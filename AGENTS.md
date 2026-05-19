@@ -10,6 +10,7 @@
 - branch dependency는 production에서 사용하지 않는다. consumer repo는 commit SHA pin 또는 path dependency만 사용한다.
 - `WALLET-CREATE`, `WALLET`, EIP-712 DepositWallet Batch, nonce, polling, pUSD/CTF adapter calldata를 구현하기 전까지 deposit-wallet live execution 가능하다고 말하지 않는다.
 - relayer API key identity, owner signer, deposit wallet/funder address는 같은 값으로 가정하지 않는다.
+- 이 repo는 consumer app에 import되는 모듈이다. exported/public API 변경은 항상 보수적으로 다루고, 기존 public type/function signature를 바꾸거나 제거하지 않는다. breaking change가 필요하면 별도 PR에서 근거, migration path, consumer 영향도를 먼저 문서화한다.
 
 ## Documentation Map
 
