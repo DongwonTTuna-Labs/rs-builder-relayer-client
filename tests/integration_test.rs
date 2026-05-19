@@ -84,7 +84,7 @@ fn test_batch_transactions() {
     let condition_id = [0xab; 32];
     let redeem_tx = operations::redeem_regular(condition_id, &[1, 2]);
 
-    let batch = vec![approve_tx, redeem_tx];
+    let batch = [approve_tx, redeem_tx];
     assert_eq!(batch.len(), 2);
 }
 

@@ -1,4 +1,30 @@
-/target
-.env
+target/
+
+# Rust and build outputs
 Cargo.lock
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+
+# Local env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and runtime data
+*.log
+logs/
+tmp/
+scratch/
+
+# IDE and OS files
 .DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

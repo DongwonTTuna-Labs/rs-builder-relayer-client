@@ -1,12 +1,33 @@
 # rs-builder-relayer-client
 
+Internal fork of `OrderBookTrade/rs-builder-relayer-client` for the
+`DongwonTTuna/polymarket-liquidity-farming-rs` migration.
+
+This fork is not an official Polymarket SDK. At setup time it still preserves
+the upstream Safe/Proxy implementation. Deposit-wallet support for
+`WALLET-CREATE`, `WALLET`, fresh `type=WALLET` nonce lookup, and EIP-712
+DepositWallet Batch signing will be added in focused PRs.
+
 Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/gasless). Redeem positions, approve tokens, split/merge — zero gas.
 
-## 30-Second Quickstart
+## Documentation
+
+- `docs/FORKED_RELAYER_CRATE.md`: fork policy and target API surface.
+- `docs/DEPOSIT_WALLET_RELAYER_DESIGN.md`: deposit-wallet relayer design.
+- `docs/SECURITY.md`: secret/signing/supply-chain rules.
+- `docs/TESTING.md`: required fixture and acceptance tests.
+- `docs/CONSUMER_INTEGRATION.md`: dependency and adapter boundary rules.
+- `docs/LEGACY_SAFE_PROXY_RELAYER_GUIDE.md`: upstream Safe/Proxy reference only.
+
+## Legacy Safe/Proxy Quickstart
+
+The examples below are retained from upstream as Safe/Proxy references. They
+are not proof that deposit-wallet `WALLET-CREATE` or `WALLET` support exists.
+Do not use them as the implementation guide for the migration.
 
 ```bash
 cargo new my-redeemer && cd my-redeemer
-cargo add rs-builder-relayer-client ethers tokio --features tokio/full
+cargo add ethers tokio --features tokio/full
 cargo add anyhow dotenvy hex
 ```
 
@@ -68,7 +89,10 @@ No Builder keys? Use `AuthMethod::relayer_key("key", "address")` instead — sam
 
 ```toml
 [dependencies]
-rs-builder-relayer-client = "0.1"
+rs-builder-relayer-client = {
+  git = "ssh://git@github.com/DongwonTTuna/rs-builder-relayer-client.git",
+  rev = "<commit-sha>"
+}
 ethers = "2"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"

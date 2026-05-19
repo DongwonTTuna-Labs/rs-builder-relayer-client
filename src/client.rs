@@ -234,7 +234,7 @@ impl RelayClient {
             return Err(RelayerError::Api { status, message: body });
         }
         let text = resp.text().await?;
-        Ok(serde_json::from_str(&text).map_err(|e| RelayerError::Other(format!("Payload Parse Error on {}: {}", text, e)))?)
+        serde_json::from_str(&text).map_err(|e| RelayerError::Other(format!("Payload Parse Error on {}: {}", text, e)))
     }
 
     /// Get a transaction's status by ID.

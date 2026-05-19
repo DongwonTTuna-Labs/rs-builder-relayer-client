@@ -101,8 +101,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n=== POSITIONS ===\n");
     println!(
-        "  {:<3} {:<46} {:<6} {:<10} {:<9} {}",
-        "#", "Market", "Side", "Shares", "Status", "Action"
+        "  {:<3} {:<46} {:<6} {:<10} {:<9} Action",
+        "#", "Market", "Side", "Shares", "Status"
     );
 
     let mut redeemable = Vec::new();
