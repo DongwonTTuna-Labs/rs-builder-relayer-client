@@ -19,7 +19,9 @@ pub fn redeem_positions(
     condition_id: [u8; 32],
     index_sets: &[u64],
 ) -> Transaction {
-    let collateral: Address = collateral_token.parse().expect("invalid collateral address");
+    let collateral: Address = collateral_token
+        .parse()
+        .expect("invalid collateral address");
     let selector = keccak256(b"redeemPositions(address,bytes32,bytes32,uint256[])");
 
     let mut calldata = selector[..4].to_vec();
@@ -27,7 +29,12 @@ pub fn redeem_positions(
         Token::Address(collateral),
         Token::FixedBytes(parent_collection.to_vec()),
         Token::FixedBytes(condition_id.to_vec()),
-        Token::Array(index_sets.iter().map(|&i| Token::Uint(U256::from(i))).collect()),
+        Token::Array(
+            index_sets
+                .iter()
+                .map(|&i| Token::Uint(U256::from(i)))
+                .collect(),
+        ),
     ]));
 
     Transaction {
@@ -40,16 +47,18 @@ pub fn redeem_positions(
 /// Build a redeemPositions call for neg-risk markets via the NegRiskAdapter.
 ///
 /// Uses the NegRiskAdapter contract instead of CTF directly.
-pub fn redeem_neg_risk_positions(
-    condition_id: [u8; 32],
-    index_sets: &[u64],
-) -> Transaction {
+pub fn redeem_neg_risk_positions(condition_id: [u8; 32], index_sets: &[u64]) -> Transaction {
     let selector = keccak256(b"redeemPositions(bytes32,uint256[])");
 
     let mut calldata = selector[..4].to_vec();
     calldata.extend_from_slice(&encode(&[
         Token::FixedBytes(condition_id.to_vec()),
-        Token::Array(index_sets.iter().map(|&i| Token::Uint(U256::from(i))).collect()),
+        Token::Array(
+            index_sets
+                .iter()
+                .map(|&i| Token::Uint(U256::from(i)))
+                .collect(),
+        ),
     ]));
 
     Transaction {

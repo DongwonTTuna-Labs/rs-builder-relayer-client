@@ -21,9 +21,12 @@ fn create2_address(deployer: Address, salt: H256, init_code_hash: H256) -> Addre
 ///
 /// salt = keccak256(abi_encode(signer_address))  (padded to 32 bytes)
 pub fn derive_safe_address(signer: Address) -> Result<Address> {
-    let factory: Address = contracts::SAFE_FACTORY
-        .parse()
-        .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
+    let factory: Address =
+        contracts::SAFE_FACTORY
+            .parse()
+            .map_err(|e: <Address as std::str::FromStr>::Err| {
+                RelayerError::InvalidAddress(e.to_string())
+            })?;
 
     let init_code_hash: H256 = contracts::SAFE_INIT_CODE_HASH
         .parse()
@@ -41,9 +44,12 @@ pub fn derive_safe_address(signer: Address) -> Result<Address> {
 ///
 /// salt = keccak256(encode_packed(signer_address))  (20 bytes, not padded)
 pub fn derive_proxy_address(signer: Address) -> Result<Address> {
-    let factory: Address = contracts::PROXY_FACTORY
-        .parse()
-        .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
+    let factory: Address =
+        contracts::PROXY_FACTORY
+            .parse()
+            .map_err(|e: <Address as std::str::FromStr>::Err| {
+                RelayerError::InvalidAddress(e.to_string())
+            })?;
 
     let init_code_hash: H256 = contracts::PROXY_INIT_CODE_HASH
         .parse()

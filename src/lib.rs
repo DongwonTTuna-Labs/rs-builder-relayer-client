@@ -2,6 +2,7 @@ pub mod auth;
 pub mod builder;
 pub mod client;
 pub mod contracts;
+pub mod deposit_wallet;
 pub mod direct;
 pub mod error;
 pub mod operations;

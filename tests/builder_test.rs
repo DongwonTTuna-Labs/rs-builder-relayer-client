@@ -1,5 +1,5 @@
-use polymarket_relayer::builder::safe::encode_multisend;
-use polymarket_relayer::types::Transaction;
+use polymarket_deposit_relayer::builder::safe::encode_multisend;
+use polymarket_deposit_relayer::types::Transaction;
 
 #[test]
 fn test_encode_multisend_single_tx() {

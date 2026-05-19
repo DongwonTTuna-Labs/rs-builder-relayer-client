@@ -16,7 +16,9 @@ pub fn split_position(
     partition: &[u64],
     amount: U256,
 ) -> Transaction {
-    let collateral: Address = collateral_token.parse().expect("invalid collateral address");
+    let collateral: Address = collateral_token
+        .parse()
+        .expect("invalid collateral address");
     let selector = keccak256(b"splitPosition(address,bytes32,bytes32,uint256[],uint256)");
 
     let mut calldata = selector[..4].to_vec();
@@ -24,7 +26,12 @@ pub fn split_position(
         Token::Address(collateral),
         Token::FixedBytes(parent_collection.to_vec()),
         Token::FixedBytes(condition_id.to_vec()),
-        Token::Array(partition.iter().map(|&i| Token::Uint(U256::from(i))).collect()),
+        Token::Array(
+            partition
+                .iter()
+                .map(|&i| Token::Uint(U256::from(i)))
+                .collect(),
+        ),
         Token::Uint(amount),
     ]));
 
@@ -45,7 +52,9 @@ pub fn merge_positions(
     partition: &[u64],
     amount: U256,
 ) -> Transaction {
-    let collateral: Address = collateral_token.parse().expect("invalid collateral address");
+    let collateral: Address = collateral_token
+        .parse()
+        .expect("invalid collateral address");
     let selector = keccak256(b"mergePositions(address,bytes32,bytes32,uint256[],uint256)");
 
     let mut calldata = selector[..4].to_vec();
@@ -53,7 +62,12 @@ pub fn merge_positions(
         Token::Address(collateral),
         Token::FixedBytes(parent_collection.to_vec()),
         Token::FixedBytes(condition_id.to_vec()),
-        Token::Array(partition.iter().map(|&i| Token::Uint(U256::from(i))).collect()),
+        Token::Array(
+            partition
+                .iter()
+                .map(|&i| Token::Uint(U256::from(i)))
+                .collect(),
+        ),
         Token::Uint(amount),
     ]));
 
@@ -66,10 +80,22 @@ pub fn merge_positions(
 
 /// Convenience: split USDC.e with default parent collection.
 pub fn split_regular(condition_id: [u8; 32], partition: &[u64], amount: U256) -> Transaction {
-    split_position(contracts::USDC_E, [0u8; 32], condition_id, partition, amount)
+    split_position(
+        contracts::USDC_E,
+        [0u8; 32],
+        condition_id,
+        partition,
+        amount,
+    )
 }
 
 /// Convenience: merge back to USDC.e with default parent collection.
 pub fn merge_regular(condition_id: [u8; 32], partition: &[u64], amount: U256) -> Transaction {
-    merge_positions(contracts::USDC_E, [0u8; 32], condition_id, partition, amount)
+    merge_positions(
+        contracts::USDC_E,
+        [0u8; 32],
+        condition_id,
+        partition,
+        amount,
+    )
 }

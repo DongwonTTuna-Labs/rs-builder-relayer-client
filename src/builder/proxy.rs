@@ -19,7 +19,9 @@ pub fn encode_proxy_calls(txs: &[Transaction]) -> Result<Vec<u8>> {
         let to: Address = tx
             .to
             .parse()
-            .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
+            .map_err(|e: <Address as std::str::FromStr>::Err| {
+                RelayerError::InvalidAddress(e.to_string())
+            })?;
         let data = hex::decode(tx.data.strip_prefix("0x").unwrap_or(&tx.data))
             .map_err(|e| RelayerError::Abi(format!("Invalid hex data: {e}")))?;
         let value = U256::from_dec_str(&tx.value)
@@ -48,16 +50,25 @@ pub async fn build_proxy_transaction<S: Signer>(
     relay_payload: &RelayPayload,
     gas_limit: u64,
 ) -> Result<(String, String, ProxySignatureParams)> {
-    let proxy_factory: Address = contracts::PROXY_FACTORY
-        .parse()
-        .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
-    let relay_hub: Address = contracts::RELAY_HUB
-        .parse()
-        .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
-    let relay_addr: Address = relay_payload
-        .address
-        .parse()
-        .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
+    let proxy_factory: Address =
+        contracts::PROXY_FACTORY
+            .parse()
+            .map_err(|e: <Address as std::str::FromStr>::Err| {
+                RelayerError::InvalidAddress(e.to_string())
+            })?;
+    let relay_hub: Address =
+        contracts::RELAY_HUB
+            .parse()
+            .map_err(|e: <Address as std::str::FromStr>::Err| {
+                RelayerError::InvalidAddress(e.to_string())
+            })?;
+    let relay_addr: Address =
+        relay_payload
+            .address
+            .parse()
+            .map_err(|e: <Address as std::str::FromStr>::Err| {
+                RelayerError::InvalidAddress(e.to_string())
+            })?;
 
     let calldata = encode_proxy_calls(txs)?;
     let nonce = relay_payload

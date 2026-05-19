@@ -7,7 +7,7 @@
 //!   cargo run --example setup_wallet
 
 use ethers::signers::LocalWallet;
-use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType};
+use polymarket_deposit_relayer::{AuthMethod, RelayClient, RelayerTxType};
 use std::env;
 
 #[tokio::main]
@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
                 result.tx_hash.unwrap_or_default()
             );
         }
-        Err(polymarket_relayer::RelayerError::WalletAlreadyDeployed(addr)) => {
+        Err(polymarket_deposit_relayer::RelayerError::WalletAlreadyDeployed(addr)) => {
             println!("ℹ️  Safe already deployed at {}", addr);
         }
         Err(e) => return Err(e.into()),

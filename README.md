@@ -1,4 +1,12 @@
-# rs-builder-relayer-client
+# polymarket-deposit-relayer
+
+Internal fork of `OrderBookTrade/rs-builder-relayer-client` for the
+`DongwonTTuna/polymarket-liquidity-farming-rs` migration.
+
+This fork is not an official Polymarket SDK. At setup time it still preserves
+the upstream Safe/Proxy implementation. Deposit-wallet support for
+`WALLET-CREATE`, `WALLET`, fresh `type=WALLET` nonce lookup, and EIP-712
+DepositWallet Batch signing will be added in focused PRs.
 
 Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/gasless). Redeem positions, approve tokens, split/merge — zero gas.
 
@@ -6,7 +14,8 @@ Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/
 
 ```bash
 cargo new my-redeemer && cd my-redeemer
-cargo add rs-builder-relayer-client ethers tokio --features tokio/full
+cargo add --git ssh://git@github.com/DongwonTTuna/polymarket-deposit-relayer.git polymarket-deposit-relayer
+cargo add ethers tokio --features tokio/full
 cargo add anyhow dotenvy hex
 ```
 
@@ -22,7 +31,7 @@ POLYGON_RPC_URL=https://...
 
 `src/main.rs`:
 ```rust
-use polymarket_relayer::{RelayClient, AuthMethod, RelayerTxType};
+use polymarket_deposit_relayer::{RelayClient, AuthMethod, RelayerTxType};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -68,7 +77,10 @@ No Builder keys? Use `AuthMethod::relayer_key("key", "address")` instead — sam
 
 ```toml
 [dependencies]
-rs-builder-relayer-client = "0.1"
+polymarket-deposit-relayer = {
+  git = "ssh://git@github.com/DongwonTTuna/polymarket-deposit-relayer.git",
+  rev = "<commit-sha>"
+}
 ethers = "2"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
@@ -81,7 +93,7 @@ hex = "0.4"
 Add `CONDITION_ID=0x...` to your `.env`, then:
 
 ```rust
-use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType, operations};
+use polymarket_deposit_relayer::{AuthMethod, RelayClient, RelayerTxType, operations};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -145,7 +157,7 @@ AuthMethod::relayer_key("api_key", "wallet_address")
 > - [LlamaRPC](https://llamarpc.com/): `https://polygon.llamarpc.com`
 
 ```rust
-use polymarket_relayer::{DirectExecutor, RelayerError};
+use polymarket_deposit_relayer::{DirectExecutor, RelayerError};
 
 let rpc_url = std::env::var("POLYGON_RPC_URL")
     .expect("Set POLYGON_RPC_URL to an Alchemy/QuickNode endpoint");

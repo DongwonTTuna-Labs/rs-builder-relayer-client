@@ -1,6 +1,6 @@
 use super::BuilderConfig;
-use base64::{engine::general_purpose, Engine};
 use crate::error::{RelayerError, Result};
+use base64::{engine::general_purpose, Engine};
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderValue};
 use sha2::Sha256;

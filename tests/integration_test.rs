@@ -1,7 +1,7 @@
 use ethers::types::{Address, U256};
-use polymarket_relayer::builder::derive::{derive_proxy_address, derive_safe_address};
-use polymarket_relayer::operations;
-use polymarket_relayer::types::Transaction;
+use polymarket_deposit_relayer::builder::derive::{derive_proxy_address, derive_safe_address};
+use polymarket_deposit_relayer::operations;
+use polymarket_deposit_relayer::types::Transaction;
 
 #[test]
 fn test_derive_safe_address_matches_reference() {
@@ -29,7 +29,7 @@ fn test_derive_proxy_address_deterministic() {
 #[test]
 fn test_approve_usdc_for_ctf() {
     let tx = operations::approve_usdc_for_ctf_exchange();
-    assert_eq!(tx.to, polymarket_relayer::contracts::USDC_E);
+    assert_eq!(tx.to, polymarket_deposit_relayer::contracts::USDC_E);
     assert!(tx.data.starts_with("0x"));
     assert_eq!(tx.value, "0");
     // Selector should be approve(address,uint256) = 0x095ea7b3
@@ -39,7 +39,7 @@ fn test_approve_usdc_for_ctf() {
 #[test]
 fn test_set_approval_for_all_ctf() {
     let tx = operations::approve_ctf_for_ctf_exchange();
-    assert_eq!(tx.to, polymarket_relayer::contracts::CTF);
+    assert_eq!(tx.to, polymarket_deposit_relayer::contracts::CTF);
     // Selector should be setApprovalForAll(address,bool) = 0xa22cb465
     assert!(tx.data.starts_with("0xa22cb465"));
 }
@@ -48,7 +48,7 @@ fn test_set_approval_for_all_ctf() {
 fn test_redeem_positions() {
     let condition_id = [0xab; 32];
     let tx = operations::redeem_regular(condition_id, &[1, 2]);
-    assert_eq!(tx.to, polymarket_relayer::contracts::CTF);
+    assert_eq!(tx.to, polymarket_deposit_relayer::contracts::CTF);
     assert!(tx.data.starts_with("0x"));
     assert_eq!(tx.value, "0");
 }
@@ -57,7 +57,10 @@ fn test_redeem_positions() {
 fn test_redeem_neg_risk() {
     let condition_id = [0xcd; 32];
     let tx = operations::redeem_neg_risk_positions(condition_id, &[1, 2]);
-    assert_eq!(tx.to, polymarket_relayer::contracts::NEG_RISK_ADAPTER);
+    assert_eq!(
+        tx.to,
+        polymarket_deposit_relayer::contracts::NEG_RISK_ADAPTER
+    );
 }
 
 #[test]
@@ -65,7 +68,7 @@ fn test_split_position() {
     let condition_id = [0xef; 32];
     let amount = U256::from(1_000_000u64); // 1 USDC
     let tx = operations::split_regular(condition_id, &[1, 2], amount);
-    assert_eq!(tx.to, polymarket_relayer::contracts::CTF);
+    assert_eq!(tx.to, polymarket_deposit_relayer::contracts::CTF);
     assert!(tx.data.starts_with("0x"));
 }
 
@@ -74,7 +77,7 @@ fn test_merge_position() {
     let condition_id = [0xef; 32];
     let amount = U256::from(1_000_000u64);
     let tx = operations::merge_regular(condition_id, &[1, 2], amount);
-    assert_eq!(tx.to, polymarket_relayer::contracts::CTF);
+    assert_eq!(tx.to, polymarket_deposit_relayer::contracts::CTF);
     assert!(tx.data.starts_with("0x"));
 }
 
@@ -84,7 +87,7 @@ fn test_batch_transactions() {
     let condition_id = [0xab; 32];
     let redeem_tx = operations::redeem_regular(condition_id, &[1, 2]);
 
-    let batch = vec![approve_tx, redeem_tx];
+    let batch = [approve_tx, redeem_tx];
     assert_eq!(batch.len(), 2);
 }
 
@@ -99,7 +102,7 @@ fn test_custom_approve() {
 
 #[tokio::test]
 async fn test_safe_multisend_encoding() {
-    use polymarket_relayer::builder::safe::encode_multisend;
+    use polymarket_deposit_relayer::builder::safe::encode_multisend;
 
     let txs = vec![
         Transaction {

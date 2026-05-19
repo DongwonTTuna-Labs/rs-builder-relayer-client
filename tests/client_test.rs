@@ -1,7 +1,7 @@
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::Address;
-use polymarket_relayer::builder::derive::{derive_proxy_address, derive_safe_address};
-use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType};
+use polymarket_deposit_relayer::builder::derive::{derive_proxy_address, derive_safe_address};
+use polymarket_deposit_relayer::{AuthMethod, RelayClient, RelayerTxType};
 
 // ── Address derivation ──
 
@@ -32,7 +32,10 @@ fn test_safe_and_proxy_derive_different_addresses() {
         .unwrap();
     let safe = derive_safe_address(signer).unwrap();
     let proxy = derive_proxy_address(signer).unwrap();
-    assert_ne!(safe, proxy, "Safe and Proxy should derive different addresses");
+    assert_ne!(
+        safe, proxy,
+        "Safe and Proxy should derive different addresses"
+    );
 }
 
 #[test]

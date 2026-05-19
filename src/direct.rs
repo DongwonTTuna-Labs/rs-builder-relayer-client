@@ -19,9 +19,7 @@ use ethers::abi::{encode, Token};
 use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Middleware, Provider};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{
-    Address, Bytes, Eip1559TransactionRequest, H256, TransactionReceipt, U256,
-};
+use ethers::types::{Address, Bytes, Eip1559TransactionRequest, TransactionReceipt, H256, U256};
 use ethers::utils::keccak256;
 
 use crate::builder::derive;
@@ -212,8 +210,7 @@ impl DirectExecutor {
         packed_sig.push(signature.v as u8);
 
         // 5. Build execTransaction calldata
-        let exec_calldata =
-            self.encode_exec_transaction(target, &inner_calldata, &packed_sig);
+        let exec_calldata = self.encode_exec_transaction(target, &inner_calldata, &packed_sig);
 
         // 6. Send transaction to Safe
         self.send_raw_tx(self.wallet_address, exec_calldata).await
@@ -320,13 +317,16 @@ impl DirectExecutor {
     /// Read the Safe nonce via eth_call to `nonce()`.
     async fn read_safe_nonce(&self) -> Result<u64> {
         let selector = &keccak256(b"nonce()")[..4];
-        let result = self.eth_call(self.wallet_address, selector).await.map_err(|e| {
-            RelayerError::Other(format!(
-                "Failed to read Safe nonce from {:?}: {}. \
+        let result = self
+            .eth_call(self.wallet_address, selector)
+            .await
+            .map_err(|e| {
+                RelayerError::Other(format!(
+                    "Failed to read Safe nonce from {:?}: {}. \
                  Check that the Safe is deployed and the RPC URL is reachable.",
-                self.wallet_address, e
-            ))
-        })?;
+                    self.wallet_address, e
+                ))
+            })?;
         if result.is_empty() {
             return Err(RelayerError::Other(format!(
                 "Empty nonce response from Safe {:?} — wallet may not be deployed",
@@ -356,15 +356,15 @@ impl DirectExecutor {
 
         let encoded_args = encode(&[
             Token::Address(to),
-            Token::Uint(U256::zero()),           // value
-            Token::Bytes(data.to_vec()),         // data
-            Token::Uint(U256::zero()),           // operation = Call
-            Token::Uint(U256::zero()),           // safeTxGas
-            Token::Uint(U256::zero()),           // baseGas
-            Token::Uint(U256::zero()),           // gasPrice
-            Token::Address(Address::zero()),     // gasToken
-            Token::Address(Address::zero()),     // refundReceiver
-            Token::Uint(U256::from(nonce)),      // _nonce
+            Token::Uint(U256::zero()),       // value
+            Token::Bytes(data.to_vec()),     // data
+            Token::Uint(U256::zero()),       // operation = Call
+            Token::Uint(U256::zero()),       // safeTxGas
+            Token::Uint(U256::zero()),       // baseGas
+            Token::Uint(U256::zero()),       // gasPrice
+            Token::Address(Address::zero()), // gasToken
+            Token::Address(Address::zero()), // refundReceiver
+            Token::Uint(U256::from(nonce)),  // _nonce
         ]);
 
         let mut calldata = selector.to_vec();
@@ -396,19 +396,16 @@ impl DirectExecutor {
                 None,
             )
             .await
-            .map_err(|e| RelayerError::Other(format!(
-                "eth_call to {:?} (selector {}) failed: {e}",
-                to, selector_hex
-            )))
+            .map_err(|e| {
+                RelayerError::Other(format!(
+                    "eth_call to {:?} (selector {}) failed: {e}",
+                    to, selector_hex
+                ))
+            })
     }
 
     /// Encode execTransaction calldata for Safe.
-    fn encode_exec_transaction(
-        &self,
-        to: Address,
-        inner_data: &[u8],
-        signature: &[u8],
-    ) -> Vec<u8> {
+    fn encode_exec_transaction(&self, to: Address, inner_data: &[u8], signature: &[u8]) -> Vec<u8> {
         let selector = &keccak256(
             b"execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)",
         )[..4];
@@ -417,12 +414,12 @@ impl DirectExecutor {
             Token::Address(to),
             Token::Uint(U256::zero()),
             Token::Bytes(inner_data.to_vec()),
-            Token::Uint(U256::zero()),           // operation
-            Token::Uint(U256::zero()),           // safeTxGas
-            Token::Uint(U256::zero()),           // baseGas
-            Token::Uint(U256::zero()),           // gasPrice
-            Token::Address(Address::zero()),     // gasToken
-            Token::Address(Address::zero()),     // refundReceiver
+            Token::Uint(U256::zero()),       // operation
+            Token::Uint(U256::zero()),       // safeTxGas
+            Token::Uint(U256::zero()),       // baseGas
+            Token::Uint(U256::zero()),       // gasPrice
+            Token::Address(Address::zero()), // gasToken
+            Token::Address(Address::zero()), // refundReceiver
             Token::Bytes(signature.to_vec()),
         ]);
 

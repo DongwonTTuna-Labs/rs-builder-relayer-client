@@ -23,9 +23,9 @@
 
 use ethers::signers::LocalWallet;
 use ethers::types::Address;
-use polymarket_client_sdk::data::Client as DataClient;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
-use polymarket_relayer::{
+use polymarket_client_sdk::data::Client as DataClient;
+use polymarket_deposit_relayer::{
     operations, AuthMethod, DirectExecutor, RelayClient, RelayerTxType, Transaction,
 };
 use rust_decimal::Decimal;
@@ -39,8 +39,7 @@ const DEFAULT_RPC: &str = "https://polygon-rpc.com";
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
 
@@ -50,7 +49,8 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     let execute = args.iter().any(|a| a == "--execute");
     let batch_mode = args.iter().any(|a| a == "--batch");
-    let delay_secs: u64 = args.iter()
+    let delay_secs: u64 = args
+        .iter()
         .position(|a| a == "--delay")
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
@@ -58,8 +58,8 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 1. Build clients ───────────────────────────────────────────────
 
-    let private_key = env::var("PRIVATE_KEY")
-        .map_err(|_| anyhow::anyhow!("Missing PRIVATE_KEY in .env"))?;
+    let private_key =
+        env::var("PRIVATE_KEY").map_err(|_| anyhow::anyhow!("Missing PRIVATE_KEY in .env"))?;
     let wallet_address = env::var("POLY_RELAYER_ADDRESS")
         .map_err(|_| anyhow::anyhow!("Missing POLY_RELAYER_ADDRESS in .env"))?;
     let rpc_url = env::var("POLYGON_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC.to_string());
@@ -75,9 +75,7 @@ async fn main() -> anyhow::Result<()> {
         println!("Auth:   Relayer key — gasless mode");
         AuthMethod::relayer_key(&api_key, &wallet_address)
     } else {
-        anyhow::bail!(
-            "Set BUILDER_KEY/SECRET/PASSPHRASE or POLY_RELAYER_API_KEY in .env"
-        );
+        anyhow::bail!("Set BUILDER_KEY/SECRET/PASSPHRASE or POLY_RELAYER_API_KEY in .env");
     };
 
     let wallet: LocalWallet = private_key.parse()?;
@@ -86,11 +84,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "2".to_string())
         .parse()
         .unwrap_or(2);
-    let tx_type = RelayerTxType::from_signature_type(sig_type)
-        .unwrap_or_else(|| {
-            eprintln!("Unknown SIGNATURE_TYPE={sig_type}, defaulting to Safe (2)");
-            RelayerTxType::Safe
-        });
+    let tx_type = RelayerTxType::from_signature_type(sig_type).unwrap_or_else(|| {
+        eprintln!("Unknown SIGNATURE_TYPE={sig_type}, defaulting to Safe (2)");
+        RelayerTxType::Safe
+    });
 
     let mut client = RelayClient::new(137, wallet.clone(), auth, tx_type).await?;
     client.set_rpc_url(rpc_url.clone());
@@ -105,9 +102,17 @@ async fn main() -> anyhow::Result<()> {
     let matic_balance = direct.get_matic_balance().await.unwrap_or(0.0);
 
     println!("EOA:    {:?}", client.signer_address());
-    println!("Wallet: {:?} ({})", client.wallet_address()?, tx_type.as_str());
+    println!(
+        "Wallet: {:?} ({})",
+        client.wallet_address()?,
+        tx_type.as_str()
+    );
     println!("MATIC:  {:.4} (for direct fallback)", matic_balance);
-    let mode_str = if batch_mode { "batch".to_string() } else { format!("sequential ({}s delay)", delay_secs) };
+    let mode_str = if batch_mode {
+        "batch".to_string()
+    } else {
+        format!("sequential ({}s delay)", delay_secs)
+    };
     println!("Mode:   {}", mode_str);
 
     // ── 2. Fetch all positions ─────────────────────────────────────────
@@ -136,8 +141,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\n=== POSITIONS ===\n");
     println!(
-        "  {:<3} {:<46} {:<6} {:<10} {:<9} {:<10} {}",
-        "#", "Market", "Side", "Shares", "Status", "Value", "Action"
+        "  {:<3} {:<46} {:<6} {:<10} {:<9} {:<10} Action",
+        "#", "Market", "Side", "Shares", "Status", "Value"
     );
 
     let mut redeemable = Vec::new();
@@ -147,7 +152,15 @@ async fn main() -> anyhow::Result<()> {
     for (i, pos) in positions.iter().enumerate() {
         let title = truncate(&pos.title, 44);
         let won = pos.cur_price >= Decimal::new(95, 2);
-        let status = if pos.redeemable { if won { "WON" } else { "LOST" } } else { "ACTIVE" };
+        let status = if pos.redeemable {
+            if won {
+                "WON"
+            } else {
+                "LOST"
+            }
+        } else {
+            "ACTIVE"
+        };
         let action = if pos.redeemable { "REDEEM" } else { "SKIP" };
         let value_str = if pos.redeemable && won {
             format!("${:.2}", pos.size)
@@ -159,11 +172,19 @@ async fn main() -> anyhow::Result<()> {
 
         println!(
             "  {:<3} {:<46} {:<6} {:<10} {:<9} {:<10} -> {}",
-            i + 1, title, pos.outcome, pos.size, status, value_str, action,
+            i + 1,
+            title,
+            pos.outcome,
+            pos.size,
+            status,
+            value_str,
+            action,
         );
 
         if pos.redeemable {
-            if won { expected_usdc += pos.size; }
+            if won {
+                expected_usdc += pos.size;
+            }
             redeemable.push(pos);
         } else {
             active_count += 1;
@@ -173,7 +194,8 @@ async fn main() -> anyhow::Result<()> {
     println!();
     println!(
         "  Redeemable: {} position(s) | Expected USDC: ~${:.2}",
-        redeemable.len(), expected_usdc,
+        redeemable.len(),
+        expected_usdc,
     );
     if active_count > 0 {
         println!("  Active (skipped): {active_count}");
@@ -211,7 +233,11 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let total = redeem_txs.len();
-    println!("=== EXECUTING {} REDEMPTION(S) [{}] ===\n", total, if batch_mode { "batch" } else { "sequential" });
+    println!(
+        "=== EXECUTING {} REDEMPTION(S) [{}] ===\n",
+        total,
+        if batch_mode { "batch" } else { "sequential" }
+    );
 
     // ── 5a. Batch mode: single relay request ───────────────────────────
 
@@ -222,7 +248,11 @@ async fn main() -> anyhow::Result<()> {
         match client.execute_batch(txs, "Batch redeem all").await {
             Ok(result) => {
                 let hash = result.tx_hash.as_deref().unwrap_or("unknown");
-                println!("  [OK]   Batch redeemed {} condition(s) | tx: {}", total, short_hash(hash));
+                println!(
+                    "  [OK]   Batch redeemed {} condition(s) | tx: {}",
+                    total,
+                    short_hash(hash)
+                );
                 for t in &titles {
                     println!("         - {}", t);
                 }
@@ -240,29 +270,32 @@ async fn main() -> anyhow::Result<()> {
 
     // ── 5b. Sequential mode: one-at-a-time with wait ───────────────────
 
-    let batches: Vec<Vec<Transaction>> = redeem_txs.iter()
-        .map(|(_, tx)| vec![tx.clone()])
-        .collect();
+    let batches: Vec<Vec<Transaction>> =
+        redeem_txs.iter().map(|(_, tx)| vec![tx.clone()]).collect();
     let titles: Vec<String> = redeem_txs.iter().map(|(t, _)| t.clone()).collect();
 
     let delay = Duration::from_secs(delay_secs);
     let mut success_count = 0u32;
     let mut fail_count = 0u32;
 
-    match client.execute_sequential(
-        batches,
-        Some(delay),
-        Some(&|completed, total| {
-            println!("  ... redeemed {}/{} positions", completed, total);
-        }),
-    ).await {
+    match client
+        .execute_sequential(
+            batches,
+            Some(delay),
+            Some(&|completed, total| {
+                println!("  ... redeemed {}/{} positions", completed, total);
+            }),
+        )
+        .await
+    {
         Ok(results) => {
             for (i, result) in results.iter().enumerate() {
                 let title = titles.get(i).map(|s| s.as_str()).unwrap_or("?");
                 let hash = result.tx_hash.as_deref().unwrap_or("unknown");
                 println!(
                     "  [OK]   \"{}\" | gasless | tx: {}",
-                    title, short_hash(hash),
+                    title,
+                    short_hash(hash),
                 );
                 success_count += 1;
             }

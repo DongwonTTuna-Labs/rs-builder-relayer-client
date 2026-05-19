@@ -11,13 +11,12 @@
 //!   NEG_RISK=false                 # set "true" for neg-risk markets
 
 use ethers::signers::LocalWallet;
-use polymarket_relayer::{
-    operations, AuthMethod, RelayClient, RelayerTxType, Transaction,
-};
+use polymarket_deposit_relayer::{operations, AuthMethod, RelayClient, RelayerTxType, Transaction};
 use std::env;
 
 fn require_env(name: &str) -> anyhow::Result<String> {
-    env::var(name).map_err(|_| anyhow::anyhow!("Missing env var: {name} (set it in .env or export it)"))
+    env::var(name)
+        .map_err(|_| anyhow::anyhow!("Missing env var: {name} (set it in .env or export it)"))
 }
 
 fn parse_bytes32(hex_str: &str) -> anyhow::Result<[u8; 32]> {
