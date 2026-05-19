@@ -1,4 +1,4 @@
-# polymarket-deposit-relayer
+# rs-builder-relayer-client
 
 Internal fork of `OrderBookTrade/rs-builder-relayer-client` for the
 `DongwonTTuna/polymarket-liquidity-farming-rs` migration.
@@ -10,11 +10,23 @@ DepositWallet Batch signing will be added in focused PRs.
 
 Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/gasless). Redeem positions, approve tokens, split/merge — zero gas.
 
-## 30-Second Quickstart
+## Documentation
+
+- `docs/FORKED_RELAYER_CRATE.md`: fork policy and target API surface.
+- `docs/DEPOSIT_WALLET_RELAYER_DESIGN.md`: deposit-wallet relayer design.
+- `docs/SECURITY.md`: secret/signing/supply-chain rules.
+- `docs/TESTING.md`: required fixture and acceptance tests.
+- `docs/CONSUMER_INTEGRATION.md`: dependency and adapter boundary rules.
+- `docs/LEGACY_SAFE_PROXY_RELAYER_GUIDE.md`: upstream Safe/Proxy reference only.
+
+## Legacy Safe/Proxy Quickstart
+
+The examples below are retained from upstream as Safe/Proxy references. They
+are not proof that deposit-wallet `WALLET-CREATE` or `WALLET` support exists.
+Do not use them as the implementation guide for the migration.
 
 ```bash
 cargo new my-redeemer && cd my-redeemer
-cargo add --git ssh://git@github.com/DongwonTTuna/polymarket-deposit-relayer.git polymarket-deposit-relayer
 cargo add ethers tokio --features tokio/full
 cargo add anyhow dotenvy hex
 ```
@@ -31,7 +43,7 @@ POLYGON_RPC_URL=https://...
 
 `src/main.rs`:
 ```rust
-use polymarket_deposit_relayer::{RelayClient, AuthMethod, RelayerTxType};
+use polymarket_relayer::{RelayClient, AuthMethod, RelayerTxType};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -77,8 +89,8 @@ No Builder keys? Use `AuthMethod::relayer_key("key", "address")` instead — sam
 
 ```toml
 [dependencies]
-polymarket-deposit-relayer = {
-  git = "ssh://git@github.com/DongwonTTuna/polymarket-deposit-relayer.git",
+rs-builder-relayer-client = {
+  git = "ssh://git@github.com/DongwonTTuna/rs-builder-relayer-client.git",
   rev = "<commit-sha>"
 }
 ethers = "2"
@@ -93,7 +105,7 @@ hex = "0.4"
 Add `CONDITION_ID=0x...` to your `.env`, then:
 
 ```rust
-use polymarket_deposit_relayer::{AuthMethod, RelayClient, RelayerTxType, operations};
+use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType, operations};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -157,7 +169,7 @@ AuthMethod::relayer_key("api_key", "wallet_address")
 > - [LlamaRPC](https://llamarpc.com/): `https://polygon.llamarpc.com`
 
 ```rust
-use polymarket_deposit_relayer::{DirectExecutor, RelayerError};
+use polymarket_relayer::{DirectExecutor, RelayerError};
 
 let rpc_url = std::env::var("POLYGON_RPC_URL")
     .expect("Set POLYGON_RPC_URL to an Alchemy/QuickNode endpoint");

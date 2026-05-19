@@ -1,5 +1,5 @@
-use polymarket_deposit_relayer::auth::builder::build_hmac_signature;
-use polymarket_deposit_relayer::auth::{AuthMethod, BuilderConfig};
+use polymarket_relayer::auth::builder::build_hmac_signature;
+use polymarket_relayer::auth::{AuthMethod, BuilderConfig};
 
 #[test]
 fn test_hmac_matches_reference_sdk() {

@@ -1,7 +1,7 @@
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::Address;
-use polymarket_deposit_relayer::builder::derive::{derive_proxy_address, derive_safe_address};
-use polymarket_deposit_relayer::{AuthMethod, RelayClient, RelayerTxType};
+use polymarket_relayer::builder::derive::{derive_proxy_address, derive_safe_address};
+use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType};
 
 // ── Address derivation ──
 

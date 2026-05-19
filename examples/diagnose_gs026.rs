@@ -18,7 +18,7 @@ use ethers::providers::{Http, Middleware, Provider};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::keccak256;
-use polymarket_deposit_relayer::{AuthMethod, RelayClient, RelayerTxType};
+use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType};
 use std::env;
 
 #[tokio::main]

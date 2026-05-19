@@ -1,5 +1,5 @@
 [package]
-name = "polymarket-deposit-relayer"
+name = "rs-builder-relayer-client"
 version = "0.1.0"
 authors = ["baice <libaice147@gmail.com>"]
 edition = "2021"
@@ -8,10 +8,10 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["polymarket", "relayer", "gasless", "ethereum", "polygon"]
 categories = ["api-bindings"]
-repository = "https://github.com/DongwonTTuna/polymarket-deposit-relayer"
+repository = "https://github.com/DongwonTTuna/rs-builder-relayer-client"
 
 [lib]
-name = "polymarket_deposit_relayer"
+name = "polymarket_relayer"
 
 [dependencies]
 reqwest = { version = "0.12", features = ["json"] }

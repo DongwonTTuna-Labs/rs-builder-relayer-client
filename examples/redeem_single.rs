@@ -11,7 +11,7 @@
 //!   NEG_RISK=false                 # set "true" for neg-risk markets
 
 use ethers::signers::LocalWallet;
-use polymarket_deposit_relayer::{operations, AuthMethod, RelayClient, RelayerTxType, Transaction};
+use polymarket_relayer::{operations, AuthMethod, RelayClient, RelayerTxType, Transaction};
 use std::env;
 
 fn require_env(name: &str) -> anyhow::Result<String> {

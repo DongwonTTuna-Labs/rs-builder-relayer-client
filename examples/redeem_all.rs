@@ -25,7 +25,7 @@ use ethers::signers::LocalWallet;
 use ethers::types::Address;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_client_sdk::data::Client as DataClient;
-use polymarket_deposit_relayer::{
+use polymarket_relayer::{
     operations, AuthMethod, DirectExecutor, RelayClient, RelayerTxType, Transaction,
 };
 use rust_decimal::Decimal;

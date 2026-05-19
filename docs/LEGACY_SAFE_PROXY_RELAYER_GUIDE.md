@@ -1,4 +1,20 @@
-# How to Use the Polymarket Relayer SDK (Python & TypeScript)
+# LEGACY_SAFE_PROXY_RELAYER_GUIDE.md
+
+This document is retained from upstream as a Safe/Proxy-oriented reference.
+
+It is **not** the implementation guide for this fork's deposit-wallet work. For
+`WALLET-CREATE`, `WALLET`, fresh `/nonce?type=WALLET`, EIP-712
+DepositWallet Batch signing, and pUSD/CTF adapter policy, use:
+
+- `FORKED_RELAYER_CRATE.md`
+- `DEPOSIT_WALLET_RELAYER_DESIGN.md`
+- `TESTING.md`
+- `SECURITY.md`
+
+Do not treat the examples below as proof that deposit-wallet relayer support is
+implemented.
+
+## Original Upstream Guide
 
 Polymarket lets you trade on real-world events. When a market settles, you need to **redeem** your winning positions to get your USDC back. This article explains how to do that programmatically using the official Python or TypeScript SDKs — no gas required.
 

@@ -21,7 +21,7 @@ use ethers::signers::LocalWallet;
 use ethers::types::Address;
 use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_client_sdk::data::Client as DataClient;
-use polymarket_deposit_relayer::{
+use polymarket_relayer::{
     operations, AuthMethod, DirectExecutor, RelayClient, RelayerError, RelayerTxType, Transaction,
 };
 use rust_decimal::Decimal;
@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,polymarket_deposit_relayer=debug".into()),
+                .unwrap_or_else(|_| "info,polymarket_relayer=debug".into()),
         )
         .init();
 
@@ -250,7 +250,7 @@ async fn try_relayer(
     client: &RelayClient,
     tx: &Transaction,
     description: &str,
-) -> polymarket_deposit_relayer::Result<String> {
+) -> polymarket_relayer::Result<String> {
     let handle = client
         .execute(vec![tx.clone()], &format!("Redeem: {}", description))
         .await?;

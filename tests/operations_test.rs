@@ -1,7 +1,7 @@
 use ethers::types::U256;
-use polymarket_deposit_relayer::contracts;
-use polymarket_deposit_relayer::operations;
-use polymarket_deposit_relayer::types::{RelayerTxType, TxState};
+use polymarket_relayer::contracts;
+use polymarket_relayer::operations;
+use polymarket_relayer::types::{RelayerTxType, TxState};
 
 // ── Type tests ──
 

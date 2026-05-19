@@ -10,7 +10,7 @@
 
 use ethers::signers::LocalWallet;
 use ethers::types::U256;
-use polymarket_deposit_relayer::{operations, AuthMethod, RelayClient, RelayerTxType};
+use polymarket_relayer::{operations, AuthMethod, RelayClient, RelayerTxType};
 use std::env;
 
 fn parse_bytes32(hex_str: &str) -> [u8; 32] {
