@@ -26,15 +26,18 @@ env:
 
 jobs:
   fmt:
-    name: fmt
+    name: Check formatting and whitespace
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - run: rustup show
+      - name: Show Rust toolchain
+        run: rustup show
 
-      - uses: actions/cache@v4
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -44,20 +47,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - run: cargo fmt --all --check
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
 
-      - run: git diff --check
+      - name: Check whitespace errors
+        run: git diff --check
 
   clippy:
-    name: clippy
+    name: Run Clippy lints
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - run: rustup show
+      - name: Show Rust toolchain
+        run: rustup show
 
-      - uses: actions/cache@v4
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -67,18 +75,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
-    name: test
+    name: Run test suite
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - run: rustup show
+      - name: Show Rust toolchain
+        run: rustup show
 
-      - uses: actions/cache@v4
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -88,18 +100,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - run: cargo test --workspace --all-features
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features
 
   build:
-    name: build
+    name: Build all targets
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-      - run: rustup show
+      - name: Show Rust toolchain
+        run: rustup show
 
-      - uses: actions/cache@v4
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -109,4 +125,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - run: cargo build --workspace --all-targets --all-features
+      - name: Build workspace targets
+        run: cargo build --workspace --all-targets --all-features
