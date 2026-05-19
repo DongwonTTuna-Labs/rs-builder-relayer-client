@@ -12,18 +12,16 @@ pub async fn build_create_transaction<S: Signer>(
     signer: &S,
     chain_id: u64,
 ) -> Result<(String, CreateSignatureParams)> {
-    let safe_factory: Address =
-        contracts::SAFE_FACTORY
-            .parse()
-            .map_err(|e: <Address as std::str::FromStr>::Err| {
-                RelayerError::InvalidAddress(e.to_string())
-            })?;
+    let safe_factory: Address = contracts::SAFE_FACTORY
+        .parse()
+        .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
 
     let params = CreateSignatureParams::default();
 
     // Domain type hash
-    let domain_type_hash =
-        keccak256(b"EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+    let domain_type_hash = keccak256(
+        b"EIP712Domain(string name,uint256 chainId,address verifyingContract)",
+    );
 
     // Domain separator
     let name_hash = keccak256(b"Polymarket Contract Proxy Factory");
@@ -35,8 +33,9 @@ pub async fn build_create_transaction<S: Signer>(
     ]));
 
     // Struct type hash
-    let type_hash =
-        keccak256(b"CreateProxy(address paymentToken,uint256 payment,address paymentReceiver)");
+    let type_hash = keccak256(
+        b"CreateProxy(address paymentToken,uint256 payment,address paymentReceiver)",
+    );
 
     // Struct hash
     let struct_hash = keccak256(encode(&[

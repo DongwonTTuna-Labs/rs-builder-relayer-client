@@ -56,10 +56,7 @@ fn test_contract_addresses_are_valid() {
 #[test]
 fn test_parse_address_helper() {
     let addr = contracts::parse_address(contracts::USDC_E).unwrap();
-    assert_eq!(
-        format!("{:?}", addr).to_lowercase(),
-        contracts::USDC_E.to_lowercase()
-    );
+    assert_eq!(format!("{:?}", addr).to_lowercase(), contracts::USDC_E.to_lowercase());
 }
 
 #[test]
@@ -77,11 +74,7 @@ fn test_approve_usdc_for_ctf_exchange() {
     assert_eq!(tx.value, "0");
     assert!(tx.data.starts_with("0x"));
     // ERC20 approve selector: 0x095ea7b3
-    assert!(
-        tx.data.starts_with("0x095ea7b3"),
-        "wrong selector: {}",
-        tx.data
-    );
+    assert!(tx.data.starts_with("0x095ea7b3"), "wrong selector: {}", tx.data);
 }
 
 #[test]
@@ -96,11 +89,7 @@ fn test_approve_ctf_for_ctf_exchange() {
     let tx = operations::approve_ctf_for_ctf_exchange();
     assert_eq!(tx.to, contracts::CTF);
     // ERC1155 setApprovalForAll selector: 0xa22cb465
-    assert!(
-        tx.data.starts_with("0xa22cb465"),
-        "wrong selector: {}",
-        tx.data
-    );
+    assert!(tx.data.starts_with("0xa22cb465"), "wrong selector: {}", tx.data);
 }
 
 #[test]
@@ -188,17 +177,18 @@ fn test_split_and_merge_produce_different_calldata() {
 
     // Both target CTF but with different function selectors
     assert_eq!(split_tx.to, merge_tx.to);
-    assert_ne!(
-        split_tx.data, merge_tx.data,
-        "split and merge should have different calldata"
-    );
+    assert_ne!(split_tx.data, merge_tx.data, "split and merge should have different calldata");
 }
 
 // ── Operations: set_approval_for_all ──
 
 #[test]
 fn test_set_approval_for_all() {
-    let tx = operations::set_approval_for_all(contracts::CTF, contracts::CTF_EXCHANGE, true);
+    let tx = operations::set_approval_for_all(
+        contracts::CTF,
+        contracts::CTF_EXCHANGE,
+        true,
+    );
     assert_eq!(tx.to, contracts::CTF);
     assert!(tx.data.starts_with("0xa22cb465"));
 
@@ -208,10 +198,8 @@ fn test_set_approval_for_all() {
 
 #[test]
 fn test_set_approval_for_all_revoke() {
-    let tx_approve =
-        operations::set_approval_for_all(contracts::CTF, contracts::CTF_EXCHANGE, true);
-    let tx_revoke =
-        operations::set_approval_for_all(contracts::CTF, contracts::CTF_EXCHANGE, false);
+    let tx_approve = operations::set_approval_for_all(contracts::CTF, contracts::CTF_EXCHANGE, true);
+    let tx_revoke = operations::set_approval_for_all(contracts::CTF, contracts::CTF_EXCHANGE, false);
 
     // Same selector, same addresses, but different bool encoding
     assert_ne!(tx_approve.data, tx_revoke.data);

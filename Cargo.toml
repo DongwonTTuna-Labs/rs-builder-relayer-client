@@ -1,9 +1,9 @@
 [package]
 name = "rs-builder-relayer-client"
-version = "0.1.0"
+version = "0.1.3"
 authors = ["baice <libaice147@gmail.com>"]
 edition = "2021"
-description = "Internal Rust fork for Polymarket Builder Relayer deposit-wallet support"
+description = "A Rust SDK for Polymarket's Builder Relayer — gasless on-chain operations"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["polymarket", "relayer", "gasless", "ethereum", "polygon"]

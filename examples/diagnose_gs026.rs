@@ -18,7 +18,7 @@ use ethers::providers::{Http, Middleware, Provider};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::keccak256;
-use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType};
+use polymarket_relayer::{RelayClient, AuthMethod, RelayerTxType};
 use std::env;
 
 #[tokio::main]
@@ -27,8 +27,8 @@ async fn main() -> anyhow::Result<()> {
 
     let private_key = env::var("PRIVATE_KEY")?;
     let expected_wallet = env::var("POLY_RELAYER_ADDRESS")?;
-    let rpc_url =
-        env::var("POLYGON_RPC_URL").unwrap_or_else(|_| "https://polygon-rpc.com".to_string());
+    let rpc_url = env::var("POLYGON_RPC_URL")
+        .unwrap_or_else(|_| "https://polygon-rpc.com".to_string());
     let sig_type: u8 = env::var("SIGNATURE_TYPE")
         .unwrap_or_else(|_| "2".to_string())
         .parse()
@@ -42,25 +42,14 @@ async fn main() -> anyhow::Result<()> {
 
     println!("=== GS026 Diagnostic ===\n");
     println!("EOA (signer):      {:?}", eoa);
-    println!(
-        "Expected wallet:   {:?} (from POLY_RELAYER_ADDRESS)",
-        expected_addr
-    );
-    println!(
-        "Wallet type:       {} (signature_type={})",
-        tx_type.as_str(),
-        sig_type
-    );
+    println!("Expected wallet:   {:?} (from POLY_RELAYER_ADDRESS)", expected_addr);
+    println!("Wallet type:       {} (signature_type={})", tx_type.as_str(), sig_type);
 
     // ── Check 1: Derived address ───────────────────────────────────────
 
     println!("\n--- Check 1: Address Derivation ---");
 
-    let auth = AuthMethod::builder(
-        "dummy",
-        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-        "dummy",
-    );
+    let auth = AuthMethod::builder("dummy", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "dummy");
     let client = RelayClient::new(137, wallet.clone(), auth, tx_type).await?;
     let derived = client.wallet_address()?;
 
@@ -69,10 +58,7 @@ async fn main() -> anyhow::Result<()> {
     if derived == expected_addr {
         println!("  [OK] Derived address matches POLY_RELAYER_ADDRESS");
     } else {
-        println!(
-            "  [FAIL] MISMATCH! Derived {:?} != Expected {:?}",
-            derived, expected_addr
-        );
+        println!("  [FAIL] MISMATCH! Derived {:?} != Expected {:?}", derived, expected_addr);
         println!("  → The SDK derives a different address than your actual wallet.");
         println!("  → This means execTransaction is sent to the WRONG Safe.");
         println!("  → Your EOA is not an owner of the derived Safe.");
@@ -93,40 +79,28 @@ async fn main() -> anyhow::Result<()> {
     // Check code at the Safe address — is a contract deployed?
     let code = provider.get_code(expected_addr, None).await?;
     if code.is_empty() {
-        println!(
-            "  [FAIL] No contract at {:?} — wallet not deployed!",
-            expected_addr
-        );
+        println!("  [FAIL] No contract at {:?} — wallet not deployed!", expected_addr);
         println!("  → You need to deploy the wallet first: client.deploy()");
     } else {
-        println!(
-            "  [OK] Contract exists at {:?} ({} bytes)",
-            expected_addr,
-            code.len()
-        );
+        println!("  [OK] Contract exists at {:?} ({} bytes)", expected_addr, code.len());
 
         // Call getOwners() on the Safe
         let owners_selector = &keccak256(b"getOwners()")[..4];
-        match provider
-            .call(
-                &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
-                    ethers::types::TransactionRequest::new()
-                        .to(expected_addr)
-                        .data(Bytes::from(owners_selector.to_vec())),
-                ),
-                None,
-            )
-            .await
-        {
+        match provider.call(
+            &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
+                ethers::types::TransactionRequest::new()
+                    .to(expected_addr)
+                    .data(Bytes::from(owners_selector.to_vec())),
+            ),
+            None,
+        ).await {
             Ok(result) => {
                 let owners = decode_address_array(&result);
                 println!("  Safe owners ({}):", owners.len());
                 let mut eoa_is_owner = false;
                 for (i, owner) in owners.iter().enumerate() {
                     let marker = if *owner == eoa { " ← YOUR EOA" } else { "" };
-                    if *owner == eoa {
-                        eoa_is_owner = true;
-                    }
+                    if *owner == eoa { eoa_is_owner = true; }
                     println!("    [{}] {:?}{}", i, owner, marker);
                 }
                 if eoa_is_owner {
@@ -151,10 +125,7 @@ async fn main() -> anyhow::Result<()> {
             if derived_code.is_empty() {
                 println!("    [INFO] No contract at derived address — Safe not deployed there");
             } else {
-                println!(
-                    "    [WARN] Contract EXISTS at derived address too ({} bytes)",
-                    derived_code.len()
-                );
+                println!("    [WARN] Contract EXISTS at derived address too ({} bytes)", derived_code.len());
                 println!("    → Two different Safes exist. SDK sends to the derived one,");
                 println!("      but your positions are in the expected one.");
             }
@@ -167,17 +138,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Read nonce from on-chain
     let nonce_selector = &keccak256(b"nonce()")[..4];
-    match provider
-        .call(
-            &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
-                ethers::types::TransactionRequest::new()
-                    .to(expected_addr)
-                    .data(Bytes::from(nonce_selector.to_vec())),
-            ),
-            None,
-        )
-        .await
-    {
+    match provider.call(
+        &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
+            ethers::types::TransactionRequest::new()
+                .to(expected_addr)
+                .data(Bytes::from(nonce_selector.to_vec())),
+        ),
+        None,
+    ).await {
         Ok(result) => {
             if result.len() >= 32 {
                 let nonce = U256::from_big_endian(&result[..32]).as_u64();
@@ -197,17 +165,7 @@ async fn main() -> anyhow::Result<()> {
     let dummy_hash = H256::from(keccak256(b"diagnose_test"));
     let sig = wallet.sign_message(dummy_hash.as_bytes()).await?;
     let v = sig.v as u8;
-    println!(
-        "  Raw signature v={}, adjusted v={}",
-        v,
-        if v <= 1 {
-            v + 31
-        } else if v <= 28 {
-            v + 4
-        } else {
-            v
-        }
-    );
+    println!("  Raw signature v={}, adjusted v={}", v, if v <= 1 { v + 31 } else if v <= 28 { v + 4 } else { v });
 
     // Verify recovery
     let recovery_hash = {
@@ -224,10 +182,7 @@ async fn main() -> anyhow::Result<()> {
         println!("  [OK] Signature recovery matches EOA");
         println!("  → Signing code is correct, GS026 is likely an address mismatch issue");
     } else {
-        println!(
-            "  [FAIL] Recovery mismatch! Got {:?}, expected {:?}",
-            recovered, eoa
-        );
+        println!("  [FAIL] Recovery mismatch! Got {:?}, expected {:?}", recovered, eoa);
         println!("  → Signing code has a bug");
     }
 
@@ -247,24 +202,18 @@ async fn main() -> anyhow::Result<()> {
 
 /// Decode a Solidity `address[]` return value.
 fn decode_address_array(data: &[u8]) -> Vec<Address> {
-    if data.len() < 64 {
-        return vec![];
-    }
+    if data.len() < 64 { return vec![]; }
 
     // offset (32 bytes) + length (32 bytes) + addresses (32 bytes each)
     let offset = U256::from_big_endian(&data[0..32]).as_usize();
-    if offset + 32 > data.len() {
-        return vec![];
-    }
+    if offset + 32 > data.len() { return vec![]; }
 
     let count = U256::from_big_endian(&data[offset..offset + 32]).as_usize();
     let mut addresses = Vec::with_capacity(count);
 
     for i in 0..count {
         let start = offset + 32 + i * 32;
-        if start + 32 > data.len() {
-            break;
-        }
+        if start + 32 > data.len() { break; }
         addresses.push(Address::from_slice(&data[start + 12..start + 32]));
     }
 

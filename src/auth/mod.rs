@@ -31,7 +31,12 @@ impl AuthMethod {
     }
 
     /// Generate auth headers for a request.
-    pub fn headers(&self, method: &str, path: &str, body: &str) -> crate::error::Result<HeaderMap> {
+    pub fn headers(
+        &self,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> crate::error::Result<HeaderMap> {
         match self {
             AuthMethod::Builder(config) => builder::build_headers(config, method, path, body),
             AuthMethod::RelayerKey { api_key, address } => {

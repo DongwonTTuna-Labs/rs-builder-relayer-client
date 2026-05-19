@@ -32,10 +32,7 @@ fn test_safe_and_proxy_derive_different_addresses() {
         .unwrap();
     let safe = derive_safe_address(signer).unwrap();
     let proxy = derive_proxy_address(signer).unwrap();
-    assert_ne!(
-        safe, proxy,
-        "Safe and Proxy should derive different addresses"
-    );
+    assert_ne!(safe, proxy, "Safe and Proxy should derive different addresses");
 }
 
 #[test]

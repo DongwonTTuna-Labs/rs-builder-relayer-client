@@ -22,8 +22,8 @@ async fn main() -> anyhow::Result<()> {
 
     let private_key = env::var("PRIVATE_KEY")?;
     let wallet_address_str = env::var("POLY_RELAYER_ADDRESS")?;
-    let rpc_url =
-        env::var("POLYGON_RPC_URL").unwrap_or_else(|_| "https://polygon-rpc.com".to_string());
+    let rpc_url = env::var("POLYGON_RPC_URL")
+        .unwrap_or_else(|_| "https://polygon-rpc.com".to_string());
 
     let wallet: LocalWallet = private_key.parse()?;
     let safe_address: Address = wallet_address_str.parse()?;
@@ -40,16 +40,14 @@ async fn main() -> anyhow::Result<()> {
     // On-chain nonce
     let nonce_selector = &keccak256(b"nonce()")[..4];
     let onchain_nonce = {
-        let result = provider
-            .call(
-                &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
-                    ethers::types::TransactionRequest::new()
-                        .to(safe_address)
-                        .data(Bytes::from(nonce_selector.to_vec())),
-                ),
-                None,
-            )
-            .await?;
+        let result = provider.call(
+            &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
+                ethers::types::TransactionRequest::new()
+                    .to(safe_address)
+                    .data(Bytes::from(nonce_selector.to_vec())),
+            ),
+            None,
+        ).await?;
         U256::from_big_endian(&result[..32]).as_u64()
     };
     println!("On-chain Safe nonce:  {}", onchain_nonce);
@@ -68,14 +66,8 @@ async fn main() -> anyhow::Result<()> {
         if relayer_nonce == onchain_nonce {
             println!("[OK] Nonces match");
         } else {
-            println!(
-                "[FAIL] NONCE MISMATCH! relayer={} vs onchain={}",
-                relayer_nonce, onchain_nonce
-            );
-            println!(
-                "  → SDK signs with nonce={} but Safe verifies with nonce={}",
-                relayer_nonce, onchain_nonce
-            );
+            println!("[FAIL] NONCE MISMATCH! relayer={} vs onchain={}", relayer_nonce, onchain_nonce);
+            println!("  → SDK signs with nonce={} but Safe verifies with nonce={}", relayer_nonce, onchain_nonce);
             println!("  → EIP-712 hash will differ → ecrecover returns garbage → GS026");
             println!("  → FIX: Read nonce from on-chain instead of relayer API");
         }
@@ -100,17 +92,14 @@ async fn main() -> anyhow::Result<()> {
 
     // On-chain domainSeparator()
     let ds_selector = &keccak256(b"domainSeparator()")[..4];
-    match provider
-        .call(
-            &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
-                ethers::types::TransactionRequest::new()
-                    .to(safe_address)
-                    .data(Bytes::from(ds_selector.to_vec())),
-            ),
-            None,
-        )
-        .await
-    {
+    match provider.call(
+        &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
+            ethers::types::TransactionRequest::new()
+                .to(safe_address)
+                .data(Bytes::from(ds_selector.to_vec())),
+        ),
+        None,
+    ).await {
         Ok(result) if result.len() >= 32 => {
             let onchain_ds = H256::from_slice(&result[..32]);
             println!("On-chain domain separator: {:?}", onchain_ds);
@@ -124,8 +113,9 @@ async fn main() -> anyhow::Result<()> {
                 println!("  → Possibly an older Safe without chainId in the domain");
 
                 // Try without chainId (older Safe versions)
-                let old_type_hash =
-                    H256::from(keccak256(b"EIP712Domain(address verifyingContract)"));
+                let old_type_hash = H256::from(keccak256(
+                    b"EIP712Domain(address verifyingContract)",
+                ));
                 let old_ds = H256::from(keccak256(encode(&[
                     Token::FixedBytes(old_type_hash.as_bytes().to_vec()),
                     Token::Address(safe_address),
@@ -201,17 +191,14 @@ async fn main() -> anyhow::Result<()> {
     let mut calldata = gth_selector.to_vec();
     calldata.extend_from_slice(&encoded_args);
 
-    match provider
-        .call(
-            &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
-                ethers::types::TransactionRequest::new()
-                    .to(safe_address)
-                    .data(Bytes::from(calldata)),
-            ),
-            None,
-        )
-        .await
-    {
+    match provider.call(
+        &ethers::types::transaction::eip2718::TypedTransaction::Legacy(
+            ethers::types::TransactionRequest::new()
+                .to(safe_address)
+                .data(Bytes::from(calldata)),
+        ),
+        None,
+    ).await {
         Ok(result) if result.len() >= 32 => {
             let onchain_tx_hash = H256::from_slice(&result[..32]);
             println!("On-chain tx hash:          {:?}", onchain_tx_hash);
@@ -238,17 +225,10 @@ fn build_dummy_redeem_calldata(condition_id: &[u8; 32]) -> Vec<u8> {
     // redeemPositions(address,bytes32,bytes32,uint256[])
     let selector: [u8; 4] = [0x01, 0xb7, 0x03, 0x7c];
     let encoded = encode(&[
-        Token::Address(
-            "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-                .parse()
-                .unwrap(),
-        ),
+        Token::Address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174".parse().unwrap()),
         Token::FixedBytes(vec![0u8; 32]), // parentCollectionId
         Token::FixedBytes(condition_id.to_vec()),
-        Token::Array(vec![
-            Token::Uint(U256::from(1u64)),
-            Token::Uint(U256::from(2u64)),
-        ]),
+        Token::Array(vec![Token::Uint(U256::from(1u64)), Token::Uint(U256::from(2u64))]),
     ]);
     let mut data = selector.to_vec();
     data.extend_from_slice(&encoded);

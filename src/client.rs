@@ -48,7 +48,9 @@ impl RelayClient {
         auth: AuthMethod,
         tx_type: RelayerTxType,
     ) -> Result<Self> {
-        let http = Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let http = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
 
         Ok(Self {
             http,
@@ -100,10 +102,7 @@ impl RelayClient {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(RelayerError::Api {
-                status,
-                message: body,
-            });
+            return Err(RelayerError::Api { status, message: body });
         }
         let text = resp.text().await?;
         let body: serde_json::Value = serde_json::from_str(&text)
@@ -112,8 +111,7 @@ impl RelayClient {
         //   true / false                → bare bool
         //   "true" / "false"            → string
         //   {"deployed": true}          → object
-        Ok(body
-            .as_bool()
+        Ok(body.as_bool()
             .or_else(|| body.as_str().map(|s| s == "true"))
             .or_else(|| body.get("deployed").and_then(|v| v.as_bool()))
             .unwrap_or(false))
@@ -172,9 +170,7 @@ impl RelayClient {
             .await
             .map_err(|e| RelayerError::Other(format!("RPC request failed: {e}")))?;
 
-        let text = resp
-            .text()
-            .await
+        let text = resp.text().await
             .map_err(|e| RelayerError::Other(format!("RPC response read failed: {e}")))?;
 
         let json: serde_json::Value = serde_json::from_str(&text)
@@ -182,15 +178,11 @@ impl RelayClient {
 
         // Check for JSON-RPC error
         if let Some(error) = json.get("error") {
-            let msg = error
-                .get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown");
+            let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("unknown");
             return Err(RelayerError::Other(format!("RPC error: {msg}")));
         }
 
-        let result_hex = json
-            .get("result")
+        let result_hex = json.get("result")
             .and_then(|r| r.as_str())
             .ok_or_else(|| RelayerError::Other(format!("No result in RPC response: {text}")))?;
 
@@ -214,10 +206,7 @@ impl RelayClient {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(RelayerError::Api {
-                status,
-                message: body,
-            });
+            return Err(RelayerError::Api { status, message: body });
         }
         let text = resp.text().await?;
         debug!(raw_response = %text, "Relayer nonce response");
@@ -242,14 +231,10 @@ impl RelayClient {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(RelayerError::Api {
-                status,
-                message: body,
-            });
+            return Err(RelayerError::Api { status, message: body });
         }
         let text = resp.text().await?;
-        serde_json::from_str(&text)
-            .map_err(|e| RelayerError::Other(format!("Payload Parse Error on {}: {}", text, e)))
+        serde_json::from_str(&text).map_err(|e| RelayerError::Other(format!("Payload Parse Error on {}: {}", text, e)))
     }
 
     /// Get a transaction's status by ID.
@@ -259,10 +244,7 @@ impl RelayClient {
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
-            return Err(RelayerError::Api {
-                status,
-                message: body,
-            });
+            return Err(RelayerError::Api { status, message: body });
         }
         let text = resp.text().await?;
         debug!(raw_response = %text, "Relayer get_transaction response");
@@ -333,16 +315,13 @@ impl RelayClient {
         description: &str,
     ) -> Result<TransactionResponseHandle> {
         if txs.is_empty() {
-            return Err(RelayerError::Other(
-                "No transactions to execute".to_string(),
-            ));
+            return Err(RelayerError::Other("No transactions to execute".to_string()));
         }
 
         let request = match self.tx_type {
             RelayerTxType::Eoa => {
                 return Err(RelayerError::Other(
-                    "EOA wallets cannot use the gasless relayer — send transactions directly"
-                        .to_string(),
+                    "EOA wallets cannot use the gasless relayer — send transactions directly".to_string(),
                 ));
             }
             RelayerTxType::Safe => self.build_safe_request(&txs, description).await?,
@@ -421,10 +400,7 @@ impl RelayClient {
             return Err(RelayerError::Other("No transactions to batch".to_string()));
         }
 
-        info!(
-            count = txs.len(),
-            description, "Submitting batch transaction"
-        );
+        info!(count = txs.len(), description, "Submitting batch transaction");
 
         let request = match self.tx_type {
             RelayerTxType::Eoa => {
@@ -447,6 +423,8 @@ impl RelayClient {
 
         self.wait_for_tx(&response.transaction_id).await
     }
+
+
 
     /// Build a Safe transaction request with full EIP-712 signing.
     async fn build_safe_request(
@@ -526,7 +504,8 @@ impl RelayClient {
     /// Submit a transaction request to the relayer.
     async fn submit(&self, request: TransactionRequest) -> Result<RelayerTransactionResponse> {
         let url = format!("{}/submit", self.base_url);
-        let body = serde_json::to_string(&request).map_err(|e| RelayerError::Abi(e.to_string()))?;
+        let body = serde_json::to_string(&request)
+            .map_err(|e| RelayerError::Abi(e.to_string()))?;
 
         debug!(url = %url, body_len = body.len(), "Submitting to relayer");
 
@@ -552,10 +531,7 @@ impl RelayClient {
             if status == 429 {
                 return Err(RelayerError::QuotaExhausted);
             }
-            return Err(RelayerError::Api {
-                status,
-                message: err,
-            });
+            return Err(RelayerError::Api { status, message: err });
         }
 
         let text = resp.text().await?;
@@ -597,15 +573,13 @@ impl RelayClient {
     /// Approve USDC.e for CTF Exchange.
     pub async fn approve_usdc_for_ctf(&self) -> Result<TransactionResponseHandle> {
         let tx = crate::operations::approve_usdc_for_ctf_exchange();
-        self.execute(vec![tx], "Approve USDC for CTF Exchange")
-            .await
+        self.execute(vec![tx], "Approve USDC for CTF Exchange").await
     }
 
     /// Approve USDC.e for Neg Risk CTF Exchange.
     pub async fn approve_usdc_for_negrisk(&self) -> Result<TransactionResponseHandle> {
         let tx = crate::operations::approve_usdc_for_neg_risk_exchange();
-        self.execute(vec![tx], "Approve USDC for NegRisk Exchange")
-            .await
+        self.execute(vec![tx], "Approve USDC for NegRisk Exchange").await
     }
 
     /// Approve CTF tokens (ERC1155) for CTF Exchange.
@@ -671,8 +645,7 @@ fn parse_relayer_response(text: &str) -> Result<RelayerTransactionResponse> {
     }
 
     Err(RelayerError::Other(format!(
-        "Failed to parse relayer response: {}",
-        text
+        "Failed to parse relayer response: {}", text
     )))
 }
 
@@ -689,24 +662,20 @@ fn parse_relayer_value(value: &serde_json::Value) -> Result<RelayerTransactionRe
     }
 
     // 2. Try extracting transactionId/transactionID from top-level (partial match)
-    let tx_id = value
-        .get("transactionId")
+    let tx_id = value.get("transactionId")
         .or_else(|| value.get("transactionID"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
     if let Some(id) = tx_id {
-        let state = value
-            .get("state")
+        let state = value.get("state")
             .and_then(|v| v.as_str())
             .unwrap_or("NEW")
             .to_string();
-        let hash = value
-            .get("hash")
+        let hash = value.get("hash")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let transaction_hash = value
-            .get("transactionHash")
+        let transaction_hash = value.get("transactionHash")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -720,8 +689,7 @@ fn parse_relayer_value(value: &serde_json::Value) -> Result<RelayerTransactionRe
     }
 
     Err(RelayerError::Other(format!(
-        "Value is not a valid relayer response: {}",
-        value
+        "Value is not a valid relayer response: {}", value
     )))
 }
 
@@ -762,15 +730,7 @@ fn extract_error_from_response(text: &str) -> Option<String> {
     };
 
     // Try common error field names
-    for key in &[
-        "errorMsg",
-        "error",
-        "reason",
-        "failureReason",
-        "revertReason",
-        "message",
-        "statusMessage",
-    ] {
+    for key in &["errorMsg", "error", "reason", "failureReason", "revertReason", "message", "statusMessage"] {
         if let Some(v) = obj.get(key) {
             let s = if let Some(s) = v.as_str() {
                 s.to_string()

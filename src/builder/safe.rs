@@ -38,9 +38,7 @@ pub fn encode_multisend(txs: &[Transaction]) -> Result<Vec<u8>> {
         let to: Address = tx
             .to
             .parse()
-            .map_err(|e: <Address as std::str::FromStr>::Err| {
-                RelayerError::InvalidAddress(e.to_string())
-            })?;
+            .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
         let data = hex::decode(tx.data.strip_prefix("0x").unwrap_or(&tx.data))
             .map_err(|e| RelayerError::Abi(format!("Invalid hex data: {e}")))?;
         let value = U256::from_dec_str(&tx.value)
@@ -81,9 +79,7 @@ pub async fn build_safe_transaction<S: Signer>(
         let to: Address = tx
             .to
             .parse()
-            .map_err(|e: <Address as std::str::FromStr>::Err| {
-                RelayerError::InvalidAddress(e.to_string())
-            })?;
+            .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
         let data = hex::decode(tx.data.strip_prefix("0x").unwrap_or(&tx.data))
             .map_err(|e| RelayerError::Abi(format!("Invalid hex data: {e}")))?;
         (to, data, 0u8) // Call
@@ -96,9 +92,9 @@ pub async fn build_safe_transaction<S: Signer>(
         let mut calldata = contracts::MULTISEND_SELECTOR.to_vec();
         calldata.extend_from_slice(&encoded_call);
 
-        let multisend_addr: Address = contracts::SAFE_MULTISEND.parse().map_err(
-            |e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()),
-        )?;
+        let multisend_addr: Address = contracts::SAFE_MULTISEND
+            .parse()
+            .map_err(|e: <Address as std::str::FromStr>::Err| RelayerError::InvalidAddress(e.to_string()))?;
 
         (multisend_addr, calldata, 1u8) // DelegateCall
     };
@@ -116,9 +112,9 @@ pub async fn build_safe_transaction<S: Signer>(
         Token::Uint(U256::zero()), // value
         Token::FixedBytes(data_hash.as_bytes().to_vec()),
         Token::Uint(U256::from(operation)),
-        Token::Uint(U256::zero()),       // safeTxGas
-        Token::Uint(U256::zero()),       // baseGas
-        Token::Uint(U256::zero()),       // gasPrice
+        Token::Uint(U256::zero()), // safeTxGas
+        Token::Uint(U256::zero()), // baseGas
+        Token::Uint(U256::zero()), // gasPrice
         Token::Address(Address::zero()), // gasToken
         Token::Address(Address::zero()), // refundReceiver
         Token::Uint(U256::from(nonce)),

@@ -67,10 +67,7 @@ pub enum TxState {
 
 impl TxState {
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            TxState::Confirmed | TxState::Failed | TxState::Invalid
-        )
+        matches!(self, TxState::Confirmed | TxState::Failed | TxState::Invalid)
     }
 
     pub fn is_success(&self) -> bool {

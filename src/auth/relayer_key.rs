@@ -1,5 +1,5 @@
-use crate::error::{RelayerError, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
+use crate::error::{RelayerError, Result};
 
 pub fn build_headers(api_key: &str, address: &str) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();

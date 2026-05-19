@@ -24,14 +24,7 @@ fn test_hmac_empty_body() {
 #[test]
 fn test_hmac_url_safe_base64() {
     let secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    let sig = build_hmac_signature(
-        secret,
-        "1000000",
-        "test-sign",
-        "/orders",
-        r#"{"hash": "0x123"}"#,
-    )
-    .unwrap();
+    let sig = build_hmac_signature(secret, "1000000", "test-sign", "/orders", r#"{"hash": "0x123"}"#).unwrap();
     assert!(!sig.contains('+'), "Should not contain '+'");
     assert!(!sig.contains('/'), "Should not contain '/'");
 }
@@ -45,19 +38,14 @@ fn test_builder_auth_generates_all_required_headers() {
         passphrase: "test-passphrase".to_string(),
     };
     let auth = AuthMethod::Builder(config);
-    let headers = auth
-        .headers("POST", "/submit", r#"{"data":"test"}"#)
-        .unwrap();
+    let headers = auth.headers("POST", "/submit", r#"{"data":"test"}"#).unwrap();
 
     assert!(headers.contains_key("POLY_BUILDER_API_KEY"));
     assert!(headers.contains_key("POLY_BUILDER_TIMESTAMP"));
     assert!(headers.contains_key("POLY_BUILDER_PASSPHRASE"));
     assert!(headers.contains_key("POLY_BUILDER_SIGNATURE"));
     assert_eq!(headers.get("POLY_BUILDER_API_KEY").unwrap(), "test-key");
-    assert_eq!(
-        headers.get("POLY_BUILDER_PASSPHRASE").unwrap(),
-        "test-passphrase"
-    );
+    assert_eq!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap(), "test-passphrase");
 }
 
 #[test]

@@ -19,8 +19,8 @@
 
 use ethers::signers::LocalWallet;
 use ethers::types::Address;
-use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_client_sdk::data::Client as DataClient;
+use polymarket_client_sdk::data::types::request::PositionsRequest;
 use polymarket_relayer::{
     operations, AuthMethod, DirectExecutor, RelayClient, RelayerError, RelayerTxType, Transaction,
 };
@@ -47,9 +47,8 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("Missing POLYMARKET_PRIVATE_KEY"))?;
     let proxy_wallet_str = env::var("PROXY_WALLET_ADDRESS")
         .map_err(|_| anyhow::anyhow!("Missing PROXY_WALLET_ADDRESS"))?;
-    let rpc_url = env::var("POLYGON_RPC_URL").map_err(|_| {
-        anyhow::anyhow!("Missing POLYGON_RPC_URL — use Alchemy or QuickNode, not polygon-rpc.com")
-    })?;
+    let rpc_url = env::var("POLYGON_RPC_URL")
+        .map_err(|_| anyhow::anyhow!("Missing POLYGON_RPC_URL — use Alchemy or QuickNode, not polygon-rpc.com"))?;
 
     let wallet: LocalWallet = private_key.parse()?;
     let proxy_address: Address = proxy_wallet_str.parse()?;
@@ -59,8 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let auth = AuthMethod::builder(
         &env::var("BUILDER_KEY").map_err(|_| anyhow::anyhow!("Missing BUILDER_KEY"))?,
         &env::var("BUILDER_SECRET").map_err(|_| anyhow::anyhow!("Missing BUILDER_SECRET"))?,
-        &env::var("BUILDER_PASSPHRASE")
-            .map_err(|_| anyhow::anyhow!("Missing BUILDER_PASSPHRASE"))?,
+        &env::var("BUILDER_PASSPHRASE").map_err(|_| anyhow::anyhow!("Missing BUILDER_PASSPHRASE"))?,
     );
 
     let mut client = RelayClient::new(137, wallet.clone(), auth, RelayerTxType::Proxy).await?;
@@ -75,10 +73,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Proxy wallet: {:?}", proxy_address);
     println!("Derived:      {:?}", client.wallet_address()?);
     println!("MATIC:        {:.4} (for direct fallback)", matic_balance);
-    println!(
-        "Mode:         {}",
-        if execute { "EXECUTE" } else { "DRY RUN" }
-    );
+    println!("Mode:         {}", if execute { "EXECUTE" } else { "DRY RUN" });
 
     // ── Fetch positions ────────────────────────────────────────────────
 
@@ -117,11 +112,7 @@ async fn main() -> anyhow::Result<()> {
         let title = truncate(&pos.title, 44);
         let won = pos.cur_price >= Decimal::new(95, 2);
         let status = if pos.redeemable {
-            if won {
-                "WON"
-            } else {
-                "LOST"
-            }
+            if won { "WON" } else { "LOST" }
         } else {
             "ACTIVE"
         };
@@ -129,27 +120,16 @@ async fn main() -> anyhow::Result<()> {
 
         println!(
             "  {:<3} {:<46} {:<6} {:<10} {:<9} -> {}",
-            i + 1,
-            title,
-            pos.outcome,
-            pos.size,
-            status,
-            action,
+            i + 1, title, pos.outcome, pos.size, status, action,
         );
 
         if pos.redeemable {
-            if won {
-                expected_usdc += pos.size;
-            }
+            if won { expected_usdc += pos.size; }
             redeemable.push(pos);
         }
     }
 
-    println!(
-        "\n  Redeemable: {} | Expected USDC: ~${:.2}\n",
-        redeemable.len(),
-        expected_usdc
-    );
+    println!("\n  Redeemable: {} | Expected USDC: ~${:.2}\n", redeemable.len(), expected_usdc);
 
     if redeemable.is_empty() {
         println!("Nothing to redeem.");
@@ -171,9 +151,7 @@ async fn main() -> anyhow::Result<()> {
 
     for pos in &redeemable {
         let cid = format!("0x{}", hex::encode(pos.condition_id));
-        if redeemed_ids.contains(&cid) {
-            continue;
-        }
+        if redeemed_ids.contains(&cid) { continue; }
         redeemed_ids.insert(cid.clone());
 
         let title = truncate(&pos.title, 42);
@@ -188,11 +166,7 @@ async fn main() -> anyhow::Result<()> {
         // Try gasless first
         match try_relayer(&client, &tx, &pos.title).await {
             Ok(hash) => {
-                println!(
-                    "  [OK]   \"{}\" | gasless | tx: {}",
-                    title,
-                    short_hash(&hash)
-                );
+                println!("  [OK]   \"{}\" | gasless | tx: {}", title, short_hash(&hash));
                 success_count += 1;
                 continue;
             }
@@ -200,10 +174,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("  [429]  \"{}\" | quota hit — direct fallback", title);
             }
             Err(e) => {
-                println!(
-                    "  [WARN] \"{}\" | relayer error: {} — trying direct",
-                    title, e
-                );
+                println!("  [WARN] \"{}\" | relayer error: {} — trying direct", title, e);
             }
         }
 
@@ -212,18 +183,12 @@ async fn main() -> anyhow::Result<()> {
             Ok(r) if r.success => {
                 println!(
                     "  [OK]   \"{}\" | direct | gas: {:.5} MATIC | tx: {}",
-                    title,
-                    r.gas_cost_matic,
-                    short_hash(&r.tx_hash),
+                    title, r.gas_cost_matic, short_hash(&r.tx_hash),
                 );
                 success_count += 1;
             }
             Ok(r) => {
-                println!(
-                    "  [FAIL] \"{}\" | reverted | tx: {}",
-                    title,
-                    short_hash(&r.tx_hash)
-                );
+                println!("  [FAIL] \"{}\" | reverted | tx: {}", title, short_hash(&r.tx_hash));
                 fail_count += 1;
             }
             Err(e) => {
@@ -234,13 +199,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     println!("\n=== DONE ===");
-    println!(
-        "Redeemed: {success_count}/{} condition(s)",
-        redeemed_ids.len()
-    );
-    if fail_count > 0 {
-        println!("Failed: {fail_count}");
-    }
+    println!("Redeemed: {success_count}/{} condition(s)", redeemed_ids.len());
+    if fail_count > 0 { println!("Failed: {fail_count}"); }
     println!("Expected USDC: ~${:.2}", expected_usdc);
 
     Ok(())
