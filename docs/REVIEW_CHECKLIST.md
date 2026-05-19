@@ -10,6 +10,15 @@
 - [ ] `git diff --check` passes.
 - [ ] Any exception to repo rules is justified by documented no-viable-alternative evidence, not convenience.
 - [ ] Any rule exception documents failed alternatives, the underlying limitation, consumer impact, and migration/rollback path.
+- [ ] Claims in the PR body are backed by command output, fixture evidence, official SDK/doc comparison, or explicitly marked residual risk.
+- [ ] Setup/docs/behavior/live-capable changes are not mixed without an explicit scope justification.
+
+## Failure Handling
+
+- [ ] New fixes document the root cause with `who`, `what`, `when`, `why`, and `how` when they address a failure.
+- [ ] The change resolves the root cause instead of adding an unbounded retry, sleep, silent fallback, lint allow, broad mock, or test deletion.
+- [ ] Any temporary workaround has a removal condition, owner, bound, and risk note.
+- [ ] Repeated failures have a regression test, fixture, or documented reason why one cannot be added.
 
 ## Fork Scope
 
@@ -34,6 +43,7 @@
 - [ ] Tests prove relayer auth identity may differ from owner signer identity.
 - [ ] Secret-bearing types do not leak through `Debug`, logs, errors, snapshots, or fixtures.
 - [ ] Production dependency instructions use pinned git `rev`, not branch.
+- [ ] Dependency changes review public API, transitive crypto/signing crates, and HTTP/TLS impact where applicable.
 
 ## pUSD / CTF Operations
 
@@ -48,3 +58,4 @@
 - [ ] No fork-specific DTO leaks into consumer domain/strategy/risk/actor state.
 - [ ] Official Rust CLOB SDK remains responsible for CLOB order path.
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
+- [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.

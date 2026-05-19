@@ -14,6 +14,57 @@
 - 이 문서의 모든 rule은 기본적으로 hard rule이다. 단순 편의, 빠른 구현, lint/format 우회, 임시 scaffold, 추정 기반 wire format 변경을 이유로 rule을 완화하지 않는다. 정말 대안이 없거나, 해당 rule을 지키면 구현 자체가 불가능하다는 원초적인 한계가 있을 때만 예외를 검토한다.
 - rule 예외가 필요하면 같은 PR 안에서 근거, 실패한 대안, 원초적 한계, consumer 영향도, migration/rollback path를 먼저 문서화한다. 이 증거 없이 rule을 깨는 변경을 넣지 않는다.
 
+## Strict Engineering Rules
+
+### Failure Handling Contract
+
+- 문제가 발생하면 증상 완화보다 먼저 근본 원인을 추적한다.
+- root cause 기록에는 최소한 `who`, `what`, `when`, `why`, `how`를 남긴다. `who`는 개인 탓이 아니라 agent, script, command, dependency, API, config 같은 실행 주체를 뜻한다.
+- 재시도, sleep, fallback, ignore, allow, unwrap 대체 같은 우회는 root cause가 식별되기 전에는 넣지 않는다.
+- 동일 failure가 반복되면 세 번째 시도 전에 원인 분류와 회귀 테스트 또는 fixture를 먼저 추가한다.
+
+### No Workaround First
+
+- senior engineer가 유지보수할 수 있는 근본 해결을 먼저 설계한다.
+- workaround는 `temporary`, `bounded`, `removal condition`, `owner`, `risk`가 문서화될 때만 허용한다.
+- "일단 통과시키기 위한" lint allow, test 삭제, broad mock, API shape 추정, silent fallback은 금지한다.
+
+### Evidence And Claim Rules
+
+- "된다", "고쳤다", "안전하다", "호환된다"는 말은 검증 증거 없이는 쓰지 않는다.
+- public API, wire format, signing, nonce, auth, calldata 변경은 fixture/golden test 또는 공식 SDK 대조 증거가 있어야 한다.
+- PR 설명에는 중요한 검증 증거와 남은 리스크를 명확히 남긴다.
+
+### Change Scope
+
+- setup PR, docs PR, behavior PR, live-capable PR을 섞지 않는다.
+- live/order-capable logic은 이름, 문서, placeholder, adapter wiring PR과 분리한다.
+- 기존 upstream Safe/Proxy 동작은 deposit-wallet 구현을 위해 암묵적으로 바꾸지 않는다.
+
+### External API And Wire Format
+
+- Polymarket 문서, official TS/Python SDK, 실제 HTTP request/response 중 최소 하나와 대조 없이 wire format을 만들지 않는다.
+- 문서와 SDK가 다르면 차이를 문서화하고, 어느 쪽을 source of truth로 삼는지 PR에 남긴다.
+- unknown transaction state, ambiguous nonce, partial submit response는 성공으로 간주하지 않는다.
+
+### Security And Dependency
+
+- secret-bearing type은 `Debug`, error, log, snapshot, fixture에 원문 노출되지 않게 설계한다.
+- signer identity, relayer auth identity, deposit wallet/funder는 타입/API 레벨에서 분리한다.
+- private key/API key가 필요한 테스트는 기본 test suite에 넣지 않고 explicit manual gate로 분리한다.
+- production dependency는 branch pin 금지, commit SHA pin만 허용한다.
+- unofficial crate/fork는 public API surface와 accepted risk를 문서화한 뒤 consumer에 연결한다.
+- dependency bump는 lockfile 변경만 보지 말고 public API, transitive crypto/signing crate, reqwest/tls 영향을 확인한다.
+
+### Testing And Rollback
+
+- fixture test 없는 signing/calldata/serialization 변경은 금지한다.
+- mock은 unit boundary에서만 쓰고, production path에 fake venue client를 만들지 않는다.
+- flaky test를 완화하기 전에 왜 flaky한지 원인을 기록한다.
+- breaking change가 아니더라도 consumer 영향이 있으면 migration path를 남긴다.
+- rollback이 불가능한 변경은 그 이유와 운영 중단 기준을 PR에 적는다.
+- stateful/live-capable 변경은 enable flag, dry-run evidence, rollback path 없이는 merge 대상이 아니다.
+
 ## Documentation Map
 
 - `docs/FORK_SCOPE.md`: fork의 범위와 non-goal.
