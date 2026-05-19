@@ -10,7 +10,9 @@
 - branch dependency는 production에서 사용하지 않는다. consumer repo는 commit SHA pin 또는 path dependency만 사용한다.
 - `WALLET-CREATE`, `WALLET`, EIP-712 DepositWallet Batch, nonce, polling, pUSD/CTF adapter calldata를 구현하기 전까지 deposit-wallet live execution 가능하다고 말하지 않는다.
 - relayer API key identity, owner signer, deposit wallet/funder address는 같은 값으로 가정하지 않는다.
-- 이 repo는 consumer app에 import되는 모듈이다. exported/public API 변경은 항상 보수적으로 다루고, 기존 public type/function signature를 바꾸거나 제거하지 않는다. breaking change가 필요하면 별도 PR에서 근거, migration path, consumer 영향도를 먼저 문서화한다.
+- 이 repo는 consumer app에 import되는 모듈이다. exported/public API 변경은 항상 보수적으로 다루고, 기존 public type/function signature를 바꾸거나 제거하지 않는다.
+- 이 문서의 모든 rule은 기본적으로 hard rule이다. 단순 편의, 빠른 구현, lint/format 우회, 임시 scaffold, 추정 기반 wire format 변경을 이유로 rule을 완화하지 않는다. 정말 대안이 없거나, 해당 rule을 지키면 구현 자체가 불가능하다는 원초적인 한계가 있을 때만 예외를 검토한다.
+- rule 예외가 필요하면 같은 PR 안에서 근거, 실패한 대안, 원초적 한계, consumer 영향도, migration/rollback path를 먼저 문서화한다. 이 증거 없이 rule을 깨는 변경을 넣지 않는다.
 
 ## Documentation Map
 
@@ -39,6 +41,7 @@
 2. venue-facing wire format이면 Polymarket 공식 문서 또는 official Python/TypeScript SDK와 대조한다.
 3. signing, nonce, auth identity, calldata를 바꾸면 golden test를 먼저 추가하거나 같은 PR에 포함한다.
 4. upstream Safe/Proxy helper를 deposit-wallet flow에 재사용하려면 request body, nonce source, signer identity가 같은지 증명한다.
+5. 기존 rule을 완화하거나 예외 처리하려면 구현 전에 근거와 대안 검토를 문서화한다.
 
 ## Required Validation
 

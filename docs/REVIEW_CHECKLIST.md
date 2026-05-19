@@ -8,6 +8,8 @@
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes.
 - [ ] `cargo test --workspace --all-features` passes.
 - [ ] `git diff --check` passes.
+- [ ] Any exception to repo rules is justified by documented no-viable-alternative evidence, not convenience.
+- [ ] Any rule exception documents failed alternatives, the underlying limitation, consumer impact, and migration/rollback path.
 
 ## Fork Scope
 
