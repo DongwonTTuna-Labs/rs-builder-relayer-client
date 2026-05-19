@@ -1,0 +1,9 @@
+{
+  "chainId": 137,
+  "owner": "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5",
+  "factory": "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
+  "implementation": "0x58CA52ebe0DadfdF531Cde7062e76746de4Db1eB",
+  "expectedDepositWallet": "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De",
+  "source": "Polymarket/py-builder-relayer-client main derive_deposit_wallet",
+  "sourceCommit": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+}

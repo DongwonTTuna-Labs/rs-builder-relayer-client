@@ -12,6 +12,13 @@ pub mod types;
 pub use auth::{AuthMethod, BuilderConfig};
 pub use client::{RelayClient, TransactionResponseHandle};
 pub use direct::{DirectExecutor, DirectTxResult};
+pub use deposit_wallet::{
+    build_wallet_batch_request_with_signature, build_wallet_create_request,
+    deposit_wallet_contract_config, derive_deposit_wallet_address, DepositWalletBatchRequest,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
+    DepositWalletParams, DepositWalletRequestContext, RelayerSubmitResponse,
+    RelayerTransactionState,
+};
 pub use error::{RelayerError, Result};
 pub use operations::{
     approve, approve_ctf_for_ctf_exchange, approve_ctf_for_neg_risk_adapter,

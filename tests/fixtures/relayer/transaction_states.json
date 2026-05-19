@@ -1,0 +1,11 @@
+{
+  "states": [
+    ["STATE_NEW", "New", false, false],
+    ["STATE_EXECUTED", "Executed", false, false],
+    ["STATE_MINED", "Mined", false, true],
+    ["STATE_CONFIRMED", "Confirmed", true, true],
+    ["STATE_INVALID", "Invalid", true, false],
+    ["STATE_FAILED", "Failed", true, false],
+    ["STATE_REPLACED", "Unknown(STATE_REPLACED)", false, false]
+  ]
+}
