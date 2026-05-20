@@ -39,6 +39,34 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Prepare redaction helper
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/codex_redaction.py" <<'PY'
+          import re
+
+          SECRET_PATTERNS = [
+              re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.DOTALL),
+              re.compile(r"(?i)\b(?:[A-Z0-9_]*PRIVATE[A-Z0-9_]*KEY[A-Z0-9_]*|WALLET[A-Z0-9_]*KEY[A-Z0-9_]*|SIGNER[A-Z0-9_]*KEY[A-Z0-9_]*)\b\s*[:=]\s*[\"']?(?:0x)?[0-9a-f]{64}[\"']?"),
+              re.compile(r"(?i)\b(?:private[_-]?key|privatekey|wallet[_-]?private[_-]?key|walletprivatekey|signer[_-]?private[_-]?key|signerprivatekey|polymarket[_-]?private[_-]?key|polymarketprivatekey)\b\s*[:=]\s*[\"']?(?:0x)?[0-9a-f]{64}[\"']?"),
+              re.compile(r"(?i)\b(?:private\s+key|wallet\s+private\s+key|signer\s+private\s+key)\b[^\n]{0,80}(?:0x)?[0-9a-f]{64}"),
+              re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+              re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
+              re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+              re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{20,}"),
+              re.compile(r"AKIA[0-9A-Z]{16}"),
+          ]
+
+          def redact(text):
+              redacted = text or ""
+              for pattern in SECRET_PATTERNS:
+                  redacted = pattern.sub("<redacted-secret>", redacted)
+              return redacted
+
+          def redact_excerpt(text, limit):
+              return redact(text)[:limit]
+          PY
+
       - name: Prepare PR review context
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,23 +82,12 @@ jobs:
           import sys
           from pathlib import Path
 
+          sys.path.insert(0, os.environ["RUNNER_TEMP"])
+          from codex_redaction import redact_excerpt
+
           repo = os.environ["GITHUB_REPOSITORY"]
           pr_number = os.environ["PR_NUMBER"]
           marker = "<!-- codex-inline-review -->"
-          secret_patterns = [
-              re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
-              re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
-              re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
-              re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
-              re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{20,}"),
-              re.compile(r"AKIA[0-9A-Z]{16}"),
-          ]
-
-          def redact(text):
-              redacted = text or ""
-              for pattern in secret_patterns:
-                  redacted = pattern.sub("<redacted-secret>", redacted)
-              return redacted
 
           def gh_json(endpoint):
               completed = subprocess.run(
@@ -143,7 +160,7 @@ jobs:
                   "deletions": item.get("deletions", 0),
                   "changes": item.get("changes", 0),
                   "changed_right_lines": changed_right_lines(patch)[:2000],
-                  "patch_excerpt": redact(patch[:12000]),
+                  "patch_excerpt": redact_excerpt(patch, 12000),
               })
 
           for comment in comments:
@@ -161,7 +178,7 @@ jobs:
                   "user_type": user.get("type", ""),
                   "editable": editable,
                   "codex_managed": managed,
-                  "body_excerpt": redact(body[:4000]) if editable else "",
+                  "body_excerpt": redact_excerpt(body, 4000) if editable else "",
               }
               if entry["path"]:
                   context["existing_inline_comments"].append(entry)
@@ -304,25 +321,14 @@ jobs:
           import sys
           from pathlib import Path
 
+          sys.path.insert(0, os.environ["RUNNER_TEMP"])
+          from codex_redaction import redact
+
           marker = "<!-- codex-inline-review -->"
           repo = os.environ["GITHUB_REPOSITORY"]
           pr_number = os.environ["PR_NUMBER"]
           head_sha = os.environ["HEAD_SHA"]
           requested = json.loads((Path(os.environ["RUNNER_TEMP"]) / "codex-output.normalized.json").read_text(encoding="utf-8"))
-          secret_patterns = [
-              re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
-              re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
-              re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
-              re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
-              re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{20,}"),
-              re.compile(r"AKIA[0-9A-Z]{16}"),
-          ]
-
-          def redact(text):
-              redacted = text or ""
-              for pattern in secret_patterns:
-                  redacted = pattern.sub("<redacted-secret>", redacted)
-              return redacted
 
           def gh_json(endpoint, method="GET", payload=None):
               cmd = ["gh", "api"]
