@@ -56,6 +56,7 @@ jobs:
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
       HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
     steps:
@@ -122,55 +123,20 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: 0
+          fetch-depth: 1
           filter: blob:none
           fetch-tags: false
           persist-credentials: false
 
-      - name: Alias base ref to existing commit object
+      - name: Prepare review git context
         working-directory: workspace
         env:
           BASE_REF: ${{ inputs.base_ref }}
           BASE_SHA: ${{ inputs.base_sha }}
-        run: |
-          if ! git check-ref-format "refs/remotes/origin/$BASE_REF"; then
-            echo "::error::Invalid base ref name: $BASE_REF"
-            exit 1
-          fi
-          if ! printf '%s' "$BASE_SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "::error::Invalid base sha format: $BASE_SHA"
-            exit 1
-          fi
-          git update-ref "refs/remotes/origin/$BASE_REF" "$BASE_SHA"
-
-      - name: Hydrate and verify review git context
-        working-directory: workspace
-        env:
-          BASE_REF: ${{ inputs.base_ref }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           GIT_AUTH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          git_with_auth() {
-            # Expanded when git invokes the credential helper.
-            # shellcheck disable=SC2016
-            git \
-              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
-              -c credential.useHttpPath=true \
-              "$@"
-          }
-
-          base_ref="refs/remotes/origin/$BASE_REF"
-          git_with_auth diff --no-ext-diff --binary "$base_ref...HEAD" >/dev/null
-          git log --oneline "$base_ref..HEAD" >/dev/null
-          if ! GIT_NO_LAZY_FETCH=1 git diff --no-ext-diff --binary "$base_ref...HEAD" >/dev/null; then
-            echo "::error::Review git context still requires lazy fetch."
-            exit 1
-          fi
-          if git config --local --name-only --get-regexp '^(http\..*\.extraheader|credential\.helper)$' >/dev/null 2>&1; then
-            echo "::error::Credential configuration remained in review workspace."
-            exit 1
-          fi
+        run: bash ../pipeline/.github/scripts/prepare_review_workspace.sh
 
       - name: Generate App installation token
         id: app-token
@@ -236,55 +202,20 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: 0
+          fetch-depth: 1
           filter: blob:none
           fetch-tags: false
           persist-credentials: false
 
-      - name: Alias base ref to existing commit object
+      - name: Prepare review git context
         working-directory: workspace
         env:
           BASE_REF: ${{ inputs.base_ref }}
           BASE_SHA: ${{ inputs.base_sha }}
-        run: |
-          if ! git check-ref-format "refs/remotes/origin/$BASE_REF"; then
-            echo "::error::Invalid base ref name: $BASE_REF"
-            exit 1
-          fi
-          if ! printf '%s' "$BASE_SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "::error::Invalid base sha format: $BASE_SHA"
-            exit 1
-          fi
-          git update-ref "refs/remotes/origin/$BASE_REF" "$BASE_SHA"
-
-      - name: Hydrate and verify review git context
-        working-directory: workspace
-        env:
-          BASE_REF: ${{ inputs.base_ref }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           GIT_AUTH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          git_with_auth() {
-            # Expanded when git invokes the credential helper.
-            # shellcheck disable=SC2016
-            git \
-              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
-              -c credential.useHttpPath=true \
-              "$@"
-          }
-
-          base_ref="refs/remotes/origin/$BASE_REF"
-          git_with_auth diff --no-ext-diff --binary "$base_ref...HEAD" >/dev/null
-          git log --oneline "$base_ref..HEAD" >/dev/null
-          if ! GIT_NO_LAZY_FETCH=1 git diff --no-ext-diff --binary "$base_ref...HEAD" >/dev/null; then
-            echo "::error::Review git context still requires lazy fetch."
-            exit 1
-          fi
-          if git config --local --name-only --get-regexp '^(http\..*\.extraheader|credential\.helper)$' >/dev/null 2>&1; then
-            echo "::error::Credential configuration remained in review workspace."
-            exit 1
-          fi
+        run: bash ../pipeline/.github/scripts/prepare_review_workspace.sh
 
       - name: Download PR context artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -336,7 +267,7 @@ jobs:
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
       ART_DIR: ${{ github.workspace }}/artifacts
-      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
+      CODEX_WORKSPACE: ${{ github.workspace }}/pipeline
     steps:
       - name: Checkout base ref (trusted scripts)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -345,61 +276,6 @@ jobs:
           path: pipeline
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Checkout PR head (review data only)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: refs/pull/${{ inputs.pr_number }}/head
-          path: workspace
-          fetch-depth: 0
-          filter: blob:none
-          fetch-tags: false
-          persist-credentials: false
-
-      - name: Alias base ref to existing commit object
-        working-directory: workspace
-        env:
-          BASE_REF: ${{ inputs.base_ref }}
-          BASE_SHA: ${{ inputs.base_sha }}
-        run: |
-          if ! git check-ref-format "refs/remotes/origin/$BASE_REF"; then
-            echo "::error::Invalid base ref name: $BASE_REF"
-            exit 1
-          fi
-          if ! printf '%s' "$BASE_SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "::error::Invalid base sha format: $BASE_SHA"
-            exit 1
-          fi
-          git update-ref "refs/remotes/origin/$BASE_REF" "$BASE_SHA"
-
-      - name: Hydrate and verify review git context
-        working-directory: workspace
-        env:
-          BASE_REF: ${{ inputs.base_ref }}
-          GIT_AUTH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          git_with_auth() {
-            # Expanded when git invokes the credential helper.
-            # shellcheck disable=SC2016
-            git \
-              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
-              -c credential.useHttpPath=true \
-              "$@"
-          }
-
-          base_ref="refs/remotes/origin/$BASE_REF"
-          git_with_auth diff --no-ext-diff --binary "$base_ref...HEAD" >/dev/null
-          git log --oneline "$base_ref..HEAD" >/dev/null
-          if ! GIT_NO_LAZY_FETCH=1 git diff --no-ext-diff --binary "$base_ref...HEAD" >/dev/null; then
-            echo "::error::Review git context still requires lazy fetch."
-            exit 1
-          fi
-          if git config --local --name-only --get-regexp '^(http\..*\.extraheader|credential\.helper)$' >/dev/null 2>&1; then
-            echo "::error::Credential configuration remained in review workspace."
-            exit 1
-          fi
 
       - name: Download all findings
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
