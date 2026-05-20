@@ -1,4 +1,5 @@
 use ethers::types::{Address, Bytes, U256};
+use ethers::utils::to_checksum;
 use serde::{Serialize, Serializer};
 
 pub const WALLET_CREATE_TRANSACTION_TYPE: &str = "WALLET-CREATE";
@@ -70,7 +71,7 @@ pub(crate) fn serialize_address<S>(address: &Address, serializer: S) -> Result<S
 where
     S: Serializer,
 {
-    serializer.serialize_str(&format!("{address:?}"))
+    serializer.serialize_str(&to_checksum(address, None))
 }
 
 pub(crate) fn serialize_u256_decimal<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
