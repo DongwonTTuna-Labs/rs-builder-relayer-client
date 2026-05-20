@@ -40,26 +40,38 @@ jobs:
             "+refs/pull/${{ github.event.pull_request.number }}/head"
 
       - name: Run Codex review
-        id: run_codex
-        uses: openai/codex-action@v1
-        with:
-          prompt-file: .github/prompts/codex-pr-review.md
-          output-file: codex-output.md
-          codex-home: /home/runner/.codex
-          sandbox: read-only
-          safety-strategy: unprivileged-user
-          codex-user: runner
+        env:
+          CODEX_HOME: /home/runner/.codex
+        run: |
+          set -euo pipefail
+          codex login status
+          codex exec \
+            --cd "$GITHUB_WORKSPACE" \
+            --sandbox read-only \
+            --ask-for-approval never \
+            --output-last-message codex-output.md \
+            --color never \
+            - < .github/prompts/codex-pr-review.md
 
       - name: Upsert Codex review comment
-        if: steps.run_codex.outputs.final-message != ''
         uses: actions/github-script@v7
-        env:
-          CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
         with:
           github-token: ${{ github.token }}
           script: |
+            const fs = require('fs');
+            const path = require('path');
             const marker = '<!-- codex-pr-review -->';
-            const body = `${marker}\n## Codex PR Review\n\n${process.env.CODEX_FINAL_MESSAGE}`;
+            const outputPath = path.join(process.env.GITHUB_WORKSPACE, 'codex-output.md');
+            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+              core.info('No Codex output file found; skipping comment.');
+              return;
+            }
+            const finalMessage = fs.readFileSync(outputPath, 'utf8').trim();
+            if (!finalMessage) {
+              core.info('Codex output was empty; skipping comment.');
+              return;
+            }
+            const body = `${marker}\n## Codex PR Review\n\n${finalMessage}`;
             const { owner, repo } = context.repo;
             const issue_number = context.payload.pull_request.number;
             const comments = await github.paginate(github.rest.issues.listComments, {
