@@ -24,6 +24,12 @@ set -euo pipefail
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 
+# CODEX_WORKSPACE 는 review 대상 (= PR head) 의 체크아웃 경로. v2 pipeline 의
+# 모든 review job 은 base-ref 와 PR head 를 분리 체크아웃하고 후자를 여기에
+# 둔다. 비어 있으면 GITHUB_WORKSPACE 로 폴백 (single-checkout / 로컬 테스트).
+CODEX_CD_DIR="${CODEX_WORKSPACE:-$GITHUB_WORKSPACE}"
+test -d "$CODEX_CD_DIR"
+
 GUARD_LIB="/opt/codex-runner/libcodex-deny-auth.so"
 test -r "$GUARD_LIB"
 
@@ -54,7 +60,7 @@ codex --enable use_legacy_landlock --ask-for-approval never exec \
   --model gpt-5.5 \
   -c 'model_reasoning_effort="xhigh"' \
   ${EXTRA_CODEX_FLAGS:-} \
-  --cd "$GITHUB_WORKSPACE" \
+  --cd "$CODEX_CD_DIR" \
   --sandbox read-only \
   --output-schema "$SCHEMA_FILE" \
   --output-last-message "$OUT_FILE" \

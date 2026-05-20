@@ -23,6 +23,7 @@ batch 의 흐름
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import re
@@ -32,24 +33,35 @@ from pathlib import Path
 from typing import Iterable
 
 from codex_redaction import redact
-from gh_api import gh_graphql, gh_paginated
+from gh_api import gh_graphql_paginated, gh_paginated
 
 INLINE_MARKER = "<!-- codex-inline-review -->"
-BOT_LOGIN = "github-actions[bot]"
 SCRIPT_DIR = Path(__file__).resolve().parent
-WORKSPACE = Path(os.environ.get("GITHUB_WORKSPACE", "."))
+# BASE_DIR: this file lives at <base-ref>/.github/scripts/. Going up twice
+# gives the base-ref checkout root — the *trusted* source of agent prompts,
+# schemas, and other instructions.
+BASE_DIR = SCRIPT_DIR.parent.parent
+# WORKSPACE: PR head checkout. Used ONLY to read snippets of the code under
+# review (data, never executable). Falls back to GITHUB_WORKSPACE when the
+# pipeline runs in single-checkout mode (e.g. local tests).
+WORKSPACE = Path(
+    os.environ.get("CODEX_WORKSPACE")
+    or os.environ.get("GITHUB_WORKSPACE", ".")
+)
 RUNNER_TEMP = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
 ART_DIR = Path(os.environ.get("ART_DIR", "./artifacts"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "3"))
+BATCH_PARALLELISM = int(os.environ.get("BATCH_PARALLELISM", "4"))
 SNIPPET_RADIUS = int(os.environ.get("SNIPPET_RADIUS", "15"))
 SCHEMA_FILE = SCRIPT_DIR / "schemas" / "resolutions.schema.json"
-AGENT_PROMPT_FILE = WORKSPACE / ".codex" / "agents" / "resolve-checker-reviewer.md"
+AGENT_PROMPT_FILE = BASE_DIR / ".codex" / "agents" / "resolve-checker-reviewer.md"
 
 UNRESOLVED_THREADS_QUERY = """
-query($owner: String!, $name: String!, $pr: Int!) {
+query($owner: String!, $name: String!, $pr: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
           comments(first: 1) {
@@ -68,18 +80,20 @@ def warn(msg: str) -> None:
 
 
 def fetch_unresolved_first_comment_ids(repo: str, pr_number: str) -> set[int]:
-    """첫 코멘트가 isResolved=false AND isMinimized=false 인 review thread 들의 first comment id 집합."""
+    """첫 코멘트가 isResolved=false AND isMinimized=false 인 review thread 들의 first comment id 집합.
+
+    페이지당 100개 thread 제한을 넘어가는 PR 에서도 모든 페이지를 순회한다.
+    """
     owner, name = repo.split("/", 1)
-    payload = gh_graphql(
+    threads = gh_graphql_paginated(
         UNRESOLVED_THREADS_QUERY,
         {"owner": owner, "name": name, "pr": int(pr_number)},
-    )
-    threads = (
-        payload.get("data", {})
-        .get("repository", {})
-        .get("pullRequest", {})
-        .get("reviewThreads", {})
-        .get("nodes", [])
+        extract=lambda payload: (
+            payload.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+        ),
     )
     out: set[int] = set()
     for thread in threads:
@@ -228,21 +242,33 @@ def main() -> int:
     unresolved_ids = fetch_unresolved_first_comment_ids(repo, pr_number)
 
     comments = gh_paginated(f"repos/{repo}/pulls/{pr_number}/comments")
-    codex_managed = [
-        {
-            "comment_id": int(c.get("id") or 0),
-            "file": str(c.get("path") or ""),
-            "line": int(c.get("line") or 0),
-            "marker_key": extract_marker_key(c.get("body") or ""),
-            "body_excerpt": redact(str(c.get("body") or ""))[:4000],
-            "code_snippet": None,
-        }
-        for c in comments
-        if (c.get("user") or {}).get("login") == BOT_LOGIN
-        and INLINE_MARKER in (c.get("body") or "")
-        and (c.get("id") is not None)
-        and int(c.get("id") or 0) in unresolved_ids
-    ]
+    codex_managed: list[dict] = []
+    for c in comments:
+        if INLINE_MARKER not in (c.get("body") or ""):
+            continue
+        if c.get("id") is None:
+            continue
+        cid = int(c.get("id") or 0)
+        if cid not in unresolved_ids:
+            continue
+        live_line = int(c.get("line") or 0)
+        original_line = int(c.get("original_line") or 0)
+        # Outdated 댓글은 `line` 이 빈 채 `original_line` 만 남는다. 그대로
+        # 보내면 LLM 이 위치 정보 없이 판정해 잘못 닫을 위험이 있어,
+        # original_line 으로 fallback 하고 outdated 플래그를 같이 넘긴다.
+        outdated = live_line <= 0 and original_line >= 1
+        effective_line = live_line if live_line >= 1 else original_line
+        codex_managed.append(
+            {
+                "comment_id": cid,
+                "file": str(c.get("path") or ""),
+                "line": effective_line,
+                "outdated": outdated,
+                "marker_key": extract_marker_key(c.get("body") or ""),
+                "body_excerpt": redact(str(c.get("body") or ""))[:4000],
+                "code_snippet": None,
+            }
+        )
 
     if not codex_managed:
         print("no codex-managed inline comments to check; resolutions.json is empty")
@@ -254,10 +280,12 @@ def main() -> int:
 
     agent_body = load_agent_body()
 
-    resolutions: list[dict] = []
-    for batch_index, batch in enumerate(chunked(codex_managed, BATCH_SIZE), start=1):
+    batches = list(enumerate(chunked(codex_managed, BATCH_SIZE), start=1))
+
+    def run_batch(batch_index: int, batch: list[dict]) -> list[dict]:
         prompt_path = build_prompt(agent_body, batch, batch_index)
         out_batch_path = RUNNER_TEMP / f"codex-output-resolve-batch-{batch_index}.json"
+        expected = {b["comment_id"] for b in batch}
         try:
             run_codex(prompt_path, out_batch_path)
         except SystemExit as exc:
@@ -265,12 +293,29 @@ def main() -> int:
                 f"resolve-check batch {batch_index} failed (exit={exc.code}); "
                 "falling back to resolved=False"
             )
-            resolutions.extend(
-                normalize_batch_output(Path("/nonexistent"), {b["comment_id"] for b in batch})
-            )
-            continue
-        expected = {b["comment_id"] for b in batch}
-        resolutions.extend(normalize_batch_output(out_batch_path, expected))
+            return normalize_batch_output(Path("/nonexistent"), expected)
+        return normalize_batch_output(out_batch_path, expected)
+
+    # Codex 호출은 각각 외부 프로세스로 IO 바운드라 ThreadPoolExecutor 로 충분히
+    # 병렬화된다. batch_index 키로 deterministic ordering 유지.
+    workers = max(1, min(BATCH_PARALLELISM, len(batches)))
+    print(
+        f"resolve-check: {len(codex_managed)} comment(s) in {len(batches)} batch(es), "
+        f"running with {workers} worker(s)"
+    )
+    results_by_index: dict[int, list[dict]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(run_batch, batch_index, batch): batch_index
+            for batch_index, batch in batches
+        }
+        for future in concurrent.futures.as_completed(futures):
+            batch_index = futures[future]
+            results_by_index[batch_index] = future.result()
+
+    resolutions: list[dict] = []
+    for batch_index, _ in batches:
+        resolutions.extend(results_by_index.get(batch_index, []))
 
     out_path.write_text(
         json.dumps({"resolutions": resolutions}, ensure_ascii=False, indent=2) + "\n",

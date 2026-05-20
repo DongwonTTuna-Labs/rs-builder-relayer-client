@@ -11,15 +11,16 @@ Two phases share this script:
     Read ``combined.json`` and ``decisions.json``, merge tech-lead decisions,
     apply hard rules, and write ``with-decisions.json`` and ``allowed.json``.
 
-Hard rules (post-script overrides tech-lead):
+Hard rules (post-script overrides tech-lead AND merge_notes):
   - ``type == "MUST"``                                 → allow=true
   - ``agent == "security"``                            → allow=true
   - ``rule_ref`` endswith ``"-critical"`` (e.g.
     ``framework-fidelity-critical``)                   → allow=true
+  - ``merge_notes`` 의 merged ids                       → allow=false
   - otherwise → tech-lead's ``allow`` value, default false.
 
-``merge_notes`` from decisions force the merged ids to ``allow=false`` so
-only the primary remains.
+Hard rule 이 ``merge_notes`` 보다 우선한다. tech-lead 가 보안/MUST/critical
+finding 을 동급 finding 으로 묶어 merge 해도 hard rule 이 살아남도록 한다.
 
 Required env:
   ART_DIR — directory holding artifacts (default: ``./artifacts``).
@@ -34,6 +35,15 @@ import sys
 from pathlib import Path
 
 
+EXPECTED_AXES = {
+    "correctness",
+    "security",
+    "performance",
+    "test-coverage",
+    "domain",
+}
+
+
 def warn(msg: str) -> None:
     sys.stderr.write(f"::warning::{msg}\n")
 
@@ -41,6 +51,7 @@ def warn(msg: str) -> None:
 def combine(art_dir: Path) -> None:
     findings_files = sorted(art_dir.glob("findings-*.json"))
     combined: list[dict] = []
+    received_axes: set[str] = set()
     if not findings_files:
         warn("no findings-*.json found; combined.json will be empty")
     for path in findings_files:
@@ -50,12 +61,36 @@ def combine(art_dir: Path) -> None:
             warn(f"skipping {path.name}: {exc}")
             continue
         agent = data.get("agent")
+        if agent:
+            received_axes.add(str(agent))
         for finding in data.get("findings") or []:
             row = dict(finding)
             row["agent"] = agent
             combined.append(row)
+
+    missing_axes = sorted(EXPECTED_AXES - received_axes)
+    if missing_axes:
+        warn(
+            "axis artifact missing for: "
+            + ", ".join(missing_axes)
+            + " — sticky summary will surface a partial-review warning"
+        )
+
     (art_dir / "combined.json").write_text(
         json.dumps(combined, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (art_dir / "axes_status.json").write_text(
+        json.dumps(
+            {
+                "expected": sorted(EXPECTED_AXES),
+                "received": sorted(received_axes),
+                "missing": missing_axes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
     print(f"combined findings: {len(combined)}")
@@ -88,10 +123,10 @@ def gate(art_dir: Path) -> None:
     for finding in combined:
         finding_id = str(finding.get("id") or "")
         decision = decisions_by_id.get(finding_id)
-        if finding_id in merged_ids:
-            allow = False
-            gate_reason = "merge_note:consolidated"
-        elif finding.get("type") == "MUST":
+        # Hard rules first — never let merge_notes hide MUST / security /
+        # domain-critical findings (tech-lead 가 동일 카테고리 finding 들을
+        # merge 해도 hard-rule allow 가 이기도록).
+        if finding.get("type") == "MUST":
             allow = True
             gate_reason = "hard_rule:must"
         elif finding.get("agent") == "security":
@@ -100,6 +135,9 @@ def gate(art_dir: Path) -> None:
         elif finding.get("agent") == "domain" and is_domain_critical(finding):
             allow = True
             gate_reason = "hard_rule:domain-critical"
+        elif finding_id in merged_ids:
+            allow = False
+            gate_reason = "merge_note:consolidated"
         elif decision is not None:
             allow = bool(decision.get("allow"))
             gate_reason = decision.get("reason") or ""

@@ -29,6 +29,9 @@ MARKER = "<!-- codex-inline-review -->"
 MAX_CHANGED_LINES = 2000
 MAX_PATCH_EXCERPT_CHARS = 12000
 MAX_COMMENT_BODY_CHARS = 4000
+# Total byte budget across all changed-file excerpts. Prevents axis prompts
+# from blowing past Codex context limits on PRs that touch hundreds of files.
+MAX_TOTAL_PATCH_BYTES = 200_000
 
 
 def changed_right_lines(patch: str | None) -> list[int]:
@@ -72,25 +75,50 @@ def main() -> int:
         "existing_inline_comments": [],
     }
 
-    for item in files:
+    # Process files sorted by total change volume so large/important diffs win
+    # the byte budget when truncation kicks in. Original order is preserved
+    # for the output by remembering the input index.
+    sorted_files = sorted(
+        enumerate(files),
+        key=lambda pair: int(pair[1].get("changes") or 0),
+        reverse=True,
+    )
+    total_patch_bytes = 0
+    rendered_by_index: dict[int, dict] = {}
+    for original_index, item in sorted_files:
         patch = item.get("patch") or ""
-        context["changed_files"].append(
-            {
-                "filename": item.get("filename", ""),
-                "status": item.get("status", ""),
-                "additions": item.get("additions", 0),
-                "deletions": item.get("deletions", 0),
-                "changes": item.get("changes", 0),
-                "changed_right_lines": changed_right_lines(patch)[:MAX_CHANGED_LINES],
-                "patch_excerpt": redact(patch[:MAX_PATCH_EXCERPT_CHARS]),
-            }
-        )
+        per_file = patch[:MAX_PATCH_EXCERPT_CHARS]
+        remaining = MAX_TOTAL_PATCH_BYTES - total_patch_bytes
+        truncated = len(patch) > MAX_PATCH_EXCERPT_CHARS
+        if remaining <= 0:
+            per_file = ""
+            truncated = True
+        elif len(per_file) > remaining:
+            per_file = per_file[:remaining]
+            truncated = True
+        redacted_excerpt = redact(per_file)
+        total_patch_bytes += len(redacted_excerpt.encode("utf-8"))
+        rendered_by_index[original_index] = {
+            "filename": item.get("filename", ""),
+            "status": item.get("status", ""),
+            "additions": item.get("additions", 0),
+            "deletions": item.get("deletions", 0),
+            "changes": item.get("changes", 0),
+            "changed_right_lines": changed_right_lines(patch)[:MAX_CHANGED_LINES],
+            "patch_excerpt": redacted_excerpt,
+            "truncated": truncated,
+        }
+    for original_index in range(len(files)):
+        context["changed_files"].append(rendered_by_index[original_index])
 
     for comment in comments:
         body = comment.get("body") or ""
         user = comment.get("user") or {}
         managed = MARKER in body
-        editable = user.get("login") == "github-actions[bot]" and managed
+        # Identify "our" managed comments by marker only (App installation
+        # token causes the bot login to vary), so the LLM still sees them as
+        # editable and won't treat them as third-party reviews.
+        editable = managed
         entry = {
             "id": comment.get("id"),
             "path": comment.get("path") or "",

@@ -3,7 +3,7 @@
 
 > PR #${PR_NUMBER} / 트리거: ${TRIGGER}
 > **판정**: ${LGTM_STATUS} — ${LGTM_DETAIL}
-
+${AXIS_STATUS_BLOCK}
 ### 결과 요약
 
 | MUST | ASK | SUGGEST | IMO | NITS |

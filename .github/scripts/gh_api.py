@@ -14,9 +14,11 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 PER_PAGE = 100
+GRAPHQL_PAGE_SIZE = 100
+GRAPHQL_PAGE_LIMIT = 50  # safety bound (5000 nodes); avoids runaway loops
 
 
 def gh_json(
@@ -101,3 +103,40 @@ def gh_graphql(query: str, variables: dict[str, object]) -> dict:
         )
         raise SystemExit(1)
     return payload
+
+
+def gh_graphql_paginated(
+    query: str,
+    variables: dict[str, object],
+    extract: Callable[[dict], dict],
+) -> list[dict]:
+    """Cursor-based pagination for a GraphQL connection.
+
+    ``query`` MUST accept an ``$after: String`` variable and the connection
+    MUST return ``pageInfo { hasNextPage endCursor }`` alongside ``nodes``.
+    ``extract`` receives the raw payload (``{"data": ...}``) and must return
+    the connection dict (the one containing ``nodes`` / ``pageInfo``).
+
+    Iterates until the GitHub API reports ``hasNextPage=false`` or a safety
+    cap is reached, and returns the concatenated ``nodes`` list.
+    """
+    nodes: list[dict] = []
+    cursor: str | None = None
+    for _ in range(GRAPHQL_PAGE_LIMIT):
+        page_vars = dict(variables)
+        page_vars["after"] = cursor
+        payload = gh_graphql(query, page_vars)
+        connection = extract(payload) or {}
+        page_nodes = connection.get("nodes") or []
+        nodes.extend(page_nodes)
+        page_info = connection.get("pageInfo") or {}
+        if not page_info.get("hasNextPage"):
+            return nodes
+        cursor = page_info.get("endCursor")
+        if not cursor:
+            return nodes
+    sys.stderr.write(
+        f"::warning::gh_graphql_paginated hit GRAPHQL_PAGE_LIMIT={GRAPHQL_PAGE_LIMIT}; "
+        "remaining pages truncated\n"
+    )
+    return nodes

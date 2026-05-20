@@ -61,24 +61,33 @@ def normalize_findings(raw: dict, axis: str) -> dict:
         finding_id = str(entry.get("id") or "").strip()
         if not title or not reason or not finding_id:
             continue
+        # 스키마는 file / line / rule_ref 를 required 로 선언하고 null 을 허용한다.
+        # 값이 없으면 키를 생략하지 말고 명시적으로 null 로 둬서 downstream 의
+        # KeyError / silent skip 을 방지한다.
+        file_value: str | None = None
+        if entry.get("file"):
+            file_value = str(entry["file"]).strip() or None
+        line_value: int | None = None
+        if entry.get("line"):
+            try:
+                parsed_line = int(entry["line"])
+                if parsed_line >= 1:
+                    line_value = parsed_line
+            except (TypeError, ValueError):
+                line_value = None
+        rule_ref_value: str | None = None
+        if entry.get("rule_ref"):
+            rule_ref_value = str(entry["rule_ref"])[:200] or None
         row: dict = {
             "id": finding_id,
             "type": finding_type,
+            "file": file_value,
+            "line": line_value,
             "title": title[:200],
             "reason": reason[:1000],
+            "rule_ref": rule_ref_value,
             "cross_cutting": bool(entry.get("cross_cutting") or False),
         }
-        if entry.get("file"):
-            row["file"] = str(entry["file"]).strip()
-        if entry.get("line"):
-            try:
-                line_no = int(entry["line"])
-                if line_no >= 1:
-                    row["line"] = line_no
-            except (TypeError, ValueError):
-                pass
-        if entry.get("rule_ref"):
-            row["rule_ref"] = str(entry["rule_ref"])[:200]
         normalized_findings.append(row)
 
     positive_raw = raw.get("positive") or []
@@ -103,7 +112,7 @@ def normalize_findings(raw: dict, axis: str) -> dict:
 def normalize_decisions(raw: dict) -> dict:
     if not isinstance(raw, dict):
         warn("decisions JSON is not an object; emitting empty")
-        return {"decisions": [], "merge_notes": []}
+        return {"decisions": [], "merge_notes": [], "judgment": None}
 
     decisions_raw = raw.get("decisions")
     if not isinstance(decisions_raw, list):
@@ -155,10 +164,13 @@ def normalize_decisions(raw: dict) -> dict:
             }
         )
 
-    out: dict = {"decisions": decisions, "merge_notes": merge_notes}
-    if judgment:
-        out["judgment"] = judgment
-    return out
+    # judgment 는 스키마상 항상 required. invalid 면 키 자체를 생략하지 않고
+    # null 로 명시해 downstream 이 KeyError 를 만나지 않도록 한다.
+    return {
+        "decisions": decisions,
+        "merge_notes": merge_notes,
+        "judgment": judgment,
+    }
 
 
 def main() -> int:

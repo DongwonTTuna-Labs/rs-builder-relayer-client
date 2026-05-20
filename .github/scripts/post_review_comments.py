@@ -35,19 +35,29 @@ from pathlib import Path
 from string import Template
 
 from codex_redaction import redact
-from gh_api import gh_graphql, gh_json, gh_paginated
+from gh_api import gh_graphql, gh_graphql_paginated, gh_json, gh_paginated
 
 INLINE_MARKER = "<!-- codex-inline-review -->"
 STICKY_MARKER = "<!-- codex-review-sticky -->"
-BOT_LOGIN = "github-actions[bot]"
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_TEMPLATE_PATH = SCRIPT_DIR / "review-summary-template.md"
 
 
 def is_codex_inline(comment: dict) -> bool:
-    """codex 가 작성한 inline 코멘트인지 식별."""
-    user = comment.get("user") or {}
-    if (user.get("login") or "") != BOT_LOGIN:
-        return False
+    """codex 가 작성한 inline 코멘트인지 본문 마커로 식별.
+
+    GitHub App installation token 으로 코멘트를 작성하면 author login 이
+    설치된 App 의 봇 핸들 (예: ``dongwontuna-s-review-bot[bot]``) 이 되어
+    기존의 ``github-actions[bot]`` 매칭이 깨진다. 봇 login 을 신뢰하지 않고
+    본문에 우리가 직접 박은 ``INLINE_MARKER`` 만 기준으로 한다.
+    """
     return INLINE_MARKER in (comment.get("body") or "")
+
+
+def is_codex_sticky(comment: dict) -> bool:
+    """codex sticky 코멘트인지 본문 마커로 식별."""
+    return (comment.get("body") or "").startswith(STICKY_MARKER)
 
 AXIS_LABEL_MAP = {
     "correctness": "정확성",
@@ -89,10 +99,11 @@ mutation($id: ID!, $classifier: ReportedContentClassifiers!) {
 """
 
 THREAD_MAP_QUERY = """
-query($owner: String!, $name: String!, $pr: Int!) {
+query($owner: String!, $name: String!, $pr: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           isResolved
@@ -108,17 +119,20 @@ query($owner: String!, $name: String!, $pr: Int!) {
 
 
 def fetch_thread_map(repo: str, pr_number: str) -> dict[int, str]:
-    """unresolved AND first comment is not minimized 인 thread 의 ``{ first comment id: thread node id }``."""
+    """unresolved AND first comment is not minimized 인 thread 의 ``{ first comment id: thread node id }``.
+
+    페이지당 100개 thread 제한을 넘어가는 PR 에서도 모든 페이지를 순회한다.
+    """
     owner, name = repo.split("/", 1)
-    payload = gh_graphql(
-        THREAD_MAP_QUERY, {"owner": owner, "name": name, "pr": int(pr_number)}
-    )
-    threads = (
-        payload.get("data", {})
-        .get("repository", {})
-        .get("pullRequest", {})
-        .get("reviewThreads", {})
-        .get("nodes", [])
+    threads = gh_graphql_paginated(
+        THREAD_MAP_QUERY,
+        {"owner": owner, "name": name, "pr": int(pr_number)},
+        extract=lambda payload: (
+            payload.get("data", {})
+            .get("repository", {})
+            .get("pullRequest", {})
+            .get("reviewThreads", {})
+        ),
     )
     out: dict[int, str] = {}
     for thread in threads:
@@ -277,15 +291,20 @@ def post_inline(
 
     for finding in allowed:
         if finding.get("cross_cutting"):
+            # cross-cutting finding 은 처음부터 inline 대상이 아니므로 표시도 안 한다.
             continue
         path = str(finding.get("file") or "").strip()
         line = int(finding.get("line") or 0)
         if not path or line <= 0:
+            # 위치 정보가 없어 인라인을 못 단다는 사실을 sticky 본문이 알 수 있도록
+            # finding 객체에 표식만 남긴다 (카운트에서는 빼지 않는다).
+            finding["_no_inline"] = "no_location"
             skipped += 1
             continue
         allowed_lines = changed_lines_by_path.get(path, set())
         if line not in allowed_lines:
             print(f"Skipping {path}:{line}: not a changed RIGHT-side line")
+            finding["_no_inline"] = "outside_changed_lines"
             skipped += 1
             continue
 
@@ -397,6 +416,12 @@ def badge_md(finding_type: str) -> str:
     )
 
 
+_NO_INLINE_LABEL = {
+    "no_location": "(no inline — 위치 정보 없음)",
+    "outside_changed_lines": "(no inline — 변경 라인 밖)",
+}
+
+
 def render_block(allowed: list[dict], types: set[str], checkbox: bool) -> str:
     rows = []
     for f in allowed:
@@ -412,6 +437,9 @@ def render_block(allowed: list[dict], types: set[str], checkbox: bool) -> str:
         if loc:
             head += f" {loc}"
         head += f" — {title}"
+        no_inline_label = _NO_INLINE_LABEL.get(str(f.get("_no_inline") or ""))
+        if no_inline_label:
+            head += f" {no_inline_label}"
         if reason:
             rows.append(f"{head}\n  이유: {reason}")
         else:
@@ -419,6 +447,26 @@ def render_block(allowed: list[dict], types: set[str], checkbox: bool) -> str:
     if not rows:
         return "- 해당 없음"
     return "\n".join(rows)
+
+
+def render_axis_status(art_dir: Path) -> str:
+    """combine 단계에서 누락된 axis 가 있으면 sticky 본문에 ⚠️ 블록을 만든다."""
+    status_path = art_dir / "axes_status.json"
+    if not status_path.is_file():
+        return ""
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    missing = data.get("missing") or []
+    if not missing:
+        return ""
+    formatted = ", ".join(f"`{name}`" for name in missing)
+    return (
+        "\n> ⚠️ **부분 리뷰**: "
+        f"{formatted} axis 의 artifact 가 누락되어 해당 관점은 이번 리뷰에 반영되지 않았습니다. "
+        "지적 사항 없음이 아니라 *검사되지 않음* 임을 유의하세요."
+    )
 
 
 def render_positive(art_dir: Path) -> str:
@@ -515,6 +563,7 @@ def post_sticky(
         "TRIGGER": trigger,
         "LGTM_STATUS": status,
         "LGTM_DETAIL": detail,
+        "AXIS_STATUS_BLOCK": render_axis_status(art_dir),
         "MUST_COUNT": str(counts.get("MUST", 0)),
         "ASK_COUNT": str(counts.get("ASK", 0)),
         "SUGGEST_COUNT": str(counts.get("SUGGEST", 0)),
@@ -548,12 +597,10 @@ def post_sticky(
     existing = gh_paginated(f"repos/{repo}/issues/{pr_number}/comments")
     existing_sticky_id: int | None = None
     for comment in existing:
-        if (comment.get("user") or {}).get("login") != BOT_LOGIN:
+        if not is_codex_sticky(comment):
             continue
-        body_text = comment.get("body") or ""
-        if body_text.startswith(STICKY_MARKER):
-            existing_sticky_id = int(comment.get("id") or 0)
-            break
+        existing_sticky_id = int(comment.get("id") or 0)
+        break
 
     if existing_sticky_id:
         print(f"PATCH existing sticky comment id={existing_sticky_id}")
@@ -583,7 +630,7 @@ def main() -> int:
     trigger = os.environ.get("TRIGGER", "unknown")
     art_dir = Path(os.environ.get("ART_DIR", "./artifacts"))
     template_path = Path(
-        os.environ.get("TEMPLATE", ".github/scripts/review-summary-template.md")
+        os.environ.get("TEMPLATE") or DEFAULT_TEMPLATE_PATH
     )
 
     allowed_path = art_dir / "allowed.json"

@@ -23,6 +23,7 @@ Codex PR Review v2 의 **Stage 0** 게이트.
       "comment_id": 4494980233,
       "file": "src/a.ts",
       "line": 42,
+      "outdated": false,
       "marker_key": "abc123...",
       "body_excerpt": "<코멘트 본문 (markdown 그대로, secrets 는 사전에 redact 됨)>",
       "code_snippet": "<해당 file:line 주변 ±15 줄 (없으면 null)>"
@@ -34,6 +35,7 @@ Codex PR Review v2 의 **Stage 0** 게이트.
 
 - 한 배치에는 항상 **최대 3 개** 의 코멘트가 들어온다.
 - `code_snippet` 이 `null` 이면 파일이 삭제되었거나 본 PR diff 에서 해당 위치가 사라졌음을 의미한다.
+- `outdated: true` 는 GitHub 이 해당 코멘트를 "이미 변경된 라인" 으로 마킹했다는 뜻이다. `line` 은 원본(`original_line`) 값에서 채워온 위치이므로, 현재 PR head 의 동일 위치를 직접 보고 판정할 것. 위치가 사라졌더라도 의도된 수정이 명백하지 않으면 안전하게 `resolved: false`.
 
 ## 출력 (필수)
 
