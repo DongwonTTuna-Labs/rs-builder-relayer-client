@@ -48,10 +48,10 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,baseRefName,baseRefOid,isDraft,headRepository,headRepositoryOwner)
+          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,baseRefName,isDraft,headRepository,headRepositoryOwner)
           head_sha=$(jq -r .headRefOid <<<"$json")
           base_ref=$(jq -r .baseRefName <<<"$json")
-          base_sha=$(jq -r .baseRefOid <<<"$json")
+          base_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .base.sha)
           is_draft=$(jq -r .isDraft <<<"$json")
           head_owner=$(jq -r '.headRepositoryOwner.login' <<<"$json")
           head_repo=$(jq -r '.headRepository.name' <<<"$json")
@@ -72,9 +72,11 @@ jobs:
             exit 1
           fi
 
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "head_sha=$head_sha"
+            echo "base_ref=$base_ref"
+            echo "base_sha=$base_sha"
+          } >> "$GITHUB_OUTPUT"
 
   call-pipeline:
     name: Codex PR Review (comment)
