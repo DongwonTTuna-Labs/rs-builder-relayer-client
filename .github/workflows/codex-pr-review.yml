@@ -39,5 +39,7 @@ jobs:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
       base_ref: ${{ github.event.pull_request.base.ref }}
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      pr_commits: ${{ github.event.pull_request.commits }}
       trigger: pull_request:${{ github.event.action }}
     secrets: inherit

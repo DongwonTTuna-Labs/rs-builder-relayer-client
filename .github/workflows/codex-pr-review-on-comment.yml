@@ -31,6 +31,8 @@ jobs:
     outputs:
       head_sha: ${{ steps.lookup.outputs.head_sha }}
       base_ref: ${{ steps.lookup.outputs.base_ref }}
+      base_sha: ${{ steps.lookup.outputs.base_sha }}
+      pr_commits: ${{ steps.lookup.outputs.pr_commits }}
     steps:
       - name: Generate App installation token
         id: app-token
@@ -47,12 +49,14 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,baseRefName,isDraft,headRepository,headRepositoryOwner)
+          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,baseRefName,baseRefOid,isDraft,headRepository,headRepositoryOwner,commits)
           head_sha=$(jq -r .headRefOid <<<"$json")
           base_ref=$(jq -r .baseRefName <<<"$json")
+          base_sha=$(jq -r .baseRefOid <<<"$json")
           is_draft=$(jq -r .isDraft <<<"$json")
           head_owner=$(jq -r '.headRepositoryOwner.login' <<<"$json")
           head_repo=$(jq -r '.headRepository.name' <<<"$json")
+          pr_commits=$(jq -r '.commits | length' <<<"$json")
 
           if [[ "$is_draft" == "true" ]]; then
             echo "::warning::PR is draft; refusing to run via /codex-review."
@@ -68,6 +72,8 @@ jobs:
 
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "pr_commits=$pr_commits" >> "$GITHUB_OUTPUT"
 
   call-pipeline:
     name: Codex PR Review (comment)
@@ -81,5 +87,7 @@ jobs:
       pr_number: ${{ github.event.issue.number }}
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       base_ref: ${{ needs.resolve.outputs.base_ref }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      pr_commits: ${{ fromJSON(needs.resolve.outputs.pr_commits) }}
       trigger: issue_comment:/codex-review
     secrets: inherit

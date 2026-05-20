@@ -31,6 +31,12 @@ on:
       base_ref:
         required: true
         type: string
+      base_sha:
+        required: true
+        type: string
+      pr_commits:
+        required: true
+        type: number
       trigger:
         required: false
         type: string
@@ -119,8 +125,14 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: 1
+          fetch-depth: ${{ inputs.pr_commits + 1 }}
+          filter: blob:none
+          fetch-tags: false
           persist-credentials: false
+
+      - name: Alias base ref to existing commit object
+        working-directory: workspace
+        run: git update-ref "refs/remotes/origin/${{ inputs.base_ref }}" "${{ inputs.base_sha }}"
 
       - name: Generate App installation token
         id: app-token
@@ -186,20 +198,14 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: 1
+          fetch-depth: ${{ inputs.pr_commits + 1 }}
+          filter: blob:none
+          fetch-tags: false
           persist-credentials: false
 
-      - name: Fetch all PR commits since base into workspace
-        # PR diff 자체는 prepare-context 가 GitHub API 로 받은 artifact 에 있지만,
-        # Codex CLI 가 workspace 에서 `git log` 등을 호출할 수 있어 base 이후의
-        # PR 커밋들을 워크스페이스 git 에 올려둔다. main 의 전체 history 는 가져오지
-        # 않도록 base ref tip 만 얕게 받고 shallow-exclude 로 PR head 를 deepen.
+      - name: Alias base ref to existing commit object
         working-directory: workspace
-        run: |
-          git fetch --no-tags --depth=1 origin \
-            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
-          git fetch --no-tags --shallow-exclude="origin/${GITHUB_BASE_REF}" \
-            origin "refs/pull/${PR_NUMBER}/head"
+        run: git update-ref "refs/remotes/origin/${{ inputs.base_ref }}" "${{ inputs.base_sha }}"
 
       - name: Download PR context artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -266,8 +272,14 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: 1
+          fetch-depth: ${{ inputs.pr_commits + 1 }}
+          filter: blob:none
+          fetch-tags: false
           persist-credentials: false
+
+      - name: Alias base ref to existing commit object
+        working-directory: workspace
+        run: git update-ref "refs/remotes/origin/${{ inputs.base_ref }}" "${{ inputs.base_sha }}"
 
       - name: Download all findings
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
