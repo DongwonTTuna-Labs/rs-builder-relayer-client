@@ -22,7 +22,8 @@ jobs:
     name: Codex PR Review
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor == 'DongwonTTuna'
     runs-on: [self-hosted, linux, x64, codex]
     timeout-minutes: 45
     permissions:
@@ -52,6 +53,24 @@ jobs:
         run: |
           set -euo pipefail
           codex login status
+
+          # Codex reads auth at startup; model-issued shell commands must not read tokens.
+          auth_guard_pid=""
+          restore_codex_auth() {
+            if [ -n "${auth_guard_pid:-}" ]; then
+              kill "$auth_guard_pid" 2>/dev/null || true
+              wait "$auth_guard_pid" 2>/dev/null || true
+            fi
+            chmod 0600 "$CODEX_HOME/auth.json" 2>/dev/null || true
+          }
+          trap restore_codex_auth EXIT
+
+          (
+            sleep 0.2
+            chmod 000 "$CODEX_HOME/auth.json" || true
+          ) &
+          auth_guard_pid=$!
+
           codex --enable use_legacy_landlock --ask-for-approval never exec \
             --cd "$GITHUB_WORKSPACE" \
             --sandbox read-only \
