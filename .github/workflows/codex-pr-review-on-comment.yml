@@ -67,6 +67,10 @@ jobs:
             echo "::warning::Refusing to run /codex-review on fork PR ($head_owner/$head_repo)."
             exit 1
           fi
+          if [[ "$base_ref" != "main" ]]; then
+            echo "::warning::Refusing to run /codex-review on PR targeting non-main branch: $base_ref"
+            exit 1
+          fi
 
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
