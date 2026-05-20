@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexTechLeadDecisions",
+  "description": "Output schema for the tech-lead axis in Stage 2 of Codex PR review v2. The tech-lead reviews every finding from combined.json and decides whether to allow it as a PR comment. Post-script applies hard rules afterward (MUST + security + domain-critical findings are forced to allow=true regardless of this decision).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decisions"],
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "allow", "reason"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$",
+            "description": "Must match a finding id from combined.json."
+          },
+          "allow": {
+            "type": "boolean",
+            "description": "true to post the comment, false to suppress. Hard rules in post-script can override false → true (never the reverse) for MUST / security / domain-critical findings."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "Short rationale in Korean (e.g. 'false positive: 해당 규칙은 이 파일에 적용 안 됨')."
+          }
+        }
+      }
+    },
+    "judgment": {
+      "type": "object",
+      "description": "Optional. Tech-lead's qualitative judgment on the PR as a whole. Post-script uses this for the LGTM line. Hard rule still wins: any MUST forces 要対応.",
+      "additionalProperties": false,
+      "required": ["status", "headline"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["LGTM", "NEEDS_CLARIFICATION", "NEEDS_WORK"]
+        },
+        "headline": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "One-line summary in Korean."
+        }
+      }
+    },
+    "merge_notes": {
+      "type": "array",
+      "description": "Optional. Used when the tech-lead consolidates duplicate findings across axes. Keep primary, deny merged ids.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["primary_id", "merged_ids", "reason"],
+        "properties": {
+          "primary_id": {
+            "type": "string",
+            "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+          },
+          "merged_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      }
+    }
+  }
+}

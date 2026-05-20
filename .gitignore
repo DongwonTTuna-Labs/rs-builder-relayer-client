@@ -28,3 +28,10 @@ scratch/
 .vscode/
 *.swp
 *.swo
+
+# Python
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/

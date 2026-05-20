@@ -1,0 +1,85 @@
+name: Codex PR Review (on comment)
+
+# PR 코멘트에 `/codex-review` 를 적으면 3-stage 파이프라인을 재실행하는 워크플로우.
+# 일반 자동 리뷰 (PR open / synchronize 등) 는 `codex-pr-review.yml` 가 처리한다.
+# 두 워크플로우 모두 본체는 재사용 가능 워크플로우 `codex-pr-review-pipeline.yml`.
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: codex-pr-review-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve PR head
+    if: >-
+      github.event.issue.pull_request != null &&
+      contains(github.event.comment.body, '/codex-review') &&
+      github.event.comment.user.login == 'DongwonTTuna' &&
+      !endsWith(github.actor, '[bot]')
+    runs-on: [self-hosted, linux, x64, codex]
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 5
+    outputs:
+      head_sha: ${{ steps.lookup.outputs.head_sha }}
+      base_ref: ${{ steps.lookup.outputs.base_ref }}
+    steps:
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+
+      - name: Lookup PR head / base via gh
+        id: lookup
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,baseRefName,isDraft,headRepository,headRepositoryOwner)
+          head_sha=$(jq -r .headRefOid <<<"$json")
+          base_ref=$(jq -r .baseRefName <<<"$json")
+          is_draft=$(jq -r .isDraft <<<"$json")
+          head_owner=$(jq -r '.headRepositoryOwner.login' <<<"$json")
+          head_repo=$(jq -r '.headRepository.name' <<<"$json")
+
+          if [[ "$is_draft" == "true" ]]; then
+            echo "::warning::PR is draft; refusing to run via /codex-review."
+            exit 1
+          fi
+          # fork 에서 올라온 PR 은 거부 (head 가 본 리포 owner 인지 확인)
+          expected_owner="${REPO%/*}"
+          expected_repo="${REPO#*/}"
+          if [[ "$head_owner" != "$expected_owner" || "$head_repo" != "$expected_repo" ]]; then
+            echo "::warning::Refusing to run /codex-review on fork PR ($head_owner/$head_repo)."
+            exit 1
+          fi
+
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
+
+  call-pipeline:
+    name: Codex PR Review (comment)
+    needs: resolve
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/codex-pr-review-pipeline.yml
+    with:
+      pr_number: ${{ github.event.issue.number }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      base_ref: ${{ needs.resolve.outputs.base_ref }}
+      trigger: issue_comment:/codex-review
+    secrets: inherit
