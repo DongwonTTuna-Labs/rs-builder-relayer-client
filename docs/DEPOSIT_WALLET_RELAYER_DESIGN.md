@@ -147,13 +147,13 @@ pub enum RelayerTransactionState {
 Policy:
 
 ```text
-Confirmed:
+Mined / Confirmed:
   terminal success
 
 Failed / Invalid:
   terminal failure; do not blindly retry
 
-New / Executed / Mined:
+New / Executed:
   pending/non-terminal; poll under timeout policy
 
 Unknown:
