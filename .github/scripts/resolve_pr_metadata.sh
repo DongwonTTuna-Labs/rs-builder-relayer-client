@@ -17,6 +17,7 @@ base_sha="$(jq -r '.base.sha // ""' <<<"$json")"
 is_draft="$(jq -r '.draft // false' <<<"$json")"
 head_owner="$(jq -r '.head.repo.owner.login // ""' <<<"$json")"
 head_repo="$(jq -r '.head.repo.name // ""' <<<"$json")"
+author_login="$(jq -r '.user.login // ""' <<<"$json")"
 
 if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "::error::Invalid PR head sha from GitHub API: $head_sha"
@@ -34,6 +35,10 @@ fi
 
 expected_owner="${REPO%/*}"
 expected_repo="${REPO#*/}"
+if [[ "$author_login" != "$expected_owner" ]]; then
+  echo "::warning::Refusing to run /codex-review for PR author: $author_login"
+  exit 1
+fi
 if [[ "$head_owner" != "$expected_owner" || "$head_repo" != "$expected_repo" ]]; then
   echo "::warning::Refusing to run /codex-review on fork PR ($head_owner/$head_repo)."
   exit 1

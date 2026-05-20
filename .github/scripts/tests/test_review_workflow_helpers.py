@@ -37,6 +37,7 @@ class ResolvePrMetadataTest(unittest.TestCase):
         gh = bin_dir / "gh"
         gh.write_text(
             "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
             "test \"$1\" = api\n"
             "test \"$2\" = repos/DongwonTTuna/demo/pulls/7\n"
             f"printf '%s\\n' '{json.dumps(payload)}'\n",
@@ -71,6 +72,7 @@ class ResolvePrMetadataTest(unittest.TestCase):
                     "repo": {"owner": {"login": "DongwonTTuna"}, "name": "demo"},
                 },
                 "base": {"ref": "main", "sha": "2" * 40},
+                "user": {"login": "DongwonTTuna"},
                 "draft": False,
             }
             completed = self.run_helper(tmp, payload)
@@ -88,10 +90,12 @@ class ResolvePrMetadataTest(unittest.TestCase):
                 "repo": {"owner": {"login": "DongwonTTuna"}, "name": "demo"},
             },
             "base": {"ref": "main", "sha": "2" * 40},
+            "user": {"login": "DongwonTTuna"},
             "draft": False,
         }
         cases = [
             ("draft", {"draft": True}),
+            ("author", {"user": {"login": "Other"}}),
             ("fork", {"head": {"repo": {"owner": {"login": "Other"}, "name": "demo"}}}),
             ("non_main", {"base": {"ref": "develop"}}),
             ("bad_head_sha", {"head": {"sha": "not-a-sha"}}),
@@ -110,6 +114,7 @@ class ResolvePrMetadataTest(unittest.TestCase):
 
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertFalse((tmp / "outputs").exists())
+                self.assertIn("::", completed.stdout)
 
 
 class PreparePrContextSnapshotTest(unittest.TestCase):
@@ -146,6 +151,52 @@ class PreparePrContextSnapshotTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 prepare_pr_context.main()
             gh_paginated.assert_not_called()
+
+    def test_rejects_snapshot_drift_after_fetching_files(self) -> None:
+        env = {
+            "GITHUB_REPOSITORY": "DongwonTTuna/demo",
+            "PR_NUMBER": "7",
+            "HEAD_SHA": "1" * 40,
+            "BASE_SHA": "2" * 40,
+            "RUNNER_TEMP": tempfile.mkdtemp(),
+        }
+        snapshots = [
+            {"head": {"sha": "1" * 40}, "base": {"sha": "2" * 40}},
+            {"head": {"sha": "3" * 40}, "base": {"sha": "2" * 40}},
+        ]
+        with patch.dict(os.environ, env, clear=False), patch.object(
+            prepare_pr_context,
+            "gh_json",
+            side_effect=snapshots,
+        ), patch.object(
+            prepare_pr_context,
+            "gh_paginated",
+            side_effect=[[], []],
+        ) as gh_paginated:
+            with self.assertRaises(SystemExit):
+                prepare_pr_context.main()
+            self.assertEqual(gh_paginated.call_count, 2)
+
+    def test_writes_base_sha_in_context(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            env = {
+                "GITHUB_REPOSITORY": "DongwonTTuna/demo",
+                "PR_NUMBER": "7",
+                "HEAD_SHA": "1" * 40,
+                "BASE_SHA": "2" * 40,
+                "RUNNER_TEMP": td,
+            }
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                prepare_pr_context,
+                "gh_json",
+                return_value={"head": {"sha": "1" * 40}, "base": {"sha": "2" * 40}},
+            ), patch.object(prepare_pr_context, "gh_paginated", side_effect=[[], []]):
+                prepare_pr_context.main()
+
+            context = json.loads(
+                (Path(td) / "codex-review-context.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(context["pull_request"]["base_sha"], "2" * 40)
 
 
 class PrepareReviewWorkspaceTest(unittest.TestCase):
@@ -265,21 +316,86 @@ class PrepareReviewWorkspaceTest(unittest.TestCase):
             )
 
     def test_rejects_invalid_inputs_before_fetching(self) -> None:
+        cases = [
+            ("../main", "2" * 40, "1" * 40, "7", "Invalid base ref name"),
+            ("main", "bad", "1" * 40, "7", "Invalid base sha format"),
+            ("main", "2" * 40, "bad", "7", "Invalid head sha format"),
+            ("main", "2" * 40, "1" * 40, "abc", "Invalid PR number"),
+        ]
+        for base_ref, base_sha, head_sha, pr_number, expected in cases:
+            with self.subTest(expected), tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                run(["git", "init", "-q"], tmp)
+                env = os.environ.copy()
+                env.update(
+                    {
+                        "BASE_REF": base_ref,
+                        "BASE_SHA": base_sha,
+                        "HEAD_SHA": head_sha,
+                        "PR_NUMBER": pr_number,
+                    }
+                )
+                completed = subprocess.run(
+                    ["bash", str(SCRIPTS / "prepare_review_workspace.sh")],
+                    cwd=tmp,
+                    env=env,
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected, completed.stdout)
+
+    def test_rejects_checked_out_head_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
-            run(["git", "init", "-q"], tmp)
+            remote = tmp / "remote.git"
+            source = tmp / "source"
+            clone = tmp / "clone"
+
+            run(["git", "init", "-q", "--bare", str(remote)], tmp)
+            source.mkdir()
+            run(["git", "init", "-q", "-b", "main"], source)
+            run(["git", "config", "user.email", "test@example.com"], source)
+            run(["git", "config", "user.name", "Test"], source)
+            (source / "file.txt").write_text("base\n", encoding="utf-8")
+            run(["git", "add", "file.txt"], source)
+            run(["git", "commit", "-q", "-m", "base"], source)
+            base_sha = run(["git", "rev-parse", "HEAD"], source).strip()
+            run(["git", "checkout", "-q", "-b", "feature"], source)
+            (source / "file.txt").write_text("head\n", encoding="utf-8")
+            run(["git", "commit", "-qam", "head"], source)
+            head_sha = run(["git", "rev-parse", "HEAD"], source).strip()
+            run(["git", "remote", "add", "origin", str(remote)], source)
+            run(["git", "push", "-q", "origin", "main", "feature"], source)
+            run(
+                [
+                    "git",
+                    "clone",
+                    "-q",
+                    "--depth=1",
+                    "--branch",
+                    "main",
+                    f"file://{remote}",
+                    str(clone),
+                ],
+                tmp,
+            )
             env = os.environ.copy()
             env.update(
                 {
-                    "BASE_REF": "../main",
-                    "BASE_SHA": "2" * 40,
-                    "HEAD_SHA": "1" * 40,
+                    "BASE_REF": "main",
+                    "BASE_SHA": base_sha,
+                    "HEAD_SHA": head_sha,
                     "PR_NUMBER": "7",
                 }
             )
+
             completed = subprocess.run(
                 ["bash", str(SCRIPTS / "prepare_review_workspace.sh")],
-                cwd=tmp,
+                cwd=clone,
                 env=env,
                 check=False,
                 stdout=subprocess.PIPE,
@@ -288,7 +404,7 @@ class PrepareReviewWorkspaceTest(unittest.TestCase):
             )
 
             self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("Invalid base ref name", completed.stdout)
+            self.assertIn("Checked out head does not match", completed.stdout)
 
     def test_fails_when_merge_base_stays_out_of_range(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -351,6 +467,17 @@ class PrepareReviewWorkspaceTest(unittest.TestCase):
 
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("Could not find merge-base", completed.stdout)
+
+
+class ReviewWorkflowBootstrapTest(unittest.TestCase):
+    def test_bootstrap_does_not_execute_pr_head_helper(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Bootstrap path for the PR that introduces the base-ref helper", workflow)
+        self.assertNotIn('helper=".github/scripts/prepare_review_workspace.sh"', workflow)
+        self.assertEqual(workflow.count("- name: Prepare review git context"), 2)
 
 
 if __name__ == "__main__":

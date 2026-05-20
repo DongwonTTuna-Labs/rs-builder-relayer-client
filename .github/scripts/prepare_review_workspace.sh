@@ -39,18 +39,18 @@ git_with_auth() {
     # Expanded when git invokes the credential helper.
     # shellcheck disable=SC2016
     git \
+      -c core.commitGraph=false \
       -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
       -c credential.useHttpPath=true \
       "$@"
   else
-    git "$@"
+    git -c core.commitGraph=false "$@"
   fi
 }
 
 base_ref="refs/remotes/$REMOTE_NAME/$BASE_REF"
-git_with_auth fetch --filter=blob:none --depth="$DEEPEN_STEP" "$REMOTE_NAME" "$BASE_SHA"
+git_with_auth fetch --filter=blob:none --depth="$DEEPEN_STEP" "$REMOTE_NAME" "$BASE_SHA" "$HEAD_SHA"
 git update-ref "$base_ref" "$BASE_SHA"
-git_with_auth fetch --filter=blob:none --depth="$DEEPEN_STEP" "$REMOTE_NAME" "$HEAD_SHA"
 
 if [[ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]]; then
   echo "::error::Checked out head does not match workflow input HEAD_SHA."
@@ -64,15 +64,12 @@ until git merge-base "$base_ref" HEAD >/dev/null 2>&1; do
     echo "::error::Could not find merge-base after $MAX_DEEPEN_ROUNDS deepen rounds."
     exit 1
   fi
-  git_with_auth fetch --filter=blob:none --deepen="$DEEPEN_STEP" "$REMOTE_NAME" "$BASE_SHA"
-  git_with_auth fetch --filter=blob:none --deepen="$DEEPEN_STEP" "$REMOTE_NAME" "$HEAD_SHA"
+  git_with_auth fetch --filter=blob:none --deepen="$DEEPEN_STEP" "$REMOTE_NAME" "$BASE_SHA" "$HEAD_SHA"
 done
 
-# Hydrate the final range diff without binary payloads:
-# Codex review prompts contain API-provided patch excerpts, while this path only
-# makes common git inspection commands work without lazy network fetches.
+# Hydrate the final review range. PR prompts use final GitHub patch excerpts,
+# so this deliberately avoids walking every intermediate blob in large repos.
 git_with_auth diff --no-ext-diff "$base_ref...HEAD" >/dev/null
-git log --oneline "$base_ref..HEAD" >/dev/null
 
 if ! GIT_NO_LAZY_FETCH=1 git diff --no-ext-diff "$base_ref...HEAD" >/dev/null; then
   echo "::error::Review range diff still requires lazy fetch."

@@ -55,13 +55,7 @@ def changed_right_lines(patch: str | None) -> list[int]:
     return result
 
 
-def main() -> int:
-    repo = os.environ["GITHUB_REPOSITORY"]
-    pr_number = os.environ["PR_NUMBER"]
-    head_sha = os.environ["HEAD_SHA"]
-    base_sha = os.environ.get("BASE_SHA", "")
-    runner_temp = Path(os.environ["RUNNER_TEMP"])
-
+def assert_pr_snapshot(repo: str, pr_number: str, head_sha: str, base_sha: str) -> None:
     pr = gh_json(f"repos/{repo}/pulls/{pr_number}")
     current_head_sha = ((pr or {}).get("head") or {}).get("sha") or ""
     current_base_sha = ((pr or {}).get("base") or {}).get("sha") or ""
@@ -76,8 +70,18 @@ def main() -> int:
             f"(expected {base_sha}, got {current_base_sha})"
         )
 
+
+def main() -> int:
+    repo = os.environ["GITHUB_REPOSITORY"]
+    pr_number = os.environ["PR_NUMBER"]
+    head_sha = os.environ["HEAD_SHA"]
+    base_sha = os.environ.get("BASE_SHA", "")
+    runner_temp = Path(os.environ["RUNNER_TEMP"])
+
+    assert_pr_snapshot(repo, pr_number, head_sha, base_sha)
     files = gh_paginated(f"repos/{repo}/pulls/{pr_number}/files")
     comments = gh_paginated(f"repos/{repo}/pulls/{pr_number}/comments")
+    assert_pr_snapshot(repo, pr_number, head_sha, base_sha)
 
     context: dict = {
         "pull_request": {
