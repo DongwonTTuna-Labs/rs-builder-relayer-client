@@ -71,7 +71,7 @@ jobs:
           {
             echo "final-message<<$delimiter"
             cat codex-output.md
-            echo "$delimiter"
+            printf '\n%s\n' "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
   upsert-codex-comment:
