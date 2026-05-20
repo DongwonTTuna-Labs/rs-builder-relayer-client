@@ -34,9 +34,6 @@ on:
       base_sha:
         required: true
         type: string
-      pr_commits:
-        required: true
-        type: number
       trigger:
         required: false
         type: string
@@ -125,8 +122,8 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: ${{ inputs.pr_commits + 1 }}
-          filter: blob:none
+          fetch-depth: 0
+          filter: tree:0
           fetch-tags: false
           persist-credentials: false
 
@@ -198,8 +195,8 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: ${{ inputs.pr_commits + 1 }}
-          filter: blob:none
+          fetch-depth: 0
+          filter: tree:0
           fetch-tags: false
           persist-credentials: false
 
@@ -272,8 +269,8 @@ jobs:
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           path: workspace
-          fetch-depth: ${{ inputs.pr_commits + 1 }}
-          filter: blob:none
+          fetch-depth: 0
+          filter: tree:0
           fetch-tags: false
           persist-credentials: false
 
