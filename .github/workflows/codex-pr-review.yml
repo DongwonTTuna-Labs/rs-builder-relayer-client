@@ -45,10 +45,9 @@ jobs:
         run: |
           set -euo pipefail
           codex login status
-          codex exec \
+          codex --ask-for-approval never exec \
             --cd "$GITHUB_WORKSPACE" \
             --sandbox read-only \
-            --ask-for-approval never \
             --output-last-message codex-output.md \
             --color never \
             - < .github/prompts/codex-pr-review.md
