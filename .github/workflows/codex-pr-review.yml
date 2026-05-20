@@ -1,0 +1,43 @@
+name: Codex PR Review
+
+# PR 의 open / synchronize / reopened / ready_for_review 시 자동 실행.
+# 본체는 재사용 가능 워크플로우 `codex-pr-review-pipeline.yml` (3-stage 파이프라인).
+# 코멘트 `/codex-review` 로 재실행하는 워크플로우는 `codex-pr-review-on-comment.yml`.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  call-pipeline:
+    name: Codex PR Review
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'DongwonTTuna' &&
+      github.actor == 'DongwonTTuna' &&
+      github.event.sender.login == 'DongwonTTuna'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/codex-pr-review-pipeline.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      base_ref: ${{ github.event.pull_request.base.ref }}
+      trigger: pull_request:${{ github.event.action }}
+    secrets: inherit

@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexResolveCheck",
+  "description": "Output schema for the resolve-check axis. Codex inspects existing codex-managed inline review comments together with the current PR head source and decides whether each comment has been resolved by the user.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resolutions"],
+  "properties": {
+    "resolutions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["comment_id", "resolved", "reason"],
+        "properties": {
+          "comment_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
+      }
+    }
+  }
+}

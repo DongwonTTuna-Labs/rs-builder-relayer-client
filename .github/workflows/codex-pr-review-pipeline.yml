@@ -1,0 +1,411 @@
+name: Codex PR Review Pipeline (reusable)
+
+# Codex PR Review v2 의 본체. 3 stage 로 구성된 재사용 가능 워크플로우.
+# - Stage 0 (resolve-check) : 기존 codex-managed inline 코멘트가 해결되었는지 LLM 판정 (3건씩 배치)
+# - Stage 1 (review)        : 5 axis 를 matrix 로 병렬 실행하여 findings-<axis>.json 생성
+# - Stage 2 (tech-lead)     : combined.json 을 Codex 에 보내 decisions.json 생성
+# - Stage 3 (post)          : LLM 호출 없이 hard rule 적용 + inline / sticky 코멘트 게시
+#
+# Stage 0 과 Stage 1 사이에는 needs 관계가 없어 두 job 이 병렬로 시작된다.
+# Stage 3 (post) 은 Stage 0 의 resolutions.json 과 Stage 2 의 decisions.json 둘 다를 입력으로 사용한다.
+#
+# 모든 GitHub API 호출은 등록된 GitHub App (`dongwontuna-s-review-bot`) 의 installation
+# token 으로 수행한다. `GITHUB_TOKEN` 으로는 `resolveReviewThread` / `minimizeComment` 등
+# 일부 GraphQL mutation 이 거부되기 때문이다.
+#
+# 보안 모델 (base-ref 실행):
+#   모든 job 이 `pipeline/` 디렉토리에 base ref (= main) 를 체크아웃하고 거기서 스크립트를
+#   실행한다. PR head 의 .github/scripts 와 .codex/agents 는 절대로 실행되지 않는다.
+#   PR head 의 파일은 review 대상 (= 데이터) 으로만 `workspace/` 에 별도로 체크아웃되어
+#   Codex CLI 의 `--cd` 와 read_snippet() 가 읽기 전용으로 사용한다.
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      head_sha:
+        required: true
+        type: string
+      base_ref:
+        required: true
+        type: string
+      trigger:
+        required: false
+        type: string
+        default: pull_request
+
+jobs:
+  # ============================================================
+  # Stage 1a (prepare-context): PR 메타데이터 / 변경 파일 / 인라인 코멘트를
+  # 단 한 번만 수집해 artifact 로 fan-out. Stage 1 의 axis matrix 가 이걸
+  # 다운로드해서 axis 마다 GitHub API 호출과 patch 직렬화를 다시 하지 않도록 한다.
+  # 이 job 은 PR head 의 코드를 실행하지 않고 GitHub API 만 사용한다.
+  # ============================================================
+  prepare-context:
+    name: prepare-context
+    runs-on: [self-hosted, linux, x64, codex]
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 5
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+
+      - name: Prepare PR review context
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: python3 pipeline/.github/scripts/prepare_pr_context.py
+
+      - name: Stage context for upload
+        run: |
+          mkdir -p artifacts
+          cp "$RUNNER_TEMP/codex-review-context.json" artifacts/pr-context.json
+
+      - name: Upload PR context artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-review-context
+          path: artifacts/pr-context.json
+          retention-days: 7
+
+  # ============================================================
+  # Stage 0: 기존 codex-managed inline 코멘트의 해결 여부를 LLM 으로 판정 (3 건씩 배치)
+  # Stage 1 과 병렬 실행. 스크립트는 base ref 에서, snippet 은 PR head workspace 에서.
+  # ============================================================
+  resolve-check:
+    name: resolve-check
+    runs-on: [self-hosted, linux, x64, codex]
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
+      ART_DIR: ${{ github.workspace }}/artifacts
+      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout PR head (review data only)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+
+      - name: Resolve-check existing codex inline comments
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: bash pipeline/.github/scripts/check_inline_resolutions.sh
+
+      - name: Upload resolutions artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-resolutions
+          path: artifacts/resolutions.json
+          retention-days: 7
+
+  # ============================================================
+  # Stage 1: 5 axis 를 matrix 로 병렬 실행. prepare-context 의 pr-context.json
+  # 을 다운로드해서 GitHub API / patch 직렬화를 5번 반복하지 않는다.
+  # 스크립트와 agent prompt 는 base ref 에서, Codex 의 분석 대상 워크스페이스는
+  # PR head 에서. (지적 사항 'PR head 스크립트가 토큰 환경에서 실행됨' 의 대응.)
+  # ============================================================
+  review:
+    name: review (${{ matrix.axis }})
+    needs: prepare-context
+    runs-on: [self-hosted, linux, x64, codex]
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        axis:
+          - correctness
+          - security
+          - performance
+          - test-coverage
+          - domain
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
+      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout PR head (review data only)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch all PR commits since base into workspace
+        # PR diff 자체는 prepare-context 가 GitHub API 로 받은 artifact 에 있지만,
+        # Codex CLI 가 workspace 에서 `git log` 등을 호출할 수 있어 base 이후의
+        # PR 커밋들을 워크스페이스 git 에 올려둔다. main 의 전체 history 는 가져오지
+        # 않도록 base ref tip 만 얕게 받고 shallow-exclude 로 PR head 를 deepen.
+        working-directory: workspace
+        run: |
+          git fetch --no-tags --depth=1 origin \
+            "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          git fetch --no-tags --shallow-exclude="origin/${GITHUB_BASE_REF}" \
+            origin "refs/pull/${PR_NUMBER}/head"
+
+      - name: Download PR context artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Build axis prompt
+        run: python3 pipeline/.github/scripts/build_prompt.py --axis ${{ matrix.axis }}
+
+      - name: Run Codex review (${{ matrix.axis }})
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-${{ matrix.axis }}.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.github/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-${{ matrix.axis }}.json
+        run: bash pipeline/.github/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.github/scripts/normalize_codex_output.py --schema findings --axis ${{ matrix.axis }}
+
+      - name: Stage findings into artifacts/
+        run: |
+          mkdir -p artifacts
+          cp "$RUNNER_TEMP/findings-${{ matrix.axis }}.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-review-${{ matrix.axis }}-findings
+          path: artifacts/findings-${{ matrix.axis }}.json
+          retention-days: 7
+
+  # ============================================================
+  # Stage 2: tech-lead gate. PR head 코드를 읽지 않고 artifact 만 다룬다.
+  # ============================================================
+  tech-lead:
+    name: tech-lead
+    needs: review
+    if: always() && !cancelled()
+    runs-on: [self-hosted, linux, x64, codex]
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 20
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
+      ART_DIR: ${{ github.workspace }}/artifacts
+      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout PR head (review data only)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download all findings
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Combine findings
+        id: combine
+        run: |
+          python3 pipeline/.github/scripts/merge_and_gate.py --phase combine
+          count=$(python3 -c "import json,sys;print(len(json.load(open('artifacts/combined.json'))))")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          cp artifacts/combined.json "$RUNNER_TEMP/combined.json"
+
+      - name: Build tech-lead prompt
+        if: steps.combine.outputs.count != '0'
+        run: python3 pipeline/.github/scripts/build_prompt.py --axis tech-lead
+
+      - name: Run Codex tech-lead gate
+        if: steps.combine.outputs.count != '0'
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-tech-lead.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.github/scripts/schemas/decisions.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-tech-lead.json
+        run: bash pipeline/.github/scripts/codex_exec.sh
+
+      - name: Normalize decisions
+        if: steps.combine.outputs.count != '0'
+        run: |
+          python3 pipeline/.github/scripts/normalize_codex_output.py --schema decisions
+          cp "$RUNNER_TEMP/decisions.json" artifacts/
+
+      - name: Emit empty decisions when no findings
+        if: steps.combine.outputs.count == '0'
+        run: |
+          mkdir -p artifacts
+          printf '%s\n' '{"decisions": [], "merge_notes": [], "judgment": null}' > artifacts/decisions.json
+
+      - name: Upload decisions artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-tech-lead-decisions
+          path: artifacts/decisions.json
+          retention-days: 7
+
+      - name: Upload combined findings artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-combined-findings
+          path: artifacts/combined.json
+          retention-days: 7
+
+      - name: Upload axes status artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-axes-status
+          path: artifacts/axes_status.json
+          retention-days: 7
+
+  # ============================================================
+  # Stage 3: deterministic post (LLM 미사용)
+  # hard rule 적용 + inline / sticky 코멘트 게시 + Stage 0 의 해결 판정 반영.
+  # 쓰기 권한이 있는 단계이므로 가장 엄격하게 base ref 의 스크립트만 실행한다.
+  # PR head 는 전혀 체크아웃하지 않는다.
+  # ============================================================
+  post:
+    name: post
+    needs: [resolve-check, tech-lead]
+    if: always() && !cancelled()
+    runs-on: [self-hosted, linux, x64, codex]
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    timeout-minutes: 10
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      TRIGGER: ${{ inputs.trigger }}
+      ART_DIR: ${{ github.workspace }}/artifacts
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.github/scripts
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+
+      - name: Download findings artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download combined findings
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-combined-findings
+          path: artifacts/
+
+      - name: Download decisions artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-tech-lead-decisions
+          path: artifacts/
+
+      - name: Download axes status artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-axes-status
+          path: artifacts/
+
+      - name: Download resolutions artifact
+        if: needs.resolve-check.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: codex-resolutions
+          path: artifacts/
+
+      - name: Apply hard rules
+        run: python3 pipeline/.github/scripts/merge_and_gate.py --phase gate
+
+      - name: Post review comments
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: bash pipeline/.github/scripts/post_review_comments.sh
