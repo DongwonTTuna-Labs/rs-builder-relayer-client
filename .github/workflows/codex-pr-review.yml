@@ -47,7 +47,7 @@ jobs:
           codex login status
           codex --ask-for-approval never exec \
             --cd "$GITHUB_WORKSPACE" \
-            --sandbox danger-full-access \
+            --sandbox read-only \
             --output-last-message codex-output.md \
             --color never \
             - < .github/prompts/codex-pr-review.md
