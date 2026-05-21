@@ -121,17 +121,22 @@ impl SignedDepositWalletBatch {
     }
 
     pub fn validate_submit_preflight(&self) -> Result<()> {
-        let batch = self.batch_to_sign();
-        validate_batch_identity(&batch)?;
+        validate_batch_identity_parts(self.owner, self.nonce_owner, self.submit_from)?;
 
-        let expected_typed_data = build_deposit_wallet_batch_typed_data(&batch);
+        let expected_typed_data = build_deposit_wallet_batch_typed_data_parts(
+            self.deposit_wallet,
+            self.chain_id,
+            self.nonce,
+            self.deadline,
+            &self.calls,
+        );
         if self.typed_data != expected_typed_data {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch typed data metadata was mutated".to_string(),
             ));
         }
 
-        let expected_digest = digest_deposit_wallet_batch(&batch)?;
+        let expected_digest = digest_deposit_wallet_typed_data(expected_typed_data)?;
         if self.digest != expected_digest {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch digest metadata was mutated".to_string(),
@@ -153,22 +158,25 @@ impl SignedDepositWalletBatch {
 
         Ok(())
     }
-
-    fn batch_to_sign(&self) -> DepositWalletBatchToSign {
-        DepositWalletBatchToSign {
-            owner: self.owner,
-            nonce_owner: self.nonce_owner,
-            submit_from: self.submit_from,
-            deposit_wallet: self.deposit_wallet,
-            chain_id: self.chain_id,
-            nonce: self.nonce,
-            deadline: self.deadline,
-            calls: self.calls.clone(),
-        }
-    }
 }
 
 pub fn build_deposit_wallet_batch_typed_data(batch: &DepositWalletBatchToSign) -> Value {
+    build_deposit_wallet_batch_typed_data_parts(
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        &batch.calls,
+    )
+}
+
+fn build_deposit_wallet_batch_typed_data_parts(
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce: U256,
+    deadline: U256,
+    calls: &[DepositWalletCall],
+) -> Value {
     json!({
         "primaryType": DEPOSIT_WALLET_PRIMARY_TYPE,
         "types": {
@@ -193,20 +201,24 @@ pub fn build_deposit_wallet_batch_typed_data(batch: &DepositWalletBatchToSign) -
         "domain": {
             "name": DEPOSIT_WALLET_DOMAIN_NAME,
             "version": DEPOSIT_WALLET_DOMAIN_VERSION,
-            "chainId": batch.chain_id,
-            "verifyingContract": checksum(batch.deposit_wallet)
+            "chainId": chain_id,
+            "verifyingContract": checksum(deposit_wallet)
         },
         "message": {
-            "wallet": checksum(batch.deposit_wallet),
-            "nonce": batch.nonce.to_string(),
-            "deadline": batch.deadline.to_string(),
-            "calls": batch.calls.iter().map(call_to_typed_data).collect::<Vec<_>>()
+            "wallet": checksum(deposit_wallet),
+            "nonce": nonce.to_string(),
+            "deadline": deadline.to_string(),
+            "calls": calls.iter().map(call_to_typed_data).collect::<Vec<_>>()
         }
     })
 }
 
 pub fn digest_deposit_wallet_batch(batch: &DepositWalletBatchToSign) -> Result<H256> {
-    let typed_data: TypedData = serde_json::from_value(build_deposit_wallet_batch_typed_data(batch))
+    digest_deposit_wallet_typed_data(build_deposit_wallet_batch_typed_data(batch))
+}
+
+fn digest_deposit_wallet_typed_data(typed_data: Value) -> Result<H256> {
+    let typed_data: TypedData = serde_json::from_value(typed_data)
         .map_err(|e| RelayerError::Signing(format!("invalid deposit wallet typed data: {e}")))?;
     let digest = typed_data
         .encode_eip712()
@@ -273,13 +285,21 @@ pub fn build_deposit_wallet_batch_request_from_signed(
 }
 
 fn validate_batch_identity(batch: &DepositWalletBatchToSign) -> Result<()> {
-    if batch.owner != batch.nonce_owner {
+    validate_batch_identity_parts(batch.owner, batch.nonce_owner, batch.submit_from)
+}
+
+fn validate_batch_identity_parts(
+    owner: Address,
+    nonce_owner: Address,
+    submit_from: Address,
+) -> Result<()> {
+    if owner != nonce_owner {
         return Err(RelayerError::Signing(
             "deposit wallet nonce owner must match owner signer".to_string(),
         ));
     }
 
-    if batch.owner != batch.submit_from {
+    if owner != submit_from {
         return Err(RelayerError::Signing(
             "deposit wallet submit from must match owner signer".to_string(),
         ));
