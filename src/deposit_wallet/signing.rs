@@ -17,7 +17,7 @@ const DEPOSIT_WALLET_PRIMARY_TYPE: &str = "Batch";
 const ECDSA_SIGNATURE_HEX_LEN: usize = 132;
 const ECDSA_SIGNATURE_PAYLOAD_HEX_LEN: usize = 130;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletBatchToSign {
     pub owner: Address,
     pub nonce_owner: Address,
@@ -27,6 +27,21 @@ pub struct DepositWalletBatchToSign {
     pub nonce: U256,
     pub deadline: U256,
     pub calls: Vec<DepositWalletCall>,
+}
+
+impl fmt::Debug for DepositWalletBatchToSign {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletBatchToSign")
+            .field("owner", &self.owner)
+            .field("nonce_owner", &self.nonce_owner)
+            .field("submit_from", &self.submit_from)
+            .field("deposit_wallet", &self.deposit_wallet)
+            .field("chain_id", &self.chain_id)
+            .field("nonce", &self.nonce)
+            .field("deadline", &self.deadline)
+            .field("calls_count", &self.calls.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -123,7 +138,7 @@ impl SignedDepositWalletBatch {
             ));
         }
 
-        let recovered = recover_deposit_wallet_batch_signer(&batch, &self.signature)?;
+        let recovered = recover_digest_signer(expected_digest, &self.signature)?;
         if recovered != self.verified_signer {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch signer metadata was mutated".to_string(),

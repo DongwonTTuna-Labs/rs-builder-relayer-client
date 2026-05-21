@@ -1,3 +1,4 @@
+use ethers::core::rand::thread_rng;
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use polymarket_relayer::{
@@ -112,10 +113,10 @@ fn wallet_batch_signature_recovery_accepts_owner() {
 }
 
 #[test]
-fn wallet_batch_signature_rejects_non_owner_session_signer() {
+fn wallet_batch_signature_rejects_non_owner_signer() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
-    let expected_signer: Address = data["approvedSessionRecoveredSigner"]
+    let expected_signer: Address = data["nonOwnerRecoveredSigner"]
         .as_str()
         .unwrap()
         .parse()
@@ -123,16 +124,15 @@ fn wallet_batch_signature_rejects_non_owner_session_signer() {
 
     let recovered = recover_deposit_wallet_batch_signer(
         &batch,
-        data["approvedSessionSignature"].as_str().unwrap(),
+        data["nonOwnerSignature"].as_str().unwrap(),
     )
     .unwrap();
 
     assert_eq!(recovered, expected_signer);
-    assert!(validate_deposit_wallet_batch_signature(
-        &batch,
-        data["approvedSessionSignature"].as_str().unwrap(),
-    )
-    .is_err());
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&batch, data["nonOwnerSignature"].as_str().unwrap()),
+        "signer must match owner",
+    );
 }
 
 #[test]
@@ -151,11 +151,13 @@ fn wallet_batch_signature_rejects_unauthorized_or_self_asserted_session_signer()
         .unwrap();
 
     assert_eq!(recovered, self_asserted);
-    assert!(validate_deposit_wallet_batch_signature(
-        &batch,
-        data["unauthorizedSignature"].as_str().unwrap(),
-    )
-    .is_err());
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            &batch,
+            data["unauthorizedSignature"].as_str().unwrap(),
+        ),
+        "signer must match owner",
+    );
 }
 
 #[test]
@@ -218,31 +220,39 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
     owner_mutation.owner = "0x000000000000000000000000000000000000dEaD"
         .parse()
         .unwrap();
-    assert!(validate_deposit_wallet_batch_signature(
-        &owner_mutation,
-        data["ownerSignature"].as_str().unwrap(),
-    )
-    .is_err());
+    owner_mutation.nonce_owner = owner_mutation.owner;
+    owner_mutation.submit_from = owner_mutation.owner;
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            &owner_mutation,
+            data["ownerSignature"].as_str().unwrap(),
+        ),
+        "signer must match owner",
+    );
 
     let mut nonce_owner_mutation = batch.clone();
     nonce_owner_mutation.nonce_owner = "0x000000000000000000000000000000000000dEaD"
         .parse()
         .unwrap();
-    assert!(validate_deposit_wallet_batch_signature(
-        &nonce_owner_mutation,
-        data["ownerSignature"].as_str().unwrap(),
-    )
-    .is_err());
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            &nonce_owner_mutation,
+            data["ownerSignature"].as_str().unwrap(),
+        ),
+        "nonce owner must match owner signer",
+    );
 
     let mut submit_from_mutation = batch;
     submit_from_mutation.submit_from = "0x000000000000000000000000000000000000dEaD"
         .parse()
         .unwrap();
-    assert!(validate_deposit_wallet_batch_signature(
-        &submit_from_mutation,
-        data["ownerSignature"].as_str().unwrap(),
-    )
-    .is_err());
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            &submit_from_mutation,
+            data["ownerSignature"].as_str().unwrap(),
+        ),
+        "submit from must match owner signer",
+    );
 }
 
 #[test]
@@ -274,9 +284,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         "submit config does not match signed chain id",
     );
 
-    let wallet: LocalWallet = "0000000000000000000000000000000000000000000000000000000000000001"
-        .parse()
-        .unwrap();
+    let wallet = LocalWallet::new(&mut thread_rng());
     let owner = wallet.address();
     let mut wrong_wallet_batch = batch;
     wrong_wallet_batch.owner = owner;
@@ -307,6 +315,7 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
     .unwrap();
 
     let debug = format!("{signed:?}");
+    let batch_debug = format!("{batch:?}");
 
     assert!(debug.contains("signature: \"<redacted>\""));
     assert!(debug.contains("typed_data: \"<redacted>\""));
@@ -314,6 +323,8 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
     assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
     assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
     assert!(!debug.contains("primaryType"));
+    assert!(batch_debug.contains("calls_count"));
+    assert!(!batch_debug.contains(data["calls"][0]["data"].as_str().unwrap()));
 }
 
 #[test]

@@ -58,6 +58,26 @@ fn test_relayer_key_auth_generates_headers() {
 }
 
 #[test]
+fn test_relayer_key_auth_identity_can_differ_from_wallet_owner() {
+    let auth_address = "0x1111111111111111111111111111111111111111";
+    let wallet_owner = "0x2222222222222222222222222222222222222222";
+    let auth = AuthMethod::relayer_key("my-key", auth_address);
+
+    let headers = auth.headers("GET", "/nonce?type=WALLET", "").unwrap();
+
+    assert_ne!(auth_address, wallet_owner);
+    assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), auth_address);
+    assert_ne!(
+        headers
+            .get("RELAYER_API_KEY_ADDRESS")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        wallet_owner
+    );
+}
+
+#[test]
 fn test_auth_method_builder_convenience() {
     let auth = AuthMethod::builder("k", "s", "p");
     match auth {

@@ -108,15 +108,8 @@
   "expectedDigest": "0x8761758518f3013544b0e1402700a02dd22927ad17005cfd4e4fb244df208fd7",
   "ownerSignature": "0x35893fd9d376a598357e548a33a0d837ed0215ee08a4de0efd8b8723f34895ce73e77f0f612e237046aa6e02ec83caf173e13a9e0a7c5cac68683fab3f6338cd1b",
   "ownerRecoveredSigner": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
-  "approvedSessionSigner": {
-    "signer": "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B",
-    "owner": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
-    "scope": "DepositWalletBatch",
-    "expiresAt": "1760000600",
-    "source": "trusted-config-fixture"
-  },
-  "approvedSessionSignature": "0x1793c0249f87c74e3b9d3440777cb2167b9b7d171ad8b446350b2a077be6f51b51b0969fff9745f0402f94ae059abfb672c87287b9fb4f22f20b427ad5ae73431b",
-  "approvedSessionRecoveredSigner": "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B",
+  "nonOwnerSignature": "0x1793c0249f87c74e3b9d3440777cb2167b9b7d171ad8b446350b2a077be6f51b51b0969fff9745f0402f94ae059abfb672c87287b9fb4f22f20b427ad5ae73431b",
+  "nonOwnerRecoveredSigner": "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B",
   "unauthorizedSignature": "0x05868331c8acc6cd080458614650fee1f912addc620f1bdb18cc61dfaa97bb745bde2af151cc7764f0f38ab937723981624ebd5f6488d0f904ab1ac814cdd2671b",
   "unauthorizedRecoveredSigner": "0x5F1B9101D99Bc71F05122A106157D60456b9af3d",
   "selfAssertedSessionSigner": "0x5F1B9101D99Bc71F05122A106157D60456b9af3d"
