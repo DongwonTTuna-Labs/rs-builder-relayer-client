@@ -122,6 +122,7 @@ fn wallet_batch_multicall_matches_official_sdk_fixture() {
     let expected_signer: Address = data["ownerRecoveredSigner"].as_str().unwrap().parse().unwrap();
 
     assert_eq!(batch.calls.len(), 2);
+    assert!(batch.calls.iter().any(|call| call.value != U256::zero()));
     assert_eq!(build_deposit_wallet_batch_typed_data(&batch), data["typedData"]);
     assert_eq!(digest_deposit_wallet_batch(&batch).unwrap(), expected_digest);
 
@@ -204,6 +205,7 @@ fn wallet_batch_signature_rejects_malformed_signature_shapes() {
         format!("{valid}00"),
         format!("{}zz", &valid[..valid.len() - 2]),
     ];
+    let unrecoverable_signature = format!("0x{}", "00".repeat(65));
 
     for signature in invalid_signatures {
         assert_signing_error_contains(
@@ -215,6 +217,15 @@ fn wallet_batch_signature_rejects_malformed_signature_shapes() {
             "0x-prefixed 65-byte hex",
         );
     }
+
+    assert_signing_error_contains(
+        recover_deposit_wallet_batch_signer(&batch, &unrecoverable_signature),
+        "could not recover deposit wallet signer",
+    );
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&batch, &unrecoverable_signature),
+        "could not recover deposit wallet signer",
+    );
 }
 
 #[test]
@@ -346,6 +357,33 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         build_deposit_wallet_batch_request_from_signed(&wrong_wallet_signed, config),
         "wallet does not match owner/config derived wallet",
     );
+
+    let mut rng = StdRng::seed_from_u64(2);
+    let unsupported_wallet = LocalWallet::new(&mut rng);
+    let unsupported_owner = unsupported_wallet.address();
+    let mut unsupported_chain_batch = batch_from_fixture(&data);
+    unsupported_chain_batch.owner = unsupported_owner;
+    unsupported_chain_batch.nonce_owner = unsupported_owner;
+    unsupported_chain_batch.submit_from = unsupported_owner;
+    unsupported_chain_batch.chain_id = 999_999;
+    let unsupported_digest = digest_deposit_wallet_batch(&unsupported_chain_batch).unwrap();
+    let unsupported_signature = format!(
+        "0x{}",
+        unsupported_wallet.sign_hash(unsupported_digest).unwrap()
+    );
+    let unsupported_signed = validate_deposit_wallet_batch_signature(
+        &unsupported_chain_batch,
+        &unsupported_signature,
+    )
+    .unwrap();
+    match build_deposit_wallet_batch_request_from_signed(&unsupported_signed, config) {
+        Err(RelayerError::Other(message)) => assert!(
+            message.contains("Deposit wallet contracts are not configured for chain 999999"),
+            "unexpected unsupported chain error: {message:?}"
+        ),
+        Err(error) => panic!("expected unsupported chain error, got {error:?}"),
+        Ok(_) => panic!("expected unsupported chain error, got success"),
+    }
 }
 
 #[test]
@@ -360,10 +398,23 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
 
     let debug = format!("{signed:?}");
     let batch_debug = format!("{batch:?}");
+    let owner_debug = format!("{:?}", batch.owner);
+    let nonce_owner_debug = format!("{:?}", batch.nonce_owner);
+    let submit_from_debug = format!("{:?}", batch.submit_from);
+    let deposit_wallet_debug = format!("{:?}", batch.deposit_wallet);
 
     assert!(debug.contains("signature: \"<redacted>\""));
     assert!(!debug.contains("typed_data"));
     assert!(debug.contains("calls_count"));
+    for raw_address in [
+        owner_debug,
+        nonce_owner_debug,
+        submit_from_debug,
+        deposit_wallet_debug,
+    ] {
+        assert!(!debug.contains(&raw_address));
+        assert!(!batch_debug.contains(&raw_address));
+    }
     assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
     assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
     assert!(!batch_debug.contains(data["calls"][0]["data"].as_str().unwrap()));
@@ -406,7 +457,11 @@ fn wallet_nonce_request_matches_fixture() {
     let owner: Address = data["address"].as_str().unwrap().parse().unwrap();
 
     let request = build_wallet_nonce_request(owner);
+    let debug = format!("{request:?}");
 
+    assert!(!debug.contains(&format!("{owner:?}")));
+    assert!(!debug.contains(data["address"].as_str().unwrap()));
+    assert!(debug.contains("..."));
     assert_eq!(serde_json::to_value(request).unwrap(), data);
 }
 

@@ -1,6 +1,8 @@
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
-use ethers::types::transaction::eip712::{Eip712, TypedData};
+use ethers::types::transaction::eip712::{
+    EIP712Domain, Eip712, Eip712DomainType, TypedData, Types,
+};
 use ethers::types::{Address, H256, Signature, U256};
 use ethers::utils::to_checksum;
 use serde_json::{json, Value};
@@ -31,11 +33,16 @@ pub struct DepositWalletBatchToSign {
 
 impl fmt::Debug for DepositWalletBatchToSign {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let owner = redacted_address(self.owner);
+        let nonce_owner = redacted_address(self.nonce_owner);
+        let submit_from = redacted_address(self.submit_from);
+        let deposit_wallet = redacted_address(self.deposit_wallet);
+
         f.debug_struct("DepositWalletBatchToSign")
-            .field("owner", &self.owner)
-            .field("nonce_owner", &self.nonce_owner)
-            .field("submit_from", &self.submit_from)
-            .field("deposit_wallet", &self.deposit_wallet)
+            .field("owner", &owner)
+            .field("nonce_owner", &nonce_owner)
+            .field("submit_from", &submit_from)
+            .field("deposit_wallet", &deposit_wallet)
             .field("chain_id", &self.chain_id)
             .field("nonce", &self.nonce)
             .field("deadline", &self.deadline)
@@ -61,18 +68,24 @@ pub struct SignedDepositWalletBatch {
 
 impl fmt::Debug for SignedDepositWalletBatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let owner = redacted_address(self.owner);
+        let nonce_owner = redacted_address(self.nonce_owner);
+        let submit_from = redacted_address(self.submit_from);
+        let deposit_wallet = redacted_address(self.deposit_wallet);
+        let verified_signer = redacted_address(self.verified_signer);
+
         f.debug_struct("SignedDepositWalletBatch")
-            .field("owner", &self.owner)
-            .field("nonce_owner", &self.nonce_owner)
-            .field("submit_from", &self.submit_from)
-            .field("deposit_wallet", &self.deposit_wallet)
+            .field("owner", &owner)
+            .field("nonce_owner", &nonce_owner)
+            .field("submit_from", &submit_from)
+            .field("deposit_wallet", &deposit_wallet)
             .field("chain_id", &self.chain_id)
             .field("nonce", &self.nonce)
             .field("deadline", &self.deadline)
             .field("calls_count", &self.calls.len())
             .field("digest", &self.digest)
             .field("signature", &"<redacted>")
-            .field("verified_signer", &self.verified_signer)
+            .field("verified_signer", &verified_signer)
             .finish()
     }
 }
@@ -185,12 +198,92 @@ fn build_deposit_wallet_batch_typed_data_parts(
 }
 
 pub fn digest_deposit_wallet_batch(batch: &DepositWalletBatchToSign) -> Result<H256> {
-    digest_deposit_wallet_typed_data(build_deposit_wallet_batch_typed_data(batch))
+    digest_deposit_wallet_typed_data(build_deposit_wallet_batch_typed_data_model(
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        &batch.calls,
+    ))
 }
 
-fn digest_deposit_wallet_typed_data(typed_data: Value) -> Result<H256> {
-    let typed_data: TypedData = serde_json::from_value(typed_data)
-        .map_err(|e| RelayerError::Signing(format!("invalid deposit wallet typed data: {e}")))?;
+fn build_deposit_wallet_batch_typed_data_model(
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce: U256,
+    deadline: U256,
+    calls: &[DepositWalletCall],
+) -> TypedData {
+    TypedData {
+        domain: EIP712Domain {
+            name: Some(DEPOSIT_WALLET_DOMAIN_NAME.to_string()),
+            version: Some(DEPOSIT_WALLET_DOMAIN_VERSION.to_string()),
+            chain_id: Some(U256::from(chain_id)),
+            verifying_contract: Some(deposit_wallet),
+            salt: None,
+        },
+        types: deposit_wallet_types(),
+        primary_type: DEPOSIT_WALLET_PRIMARY_TYPE.to_string(),
+        message: batch_message(deposit_wallet, nonce, deadline, calls),
+    }
+}
+
+fn deposit_wallet_types() -> Types {
+    let mut types = BTreeMap::new();
+    types.insert(
+        "EIP712Domain".to_string(),
+        vec![
+            eip712_field("name", "string"),
+            eip712_field("version", "string"),
+            eip712_field("chainId", "uint256"),
+            eip712_field("verifyingContract", "address"),
+        ],
+    );
+    types.insert(
+        "Call".to_string(),
+        vec![
+            eip712_field("target", "address"),
+            eip712_field("value", "uint256"),
+            eip712_field("data", "bytes"),
+        ],
+    );
+    types.insert(
+        "Batch".to_string(),
+        vec![
+            eip712_field("wallet", "address"),
+            eip712_field("nonce", "uint256"),
+            eip712_field("deadline", "uint256"),
+            eip712_field("calls", "Call[]"),
+        ],
+    );
+    types
+}
+
+fn eip712_field(name: &str, r#type: &str) -> Eip712DomainType {
+    Eip712DomainType {
+        name: name.to_string(),
+        r#type: r#type.to_string(),
+    }
+}
+
+fn batch_message(
+    deposit_wallet: Address,
+    nonce: U256,
+    deadline: U256,
+    calls: &[DepositWalletCall],
+) -> BTreeMap<String, Value> {
+    let mut message = BTreeMap::new();
+    message.insert("wallet".to_string(), Value::String(checksum(deposit_wallet)));
+    message.insert("nonce".to_string(), Value::String(nonce.to_string()));
+    message.insert("deadline".to_string(), Value::String(deadline.to_string()));
+    message.insert(
+        "calls".to_string(),
+        Value::Array(calls.iter().map(call_to_typed_data).collect()),
+    );
+    message
+}
+
+fn digest_deposit_wallet_typed_data(typed_data: TypedData) -> Result<H256> {
     let digest = typed_data
         .encode_eip712()
         .map_err(|e| RelayerError::Signing(format!("could not encode EIP-712 digest: {e}")))?;
@@ -339,6 +432,11 @@ fn call_to_typed_data(call: &DepositWalletCall) -> Value {
 
 fn checksum(address: Address) -> String {
     to_checksum(&address, None)
+}
+
+fn redacted_address(address: Address) -> String {
+    let checksum = checksum(address);
+    format!("{}...{}", &checksum[..6], &checksum[38..])
 }
 
 fn bytes_hex(bytes: &ethers::types::Bytes) -> String {
