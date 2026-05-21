@@ -104,6 +104,18 @@ class WorkflowPostGateTest(unittest.TestCase):
         )
 
 
+class WorkflowReviewMatrixTest(unittest.TestCase):
+    def test_review_matrix_parallelism_is_not_capped_by_workflow(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
+            encoding="utf-8"
+        )
+        review_strategy = workflow.split("\n    strategy:\n", 1)[1].split(
+            "\n    permissions:\n",
+            1,
+        )[0]
+        self.assertNotIn("max-parallel", review_strategy)
+
+
 class StickyInlineSkipMarkerTest(unittest.TestCase):
     def test_no_inline_marker_inserted_for_out_of_range(self) -> None:
         finding = {
