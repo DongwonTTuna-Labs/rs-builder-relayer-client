@@ -515,7 +515,7 @@ jobs:
   post:
     name: post
     needs: [resolve-check, tech-lead]
-    if: always() && !cancelled() && needs.tech-lead.result == 'success'
+    if: always() && !cancelled() && needs.resolve-check.result == 'success' && needs.tech-lead.result == 'success'
     runs-on: [self-hosted, linux, x64, codex]
     permissions:
       contents: read

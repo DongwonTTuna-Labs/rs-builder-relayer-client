@@ -88,7 +88,7 @@ class AxisStatusRenderTest(unittest.TestCase):
 
 
 class WorkflowPostGateTest(unittest.TestCase):
-    def test_post_job_waits_for_successful_tech_lead(self) -> None:
+    def test_post_job_waits_for_successful_review_prerequisites(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
             encoding="utf-8"
         )
@@ -100,7 +100,7 @@ class WorkflowPostGateTest(unittest.TestCase):
         self.assertIn("needs: [resolve-check, tech-lead]", post_block)
         self.assertRegex(
             post_block,
-            r"(?m)^    if: always\(\) && !cancelled\(\) && needs\.tech-lead\.result == 'success'$",
+            r"(?m)^    if: always\(\) && !cancelled\(\) && needs\.resolve-check\.result == 'success' && needs\.tech-lead\.result == 'success'$",
         )
 
 
