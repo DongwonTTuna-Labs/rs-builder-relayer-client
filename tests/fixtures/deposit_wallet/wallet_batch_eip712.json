@@ -1,0 +1,123 @@
+{
+  "metadata": {
+    "retrievalDate": "2026-05-21",
+    "docsUrl": "https://docs.polymarket.com/trading/deposit-wallets",
+    "tsSdk": {
+      "repo": "https://github.com/Polymarket/builder-relayer-client",
+      "commit": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+      "packageVersion": "0.0.9",
+      "sourceFile": "src/builder/deposit-wallet.ts"
+    },
+    "pySdk": {
+      "repo": "https://github.com/Polymarket/py-builder-relayer-client",
+      "commit": "6589f36740a2a98736f5b0499f29d2d234c583bc",
+      "packageVersion": "0.0.2rc1",
+      "sourceFile": "py_builder_relayer_client/builder/deposit_wallet.py"
+    },
+    "generatedBy": "official TypeScript SDK shape using viem hashTypedData/signTypedData in a temporary checkout",
+    "sanitized": true,
+    "secretPolicy": "No production private key, API credential, auth header, or production signature is included. Signatures are synthetic fixture signatures from label-derived public test signers; private keys are not recorded."
+  },
+  "owner": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
+  "nonceOwner": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
+  "submitFrom": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
+  "depositWallet": "0x3166bD2E57FF27FD045C00b5B81Cd0cff30498c7",
+  "chainId": 137,
+  "nonce": "31",
+  "deadline": "1760000000",
+  "calls": [
+    {
+      "target": "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
+      "value": "0",
+      "data": "0x095ea7b30000000000000000000000004d97dcd97ec945f40cf65f87097ace5ea0476045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ],
+  "typedData": {
+    "primaryType": "Batch",
+    "types": {
+      "EIP712Domain": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "chainId",
+          "type": "uint256"
+        },
+        {
+          "name": "verifyingContract",
+          "type": "address"
+        }
+      ],
+      "Call": [
+        {
+          "name": "target",
+          "type": "address"
+        },
+        {
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ],
+      "Batch": [
+        {
+          "name": "wallet",
+          "type": "address"
+        },
+        {
+          "name": "nonce",
+          "type": "uint256"
+        },
+        {
+          "name": "deadline",
+          "type": "uint256"
+        },
+        {
+          "name": "calls",
+          "type": "Call[]"
+        }
+      ]
+    },
+    "domain": {
+      "name": "DepositWallet",
+      "version": "1",
+      "chainId": 137,
+      "verifyingContract": "0x3166bD2E57FF27FD045C00b5B81Cd0cff30498c7"
+    },
+    "message": {
+      "wallet": "0x3166bD2E57FF27FD045C00b5B81Cd0cff30498c7",
+      "nonce": "31",
+      "deadline": "1760000000",
+      "calls": [
+        {
+          "target": "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
+          "value": "0",
+          "data": "0x095ea7b30000000000000000000000004d97dcd97ec945f40cf65f87097ace5ea0476045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ]
+    }
+  },
+  "expectedDigest": "0x8761758518f3013544b0e1402700a02dd22927ad17005cfd4e4fb244df208fd7",
+  "ownerSignature": "0x35893fd9d376a598357e548a33a0d837ed0215ee08a4de0efd8b8723f34895ce73e77f0f612e237046aa6e02ec83caf173e13a9e0a7c5cac68683fab3f6338cd1b",
+  "ownerRecoveredSigner": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
+  "approvedSessionSigner": {
+    "signer": "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B",
+    "owner": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
+    "scope": "DepositWalletBatch",
+    "expiresAt": "1760000600",
+    "source": "trusted-config-fixture"
+  },
+  "approvedSessionSignature": "0x1793c0249f87c74e3b9d3440777cb2167b9b7d171ad8b446350b2a077be6f51b51b0969fff9745f0402f94ae059abfb672c87287b9fb4f22f20b427ad5ae73431b",
+  "approvedSessionRecoveredSigner": "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B",
+  "unauthorizedSignature": "0x05868331c8acc6cd080458614650fee1f912addc620f1bdb18cc61dfaa97bb745bde2af151cc7764f0f38ab937723981624ebd5f6488d0f904ab1ac814cdd2671b",
+  "unauthorizedRecoveredSigner": "0x5F1B9101D99Bc71F05122A106157D60456b9af3d",
+  "selfAssertedSessionSigner": "0x5F1B9101D99Bc71F05122A106157D60456b9af3d"
+}

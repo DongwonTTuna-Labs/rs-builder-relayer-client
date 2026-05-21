@@ -6,7 +6,9 @@
 
 pub mod address;
 pub mod config;
+pub mod nonce;
 pub mod requests;
+pub mod signing;
 pub mod transaction;
 pub mod types;
 
@@ -16,7 +18,14 @@ pub use config::{
     AMOY_DEPOSIT_WALLET_FACTORY, AMOY_DEPOSIT_WALLET_IMPLEMENTATION, POLYGON_CHAIN_ID,
     POLYGON_DEPOSIT_WALLET_FACTORY, POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
 };
+pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 pub use requests::{build_wallet_batch_request_with_signature, build_wallet_create_request};
+pub use signing::{
+    build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
+    digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
+    validate_deposit_wallet_batch_signature, ApprovedSessionSigner, DepositWalletBatchToSign,
+    SessionSignerScope, SessionSignerSource, SignedDepositWalletBatch, SignerAuthorization,
+};
 pub use transaction::RelayerTransactionState;
 pub use types::{
     DepositWalletBatchRequest, DepositWalletCall, DepositWalletCreateRequest, DepositWalletParams,
