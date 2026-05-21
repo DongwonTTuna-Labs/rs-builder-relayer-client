@@ -23,7 +23,9 @@ jobs:
       contains(github.event.comment.body, '/codex-review') &&
       github.event.comment.user.login == 'DongwonTTuna' &&
       !endsWith(github.actor, '[bot]')
-    runs-on: [self-hosted, linux, x64, codex]
+    runs-on:
+      group: "Home Server Runners"
+      labels: codex
     permissions:
       contents: read
       pull-requests: read
