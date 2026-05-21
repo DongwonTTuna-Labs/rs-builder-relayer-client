@@ -109,7 +109,11 @@ class WorkflowReviewMatrixTest(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
             encoding="utf-8"
         )
-        review_strategy = workflow.split("\n    strategy:\n", 1)[1].split(
+        review_block = workflow.split("\n  review:\n", 1)[1].split(
+            "\n  tech-lead:\n",
+            1,
+        )[0]
+        review_strategy = review_block.split("\n    strategy:\n", 1)[1].split(
             "\n    permissions:\n",
             1,
         )[0]

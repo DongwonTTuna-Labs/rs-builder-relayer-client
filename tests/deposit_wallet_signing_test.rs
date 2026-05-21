@@ -1,9 +1,10 @@
+use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use polymarket_relayer::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
     build_wallet_nonce_request, deposit_wallet_contract_config, digest_deposit_wallet_batch,
     recover_deposit_wallet_batch_signer, validate_deposit_wallet_batch_signature,
-    DepositWalletBatchToSign, DepositWalletCall,
+    DepositWalletBatchToSign, DepositWalletCall, DepositWalletContractConfig, RelayerError,
 };
 use serde_json::Value;
 
@@ -40,6 +41,32 @@ fn batch_from_fixture(data: &Value) -> DepositWalletBatchToSign {
         deadline: parse_u256(data, "deadline"),
         calls: data["calls"].as_array().unwrap().iter().map(call_from_value).collect(),
     }
+}
+
+fn assert_signing_error_contains<T>(
+    result: std::result::Result<T, RelayerError>,
+    expected: &str,
+) {
+    match result {
+        Err(RelayerError::Signing(message)) => assert!(
+            message.contains(expected),
+            "expected signing error containing {expected:?}, got {message:?}"
+        ),
+        Err(error) => panic!("expected signing error containing {expected:?}, got {error:?}"),
+        Ok(_) => panic!("expected signing error containing {expected:?}, got success"),
+    }
+}
+
+#[test]
+fn deposit_wallet_contract_config_keeps_public_literal_compatibility() {
+    let config = deposit_wallet_contract_config(137).unwrap();
+
+    let literal = DepositWalletContractConfig {
+        factory: config.factory,
+        implementation: config.implementation,
+    };
+
+    assert_eq!(literal, config);
 }
 
 #[test]
@@ -132,6 +159,26 @@ fn wallet_batch_signature_rejects_unauthorized_or_self_asserted_session_signer()
 }
 
 #[test]
+fn wallet_batch_signature_rejects_malformed_signature_shapes() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let valid = data["ownerSignature"].as_str().unwrap();
+    let invalid_signatures = [
+        valid.trim_start_matches("0x").to_string(),
+        valid[..valid.len() - 2].to_string(),
+        format!("{valid}00"),
+        format!("{}zz", &valid[..valid.len() - 2]),
+    ];
+
+    for signature in invalid_signatures {
+        assert_signing_error_contains(
+            validate_deposit_wallet_batch_signature(&batch, &signature),
+            "0x-prefixed 65-byte hex",
+        );
+    }
+}
+
+#[test]
 fn wallet_batch_digest_changes_when_domain_or_message_changes() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
@@ -209,29 +256,43 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     )
     .unwrap();
 
-    let request = serde_json::to_value(
-        build_deposit_wallet_batch_request_from_signed(&signed, config).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(request["type"], "WALLET");
-    assert_eq!(request["from"], data["submitFrom"]);
-    assert_eq!(request["nonce"], data["nonce"]);
-    assert_eq!(request["signature"], data["ownerSignature"]);
-    assert_eq!(request["depositWalletParams"]["depositWallet"], data["depositWallet"]);
+    let request = build_deposit_wallet_batch_request_from_signed(&signed, config).unwrap();
+    let debug = format!("{request:?}");
 
-    let mismatched_chain_config = deposit_wallet_contract_config(80002).unwrap();
-    assert!(
-        build_deposit_wallet_batch_request_from_signed(&signed, mismatched_chain_config).is_err()
+    assert!(debug.contains("calls_count"));
+    assert!(!debug.contains("signature"));
+    assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
+    assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        fixture("deposit_wallet/wallet_signed_submit_body.json")
     );
 
-    let mut wrong_derived_wallet_config = config;
-    wrong_derived_wallet_config.implementation =
-        "0x000000000000000000000000000000000000dEaD"
-            .parse()
+    let mismatched_chain_config = deposit_wallet_contract_config(80002).unwrap();
+    assert_signing_error_contains(
+        build_deposit_wallet_batch_request_from_signed(&signed, mismatched_chain_config),
+        "submit config does not match signed chain id",
+    );
+
+    let wallet: LocalWallet = "0000000000000000000000000000000000000000000000000000000000000001"
+        .parse()
+        .unwrap();
+    let owner = wallet.address();
+    let mut wrong_wallet_batch = batch;
+    wrong_wallet_batch.owner = owner;
+    wrong_wallet_batch.nonce_owner = owner;
+    wrong_wallet_batch.submit_from = owner;
+    wrong_wallet_batch.deposit_wallet = "0x000000000000000000000000000000000000dEaD"
+        .parse()
+        .unwrap();
+    let wrong_wallet_digest = digest_deposit_wallet_batch(&wrong_wallet_batch).unwrap();
+    let wrong_wallet_signature = format!("0x{}", wallet.sign_hash(wrong_wallet_digest).unwrap());
+    let wrong_wallet_signed =
+        validate_deposit_wallet_batch_signature(&wrong_wallet_batch, &wrong_wallet_signature)
             .unwrap();
-    assert!(
-        build_deposit_wallet_batch_request_from_signed(&signed, wrong_derived_wallet_config)
-            .is_err()
+    assert_signing_error_contains(
+        build_deposit_wallet_batch_request_from_signed(&wrong_wallet_signed, config),
+        "wallet does not match owner/config derived wallet",
     );
 }
 

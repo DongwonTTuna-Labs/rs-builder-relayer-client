@@ -1,3 +1,5 @@
+use std::fmt;
+
 use ethers::types::{Address, Bytes, U256};
 use ethers::utils::to_checksum;
 use serde::{Serialize, Serializer};
@@ -42,7 +44,7 @@ pub struct DepositWalletParams {
     pub calls: Vec<DepositWalletCall>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepositWalletBatchRequest {
     #[serde(rename = "type")]
@@ -55,6 +57,20 @@ pub struct DepositWalletBatchRequest {
     pub nonce: U256,
     pub signature: String,
     pub deposit_wallet_params: DepositWalletParams,
+}
+
+impl fmt::Debug for DepositWalletBatchRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletBatchRequest")
+            .field("type", &self.tx_type)
+            .field("from", &self.from_address)
+            .field("to", &self.to)
+            .field("nonce", &self.nonce)
+            .field("deposit_wallet", &self.deposit_wallet_params.deposit_wallet)
+            .field("deadline", &self.deposit_wallet_params.deadline)
+            .field("calls_count", &self.deposit_wallet_params.calls.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]

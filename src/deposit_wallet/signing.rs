@@ -6,14 +6,16 @@ use ethers::utils::to_checksum;
 use serde_json::{json, Value};
 
 use crate::deposit_wallet::{
-    derive_deposit_wallet_address, DepositWalletBatchRequest, DepositWalletCall,
-    DepositWalletContractConfig,
+    deposit_wallet_contract_config, derive_deposit_wallet_address, DepositWalletBatchRequest,
+    DepositWalletCall, DepositWalletContractConfig,
 };
 use crate::error::{RelayerError, Result};
 
 const DEPOSIT_WALLET_DOMAIN_NAME: &str = "DepositWallet";
 const DEPOSIT_WALLET_DOMAIN_VERSION: &str = "1";
 const DEPOSIT_WALLET_PRIMARY_TYPE: &str = "Batch";
+const ECDSA_SIGNATURE_HEX_LEN: usize = 132;
+const ECDSA_SIGNATURE_PAYLOAD_HEX_LEN: usize = 130;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepositWalletBatchToSign {
@@ -275,9 +277,10 @@ fn validate_submit_config(
     signed: &SignedDepositWalletBatch,
     config: DepositWalletContractConfig,
 ) -> Result<()> {
-    if signed.chain_id != config.chain_id {
+    let expected_config = deposit_wallet_contract_config(signed.chain_id)?;
+    if config != expected_config {
         return Err(RelayerError::Signing(
-            "signed deposit wallet batch chain id does not match submit config".to_string(),
+            "signed deposit wallet batch submit config does not match signed chain id".to_string(),
         ));
     }
 
@@ -293,12 +296,32 @@ fn validate_submit_config(
 }
 
 fn recover_digest_signer(digest: H256, signature: &str) -> Result<Address> {
+    validate_signature_shape(signature)?;
     let signature: Signature = signature
         .parse()
         .map_err(|e| RelayerError::Signing(format!("invalid deposit wallet signature: {e}")))?;
     signature
         .recover(digest)
         .map_err(|e| RelayerError::Signing(format!("could not recover deposit wallet signer: {e}")))
+}
+
+fn validate_signature_shape(signature: &str) -> Result<()> {
+    let Some(hex_payload) = signature.strip_prefix("0x") else {
+        return Err(RelayerError::Signing(
+            "deposit wallet signature must be 0x-prefixed 65-byte hex".to_string(),
+        ));
+    };
+
+    if signature.len() != ECDSA_SIGNATURE_HEX_LEN
+        || hex_payload.len() != ECDSA_SIGNATURE_PAYLOAD_HEX_LEN
+        || !hex_payload.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(RelayerError::Signing(
+            "deposit wallet signature must be 0x-prefixed 65-byte hex".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn call_to_typed_data(call: &DepositWalletCall) -> Value {

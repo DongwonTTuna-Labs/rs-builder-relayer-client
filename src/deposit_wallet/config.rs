@@ -17,7 +17,6 @@ pub const AMOY_DEPOSIT_WALLET_IMPLEMENTATION: &str =
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DepositWalletContractConfig {
-    pub chain_id: u64,
     pub factory: Address,
     pub implementation: Address,
 }
@@ -25,12 +24,10 @@ pub struct DepositWalletContractConfig {
 pub fn deposit_wallet_contract_config(chain_id: u64) -> Result<DepositWalletContractConfig> {
     match chain_id {
         POLYGON_CHAIN_ID => build_config(
-            chain_id,
             POLYGON_DEPOSIT_WALLET_FACTORY,
             POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
         ),
         AMOY_CHAIN_ID => build_config(
-            chain_id,
             AMOY_DEPOSIT_WALLET_FACTORY,
             AMOY_DEPOSIT_WALLET_IMPLEMENTATION,
         ),
@@ -40,13 +37,8 @@ pub fn deposit_wallet_contract_config(chain_id: u64) -> Result<DepositWalletCont
     }
 }
 
-fn build_config(
-    chain_id: u64,
-    factory: &str,
-    implementation: &str,
-) -> Result<DepositWalletContractConfig> {
+fn build_config(factory: &str, implementation: &str) -> Result<DepositWalletContractConfig> {
     Ok(DepositWalletContractConfig {
-        chain_id,
         factory: parse_address(factory)?,
         implementation: parse_address(implementation)?,
     })
