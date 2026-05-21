@@ -159,17 +159,23 @@ pub fn try_build_deposit_wallet_batch_typed_data(batch: &DepositWalletBatchToSig
     ))
 }
 
-/// Compatibility wrapper for the original typed-data builder.
+/// Unchecked compatibility wrapper for the original typed-data builder.
 ///
-/// New callers should prefer `try_build_deposit_wallet_batch_typed_data` so
-/// oversized batch errors are returned instead of panicking.
+/// This preserves the existing infallible typed-data serialization behavior for
+/// consumers that have not migrated yet. It does not enforce batch resource
+/// limits; use `try_build_deposit_wallet_batch_typed_data` for untrusted input.
 #[deprecated(
     since = "0.1.3",
-    note = "use try_build_deposit_wallet_batch_typed_data so batch resource limit errors are returned instead of panicking"
+    note = "unchecked compatibility shim; use try_build_deposit_wallet_batch_typed_data for resource-limit validation"
 )]
 pub fn build_deposit_wallet_batch_typed_data(batch: &DepositWalletBatchToSign) -> Value {
-    try_build_deposit_wallet_batch_typed_data(batch)
-        .expect("deposit wallet typed-data compatibility builder preflight failed")
+    build_deposit_wallet_batch_typed_data_parts(
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        &batch.calls,
+    )
 }
 
 fn build_deposit_wallet_batch_typed_data_parts(
@@ -371,15 +377,20 @@ pub fn build_deposit_wallet_batch_request_from_signed(
 }
 
 fn validate_batch_resource_limits(batch: &DepositWalletBatchToSign) -> Result<()> {
-    if batch.calls.len() > MAX_DEPOSIT_WALLET_BATCH_CALLS {
+    validate_deposit_wallet_batch_resource_limits(&batch.calls)
+}
+
+pub(crate) fn validate_deposit_wallet_batch_resource_limits(
+    calls: &[DepositWalletCall],
+) -> Result<()> {
+    if calls.len() > MAX_DEPOSIT_WALLET_BATCH_CALLS {
         return Err(RelayerError::Signing(format!(
             "deposit wallet batch call count exceeds maximum of {MAX_DEPOSIT_WALLET_BATCH_CALLS}"
         )));
     }
 
     let total_calldata_bytes =
-        batch
-            .calls
+        calls
             .iter()
             .try_fold(0usize, |total, call| match total.checked_add(call.data.len()) {
                 Some(next) => Ok(next),

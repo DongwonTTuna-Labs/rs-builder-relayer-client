@@ -1,9 +1,11 @@
 use ethers::types::U256;
 
 use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
+use crate::deposit_wallet::signing::validate_deposit_wallet_batch_resource_limits;
 use crate::deposit_wallet::{
-    derive_deposit_wallet_address, validate_deposit_wallet_batch_signature,
-    DepositWalletBatchRequest, DepositWalletBatchToSign, DepositWalletCall,
+    build_deposit_wallet_batch_request_from_signed, derive_deposit_wallet_address,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchRequest, DepositWalletBatchToSign,
+    DepositWalletCall,
     DepositWalletContractConfig, DepositWalletCreateRequest, DepositWalletParams,
     DepositWalletRequestContext, WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
 };
@@ -35,6 +37,7 @@ pub fn try_build_wallet_batch_request_with_signature(
     signature: String,
 ) -> Result<DepositWalletBatchRequest> {
     let chain_id = deposit_wallet_contract_chain_id(config)?;
+    validate_deposit_wallet_batch_resource_limits(&calls)?;
     let derived_wallet = derive_deposit_wallet_address(ctx.owner_address, config)?;
     if ctx.deposit_wallet_address != derived_wallet {
         return Err(RelayerError::Signing(
@@ -51,24 +54,23 @@ pub fn try_build_wallet_batch_request_with_signature(
         chain_id,
         nonce,
         deadline,
-        calls: calls.clone(),
+        calls,
     };
-    validate_deposit_wallet_batch_signature(&batch, &signature)?;
+    let signed = validate_deposit_wallet_batch_signature(&batch, &signature)?;
 
-    Ok(build_wallet_batch_request_unchecked(
-        ctx, config, nonce, deadline, calls, signature,
-    ))
+    build_deposit_wallet_batch_request_from_signed(&signed, config)
 }
 
-/// Compatibility wrapper for the original public WALLET batch builder.
+/// Unchecked compatibility wrapper for the original public WALLET batch builder.
 ///
-/// This preserves the existing function signature for consumers that have not
-/// migrated yet, but it now performs the same owner signature, derived wallet,
-/// signature shape, and batch resource preflight as the fallible builder before
-/// constructing a request body.
+/// This preserves the existing infallible serialization behavior for consumers
+/// that have not migrated yet. It does not validate signer, config, derived
+/// wallet, signature shape, or batch resource limits; use
+/// `try_build_wallet_batch_request_with_signature` or
+/// `build_deposit_wallet_batch_request_from_signed` for untrusted input.
 #[deprecated(
     since = "0.1.3",
-    note = "use try_build_wallet_batch_request_with_signature or build_deposit_wallet_batch_request_from_signed so signature/config preflight errors are returned instead of panicking"
+    note = "unchecked compatibility shim; use try_build_wallet_batch_request_with_signature or build_deposit_wallet_batch_request_from_signed for validation"
 )]
 pub fn build_wallet_batch_request_with_signature(
     ctx: DepositWalletRequestContext,
@@ -78,8 +80,7 @@ pub fn build_wallet_batch_request_with_signature(
     calls: Vec<DepositWalletCall>,
     signature: String,
 ) -> DepositWalletBatchRequest {
-    try_build_wallet_batch_request_with_signature(ctx, config, nonce, deadline, calls, signature)
-        .expect("deposit wallet WALLET batch compatibility builder preflight failed")
+    build_wallet_batch_request_unchecked(ctx, config, nonce, deadline, calls, signature)
 }
 
 pub(crate) fn build_wallet_batch_request_unchecked(
