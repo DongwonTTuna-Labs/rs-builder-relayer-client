@@ -40,7 +40,12 @@ the required dry-run and manual live gates are satisfied.
 - `WALLET` signing/submission is serialized per owner through an in-flight owner
   lock, nonce lease, or actor queue. A second batch for the same owner must not
   fetch/sign/submit with a nonce while another owner-scoped batch is unresolved.
-- Signed batch digest and submit body are captured in redacted dry-run evidence.
+- Signed batch digest and a field-level submit summary are captured in redacted
+  dry-run evidence. Raw signatures, auth material, raw signed payloads, and full
+  replayable submit bodies must never be stored in logs, fixtures, PR comments,
+  screenshots, or artifacts. Evidence may store a payload hash, target/value
+  summaries, method selectors, owner/deposit-wallet addresses, nonce metadata,
+  and explicit redaction markers.
 - Polling handles new, executed, mined, confirmed, failed, invalid, and unknown
   states under the configured timeout/backoff policy. `STATE_NEW`,
   `STATE_EXECUTED`, and `STATE_MINED` remain pending; `STATE_CONFIRMED` is the
@@ -72,6 +77,9 @@ the required dry-run and manual live gates are satisfied.
   submit, or re-signing.
 - Id-less submit timeout tests prove payload-hash blocked state is written,
   same-owner mutation is denied, and recovery requires explicit reconciliation.
+- Dry-run evidence tests prove signatures, authorization headers, raw signed
+  typed data, and replayable submit bodies are redacted while non-secret hashes
+  and field-level summaries remain available for review.
 - Manual live gate evidence is stored outside fixtures and without secrets.
 
 ## Residual Risk

@@ -31,7 +31,10 @@ without touching live relayer endpoints.
   metadata, never raw API keys, bearer values, auth headers, or derived signing
   material.
 - `DepositWalletRelayerClient`: configured with relayer URL, chain id, owner
-  signer, relayer auth, and deposit-wallet contract config.
+  signer, relayer auth, and deposit-wallet contract config. The relayer URL
+  must be a validated endpoint newtype, not an arbitrary string. It must require
+  HTTPS and an approved Polymarket relayer host allowlist before any request can
+  attach relayer authentication headers.
 - `get_wallet_nonce(owner)`: fetches fresh `type=WALLET` nonce.
 - `submit_wallet_create(owner, mutation_gate)`: submits `WALLET-CREATE` only
   when an explicit mutation gate permits relayer mutation.
@@ -47,6 +50,11 @@ The implementation PR must document the enable flag or permit type, dry-run
 evidence requirement, rollback path, and the error returned when mutation is
 blocked.
 
+Relayer authentication headers must only be attached after endpoint validation.
+Tests must reject `http://` URLs, non-allowlisted hosts, userinfo-bearing URLs,
+host confusion such as suffix/prefix lookalikes, and redirects that would send
+credentials to an unapproved origin.
+
 The poll policy must include max attempts or total timeout, initial interval,
 backoff or rate-limit handling, and caller cancellation behavior.
 
@@ -56,6 +64,8 @@ APIs must not be removed or silently changed.
 ## Fixture And Mock Requirements
 
 - Mocked `GET /nonce` must assert `address=<owner>` and `type=WALLET`.
+- Endpoint validation tests must prove relayer auth is never sent to
+  non-HTTPS, non-allowlisted, userinfo-bearing, or redirect targets.
 - Mocked `POST /submit` must assert exact JSON body for both `WALLET-CREATE`
   and `WALLET`.
 - Mocked polling must cover `STATE_NEW`, `STATE_EXECUTED`, `STATE_MINED`,
