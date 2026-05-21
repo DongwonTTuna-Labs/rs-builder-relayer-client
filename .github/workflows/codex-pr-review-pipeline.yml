@@ -48,7 +48,9 @@ jobs:
   # ============================================================
   prepare-context:
     name: prepare-context
-    runs-on: [self-hosted, linux, x64, codex]
+    runs-on:
+      group: "Home Server Runners"
+      labels: codex
     permissions:
       contents: read
       pull-requests: read
@@ -98,7 +100,9 @@ jobs:
   # ============================================================
   resolve-check:
     name: resolve-check
-    runs-on: [self-hosted, linux, x64, codex]
+    runs-on:
+      group: "Home Server Runners"
+      labels: codex
     permissions:
       contents: read
       pull-requests: read
@@ -250,10 +254,12 @@ jobs:
   review:
     name: review (${{ matrix.axis }})
     needs: prepare-context
-    runs-on: [self-hosted, linux, x64, codex]
+    runs-on:
+      group: "Home Server Runners"
+      labels: codex
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         axis:
           - correctness
@@ -422,7 +428,9 @@ jobs:
     name: tech-lead
     needs: review
     if: always() && !cancelled()
-    runs-on: [self-hosted, linux, x64, codex]
+    runs-on:
+      group: "Home Server Runners"
+      labels: codex
     permissions:
       contents: read
       pull-requests: read
@@ -516,7 +524,9 @@ jobs:
     name: post
     needs: [resolve-check, tech-lead]
     if: always() && !cancelled() && needs.resolve-check.result == 'success' && needs.tech-lead.result == 'success'
-    runs-on: [self-hosted, linux, x64, codex]
+    runs-on:
+      group: "Home Server Runners"
+      labels: codex
     permissions:
       contents: read
       pull-requests: write
