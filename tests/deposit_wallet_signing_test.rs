@@ -1,6 +1,7 @@
 use ethers::core::rand::{rngs::StdRng, SeedableRng};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
+use ethers::utils::to_checksum;
 use polymarket_relayer::auth::AuthMethod;
 use polymarket_relayer::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
@@ -226,6 +227,35 @@ fn wallet_batch_signature_rejects_malformed_signature_shapes() {
     assert_signing_error_contains(
         validate_deposit_wallet_batch_signature(&batch, &unrecoverable_signature),
         "could not recover deposit wallet signer",
+    );
+}
+
+#[test]
+fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let valid_signature_shape = data["ownerSignature"].as_str().unwrap();
+
+    let mut too_many_calls = batch.clone();
+    too_many_calls.calls = vec![batch.calls[0].clone(); 257];
+    assert_signing_error_contains(
+        recover_deposit_wallet_batch_signer(&too_many_calls, valid_signature_shape),
+        "call count exceeds maximum",
+    );
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&too_many_calls, valid_signature_shape),
+        "call count exceeds maximum",
+    );
+
+    let mut too_much_calldata = batch.clone();
+    too_much_calldata.calls[0].data = Bytes::from(vec![0u8; 1024 * 1024 + 1]);
+    assert_signing_error_contains(
+        recover_deposit_wallet_batch_signer(&too_much_calldata, valid_signature_shape),
+        "calldata bytes exceed maximum",
+    );
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&too_much_calldata, valid_signature_shape),
+        "calldata bytes exceed maximum",
     );
 }
 
@@ -482,11 +512,16 @@ fn deposit_wallet_public_debug_outputs_redacted_summaries() {
         calls: batch.calls.clone(),
     };
 
-    let raw_owner = format!("{:?}", batch.owner);
-    let raw_submit_from = format!("{:?}", batch.submit_from);
-    let raw_deposit_wallet = format!("{:?}", batch.deposit_wallet);
-    let raw_factory = format!("{:?}", config.factory);
-    let raw_call_target = format!("{:?}", batch.calls[0].target);
+    let raw_owner_debug = format!("{:?}", batch.owner);
+    let raw_submit_from_debug = format!("{:?}", batch.submit_from);
+    let raw_deposit_wallet_debug = format!("{:?}", batch.deposit_wallet);
+    let raw_factory_debug = format!("{:?}", config.factory);
+    let raw_call_target_debug = format!("{:?}", batch.calls[0].target);
+    let raw_owner_checksum = to_checksum(&batch.owner, None);
+    let raw_submit_from_checksum = to_checksum(&batch.submit_from, None);
+    let raw_deposit_wallet_checksum = to_checksum(&batch.deposit_wallet, None);
+    let raw_factory_checksum = to_checksum(&config.factory, None);
+    let raw_call_target_checksum = to_checksum(&batch.calls[0].target, None);
     let raw_call_data = data["calls"][0]["data"].as_str().unwrap();
     let context_debug = format!("{context:?}");
     let create_debug = format!("{create_request:?}");
@@ -495,11 +530,16 @@ fn deposit_wallet_public_debug_outputs_redacted_summaries() {
 
     for debug in [&context_debug, &create_debug, &call_debug, &params_debug] {
         for raw in [
-            raw_owner.as_str(),
-            raw_submit_from.as_str(),
-            raw_deposit_wallet.as_str(),
-            raw_factory.as_str(),
-            raw_call_target.as_str(),
+            raw_owner_debug.as_str(),
+            raw_submit_from_debug.as_str(),
+            raw_deposit_wallet_debug.as_str(),
+            raw_factory_debug.as_str(),
+            raw_call_target_debug.as_str(),
+            raw_owner_checksum.as_str(),
+            raw_submit_from_checksum.as_str(),
+            raw_deposit_wallet_checksum.as_str(),
+            raw_factory_checksum.as_str(),
+            raw_call_target_checksum.as_str(),
             raw_call_data,
         ] {
             assert!(!debug.contains(raw), "debug leaked raw value {raw}: {debug}");

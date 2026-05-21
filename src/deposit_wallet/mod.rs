@@ -19,7 +19,7 @@ pub use config::{
     POLYGON_DEPOSIT_WALLET_FACTORY, POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
-pub use requests::{build_wallet_batch_request_with_signature, build_wallet_create_request};
+pub use requests::build_wallet_create_request;
 pub use signing::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
     digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,

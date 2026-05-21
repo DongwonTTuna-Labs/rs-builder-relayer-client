@@ -11,6 +11,7 @@ use crate::deposit_wallet::{
     deposit_wallet_contract_config, derive_deposit_wallet_address, DepositWalletBatchRequest,
     DepositWalletCall, DepositWalletContractConfig,
 };
+use crate::deposit_wallet::requests::build_wallet_batch_request_with_signature;
 use crate::error::{RelayerError, Result};
 
 const DEPOSIT_WALLET_DOMAIN_NAME: &str = "DepositWallet";
@@ -18,6 +19,8 @@ const DEPOSIT_WALLET_DOMAIN_VERSION: &str = "1";
 const DEPOSIT_WALLET_PRIMARY_TYPE: &str = "Batch";
 const ECDSA_SIGNATURE_HEX_LEN: usize = 132;
 const ECDSA_SIGNATURE_PAYLOAD_HEX_LEN: usize = 130;
+const MAX_DEPOSIT_WALLET_BATCH_CALLS: usize = 256;
+const MAX_DEPOSIT_WALLET_BATCH_CALLDATA_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletBatchToSign {
@@ -295,17 +298,21 @@ pub fn recover_deposit_wallet_batch_signer(
     batch: &DepositWalletBatchToSign,
     signature: &str,
 ) -> Result<Address> {
+    let signature_payload = validate_signature_shape(signature)?;
+    validate_batch_resource_limits(batch)?;
     let digest = digest_deposit_wallet_batch(batch)?;
-    recover_digest_signer(digest, signature)
+    recover_digest_signer_payload(digest, signature_payload)
 }
 
 pub fn validate_deposit_wallet_batch_signature(
     batch: &DepositWalletBatchToSign,
     signature: &str,
 ) -> Result<SignedDepositWalletBatch> {
+    let signature_payload = validate_signature_shape(signature)?;
+    validate_batch_resource_limits(batch)?;
     validate_batch_identity(batch)?;
     let digest = digest_deposit_wallet_batch(batch)?;
-    let verified_signer = recover_digest_signer(digest, signature)?;
+    let verified_signer = recover_digest_signer_payload(digest, signature_payload)?;
     if verified_signer != batch.owner {
         return Err(RelayerError::Signing(
             "deposit wallet batch signer must match owner".to_string(),
@@ -334,7 +341,7 @@ pub fn build_deposit_wallet_batch_request_from_signed(
     signed.validate_submit_preflight()?;
     validate_submit_config(signed, config)?;
 
-    Ok(crate::deposit_wallet::build_wallet_batch_request_with_signature(
+    Ok(build_wallet_batch_request_with_signature(
         crate::deposit_wallet::DepositWalletRequestContext {
             owner_address: signed.submit_from,
             deposit_wallet_address: signed.deposit_wallet,
@@ -345,6 +352,33 @@ pub fn build_deposit_wallet_batch_request_from_signed(
         signed.calls.clone(),
         signed.signature.clone(),
     ))
+}
+
+fn validate_batch_resource_limits(batch: &DepositWalletBatchToSign) -> Result<()> {
+    if batch.calls.len() > MAX_DEPOSIT_WALLET_BATCH_CALLS {
+        return Err(RelayerError::Signing(format!(
+            "deposit wallet batch call count exceeds maximum of {MAX_DEPOSIT_WALLET_BATCH_CALLS}"
+        )));
+    }
+
+    let total_calldata_bytes =
+        batch
+            .calls
+            .iter()
+            .try_fold(0usize, |total, call| match total.checked_add(call.data.len()) {
+                Some(next) => Ok(next),
+                None => Err(RelayerError::Signing(
+                    "deposit wallet batch calldata byte count overflowed".to_string(),
+                )),
+            })?;
+
+    if total_calldata_bytes > MAX_DEPOSIT_WALLET_BATCH_CALLDATA_BYTES {
+        return Err(RelayerError::Signing(format!(
+            "deposit wallet batch calldata bytes exceed maximum of {MAX_DEPOSIT_WALLET_BATCH_CALLDATA_BYTES}"
+        )));
+    }
+
+    Ok(())
 }
 
 fn validate_batch_identity(batch: &DepositWalletBatchToSign) -> Result<()> {
@@ -393,8 +427,7 @@ fn validate_submit_config(
     Ok(())
 }
 
-fn recover_digest_signer(digest: H256, signature: &str) -> Result<Address> {
-    let signature_payload = validate_signature_shape(signature)?;
+fn recover_digest_signer_payload(digest: H256, signature_payload: &str) -> Result<Address> {
     let signature: Signature = signature_payload
         .parse()
         .map_err(|e| RelayerError::Signing(format!("invalid deposit wallet signature: {e}")))?;

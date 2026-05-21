@@ -1,8 +1,7 @@
-use ethers::types::{Address, Bytes, U256};
+use ethers::types::Address;
 use polymarket_relayer::{
-    build_wallet_batch_request_with_signature, build_wallet_create_request,
-    deposit_wallet_contract_config, derive_deposit_wallet_address, DepositWalletCall,
-    DepositWalletRequestContext, RelayerTransactionState,
+    build_wallet_create_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
+    RelayerTransactionState,
 };
 use serde_json::Value;
 
@@ -36,44 +35,6 @@ fn wallet_create_submit_body_matches_fixture() {
     assert_eq!(
         serde_json::to_value(request).unwrap(),
         fixture("deposit_wallet/wallet_create_submit_body.json")
-    );
-}
-
-#[test]
-fn wallet_batch_submit_body_matches_fixture() {
-    let owner: Address = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5"
-        .parse()
-        .unwrap();
-    let deposit_wallet: Address = "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De"
-        .parse()
-        .unwrap();
-    let target: Address = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
-        .parse()
-        .unwrap();
-    let config = deposit_wallet_contract_config(137).unwrap();
-    let ctx = DepositWalletRequestContext {
-        owner_address: owner,
-        deposit_wallet_address: deposit_wallet,
-    };
-    let call = DepositWalletCall {
-        target,
-        value: U256::zero(),
-        data: Bytes::from(hex::decode("095ea7b30000000000000000000000004d97dcd97ec945f40cf65f87097ace5ea0476045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff").unwrap()),
-    };
-    let signature = "0x111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221b";
-
-    let request = build_wallet_batch_request_with_signature(
-        ctx,
-        config,
-        U256::from(31u64),
-        U256::from(1_760_000_000u64),
-        vec![call],
-        signature.to_string(),
-    );
-
-    assert_eq!(
-        serde_json::to_value(request).unwrap(),
-        fixture("deposit_wallet/wallet_submit_body.json")
     );
 }
 
