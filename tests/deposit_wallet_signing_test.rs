@@ -1,6 +1,7 @@
-use ethers::core::rand::thread_rng;
+use ethers::core::rand::{rngs::StdRng, SeedableRng};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
+use polymarket_relayer::auth::AuthMethod;
 use polymarket_relayer::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
     build_wallet_nonce_request, deposit_wallet_contract_config, digest_deposit_wallet_batch,
@@ -284,7 +285,8 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         "submit config does not match signed chain id",
     );
 
-    let wallet = LocalWallet::new(&mut thread_rng());
+    let mut rng = StdRng::seed_from_u64(1);
+    let wallet = LocalWallet::new(&mut rng);
     let owner = wallet.address();
     let mut wrong_wallet_batch = batch;
     wrong_wallet_batch.owner = owner;
@@ -364,4 +366,36 @@ fn wallet_nonce_request_matches_fixture() {
     let request = build_wallet_nonce_request(owner);
 
     assert_eq!(serde_json::to_value(request).unwrap(), data);
+}
+
+#[test]
+fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let owner = batch.owner;
+    let auth_address = "0x1111111111111111111111111111111111111111";
+    let auth = AuthMethod::relayer_key("my-key", auth_address);
+
+    let nonce_request = build_wallet_nonce_request(owner);
+    let headers = auth
+        .headers("GET", nonce_request.path_and_query.as_str(), "")
+        .unwrap();
+    let signed =
+        validate_deposit_wallet_batch_signature(&batch, data["ownerSignature"].as_str().unwrap())
+            .unwrap();
+    let submit_request = serde_json::to_value(
+        build_deposit_wallet_batch_request_from_signed(
+            &signed,
+            deposit_wallet_contract_config(batch.chain_id).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_ne!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), data["owner"].as_str().unwrap());
+    assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), auth_address);
+    assert_eq!(nonce_request.address, owner);
+    assert_eq!(signed.owner(), owner);
+    assert_eq!(submit_request["from"], data["submitFrom"]);
+    assert_eq!(submit_request["from"], data["owner"]);
 }

@@ -412,6 +412,17 @@ mod tests {
         .unwrap()
     }
 
+    fn assert_signing_error_contains(result: Result<()>, expected: &str) {
+        match result {
+            Err(RelayerError::Signing(message)) => assert!(
+                message.contains(expected),
+                "expected signing error containing {expected:?}, got {message:?}"
+            ),
+            Err(error) => panic!("expected signing error containing {expected:?}, got {error:?}"),
+            Ok(_) => panic!("expected signing error containing {expected:?}, got success"),
+        }
+    }
+
     #[test]
     fn submit_preflight_rejects_private_metadata_tampering() {
         let signed = signed_fixture();
@@ -421,19 +432,31 @@ mod tests {
 
         let mut tampered_owner = signed.clone();
         tampered_owner.owner = dead_address;
-        assert!(tampered_owner.validate_submit_preflight().is_err());
+        assert_signing_error_contains(
+            tampered_owner.validate_submit_preflight(),
+            "nonce owner must match owner signer",
+        );
 
         let mut tampered_domain = signed.clone();
         tampered_domain.typed_data["domain"]["verifyingContract"] =
             Value::String("0x000000000000000000000000000000000000dEaD".to_string());
-        assert!(tampered_domain.validate_submit_preflight().is_err());
+        assert_signing_error_contains(
+            tampered_domain.validate_submit_preflight(),
+            "typed data metadata was mutated",
+        );
 
         let mut tampered_signer = signed.clone();
         tampered_signer.verified_signer = dead_address;
-        assert!(tampered_signer.validate_submit_preflight().is_err());
+        assert_signing_error_contains(
+            tampered_signer.validate_submit_preflight(),
+            "signer metadata was mutated",
+        );
 
         let mut tampered_digest = signed;
         tampered_digest.digest = H256::zero();
-        assert!(tampered_digest.validate_submit_preflight().is_err());
+        assert_signing_error_contains(
+            tampered_digest.validate_submit_preflight(),
+            "digest metadata was mutated",
+        );
     }
 }
