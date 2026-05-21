@@ -26,8 +26,9 @@ class CombineAxisStatusTest(unittest.TestCase):
             (art_dir / "findings-security.json").write_text(
                 json.dumps({"agent": "security", "findings": []}), encoding="utf-8"
             )
-            with self.assertRaises(SystemExit):
+            with self.assertRaises(SystemExit) as raised:
                 combine(art_dir)
+            self.assertEqual(raised.exception.code, 1)
             data = json.loads(
                 (art_dir / "axes_status.json").read_text(encoding="utf-8")
             )
@@ -91,9 +92,15 @@ class WorkflowPostGateTest(unittest.TestCase):
         workflow = (REPO_ROOT / ".github" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn(
-            "if: always() && !cancelled() && needs.tech-lead.result == 'success'",
-            workflow,
+        post_block = workflow.split("\n  post:\n", 1)[1].split(
+            "\n  # ============================================================",
+            1,
+        )[0]
+        self.assertIn("name: post", post_block)
+        self.assertIn("needs: [resolve-check, tech-lead]", post_block)
+        self.assertRegex(
+            post_block,
+            r"(?m)^    if: always\(\) && !cancelled\(\) && needs\.tech-lead\.result == 'success'$",
         )
 
 
