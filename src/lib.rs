@@ -12,15 +12,17 @@ pub mod types;
 pub use auth::{AuthMethod, BuilderConfig};
 pub use client::{RelayClient, TransactionResponseHandle};
 pub use direct::{DirectExecutor, DirectTxResult};
+#[allow(deprecated)]
 pub use deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
-    build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
-    derive_deposit_wallet_address, digest_deposit_wallet_batch,
-    recover_deposit_wallet_batch_signer, validate_deposit_wallet_batch_signature,
-    DepositWalletBatchRequest, DepositWalletBatchToSign, DepositWalletCall,
-    DepositWalletContractConfig, DepositWalletCreateRequest, DepositWalletParams,
-    DepositWalletRequestContext, RelayerSubmitResponse, RelayerTransactionState,
-    SignedDepositWalletBatch, WalletNonceRequest,
+    build_wallet_batch_request_with_signature, build_wallet_create_request,
+    build_wallet_nonce_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
+    digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
+    try_build_deposit_wallet_batch_typed_data, try_build_wallet_batch_request_with_signature,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchRequest, DepositWalletBatchToSign,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
+    DepositWalletParams, DepositWalletRequestContext, RelayerSubmitResponse,
+    RelayerTransactionState, SignedDepositWalletBatch, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

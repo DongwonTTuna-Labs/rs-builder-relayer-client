@@ -4,9 +4,10 @@ use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::to_checksum;
 use polymarket_relayer::auth::AuthMethod;
 use polymarket_relayer::{
-    build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
+    build_deposit_wallet_batch_request_from_signed,
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
     digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
+    try_build_deposit_wallet_batch_typed_data, try_build_wallet_batch_request_with_signature,
     validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
     DepositWalletContractConfig, DepositWalletParams, DepositWalletRequestContext, RelayerError,
 };
@@ -78,7 +79,7 @@ fn wallet_batch_typed_data_matches_official_sdk_fixture() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
 
-    let typed_data = build_deposit_wallet_batch_typed_data(&batch);
+    let typed_data = try_build_deposit_wallet_batch_typed_data(&batch).unwrap();
 
     assert_eq!(typed_data, data["typedData"]);
 }
@@ -125,7 +126,10 @@ fn wallet_batch_multicall_matches_official_sdk_fixture() {
 
     assert_eq!(batch.calls.len(), 2);
     assert!(batch.calls.iter().any(|call| call.value != U256::zero()));
-    assert_eq!(build_deposit_wallet_batch_typed_data(&batch), data["typedData"]);
+    assert_eq!(
+        try_build_deposit_wallet_batch_typed_data(&batch).unwrap(),
+        data["typedData"]
+    );
     assert_eq!(digest_deposit_wallet_batch(&batch).unwrap(), expected_digest);
 
     let recovered = recover_deposit_wallet_batch_signer(
@@ -235,9 +239,18 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
     let valid_signature_shape = data["ownerSignature"].as_str().unwrap();
+    let malformed_signature = valid_signature_shape.trim_start_matches("0x");
 
     let mut too_many_calls = batch.clone();
     too_many_calls.calls = vec![batch.calls[0].clone(); 257];
+    assert_signing_error_contains(
+        try_build_deposit_wallet_batch_typed_data(&too_many_calls),
+        "call count exceeds maximum",
+    );
+    assert_signing_error_contains(
+        digest_deposit_wallet_batch(&too_many_calls),
+        "call count exceeds maximum",
+    );
     assert_signing_error_contains(
         recover_deposit_wallet_batch_signer(&too_many_calls, valid_signature_shape),
         "call count exceeds maximum",
@@ -246,9 +259,21 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
         validate_deposit_wallet_batch_signature(&too_many_calls, valid_signature_shape),
         "call count exceeds maximum",
     );
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&too_many_calls, malformed_signature),
+        "0x-prefixed 65-byte hex",
+    );
 
     let mut too_much_calldata = batch.clone();
     too_much_calldata.calls[0].data = Bytes::from(vec![0u8; 1024 * 1024 + 1]);
+    assert_signing_error_contains(
+        try_build_deposit_wallet_batch_typed_data(&too_much_calldata),
+        "calldata bytes exceed maximum",
+    );
+    assert_signing_error_contains(
+        digest_deposit_wallet_batch(&too_much_calldata),
+        "calldata bytes exceed maximum",
+    );
     assert_signing_error_contains(
         recover_deposit_wallet_batch_signer(&too_much_calldata, valid_signature_shape),
         "calldata bytes exceed maximum",
@@ -257,6 +282,22 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
         validate_deposit_wallet_batch_signature(&too_much_calldata, valid_signature_shape),
         "calldata bytes exceed maximum",
     );
+}
+
+#[test]
+fn wallet_batch_resource_limits_accept_exact_boundaries() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+
+    let mut max_calls = batch.clone();
+    max_calls.calls = vec![batch.calls[0].clone(); 256];
+    assert!(try_build_deposit_wallet_batch_typed_data(&max_calls).is_ok());
+    assert!(digest_deposit_wallet_batch(&max_calls).is_ok());
+
+    let mut max_calldata = batch;
+    max_calldata.calls[0].data = Bytes::from(vec![0u8; 1024 * 1024]);
+    assert!(try_build_deposit_wallet_batch_typed_data(&max_calldata).is_ok());
+    assert!(digest_deposit_wallet_batch(&max_calldata).is_ok());
 }
 
 #[test]
@@ -288,6 +329,79 @@ fn wallet_batch_digest_changes_when_domain_or_message_changes() {
         .parse()
         .unwrap();
     assert_ne!(digest_deposit_wallet_batch(&call_mutation).unwrap(), baseline);
+}
+
+#[test]
+fn wallet_batch_validation_rejects_signed_payload_mutations() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let owner_signature = data["ownerSignature"].as_str().unwrap();
+
+    let mut chain_mutation = batch.clone();
+    chain_mutation.chain_id = 80002;
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&chain_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let mut wallet_mutation = batch.clone();
+    wallet_mutation.deposit_wallet = "0x000000000000000000000000000000000000dEaD"
+        .parse()
+        .unwrap();
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&wallet_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let mut nonce_mutation = batch.clone();
+    nonce_mutation.nonce += U256::one();
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&nonce_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let mut deadline_mutation = batch.clone();
+    deadline_mutation.deadline += U256::one();
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&deadline_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let mut target_mutation = batch.clone();
+    target_mutation.calls[0].target = "0x0000000000000000000000000000000000000001"
+        .parse()
+        .unwrap();
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&target_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let mut value_mutation = batch.clone();
+    value_mutation.calls[0].value += U256::one();
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&value_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let mut data_mutation = batch;
+    let mut call_data = data_mutation.calls[0].data.as_ref().to_vec();
+    call_data.push(0);
+    data_mutation.calls[0].data = Bytes::from(call_data);
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(&data_mutation, owner_signature),
+        "signer must match owner",
+    );
+
+    let multicall_data = fixture("deposit_wallet/wallet_batch_eip712_multicall.json");
+    let mut order_mutation = batch_from_fixture(&multicall_data);
+    order_mutation.calls.swap(0, 1);
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            &order_mutation,
+            multicall_data["ownerSignature"].as_str().unwrap(),
+        ),
+        "signer must match owner",
+    );
 }
 
 #[test]
@@ -418,6 +532,32 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
 }
 
 #[test]
+fn wallet_batch_public_try_builder_matches_signed_submit_fixture() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let ctx = DepositWalletRequestContext {
+        owner_address: batch.submit_from,
+        deposit_wallet_address: batch.deposit_wallet,
+    };
+
+    let request = try_build_wallet_batch_request_with_signature(
+        ctx,
+        config,
+        batch.nonce,
+        batch.deadline,
+        batch.calls,
+        data["ownerSignature"].as_str().unwrap().to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        fixture("deposit_wallet/wallet_signed_submit_body.json")
+    );
+}
+
+#[test]
 fn signed_batch_debug_redacts_signature_and_payload_material() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
@@ -433,6 +573,10 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
     let nonce_owner_debug = format!("{:?}", batch.nonce_owner);
     let submit_from_debug = format!("{:?}", batch.submit_from);
     let deposit_wallet_debug = format!("{:?}", batch.deposit_wallet);
+    let owner_checksum = to_checksum(&batch.owner, None);
+    let nonce_owner_checksum = to_checksum(&batch.nonce_owner, None);
+    let submit_from_checksum = to_checksum(&batch.submit_from, None);
+    let deposit_wallet_checksum = to_checksum(&batch.deposit_wallet, None);
 
     assert!(debug.contains("signature: \"<redacted>\""));
     assert!(!debug.contains("typed_data"));
@@ -442,6 +586,10 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
         nonce_owner_debug,
         submit_from_debug,
         deposit_wallet_debug,
+        owner_checksum,
+        nonce_owner_checksum,
+        submit_from_checksum,
+        deposit_wallet_checksum,
     ] {
         assert!(!debug.contains(&raw_address));
         assert!(!batch_debug.contains(&raw_address));

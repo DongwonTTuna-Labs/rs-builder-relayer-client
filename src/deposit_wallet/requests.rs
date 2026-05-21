@@ -1,10 +1,13 @@
 use ethers::types::U256;
 
+use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
 use crate::deposit_wallet::{
-    DepositWalletBatchRequest, DepositWalletCall, DepositWalletContractConfig,
-    DepositWalletCreateRequest, DepositWalletParams, DepositWalletRequestContext,
-    WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
+    derive_deposit_wallet_address, validate_deposit_wallet_batch_signature,
+    DepositWalletBatchRequest, DepositWalletBatchToSign, DepositWalletCall,
+    DepositWalletContractConfig, DepositWalletCreateRequest, DepositWalletParams,
+    DepositWalletRequestContext, WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
 };
+use crate::error::{RelayerError, Result};
 
 pub fn build_wallet_create_request(
     owner_address: ethers::types::Address,
@@ -17,7 +20,69 @@ pub fn build_wallet_create_request(
     }
 }
 
-pub(crate) fn build_wallet_batch_request_with_signature(
+/// Builds a WALLET batch request from an owner-signed payload.
+///
+/// New callers should prefer this fallible compatibility entry point or
+/// `build_deposit_wallet_batch_request_from_signed` so signer/config validation
+/// failures are returned as `RelayerError` instead of producing an unchecked
+/// request body.
+pub fn try_build_wallet_batch_request_with_signature(
+    ctx: DepositWalletRequestContext,
+    config: DepositWalletContractConfig,
+    nonce: U256,
+    deadline: U256,
+    calls: Vec<DepositWalletCall>,
+    signature: String,
+) -> Result<DepositWalletBatchRequest> {
+    let chain_id = deposit_wallet_contract_chain_id(config)?;
+    let derived_wallet = derive_deposit_wallet_address(ctx.owner_address, config)?;
+    if ctx.deposit_wallet_address != derived_wallet {
+        return Err(RelayerError::Signing(
+            "deposit wallet request context wallet does not match owner/config derived wallet"
+                .to_string(),
+        ));
+    }
+
+    let batch = DepositWalletBatchToSign {
+        owner: ctx.owner_address,
+        nonce_owner: ctx.owner_address,
+        submit_from: ctx.owner_address,
+        deposit_wallet: ctx.deposit_wallet_address,
+        chain_id,
+        nonce,
+        deadline,
+        calls: calls.clone(),
+    };
+    validate_deposit_wallet_batch_signature(&batch, &signature)?;
+
+    Ok(build_wallet_batch_request_unchecked(
+        ctx, config, nonce, deadline, calls, signature,
+    ))
+}
+
+/// Compatibility wrapper for the original public WALLET batch builder.
+///
+/// This preserves the existing function signature for consumers that have not
+/// migrated yet, but it now performs the same owner signature, derived wallet,
+/// signature shape, and batch resource preflight as the fallible builder before
+/// constructing a request body.
+#[deprecated(
+    since = "0.1.3",
+    note = "use try_build_wallet_batch_request_with_signature or build_deposit_wallet_batch_request_from_signed so signature/config preflight errors are returned instead of panicking"
+)]
+pub fn build_wallet_batch_request_with_signature(
+    ctx: DepositWalletRequestContext,
+    config: DepositWalletContractConfig,
+    nonce: U256,
+    deadline: U256,
+    calls: Vec<DepositWalletCall>,
+    signature: String,
+) -> DepositWalletBatchRequest {
+    try_build_wallet_batch_request_with_signature(ctx, config, nonce, deadline, calls, signature)
+        .expect("deposit wallet WALLET batch compatibility builder preflight failed")
+}
+
+pub(crate) fn build_wallet_batch_request_unchecked(
     ctx: DepositWalletRequestContext,
     config: DepositWalletContractConfig,
     nonce: U256,
@@ -44,7 +109,7 @@ mod tests {
     use ethers::types::{Address, Bytes, U256};
     use serde_json::Value;
 
-    use super::build_wallet_batch_request_with_signature;
+    use super::build_wallet_batch_request_unchecked;
     use crate::deposit_wallet::{
         deposit_wallet_contract_config, DepositWalletCall, DepositWalletRequestContext,
     };
@@ -78,7 +143,7 @@ mod tests {
         };
         let signature = "0x111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221b";
 
-        let request = build_wallet_batch_request_with_signature(
+        let request = build_wallet_batch_request_unchecked(
             ctx,
             config,
             U256::from(31u64),

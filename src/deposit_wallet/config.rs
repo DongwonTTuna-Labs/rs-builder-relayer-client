@@ -37,6 +37,22 @@ pub fn deposit_wallet_contract_config(chain_id: u64) -> Result<DepositWalletCont
     }
 }
 
+pub(crate) fn deposit_wallet_contract_chain_id(
+    config: DepositWalletContractConfig,
+) -> Result<u64> {
+    if config == deposit_wallet_contract_config(POLYGON_CHAIN_ID)? {
+        return Ok(POLYGON_CHAIN_ID);
+    }
+
+    if config == deposit_wallet_contract_config(AMOY_CHAIN_ID)? {
+        return Ok(AMOY_CHAIN_ID);
+    }
+
+    Err(RelayerError::Signing(
+        "deposit wallet contract config is not supported for signed batch validation".to_string(),
+    ))
+}
+
 fn build_config(factory: &str, implementation: &str) -> Result<DepositWalletContractConfig> {
     Ok(DepositWalletContractConfig {
         factory: parse_address(factory)?,
