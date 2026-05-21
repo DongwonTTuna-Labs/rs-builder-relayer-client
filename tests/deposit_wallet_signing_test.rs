@@ -3,12 +3,14 @@ use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::to_checksum;
 use polymarket_relayer::auth::AuthMethod;
+use polymarket_relayer::deposit_wallet::{
+    build_deposit_wallet_batch_request_from_signed, digest_deposit_wallet_batch,
+    recover_deposit_wallet_batch_signer, try_build_deposit_wallet_batch_typed_data,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign,
+};
 use polymarket_relayer::{
-    build_deposit_wallet_batch_request_from_signed,
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
-    digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
-    try_build_deposit_wallet_batch_typed_data, try_build_wallet_batch_request_with_signature,
-    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
+    try_build_wallet_batch_request_with_signature, DepositWalletCall,
     DepositWalletContractConfig, DepositWalletParams, DepositWalletRequestContext, RelayerError,
 };
 use serde_json::Value;

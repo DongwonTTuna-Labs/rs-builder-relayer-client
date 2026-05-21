@@ -27,7 +27,8 @@ pub fn build_wallet_create_request(
 /// New callers should prefer this fallible compatibility entry point or
 /// `build_deposit_wallet_batch_request_from_signed` so signer/config validation
 /// failures are returned as `RelayerError` instead of producing an unchecked
-/// request body.
+/// request body. This helper does not enforce wall-clock deadline freshness;
+/// live submit code must add a clock-injected expiry guard before calling it.
 pub fn try_build_wallet_batch_request_with_signature(
     ctx: DepositWalletRequestContext,
     config: DepositWalletContractConfig,

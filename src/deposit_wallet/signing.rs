@@ -356,6 +356,12 @@ pub fn validate_deposit_wallet_batch_signature(
     })
 }
 
+/// Builds a WALLET submit request from an already owner-validated signed batch.
+///
+/// This is a serialization and consistency guard for fixture-backed request
+/// construction. It rechecks the signed owner, chain/config, and derived wallet,
+/// but it intentionally does not apply wall-clock deadline freshness. Live
+/// submit code must add a clock-injected expiry guard before calling it.
 pub fn build_deposit_wallet_batch_request_from_signed(
     signed: &SignedDepositWalletBatch,
     config: DepositWalletContractConfig,
