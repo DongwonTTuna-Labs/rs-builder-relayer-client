@@ -31,7 +31,16 @@ jobs:
     outputs:
       head_sha: ${{ steps.lookup.outputs.head_sha }}
       base_ref: ${{ steps.lookup.outputs.base_ref }}
+      base_sha: ${{ steps.lookup.outputs.base_sha }}
     steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Generate App installation token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -45,29 +54,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          set -euo pipefail
-          json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,baseRefName,isDraft,headRepository,headRepositoryOwner)
-          head_sha=$(jq -r .headRefOid <<<"$json")
-          base_ref=$(jq -r .baseRefName <<<"$json")
-          is_draft=$(jq -r .isDraft <<<"$json")
-          head_owner=$(jq -r '.headRepositoryOwner.login' <<<"$json")
-          head_repo=$(jq -r '.headRepository.name' <<<"$json")
-
-          if [[ "$is_draft" == "true" ]]; then
-            echo "::warning::PR is draft; refusing to run via /codex-review."
-            exit 1
-          fi
-          # fork 에서 올라온 PR 은 거부 (head 가 본 리포 owner 인지 확인)
-          expected_owner="${REPO%/*}"
-          expected_repo="${REPO#*/}"
-          if [[ "$head_owner" != "$expected_owner" || "$head_repo" != "$expected_repo" ]]; then
-            echo "::warning::Refusing to run /codex-review on fork PR ($head_owner/$head_repo)."
-            exit 1
-          fi
-
-          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "base_ref=$base_ref" >> "$GITHUB_OUTPUT"
+        run: bash pipeline/.github/scripts/resolve_pr_metadata.sh
 
   call-pipeline:
     name: Codex PR Review (comment)
@@ -81,5 +68,6 @@ jobs:
       pr_number: ${{ github.event.issue.number }}
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       base_ref: ${{ needs.resolve.outputs.base_ref }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
       trigger: issue_comment:/codex-review
     secrets: inherit

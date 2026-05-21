@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - ".github/scripts/**"
+      - ".github/workflows/codex-pr-review*.yml"
       - ".github/workflows/codex-scripts-tests.yml"
   push:
     branches:
       - main
     paths:
       - ".github/scripts/**"
+      - ".github/workflows/codex-pr-review*.yml"
       - ".github/workflows/codex-scripts-tests.yml"
 
 permissions:

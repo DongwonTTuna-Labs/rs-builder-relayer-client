@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 
 from codex_redaction import redact
-from gh_api import gh_paginated
+from gh_api import gh_json, gh_paginated
 
 MARKER = "<!-- codex-inline-review -->"
 MAX_CHANGED_LINES = 2000
@@ -55,19 +55,39 @@ def changed_right_lines(patch: str | None) -> list[int]:
     return result
 
 
+def assert_pr_snapshot(repo: str, pr_number: str, head_sha: str, base_sha: str) -> None:
+    pr = gh_json(f"repos/{repo}/pulls/{pr_number}")
+    current_head_sha = ((pr or {}).get("head") or {}).get("sha") or ""
+    current_base_sha = ((pr or {}).get("base") or {}).get("sha") or ""
+    if current_head_sha != head_sha:
+        raise SystemExit(
+            "::error::PR head SHA changed while preparing review context "
+            f"(expected {head_sha}, got {current_head_sha})"
+        )
+    if base_sha and current_base_sha != base_sha:
+        raise SystemExit(
+            "::error::PR base SHA changed while preparing review context "
+            f"(expected {base_sha}, got {current_base_sha})"
+        )
+
+
 def main() -> int:
     repo = os.environ["GITHUB_REPOSITORY"]
     pr_number = os.environ["PR_NUMBER"]
     head_sha = os.environ["HEAD_SHA"]
+    base_sha = os.environ.get("BASE_SHA", "")
     runner_temp = Path(os.environ["RUNNER_TEMP"])
 
+    assert_pr_snapshot(repo, pr_number, head_sha, base_sha)
     files = gh_paginated(f"repos/{repo}/pulls/{pr_number}/files")
     comments = gh_paginated(f"repos/{repo}/pulls/{pr_number}/comments")
+    assert_pr_snapshot(repo, pr_number, head_sha, base_sha)
 
     context: dict = {
         "pull_request": {
             "number": int(pr_number),
             "base_ref": os.environ.get("GITHUB_BASE_REF", ""),
+            "base_sha": base_sha,
             "head_ref": os.environ.get("GITHUB_HEAD_REF", ""),
             "head_sha": head_sha,
         },
