@@ -24,17 +24,21 @@ that will later be submitted inside `WALLET` batches.
 
 ## Target API
 
-- `build_pusd_approval_call(spender, amount) -> DepositWalletCall`.
-- `build_ctf_approval_for_all_call(operator, approved) -> DepositWalletCall`.
-- `build_split_position_call(...) -> DepositWalletCall` only if the current
-  adapter route is verified.
-- `build_merge_positions_call(...) -> DepositWalletCall` only if the current
-  adapter route is verified.
-- `build_redeem_positions_call(...) -> DepositWalletCall` only if the current
-  adapter route is verified.
+- `DepositWalletCalldataConfig`: chain id, pUSD contract address, CTF contract
+  address, enabled adapter addresses, and source metadata for each address.
+- `build_pusd_approval_call(config, spender, amount) -> DepositWalletCall`.
+- `build_ctf_approval_for_all_call(config, operator, approved) ->
+  DepositWalletCall`.
+- `build_split_position_call(config, ...) -> DepositWalletCall` only if the
+  current adapter route is verified.
+- `build_merge_positions_call(config, ...) -> DepositWalletCall` only if the
+  current adapter route is verified.
+- `build_redeem_positions_call(config, ...) -> DepositWalletCall` only if the
+  current adapter route is verified.
 
 All builders must return explicit `DepositWalletCall { target, value, data }`
-values. Hidden defaults are not allowed.
+values from the provided config. Hidden defaults, global contract addresses,
+chain inference, and fallback targets are not allowed.
 
 ## Fixture Requirements
 
@@ -42,13 +46,17 @@ values. Hidden defaults are not allowed.
   encoded calldata, and source reference.
 - pUSD and CTF addresses must come from official docs, official SDK/config, or
   a documented current consumer runtime source.
+- Fixture source references must include the source name and version, commit
+  SHA, or retrieval date used for the address and adapter route.
 - Each enabled split, merge, or redeem route must cite the verified adapter path.
 - If a route cannot be proven, it stays out of scope for this PR.
 
 ## Validation
 
 - Exact calldata equality for every enabled builder.
-- Negative tests for invalid address or unsupported route where applicable.
+- Negative tests for every enabled builder must cover invalid config/address,
+  invalid spender or operator, zero or invalid amount, unsupported route, and
+  invalid route arguments as applicable to that builder.
 - Standard validation commands from `docs/plans/README.md`.
 
 ## Residual Risk

@@ -50,15 +50,26 @@ must be reviewed in that PR before becoming public.
   `Call { target, value, data }` and
   `Batch { wallet, nonce, deadline, calls }`.
 - The fixture must include expected digest, expected signature, recovered signer
-  address, chain id, nonce, deadline, deposit wallet, and calls.
+  address, owner address, nonce owner, submit `from` owner, optional approved
+  session signer, chain id, nonce, deadline, deposit wallet, and calls.
+- Signature recovery must prove the recovered signer is the owner used for
+  `GET /nonce?type=WALLET` and submit `from`, or an explicitly approved session
+  signer recorded in the fixture. A signature from any other signer must fail
+  validation.
+- Any fixture derived from official TypeScript/Python SDK behavior must record
+  the SDK name and version or commit SHA used to generate the expected payload.
 - Do not commit a private key. If the signature comes from a public test signer,
   record only the signer address, digest, and signature.
 
 ## Validation
 
 - Exact JSON equality for the typed-data fixture.
-- Digest equality with the official SDK-generated fixture.
+- Digest equality with the official SDK-generated fixture, including SDK
+  provenance in the fixture metadata.
 - Signature recovery proves the fixture signature signs the expected digest.
+- Negative tests prove validation rejects a recovered signer that does not match
+  the owner/session signer and rejects mutated typed-data fields that would
+  change the signed digest.
 - `/nonce` fixture proves `type=WALLET` and the owner address are present.
 - Standard validation commands from `docs/plans/README.md`.
 
