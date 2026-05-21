@@ -26,12 +26,15 @@ that will later be submitted inside `WALLET` batches.
 
 - `DepositWalletCalldataConfig`: chain id, pUSD contract address, CTF contract
   address, enabled adapter addresses, token decimals, amount unit metadata, and
-  source metadata for each address/decimal.
+  source metadata for each address/decimal. The config must also carry verified
+  pUSD approval spender and CTF approval operator allowlists with source
+  metadata for every allowed address.
 - `build_pusd_approval_call(config, spender, amount) -> DepositWalletCall`,
   where `amount` is a unit-bearing pUSD amount type, not an ambiguous raw
-  integer.
+  integer. `spender` must be present in the verified pUSD spender allowlist.
 - `build_ctf_approval_for_all_call(config, operator, approved) ->
-  DepositWalletCall`.
+  DepositWalletCall`. `operator` must be present in the verified CTF operator
+  allowlist before any `setApprovalForAll` calldata can be built.
 - `build_split_position_call(config, ...) -> DepositWalletCall` only if the
   current adapter route is verified, using unit-bearing CTF position amount
   inputs where amounts are required.
@@ -66,6 +69,11 @@ chain inference, and fallback targets are not allowed.
 - Negative tests for every enabled builder must cover invalid config/address,
   invalid spender or operator, zero or invalid amount, unsupported route, and
   invalid route arguments as applicable to that builder.
+- pUSD approval tests must reject every non-allowlisted spender, including
+  otherwise well-formed attacker addresses.
+- CTF approval tests must reject every non-allowlisted operator, including
+  otherwise well-formed attacker addresses, because `setApprovalForAll` grants
+  operator control over all matching positions.
 - Negative tests must reject ambiguous raw amount inputs and amount/decimals
   source mismatches for every amount-bearing builder.
 - Standard validation commands from `docs/plans/README.md`.

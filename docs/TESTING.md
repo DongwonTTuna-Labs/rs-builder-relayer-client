@@ -24,6 +24,7 @@ pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
 ambiguous_submit_timeout_does_not_duplicate_submit
+idless_submit_timeout_blocks_owner_until_manual_reconcile
 ```
 
 ## Fixture Rules
@@ -69,7 +70,7 @@ Before any real relayer mutation, record evidence for:
 
 ```text
 deposit wallet derive parity
-WALLET-CREATE reaches MINED/CONFIRMED if deployment is in scope
+WALLET-CREATE reaches STATE_CONFIRMED if deployment is in scope
 fresh GET /nonce?type=WALLET before signing
 WALLET approval batch updates deposit wallet allowance
 CLOB balance allowance sync observes deposit wallet state in consumer app
@@ -77,3 +78,7 @@ POLY_1271 order path accepts maker/funder shape in consumer app
 merge/redeem calldata follows current pUSD adapter path
 ambiguous submit timeout does not duplicate transaction
 ```
+
+`STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
+manual live gate. Wallet deployment or wallet-action effects become usable only
+after `STATE_CONFIRMED`.

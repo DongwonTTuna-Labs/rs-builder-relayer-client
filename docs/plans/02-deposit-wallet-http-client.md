@@ -26,7 +26,10 @@ without touching live relayer endpoints.
 ## Target API
 
 - `RelayerKeyAuth`: relayer API key identity and credentials, separate from the
-  owner signer.
+  owner signer. Secret material must be wrapped so `Debug`, errors, logs,
+  snapshots, fixtures, and test failure output expose only redacted identity
+  metadata, never raw API keys, bearer values, auth headers, or derived signing
+  material.
 - `DepositWalletRelayerClient`: configured with relayer URL, chain id, owner
   signer, relayer auth, and deposit-wallet contract config.
 - `get_wallet_nonce(owner)`: fetches fresh `type=WALLET` nonce.
@@ -66,6 +69,11 @@ APIs must not be removed or silently changed.
 - Unknown states and partial submit responses must not be treated as success and
   must not trigger duplicate submit. They must stop mutation and require
   reconciliation evidence before any new submit.
+- Submit timeouts before a `transactionID` is known must be treated as
+  owner-scoped ambiguous mutation. Tests must prove the client records a
+  redacted payload hash or equivalent idempotency evidence, blocks additional
+  same-owner nonce fetch/sign/submit work, and requires manual or authoritative
+  reconciliation before the owner can submit again.
 - Tests must prove relayer auth identity can differ from owner signer identity.
 - Ambiguous submit timeout must not create a duplicate submit.
 
@@ -75,6 +83,10 @@ APIs must not be removed or silently changed.
 - Integration-style local HTTP tests with deterministic request/response bodies.
 - Polling tests cover timeout/max-attempt exhaustion, backoff or rate-limit
   behavior, cancellation, and no duplicate submit after ambiguous responses.
+- Polling timeout, backoff, and cancellation tests must use deterministic time,
+  such as `tokio::time::pause`/`advance` or an injected clock/sleeper. They must
+  assert exact attempt counts and poll intervals without real sleeps or wall
+  clock timing.
 - Standard validation commands from `docs/plans/README.md`.
 
 ## Residual Risk

@@ -48,6 +48,12 @@ the required dry-run and manual live gates are satisfied.
 - Ambiguous timeout does not duplicate submit. After ambiguous submit, unknown
   state, or timeout for an owner, the adapter must reconcile the known
   `transactionID` before re-signing or submitting another batch for that owner.
+- If a submit timeout happens before a `transactionID` is known, the adapter
+  must store redacted owner-scoped blocked state keyed by payload hash or
+  equivalent idempotency evidence. That state prevents a second same-owner
+  nonce fetch, signature, or submit until manual or authoritative reconciliation
+  proves the original payload was not accepted or has reached a terminal
+  outcome.
 - Rollback disables relayer mutation without disabling read-only CLOB/account
   observations.
 
@@ -57,9 +63,15 @@ the required dry-run and manual live gates are satisfied.
 - This repo's standard validation commands from `docs/plans/README.md`.
 - Owner-scoped concurrency tests prove a second same-owner batch is blocked or
   queued until the first transaction reaches a reconciled terminal outcome.
+- Owner-scoped concurrency tests must use deterministic synchronization, such
+  as barriers, channels, or a controlled mock relayer. The first batch must be
+  held pending while the test proves the second same-owner batch does not call
+  nonce fetch, signing, or submit before reconciliation.
 - Pending-state tests prove `STATE_NEW`, `STATE_EXECUTED`, and `STATE_MINED`
   keep polling under the timeout policy and do not trigger success, duplicate
   submit, or re-signing.
+- Id-less submit timeout tests prove payload-hash blocked state is written,
+  same-owner mutation is denied, and recovery requires explicit reconciliation.
 - Manual live gate evidence is stored outside fixtures and without secrets.
 
 ## Residual Risk

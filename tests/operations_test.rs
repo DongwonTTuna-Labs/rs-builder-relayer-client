@@ -7,21 +7,42 @@ use polymarket_relayer::types::{RelayerTxType, TxState};
 
 #[test]
 fn test_tx_state_terminal() {
-    assert!(TxState::Confirmed.is_terminal());
-    assert!(TxState::Failed.is_terminal());
-    assert!(TxState::Invalid.is_terminal());
-    assert!(!TxState::New.is_terminal());
-    assert!(!TxState::Executed.is_terminal());
-    assert!(!TxState::Mined.is_terminal());
+    let cases = [
+        (TxState::New, false),
+        (TxState::Executed, false),
+        (TxState::Mined, false),
+        (TxState::Confirmed, true),
+        (TxState::Failed, true),
+        (TxState::Invalid, true),
+    ];
+
+    for (state, expected) in cases {
+        assert_eq!(
+            state.is_terminal(),
+            expected,
+            "{state:?} terminal status changed"
+        );
+    }
 }
 
 #[test]
 fn test_tx_state_success() {
-    assert!(TxState::Confirmed.is_success());
-    assert!(!TxState::Mined.is_success());
-    assert!(!TxState::Failed.is_success());
-    assert!(!TxState::Invalid.is_success());
-    assert!(!TxState::New.is_success());
+    let cases = [
+        (TxState::New, false),
+        (TxState::Executed, false),
+        (TxState::Mined, false),
+        (TxState::Confirmed, true),
+        (TxState::Failed, false),
+        (TxState::Invalid, false),
+    ];
+
+    for (state, expected) in cases {
+        assert_eq!(
+            state.is_success(),
+            expected,
+            "{state:?} success status changed"
+        );
+    }
 }
 
 #[test]
