@@ -30,7 +30,7 @@ fn test_tx_state_success() {
     let cases = [
         (TxState::New, false),
         (TxState::Executed, false),
-        (TxState::Mined, false),
+        (TxState::Mined, true),
         (TxState::Confirmed, true),
         (TxState::Failed, false),
         (TxState::Invalid, false),
