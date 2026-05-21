@@ -16,7 +16,7 @@ from post_review_comments import render_axis_status, render_block  # noqa: E402
 
 
 class CombineAxisStatusTest(unittest.TestCase):
-    def test_missing_axes_recorded(self) -> None:
+    def test_missing_axes_fail_before_posting_sticky(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             art_dir = Path(tmp)
             # Only correctness + security present; performance/test-coverage/domain missing.
@@ -26,7 +26,9 @@ class CombineAxisStatusTest(unittest.TestCase):
             (art_dir / "findings-security.json").write_text(
                 json.dumps({"agent": "security", "findings": []}), encoding="utf-8"
             )
-            combine(art_dir)
+            with self.assertRaises(SystemExit) as raised:
+                combine(art_dir)
+            self.assertEqual(raised.exception.code, 1)
             data = json.loads(
                 (art_dir / "axes_status.json").read_text(encoding="utf-8")
             )
@@ -83,6 +85,23 @@ class AxisStatusRenderTest(unittest.TestCase):
         self.assertIn("⚠️", rendered)
         self.assertIn("`security`", rendered)
         self.assertIn("부분 리뷰", rendered)
+
+
+class WorkflowPostGateTest(unittest.TestCase):
+    def test_post_job_waits_for_successful_review_prerequisites(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
+            encoding="utf-8"
+        )
+        post_block = workflow.split("\n  post:\n", 1)[1].split(
+            "\n  # ============================================================",
+            1,
+        )[0]
+        self.assertIn("name: post", post_block)
+        self.assertIn("needs: [resolve-check, tech-lead]", post_block)
+        self.assertRegex(
+            post_block,
+            r"(?m)^    if: always\(\) && !cancelled\(\) && needs\.resolve-check\.result == 'success' && needs\.tech-lead\.result == 'success'$",
+        )
 
 
 class StickyInlineSkipMarkerTest(unittest.TestCase):

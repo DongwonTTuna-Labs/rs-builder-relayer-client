@@ -48,6 +48,10 @@ def warn(msg: str) -> None:
     sys.stderr.write(f"::warning::{msg}\n")
 
 
+def error(msg: str) -> None:
+    sys.stderr.write(f"::error::{msg}\n")
+
+
 def combine(art_dir: Path) -> None:
     findings_files = sorted(art_dir.glob("findings-*.json"))
     combined: list[dict] = []
@@ -69,13 +73,6 @@ def combine(art_dir: Path) -> None:
             combined.append(row)
 
     missing_axes = sorted(EXPECTED_AXES - received_axes)
-    if missing_axes:
-        warn(
-            "axis artifact missing for: "
-            + ", ".join(missing_axes)
-            + " — sticky summary will surface a partial-review warning"
-        )
-
     (art_dir / "combined.json").write_text(
         json.dumps(combined, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -93,6 +90,13 @@ def combine(art_dir: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    if missing_axes:
+        error(
+            "axis artifact missing for: "
+            + ", ".join(missing_axes)
+            + "; refusing to publish a partial review sticky"
+        )
+        raise SystemExit(1)
     print(f"combined findings: {len(combined)}")
 
 
