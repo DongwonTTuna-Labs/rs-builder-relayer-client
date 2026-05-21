@@ -1,9 +1,14 @@
+use std::fmt;
+
 use ethers::types::transaction::eip712::{Eip712, TypedData};
 use ethers::types::{Address, H256, Signature, U256};
 use ethers::utils::to_checksum;
 use serde_json::{json, Value};
 
-use crate::deposit_wallet::{DepositWalletBatchRequest, DepositWalletCall};
+use crate::deposit_wallet::{
+    derive_deposit_wallet_address, DepositWalletBatchRequest, DepositWalletCall,
+    DepositWalletContractConfig,
+};
 use crate::error::{RelayerError, Result};
 
 const DEPOSIT_WALLET_DOMAIN_NAME: &str = "DepositWallet";
@@ -22,79 +27,82 @@ pub struct DepositWalletBatchToSign {
     pub calls: Vec<DepositWalletCall>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionSignerScope {
-    DepositWalletBatch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionSignerSource {
-    TrustedConfig(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApprovedSessionSigner {
-    pub signer: Address,
-    pub owner: Address,
-    pub scope: SessionSignerScope,
-    pub expires_at: U256,
-    pub source: SessionSignerSource,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SignerAuthorization {
-    Owner,
-    TrustedSessionSigner(ApprovedSessionSigner),
-}
-
-impl SignerAuthorization {
-    pub fn is_owner(&self) -> bool {
-        matches!(self, Self::Owner)
-    }
-
-    pub fn trusted_session_signer(&self) -> Option<&ApprovedSessionSigner> {
-        match self {
-            Self::Owner => None,
-            Self::TrustedSessionSigner(signer) => Some(signer),
-        }
-    }
-
-    fn authorizes(&self, owner: Address, deadline: U256, signer: Address) -> bool {
-        match self {
-            Self::Owner => signer == owner,
-            Self::TrustedSessionSigner(approved) => approved.authorizes(owner, deadline, signer),
-        }
-    }
-}
-
-impl ApprovedSessionSigner {
-    fn authorizes(&self, owner: Address, deadline: U256, signer: Address) -> bool {
-        self.signer == signer
-            && self.owner == owner
-            && self.scope == SessionSignerScope::DepositWalletBatch
-            && self.expires_at >= deadline
-            && matches!(self.source, SessionSignerSource::TrustedConfig(_))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SignedDepositWalletBatch {
-    pub owner: Address,
-    pub nonce_owner: Address,
-    pub submit_from: Address,
-    pub deposit_wallet: Address,
-    pub chain_id: u64,
-    pub nonce: U256,
-    pub deadline: U256,
-    pub calls: Vec<DepositWalletCall>,
-    pub typed_data: Value,
-    pub digest: H256,
-    pub signature: String,
-    pub verified_signer: Address,
-    pub signer_authorization: SignerAuthorization,
+    owner: Address,
+    nonce_owner: Address,
+    submit_from: Address,
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce: U256,
+    deadline: U256,
+    calls: Vec<DepositWalletCall>,
+    typed_data: Value,
+    digest: H256,
+    signature: String,
+    verified_signer: Address,
+}
+
+impl fmt::Debug for SignedDepositWalletBatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignedDepositWalletBatch")
+            .field("owner", &self.owner)
+            .field("nonce_owner", &self.nonce_owner)
+            .field("submit_from", &self.submit_from)
+            .field("deposit_wallet", &self.deposit_wallet)
+            .field("chain_id", &self.chain_id)
+            .field("nonce", &self.nonce)
+            .field("deadline", &self.deadline)
+            .field("calls_count", &self.calls.len())
+            .field("typed_data", &"<redacted>")
+            .field("digest", &self.digest)
+            .field("signature", &"<redacted>")
+            .field("verified_signer", &self.verified_signer)
+            .finish()
+    }
 }
 
 impl SignedDepositWalletBatch {
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce_owner(&self) -> Address {
+        self.nonce_owner
+    }
+
+    pub fn submit_from(&self) -> Address {
+        self.submit_from
+    }
+
+    pub fn deposit_wallet(&self) -> Address {
+        self.deposit_wallet
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub fn deadline(&self) -> U256 {
+        self.deadline
+    }
+
+    pub fn calls(&self) -> &[DepositWalletCall] {
+        &self.calls
+    }
+
+    pub fn digest(&self) -> H256 {
+        self.digest
+    }
+
+    pub fn verified_signer(&self) -> Address {
+        self.verified_signer
+    }
+
     pub fn validate_submit_preflight(&self) -> Result<()> {
         let batch = self.batch_to_sign();
         validate_batch_identity(&batch)?;
@@ -120,12 +128,9 @@ impl SignedDepositWalletBatch {
             ));
         }
 
-        if !self
-            .signer_authorization
-            .authorizes(self.owner, self.deadline, self.verified_signer)
-        {
+        if self.verified_signer != self.owner {
             return Err(RelayerError::Signing(
-                "signed deposit wallet batch signer authorization is not valid".to_string(),
+                "signed deposit wallet batch signer must match owner".to_string(),
             ));
         }
 
@@ -204,13 +209,15 @@ pub fn recover_deposit_wallet_batch_signer(
 pub fn validate_deposit_wallet_batch_signature(
     batch: &DepositWalletBatchToSign,
     signature: &str,
-    approved_session_signers: &[ApprovedSessionSigner],
 ) -> Result<SignedDepositWalletBatch> {
     validate_batch_identity(batch)?;
     let digest = digest_deposit_wallet_batch(batch)?;
     let verified_signer = recover_digest_signer(digest, signature)?;
-    let signer_authorization =
-        signer_authorization(batch, verified_signer, approved_session_signers)?;
+    if verified_signer != batch.owner {
+        return Err(RelayerError::Signing(
+            "deposit wallet batch signer must match owner".to_string(),
+        ));
+    }
 
     Ok(SignedDepositWalletBatch {
         owner: batch.owner,
@@ -225,15 +232,15 @@ pub fn validate_deposit_wallet_batch_signature(
         digest,
         signature: signature.to_string(),
         verified_signer,
-        signer_authorization,
     })
 }
 
 pub fn build_deposit_wallet_batch_request_from_signed(
     signed: &SignedDepositWalletBatch,
-    config: crate::deposit_wallet::DepositWalletContractConfig,
+    config: DepositWalletContractConfig,
 ) -> Result<DepositWalletBatchRequest> {
     signed.validate_submit_preflight()?;
+    validate_submit_config(signed, config)?;
 
     Ok(crate::deposit_wallet::build_wallet_batch_request_with_signature(
         crate::deposit_wallet::DepositWalletRequestContext {
@@ -248,28 +255,6 @@ pub fn build_deposit_wallet_batch_request_from_signed(
     ))
 }
 
-fn signer_authorization(
-    batch: &DepositWalletBatchToSign,
-    verified_signer: Address,
-    approved_session_signers: &[ApprovedSessionSigner],
-) -> Result<SignerAuthorization> {
-    if verified_signer == batch.owner {
-        return Ok(SignerAuthorization::Owner);
-    }
-
-    approved_session_signers
-        .iter()
-        .find(|approved| approved.authorizes(batch.owner, batch.deadline, verified_signer))
-        .cloned()
-        .map(SignerAuthorization::TrustedSessionSigner)
-        .ok_or_else(|| {
-            RelayerError::Signing(
-                "deposit wallet batch signer is neither owner nor approved session signer"
-                    .to_string(),
-            )
-        })
-}
-
 fn validate_batch_identity(batch: &DepositWalletBatchToSign) -> Result<()> {
     if batch.owner != batch.nonce_owner {
         return Err(RelayerError::Signing(
@@ -280,6 +265,27 @@ fn validate_batch_identity(batch: &DepositWalletBatchToSign) -> Result<()> {
     if batch.owner != batch.submit_from {
         return Err(RelayerError::Signing(
             "deposit wallet submit from must match owner signer".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_submit_config(
+    signed: &SignedDepositWalletBatch,
+    config: DepositWalletContractConfig,
+) -> Result<()> {
+    if signed.chain_id != config.chain_id {
+        return Err(RelayerError::Signing(
+            "signed deposit wallet batch chain id does not match submit config".to_string(),
+        ));
+    }
+
+    let derived_wallet = derive_deposit_wallet_address(signed.owner, config)?;
+    if signed.deposit_wallet != derived_wallet {
+        return Err(RelayerError::Signing(
+            "signed deposit wallet batch wallet does not match owner/config derived wallet"
+                .to_string(),
         ));
     }
 
@@ -309,4 +315,87 @@ fn checksum(address: Address) -> String {
 
 fn bytes_hex(bytes: &ethers::types::Bytes) -> String {
     format!("0x{}", hex::encode(bytes.as_ref()))
+}
+
+#[cfg(test)]
+mod tests {
+    use ethers::types::Bytes;
+
+    use super::*;
+
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!(
+            "../../tests/fixtures/deposit_wallet/wallet_batch_eip712.json"
+        ))
+        .expect("fixture should be valid JSON")
+    }
+
+    fn parse_address(value: &Value, key: &str) -> Address {
+        value[key].as_str().unwrap().parse().unwrap()
+    }
+
+    fn parse_u256(value: &Value, key: &str) -> U256 {
+        U256::from_dec_str(value[key].as_str().unwrap()).unwrap()
+    }
+
+    fn call_from_value(value: &Value) -> DepositWalletCall {
+        DepositWalletCall {
+            target: value["target"].as_str().unwrap().parse().unwrap(),
+            value: U256::from_dec_str(value["value"].as_str().unwrap()).unwrap(),
+            data: Bytes::from(hex::decode(&value["data"].as_str().unwrap()[2..]).unwrap()),
+        }
+    }
+
+    fn batch_from_fixture(data: &Value) -> DepositWalletBatchToSign {
+        DepositWalletBatchToSign {
+            owner: parse_address(data, "owner"),
+            nonce_owner: parse_address(data, "nonceOwner"),
+            submit_from: parse_address(data, "submitFrom"),
+            deposit_wallet: parse_address(data, "depositWallet"),
+            chain_id: data["chainId"].as_u64().unwrap(),
+            nonce: parse_u256(data, "nonce"),
+            deadline: parse_u256(data, "deadline"),
+            calls: data["calls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(call_from_value)
+                .collect(),
+        }
+    }
+
+    fn signed_fixture() -> SignedDepositWalletBatch {
+        let data = fixture();
+        let batch = batch_from_fixture(&data);
+        validate_deposit_wallet_batch_signature(
+            &batch,
+            data["ownerSignature"].as_str().unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn submit_preflight_rejects_private_metadata_tampering() {
+        let signed = signed_fixture();
+        let dead_address: Address = "0x000000000000000000000000000000000000dEaD"
+            .parse()
+            .unwrap();
+
+        let mut tampered_owner = signed.clone();
+        tampered_owner.owner = dead_address;
+        assert!(tampered_owner.validate_submit_preflight().is_err());
+
+        let mut tampered_domain = signed.clone();
+        tampered_domain.typed_data["domain"]["verifyingContract"] =
+            Value::String("0x000000000000000000000000000000000000dEaD".to_string());
+        assert!(tampered_domain.validate_submit_preflight().is_err());
+
+        let mut tampered_signer = signed.clone();
+        tampered_signer.verified_signer = dead_address;
+        assert!(tampered_signer.validate_submit_preflight().is_err());
+
+        let mut tampered_digest = signed;
+        tampered_digest.digest = H256::zero();
+        assert!(tampered_digest.validate_submit_preflight().is_err());
+    }
 }

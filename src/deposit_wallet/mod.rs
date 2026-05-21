@@ -23,8 +23,7 @@ pub use requests::{build_wallet_batch_request_with_signature, build_wallet_creat
 pub use signing::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
     digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
-    validate_deposit_wallet_batch_signature, ApprovedSessionSigner, DepositWalletBatchToSign,
-    SessionSignerScope, SessionSignerSource, SignedDepositWalletBatch, SignerAuthorization,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, SignedDepositWalletBatch,
 };
 pub use transaction::RelayerTransactionState;
 pub use types::{

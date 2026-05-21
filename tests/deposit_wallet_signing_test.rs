@@ -3,8 +3,7 @@ use polymarket_relayer::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
     build_wallet_nonce_request, deposit_wallet_contract_config, digest_deposit_wallet_batch,
     recover_deposit_wallet_batch_signer, validate_deposit_wallet_batch_signature,
-    ApprovedSessionSigner, DepositWalletBatchToSign, DepositWalletCall,
-    SessionSignerScope, SessionSignerSource,
+    DepositWalletBatchToSign, DepositWalletCall,
 };
 use serde_json::Value;
 
@@ -43,17 +42,6 @@ fn batch_from_fixture(data: &Value) -> DepositWalletBatchToSign {
     }
 }
 
-fn approved_session_signer(data: &Value) -> ApprovedSessionSigner {
-    let session = &data["approvedSessionSigner"];
-    ApprovedSessionSigner {
-        signer: session["signer"].as_str().unwrap().parse().unwrap(),
-        owner: session["owner"].as_str().unwrap().parse().unwrap(),
-        scope: SessionSignerScope::DepositWalletBatch,
-        expires_at: U256::from_dec_str(session["expiresAt"].as_str().unwrap()).unwrap(),
-        source: SessionSignerSource::TrustedConfig(session["source"].as_str().unwrap().to_string()),
-    }
-}
-
 #[test]
 fn wallet_batch_typed_data_matches_official_sdk_fixture() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
@@ -89,35 +77,35 @@ fn wallet_batch_signature_recovery_accepts_owner() {
     let signed = validate_deposit_wallet_batch_signature(
         &batch,
         data["ownerSignature"].as_str().unwrap(),
-        &[],
     )
     .unwrap();
 
     assert_eq!(recovered, expected_signer);
-    assert_eq!(signed.verified_signer, expected_signer);
-    assert!(signed.signer_authorization.is_owner());
+    assert_eq!(signed.verified_signer(), expected_signer);
 }
 
 #[test]
-fn wallet_batch_signature_recovery_accepts_trusted_session_signer() {
+fn wallet_batch_signature_rejects_non_owner_session_signer() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
-    let trusted = approved_session_signer(&data);
     let expected_signer: Address = data["approvedSessionRecoveredSigner"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
 
-    let signed = validate_deposit_wallet_batch_signature(
+    let recovered = recover_deposit_wallet_batch_signer(
         &batch,
         data["approvedSessionSignature"].as_str().unwrap(),
-        std::slice::from_ref(&trusted),
     )
     .unwrap();
 
-    assert_eq!(signed.verified_signer, expected_signer);
-    assert_eq!(signed.signer_authorization.trusted_session_signer(), Some(&trusted));
+    assert_eq!(recovered, expected_signer);
+    assert!(validate_deposit_wallet_batch_signature(
+        &batch,
+        data["approvedSessionSignature"].as_str().unwrap(),
+    )
+    .is_err());
 }
 
 #[test]
@@ -139,7 +127,6 @@ fn wallet_batch_signature_rejects_unauthorized_or_self_asserted_session_signer()
     assert!(validate_deposit_wallet_batch_signature(
         &batch,
         data["unauthorizedSignature"].as_str().unwrap(),
-        &[],
     )
     .is_err());
 }
@@ -187,7 +174,6 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
     assert!(validate_deposit_wallet_batch_signature(
         &owner_mutation,
         data["ownerSignature"].as_str().unwrap(),
-        &[],
     )
     .is_err());
 
@@ -198,7 +184,6 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
     assert!(validate_deposit_wallet_batch_signature(
         &nonce_owner_mutation,
         data["ownerSignature"].as_str().unwrap(),
-        &[],
     )
     .is_err());
 
@@ -209,20 +194,18 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
     assert!(validate_deposit_wallet_batch_signature(
         &submit_from_mutation,
         data["ownerSignature"].as_str().unwrap(),
-        &[],
     )
     .is_err());
 }
 
 #[test]
-fn signed_batch_submit_preflight_rejects_metadata_tampering() {
+fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
     let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
     let signed = validate_deposit_wallet_batch_signature(
         &batch,
         data["ownerSignature"].as_str().unwrap(),
-        &[],
     )
     .unwrap();
 
@@ -236,26 +219,69 @@ fn signed_batch_submit_preflight_rejects_metadata_tampering() {
     assert_eq!(request["signature"], data["ownerSignature"]);
     assert_eq!(request["depositWalletParams"]["depositWallet"], data["depositWallet"]);
 
-    let mut tampered_owner = signed.clone();
-    tampered_owner.owner = "0x000000000000000000000000000000000000dEaD"
-        .parse()
-        .unwrap();
-    assert!(build_deposit_wallet_batch_request_from_signed(&tampered_owner, config).is_err());
+    let mismatched_chain_config = deposit_wallet_contract_config(80002).unwrap();
+    assert!(
+        build_deposit_wallet_batch_request_from_signed(&signed, mismatched_chain_config).is_err()
+    );
 
-    let mut tampered_domain = signed.clone();
-    tampered_domain.typed_data["domain"]["verifyingContract"] =
-        Value::String("0x000000000000000000000000000000000000dEaD".to_string());
-    assert!(build_deposit_wallet_batch_request_from_signed(&tampered_domain, config).is_err());
+    let mut wrong_derived_wallet_config = config;
+    wrong_derived_wallet_config.implementation =
+        "0x000000000000000000000000000000000000dEaD"
+            .parse()
+            .unwrap();
+    assert!(
+        build_deposit_wallet_batch_request_from_signed(&signed, wrong_derived_wallet_config)
+            .is_err()
+    );
+}
 
-    let mut tampered_signer = signed.clone();
-    tampered_signer.verified_signer = "0x000000000000000000000000000000000000dEaD"
-        .parse()
-        .unwrap();
-    assert!(build_deposit_wallet_batch_request_from_signed(&tampered_signer, config).is_err());
+#[test]
+fn signed_batch_debug_redacts_signature_and_payload_material() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let signed = validate_deposit_wallet_batch_signature(
+        &batch,
+        data["ownerSignature"].as_str().unwrap(),
+    )
+    .unwrap();
 
-    let mut tampered_digest = signed;
-    tampered_digest.digest = H256::zero();
-    assert!(build_deposit_wallet_batch_request_from_signed(&tampered_digest, config).is_err());
+    let debug = format!("{signed:?}");
+
+    assert!(debug.contains("signature: \"<redacted>\""));
+    assert!(debug.contains("typed_data: \"<redacted>\""));
+    assert!(debug.contains("calls_count"));
+    assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
+    assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
+    assert!(!debug.contains("primaryType"));
+}
+
+#[test]
+fn signed_batch_accessors_expose_safe_metadata() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let signed = validate_deposit_wallet_batch_signature(
+        &batch,
+        data["ownerSignature"].as_str().unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(signed.owner(), batch.owner);
+    assert_eq!(signed.nonce_owner(), batch.nonce_owner);
+    assert_eq!(signed.submit_from(), batch.submit_from);
+    assert_eq!(signed.deposit_wallet(), batch.deposit_wallet);
+    assert_eq!(signed.chain_id(), batch.chain_id);
+    assert_eq!(signed.nonce(), batch.nonce);
+    assert_eq!(signed.deadline(), batch.deadline);
+    assert_eq!(signed.calls(), batch.calls.as_slice());
+    assert_eq!(signed.digest(), digest_deposit_wallet_batch(&batch).unwrap());
+    assert_eq!(
+        signed.verified_signer(),
+        data["ownerRecoveredSigner"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    );
 }
 
 #[test]

@@ -17,11 +17,10 @@ pub use deposit_wallet::{
     build_wallet_batch_request_with_signature, build_wallet_create_request,
     build_wallet_nonce_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
     digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
-    validate_deposit_wallet_batch_signature, ApprovedSessionSigner, DepositWalletBatchRequest,
-    DepositWalletBatchToSign, DepositWalletCall, DepositWalletContractConfig,
-    DepositWalletCreateRequest, DepositWalletParams, DepositWalletRequestContext,
-    RelayerSubmitResponse, RelayerTransactionState, SessionSignerScope, SessionSignerSource,
-    SignedDepositWalletBatch, SignerAuthorization, WalletNonceRequest,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchRequest, DepositWalletBatchToSign,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
+    DepositWalletParams, DepositWalletRequestContext, RelayerSubmitResponse,
+    RelayerTransactionState, SignedDepositWalletBatch, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{
