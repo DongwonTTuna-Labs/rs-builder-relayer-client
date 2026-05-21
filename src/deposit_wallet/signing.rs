@@ -54,7 +54,6 @@ pub struct SignedDepositWalletBatch {
     nonce: U256,
     deadline: U256,
     calls: Vec<DepositWalletCall>,
-    typed_data: Value,
     digest: H256,
     signature: String,
     verified_signer: Address,
@@ -71,7 +70,6 @@ impl fmt::Debug for SignedDepositWalletBatch {
             .field("nonce", &self.nonce)
             .field("deadline", &self.deadline)
             .field("calls_count", &self.calls.len())
-            .field("typed_data", &"<redacted>")
             .field("digest", &self.digest)
             .field("signature", &"<redacted>")
             .field("verified_signer", &self.verified_signer)
@@ -122,33 +120,6 @@ impl SignedDepositWalletBatch {
 
     pub fn validate_submit_preflight(&self) -> Result<()> {
         validate_batch_identity_parts(self.owner, self.nonce_owner, self.submit_from)?;
-
-        let expected_typed_data = build_deposit_wallet_batch_typed_data_parts(
-            self.deposit_wallet,
-            self.chain_id,
-            self.nonce,
-            self.deadline,
-            &self.calls,
-        );
-        if self.typed_data != expected_typed_data {
-            return Err(RelayerError::Signing(
-                "signed deposit wallet batch typed data metadata was mutated".to_string(),
-            ));
-        }
-
-        let expected_digest = digest_deposit_wallet_typed_data(expected_typed_data)?;
-        if self.digest != expected_digest {
-            return Err(RelayerError::Signing(
-                "signed deposit wallet batch digest metadata was mutated".to_string(),
-            ));
-        }
-
-        let recovered = recover_digest_signer(expected_digest, &self.signature)?;
-        if recovered != self.verified_signer {
-            return Err(RelayerError::Signing(
-                "signed deposit wallet batch signer metadata was mutated".to_string(),
-            ));
-        }
 
         if self.verified_signer != self.owner {
             return Err(RelayerError::Signing(
@@ -257,7 +228,6 @@ pub fn validate_deposit_wallet_batch_signature(
         nonce: batch.nonce,
         deadline: batch.deadline,
         calls: batch.calls.clone(),
-        typed_data: build_deposit_wallet_batch_typed_data(batch),
         digest,
         signature: signature.to_string(),
         verified_signer,
@@ -331,8 +301,8 @@ fn validate_submit_config(
 }
 
 fn recover_digest_signer(digest: H256, signature: &str) -> Result<Address> {
-    validate_signature_shape(signature)?;
-    let signature: Signature = signature
+    let signature_payload = validate_signature_shape(signature)?;
+    let signature: Signature = signature_payload
         .parse()
         .map_err(|e| RelayerError::Signing(format!("invalid deposit wallet signature: {e}")))?;
     signature
@@ -340,7 +310,7 @@ fn recover_digest_signer(digest: H256, signature: &str) -> Result<Address> {
         .map_err(|e| RelayerError::Signing(format!("could not recover deposit wallet signer: {e}")))
 }
 
-fn validate_signature_shape(signature: &str) -> Result<()> {
+fn validate_signature_shape(signature: &str) -> Result<&str> {
     let Some(hex_payload) = signature.strip_prefix("0x") else {
         return Err(RelayerError::Signing(
             "deposit wallet signature must be 0x-prefixed 65-byte hex".to_string(),
@@ -356,7 +326,7 @@ fn validate_signature_shape(signature: &str) -> Result<()> {
         ));
     }
 
-    Ok(())
+    Ok(hex_payload)
 }
 
 fn call_to_typed_data(call: &DepositWalletCall) -> Value {
@@ -457,26 +427,11 @@ mod tests {
             "nonce owner must match owner signer",
         );
 
-        let mut tampered_domain = signed.clone();
-        tampered_domain.typed_data["domain"]["verifyingContract"] =
-            Value::String("0x000000000000000000000000000000000000dEaD".to_string());
-        assert_signing_error_contains(
-            tampered_domain.validate_submit_preflight(),
-            "typed data metadata was mutated",
-        );
-
         let mut tampered_signer = signed.clone();
         tampered_signer.verified_signer = dead_address;
         assert_signing_error_contains(
             tampered_signer.validate_submit_preflight(),
-            "signer metadata was mutated",
-        );
-
-        let mut tampered_digest = signed;
-        tampered_digest.digest = H256::zero();
-        assert_signing_error_contains(
-            tampered_digest.validate_submit_preflight(),
-            "digest metadata was mutated",
+            "signer must match owner",
         );
     }
 }

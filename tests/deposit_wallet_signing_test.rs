@@ -175,6 +175,10 @@ fn wallet_batch_signature_rejects_malformed_signature_shapes() {
 
     for signature in invalid_signatures {
         assert_signing_error_contains(
+            recover_deposit_wallet_batch_signer(&batch, &signature),
+            "0x-prefixed 65-byte hex",
+        );
+        assert_signing_error_contains(
             validate_deposit_wallet_batch_signature(&batch, &signature),
             "0x-prefixed 65-byte hex",
         );
@@ -320,7 +324,7 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
     let batch_debug = format!("{batch:?}");
 
     assert!(debug.contains("signature: \"<redacted>\""));
-    assert!(debug.contains("typed_data: \"<redacted>\""));
+    assert!(!debug.contains("typed_data"));
     assert!(debug.contains("calls_count"));
     assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
     assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
