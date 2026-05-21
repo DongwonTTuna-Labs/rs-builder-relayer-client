@@ -37,9 +37,17 @@ the required dry-run and manual live gates are satisfied.
 - Address identity separation is configured and visible in redacted logs.
 - `WALLET-CREATE` is disabled unless deployment is explicitly needed.
 - Fresh `WALLET` nonce is fetched immediately before signing.
+- `WALLET` signing/submission is serialized per owner through an in-flight owner
+  lock, nonce lease, or actor queue. A second batch for the same owner must not
+  fetch/sign/submit with a nonce while another owner-scoped batch is unresolved.
 - Signed batch digest and submit body are captured in redacted dry-run evidence.
-- Polling handles mined, confirmed, failed, invalid, and unknown states.
-- Ambiguous timeout does not duplicate submit.
+- Polling handles new, executed, mined, confirmed, failed, invalid, and unknown
+  states under the configured timeout/backoff policy. `STATE_NEW`,
+  `STATE_EXECUTED`, and `STATE_MINED` remain pending; `STATE_CONFIRMED` is the
+  only success state for relying on deposit-wallet action effects.
+- Ambiguous timeout does not duplicate submit. After ambiguous submit, unknown
+  state, or timeout for an owner, the adapter must reconcile the known
+  `transactionID` before re-signing or submitting another batch for that owner.
 - Rollback disables relayer mutation without disabling read-only CLOB/account
   observations.
 
@@ -47,6 +55,11 @@ the required dry-run and manual live gates are satisfied.
 
 - Consumer adapter compile/test checks in the consumer repo.
 - This repo's standard validation commands from `docs/plans/README.md`.
+- Owner-scoped concurrency tests prove a second same-owner batch is blocked or
+  queued until the first transaction reaches a reconciled terminal outcome.
+- Pending-state tests prove `STATE_NEW`, `STATE_EXECUTED`, and `STATE_MINED`
+  keep polling under the timeout policy and do not trigger success, duplicate
+  submit, or re-signing.
 - Manual live gate evidence is stored outside fixtures and without secrets.
 
 ## Residual Risk

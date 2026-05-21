@@ -71,7 +71,7 @@ impl TxState {
     }
 
     pub fn is_success(&self) -> bool {
-        matches!(self, TxState::Mined | TxState::Confirmed)
+        matches!(self, TxState::Confirmed)
     }
 }
 

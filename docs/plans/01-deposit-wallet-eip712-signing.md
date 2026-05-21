@@ -33,8 +33,10 @@ This PR proves the signed payload shape before any live HTTP client exists.
   message.
 - `digest_deposit_wallet_batch(...)`: returns the EIP-712 digest used for
   signing and fixture comparison.
-- `SignedDepositWalletBatch`: signed payload with digest, signature, nonce,
-  deadline, and calls.
+- `SignedDepositWalletBatch`: signed payload with digest, signature, full
+  typed-data/domain metadata, owner, nonce owner, submit `from`, deposit wallet,
+  chain id, verified signer, signer authorization evidence, nonce, deadline,
+  and calls.
 - `build_wallet_nonce_request(owner)`: returns path/query components for
   `GET /nonce?address=<owner>&type=WALLET`.
 
@@ -56,6 +58,14 @@ must be reviewed in that PR before becoming public.
   `GET /nonce?type=WALLET` and submit `from`, or an explicitly approved session
   signer recorded in the fixture. A signature from any other signer must fail
   validation.
+- Approved session signer support must not rely on a fixture or caller claim
+  alone. The fixture/API must include authorization evidence from an owner-signed
+  delegation or a trusted config source, plus scope, expiry, and the owner
+  address that authorizes the session signer.
+- The signed batch result must preserve the EIP-712 domain and message metadata
+  needed by the HTTP client and consumer adapter to re-check owner, submit
+  `from`, nonce owner, chain id, deposit wallet/verifying contract, and verified
+  signer before submit.
 - Any fixture derived from official TypeScript/Python SDK behavior must record
   the SDK name and version or commit SHA used to generate the expected payload.
 - Do not commit a private key. If the signature comes from a public test signer,
@@ -70,6 +80,11 @@ must be reviewed in that PR before becoming public.
 - Negative tests prove validation rejects a recovered signer that does not match
   the owner/session signer and rejects mutated typed-data fields that would
   change the signed digest.
+- Negative tests prove self-asserted session signers are rejected unless the
+  required owner delegation or trusted config evidence, scope, and expiry are
+  valid.
+- Submit-preflight tests prove a signed batch cannot be submitted after losing or
+  mutating its owner/domain/signer metadata.
 - `/nonce` fixture proves `type=WALLET` and the owner address are present.
 - Standard validation commands from `docs/plans/README.md`.
 

@@ -25,16 +25,22 @@ that will later be submitted inside `WALLET` batches.
 ## Target API
 
 - `DepositWalletCalldataConfig`: chain id, pUSD contract address, CTF contract
-  address, enabled adapter addresses, and source metadata for each address.
-- `build_pusd_approval_call(config, spender, amount) -> DepositWalletCall`.
+  address, enabled adapter addresses, token decimals, amount unit metadata, and
+  source metadata for each address/decimal.
+- `build_pusd_approval_call(config, spender, amount) -> DepositWalletCall`,
+  where `amount` is a unit-bearing pUSD amount type, not an ambiguous raw
+  integer.
 - `build_ctf_approval_for_all_call(config, operator, approved) ->
   DepositWalletCall`.
 - `build_split_position_call(config, ...) -> DepositWalletCall` only if the
-  current adapter route is verified.
+  current adapter route is verified, using unit-bearing CTF position amount
+  inputs where amounts are required.
 - `build_merge_positions_call(config, ...) -> DepositWalletCall` only if the
-  current adapter route is verified.
+  current adapter route is verified, using unit-bearing CTF position amount
+  inputs where amounts are required.
 - `build_redeem_positions_call(config, ...) -> DepositWalletCall` only if the
-  current adapter route is verified.
+  current adapter route is verified, using unit-bearing CTF position amount
+  inputs where amounts are required.
 
 All builders must return explicit `DepositWalletCall { target, value, data }`
 values from the provided config. Hidden defaults, global contract addresses,
@@ -44,6 +50,9 @@ chain inference, and fallback targets are not allowed.
 
 - Fixtures must record contract address, method selector, argument values,
   encoded calldata, and source reference.
+- Amount-bearing fixtures must record the human input value, raw ABI integer,
+  unit name, decimals, and decimals source reference. pUSD, CTF position amount,
+  and adapter-specific quantity units must not be inferred from bare integers.
 - pUSD and CTF addresses must come from official docs, official SDK/config, or
   a documented current consumer runtime source.
 - Fixture source references must include the source name and version, commit
@@ -57,6 +66,8 @@ chain inference, and fallback targets are not allowed.
 - Negative tests for every enabled builder must cover invalid config/address,
   invalid spender or operator, zero or invalid amount, unsupported route, and
   invalid route arguments as applicable to that builder.
+- Negative tests must reject ambiguous raw amount inputs and amount/decimals
+  source mismatches for every amount-bearing builder.
 - Standard validation commands from `docs/plans/README.md`.
 
 ## Residual Risk

@@ -18,7 +18,7 @@ fn test_tx_state_terminal() {
 #[test]
 fn test_tx_state_success() {
     assert!(TxState::Confirmed.is_success());
-    assert!(TxState::Mined.is_success());
+    assert!(!TxState::Mined.is_success());
     assert!(!TxState::Failed.is_success());
     assert!(!TxState::Invalid.is_success());
     assert!(!TxState::New.is_success());
