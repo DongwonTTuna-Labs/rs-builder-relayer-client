@@ -259,7 +259,6 @@ jobs:
       labels: codex
     strategy:
       fail-fast: false
-      max-parallel: 8
       matrix:
         axis:
           - correctness
