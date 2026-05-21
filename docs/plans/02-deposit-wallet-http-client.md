@@ -66,6 +66,14 @@ APIs must not be removed or silently changed.
 - Mocked `GET /nonce` must assert `address=<owner>` and `type=WALLET`.
 - Endpoint validation tests must prove relayer auth is never sent to
   non-HTTPS, non-allowlisted, userinfo-bearing, or redirect targets.
+- Relayer auth redaction tests must prove `RelayerKeyAuth` and related errors
+  do not expose raw API keys, bearer values, auth headers, HMAC material, or
+  credential-derived strings through `Debug`, `Display`, error conversion,
+  logs, snapshots, or fixture output.
+- Mutation gate tests must prove both `submit_wallet_create` and
+  `submit_signed_wallet_batch` are denied by default before any HTTP request or
+  auth header construction, return a stable blocked-mutation error, and proceed
+  only when an explicit permit is supplied.
 - Mocked `POST /submit` must assert exact JSON body for both `WALLET-CREATE`
   and `WALLET`.
 - Mocked polling must cover `STATE_NEW`, `STATE_EXECUTED`, `STATE_MINED`,
@@ -90,6 +98,7 @@ APIs must not be removed or silently changed.
 ## Validation
 
 - Unit tests for request construction and response parsing.
+- Unit tests for relayer auth redaction and mutation gate default-deny behavior.
 - Integration-style local HTTP tests with deterministic request/response bodies.
 - Polling tests cover timeout/max-attempt exhaustion, backoff or rate-limit
   behavior, cancellation, and no duplicate submit after ambiguous responses.
