@@ -71,6 +71,8 @@ impl TxState {
     }
 
     pub fn is_success(&self) -> bool {
+        // Legacy Safe/Proxy compatibility: deposit-wallet readiness uses the
+        // stricter deposit_wallet::RelayerTransactionState policy instead.
         matches!(self, TxState::Mined | TxState::Confirmed)
     }
 }
