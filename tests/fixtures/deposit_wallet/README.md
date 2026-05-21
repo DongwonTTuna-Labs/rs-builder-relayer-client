@@ -18,3 +18,10 @@ Sources checked while creating these fixtures:
 
 The `wallet_submit_body.json` signature is a synthetic 65-byte fixture string,
 not a live or production signature.
+
+The `wallet_batch_eip712_multicall.json` and
+`wallet_signed_submit_body_multicall.json` fixtures were generated from a
+temporary checkout of the official TypeScript relayer SDK at commit
+`72886a57116debcbcbf8df43d7f1a53a0f73a771` using
+`buildDepositWalletBatchRequest` and `viem` `hashTypedData`. The signer was an
+ephemeral synthetic test wallet; its private key is not recorded.

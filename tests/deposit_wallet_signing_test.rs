@@ -114,6 +114,38 @@ fn wallet_batch_signature_recovery_accepts_owner() {
 }
 
 #[test]
+fn wallet_batch_multicall_matches_official_sdk_fixture() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712_multicall.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let expected_digest: H256 = data["expectedDigest"].as_str().unwrap().parse().unwrap();
+    let expected_signer: Address = data["ownerRecoveredSigner"].as_str().unwrap().parse().unwrap();
+
+    assert_eq!(batch.calls.len(), 2);
+    assert_eq!(build_deposit_wallet_batch_typed_data(&batch), data["typedData"]);
+    assert_eq!(digest_deposit_wallet_batch(&batch).unwrap(), expected_digest);
+
+    let recovered = recover_deposit_wallet_batch_signer(
+        &batch,
+        data["ownerSignature"].as_str().unwrap(),
+    )
+    .unwrap();
+    let signed = validate_deposit_wallet_batch_signature(
+        &batch,
+        data["ownerSignature"].as_str().unwrap(),
+    )
+    .unwrap();
+    let request = build_deposit_wallet_batch_request_from_signed(&signed, config).unwrap();
+
+    assert_eq!(recovered, expected_signer);
+    assert_eq!(signed.verified_signer(), expected_signer);
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        fixture("deposit_wallet/wallet_signed_submit_body_multicall.json")
+    );
+}
+
+#[test]
 fn wallet_batch_signature_rejects_non_owner_signer() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
@@ -265,6 +297,9 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
     let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let from_debug = format!("{:?}", batch.submit_from);
+    let to_debug = format!("{:?}", config.factory);
+    let deposit_wallet_debug = format!("{:?}", batch.deposit_wallet);
     let signed = validate_deposit_wallet_batch_signature(
         &batch,
         data["ownerSignature"].as_str().unwrap(),
@@ -276,6 +311,9 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
 
     assert!(debug.contains("calls_count"));
     assert!(!debug.contains("signature"));
+    assert!(!debug.contains(&from_debug));
+    assert!(!debug.contains(&to_debug));
+    assert!(!debug.contains(&deposit_wallet_debug));
     assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
     assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
     assert_eq!(
@@ -328,9 +366,9 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
     assert!(debug.contains("calls_count"));
     assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
     assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
+    assert!(!batch_debug.contains(data["calls"][0]["data"].as_str().unwrap()));
     assert!(!debug.contains("primaryType"));
     assert!(batch_debug.contains("calls_count"));
-    assert!(!batch_debug.contains(data["calls"][0]["data"].as_str().unwrap()));
 }
 
 #[test]

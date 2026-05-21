@@ -118,7 +118,7 @@ impl SignedDepositWalletBatch {
         self.verified_signer
     }
 
-    pub fn validate_submit_preflight(&self) -> Result<()> {
+    fn validate_submit_preflight(&self) -> Result<()> {
         validate_batch_identity_parts(self.owner, self.nonce_owner, self.submit_from)?;
 
         if self.verified_signer != self.owner {

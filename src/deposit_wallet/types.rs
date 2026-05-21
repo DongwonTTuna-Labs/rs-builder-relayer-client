@@ -7,13 +7,25 @@ use serde::{Serialize, Serializer};
 pub const WALLET_CREATE_TRANSACTION_TYPE: &str = "WALLET-CREATE";
 pub const WALLET_TRANSACTION_TYPE: &str = "WALLET";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletRequestContext {
     pub owner_address: Address,
     pub deposit_wallet_address: Address,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+impl fmt::Debug for DepositWalletRequestContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let owner = redacted_address(self.owner_address);
+        let deposit_wallet = redacted_address(self.deposit_wallet_address);
+
+        f.debug_struct("DepositWalletRequestContext")
+            .field("owner_address", &owner)
+            .field("deposit_wallet_address", &deposit_wallet)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepositWalletCall {
     #[serde(serialize_with = "serialize_address")]
@@ -24,7 +36,20 @@ pub struct DepositWalletCall {
     pub data: Bytes,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+impl fmt::Debug for DepositWalletCall {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let target = redacted_address(self.target);
+
+        f.debug_struct("DepositWalletCall")
+            .field("target", &target)
+            .field("value", &self.value)
+            .field("data", &"<redacted>")
+            .field("data_len", &self.data.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct DepositWalletCreateRequest {
     #[serde(rename = "type")]
     pub tx_type: String,
@@ -34,7 +59,20 @@ pub struct DepositWalletCreateRequest {
     pub to: Address,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+impl fmt::Debug for DepositWalletCreateRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let from = redacted_address(self.from_address);
+        let to = redacted_address(self.to);
+
+        f.debug_struct("DepositWalletCreateRequest")
+            .field("type", &self.tx_type)
+            .field("from", &from)
+            .field("to", &to)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DepositWalletParams {
     #[serde(serialize_with = "serialize_address")]
@@ -42,6 +80,18 @@ pub struct DepositWalletParams {
     #[serde(serialize_with = "serialize_u256_decimal")]
     pub deadline: U256,
     pub calls: Vec<DepositWalletCall>,
+}
+
+impl fmt::Debug for DepositWalletParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let deposit_wallet = redacted_address(self.deposit_wallet);
+
+        f.debug_struct("DepositWalletParams")
+            .field("deposit_wallet", &deposit_wallet)
+            .field("deadline", &self.deadline)
+            .field("calls_count", &self.calls.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -61,12 +111,16 @@ pub struct DepositWalletBatchRequest {
 
 impl fmt::Debug for DepositWalletBatchRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let from = redacted_address(self.from_address);
+        let to = redacted_address(self.to);
+        let deposit_wallet = redacted_address(self.deposit_wallet_params.deposit_wallet);
+
         f.debug_struct("DepositWalletBatchRequest")
             .field("type", &self.tx_type)
-            .field("from", &self.from_address)
-            .field("to", &self.to)
+            .field("from", &from)
+            .field("to", &to)
             .field("nonce", &self.nonce)
-            .field("deposit_wallet", &self.deposit_wallet_params.deposit_wallet)
+            .field("deposit_wallet", &deposit_wallet)
             .field("deadline", &self.deposit_wallet_params.deadline)
             .field("calls_count", &self.deposit_wallet_params.calls.len())
             .finish()
@@ -88,6 +142,11 @@ where
     S: Serializer,
 {
     serializer.serialize_str(&to_checksum(address, None))
+}
+
+fn redacted_address(address: Address) -> String {
+    let checksum = to_checksum(&address, None);
+    format!("{}...{}", &checksum[..6], &checksum[38..])
 }
 
 pub(crate) fn serialize_u256_decimal<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>

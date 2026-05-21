@@ -1,0 +1,114 @@
+{
+  "metadata": {
+    "retrievalDate": "2026-05-21",
+    "tsSdk": {
+      "repo": "https://github.com/Polymarket/builder-relayer-client",
+      "commit": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+      "packageVersion": "0.0.9",
+      "sourceFile": "src/builder/deposit-wallet.ts"
+    },
+    "generatedBy": "official TypeScript SDK buildDepositWalletBatchRequest plus viem hashTypedData in a temporary checkout",
+    "sanitized": true,
+    "secretPolicy": "No production private key, API credential, auth header, or production signature is included. Signature is from an ephemeral synthetic test signer; private key is not recorded."
+  },
+  "owner": "0xa0365b50186321511B606624501CCeBB65fdee45",
+  "nonceOwner": "0xa0365b50186321511B606624501CCeBB65fdee45",
+  "submitFrom": "0xa0365b50186321511B606624501CCeBB65fdee45",
+  "depositWallet": "0x77FB7bd6CC8E4147C9449BF0C194A87128eD6E7F",
+  "chainId": 137,
+  "nonce": "42",
+  "deadline": "1760000000",
+  "calls": [
+    {
+      "target": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+      "value": "0",
+      "data": "0x095ea7b30000000000000000000000004bfb41d5b3570defd03c39a9a4d8de6bd8b8982effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "target": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+      "value": "0",
+      "data": "0xa22cb4650000000000000000000000004bfb41d5b3570defd03c39a9a4d8de6bd8b8982e0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ],
+  "typedData": {
+    "primaryType": "Batch",
+    "types": {
+      "EIP712Domain": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "version",
+          "type": "string"
+        },
+        {
+          "name": "chainId",
+          "type": "uint256"
+        },
+        {
+          "name": "verifyingContract",
+          "type": "address"
+        }
+      ],
+      "Call": [
+        {
+          "name": "target",
+          "type": "address"
+        },
+        {
+          "name": "value",
+          "type": "uint256"
+        },
+        {
+          "name": "data",
+          "type": "bytes"
+        }
+      ],
+      "Batch": [
+        {
+          "name": "wallet",
+          "type": "address"
+        },
+        {
+          "name": "nonce",
+          "type": "uint256"
+        },
+        {
+          "name": "deadline",
+          "type": "uint256"
+        },
+        {
+          "name": "calls",
+          "type": "Call[]"
+        }
+      ]
+    },
+    "domain": {
+      "name": "DepositWallet",
+      "version": "1",
+      "chainId": 137,
+      "verifyingContract": "0x77FB7bd6CC8E4147C9449BF0C194A87128eD6E7F"
+    },
+    "message": {
+      "wallet": "0x77FB7bd6CC8E4147C9449BF0C194A87128eD6E7F",
+      "nonce": "42",
+      "deadline": "1760000000",
+      "calls": [
+        {
+          "target": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+          "value": "0",
+          "data": "0x095ea7b30000000000000000000000004bfb41d5b3570defd03c39a9a4d8de6bd8b8982effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "target": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+          "value": "0",
+          "data": "0xa22cb4650000000000000000000000004bfb41d5b3570defd03c39a9a4d8de6bd8b8982e0000000000000000000000000000000000000000000000000000000000000001"
+        }
+      ]
+    }
+  },
+  "expectedDigest": "0x1914c1a6c4a12d53fc90aed2dee262ad4ee08324a311caecbc273071d09cf6de",
+  "ownerSignature": "0xb4cd328ccbdc3112e5e69aad47a3127d860a63a31d3c67db140dce89cffa6e582763d525ac004f8f59daa86ed1d52b45a9b04acc0289a84d5be13e249b39ef571c",
+  "ownerRecoveredSigner": "0xa0365b50186321511B606624501CCeBB65fdee45"
+}
