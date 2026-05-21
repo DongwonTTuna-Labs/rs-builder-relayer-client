@@ -4,9 +4,10 @@ use ethers::types::{Address, Bytes, H256, U256};
 use polymarket_relayer::auth::AuthMethod;
 use polymarket_relayer::{
     build_deposit_wallet_batch_request_from_signed, build_deposit_wallet_batch_typed_data,
-    build_wallet_nonce_request, deposit_wallet_contract_config, digest_deposit_wallet_batch,
-    recover_deposit_wallet_batch_signer, validate_deposit_wallet_batch_signature,
-    DepositWalletBatchToSign, DepositWalletCall, DepositWalletContractConfig, RelayerError,
+    build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
+    digest_deposit_wallet_batch, recover_deposit_wallet_batch_signer,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
+    DepositWalletContractConfig, DepositWalletParams, DepositWalletRequestContext, RelayerError,
 };
 use serde_json::Value;
 
@@ -463,6 +464,51 @@ fn wallet_nonce_request_matches_fixture() {
     assert!(!debug.contains(data["address"].as_str().unwrap()));
     assert!(debug.contains("..."));
     assert_eq!(serde_json::to_value(request).unwrap(), data);
+}
+
+#[test]
+fn deposit_wallet_public_debug_outputs_redacted_summaries() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let context = DepositWalletRequestContext {
+        owner_address: batch.submit_from,
+        deposit_wallet_address: batch.deposit_wallet,
+    };
+    let create_request = build_wallet_create_request(batch.owner, config);
+    let params = DepositWalletParams {
+        deposit_wallet: batch.deposit_wallet,
+        deadline: batch.deadline,
+        calls: batch.calls.clone(),
+    };
+
+    let raw_owner = format!("{:?}", batch.owner);
+    let raw_submit_from = format!("{:?}", batch.submit_from);
+    let raw_deposit_wallet = format!("{:?}", batch.deposit_wallet);
+    let raw_factory = format!("{:?}", config.factory);
+    let raw_call_target = format!("{:?}", batch.calls[0].target);
+    let raw_call_data = data["calls"][0]["data"].as_str().unwrap();
+    let context_debug = format!("{context:?}");
+    let create_debug = format!("{create_request:?}");
+    let call_debug = format!("{:?}", batch.calls[0]);
+    let params_debug = format!("{params:?}");
+
+    for debug in [&context_debug, &create_debug, &call_debug, &params_debug] {
+        for raw in [
+            raw_owner.as_str(),
+            raw_submit_from.as_str(),
+            raw_deposit_wallet.as_str(),
+            raw_factory.as_str(),
+            raw_call_target.as_str(),
+            raw_call_data,
+        ] {
+            assert!(!debug.contains(raw), "debug leaked raw value {raw}: {debug}");
+        }
+        assert!(debug.contains("..."), "debug should include redacted address summary: {debug}");
+    }
+    assert!(call_debug.contains("data: \"<redacted>\""));
+    assert!(call_debug.contains("data_len"));
+    assert!(params_debug.contains("calls_count"));
 }
 
 #[test]
