@@ -106,6 +106,19 @@ Consumer adapter migration status for PR #8:
   consumer adapter that has not completed this migration must not treat this PR
   as live-submit capable.
 
+### RelayerError matching in 0.2.x
+
+The deposit-wallet HTTP client adds new `RelayerError` variants for URL
+validation, mutation gating, ambiguous submit handling, reconciliation, and
+relayer quota exhaustion. `RelayerError` is a public enum and is not currently
+`#[non_exhaustive]`, so a consumer that exhaustively matches the enum must add
+explicit arms or a wildcard arm before pinning a commit that includes this
+client.
+
+Rollback path: if a consumer adapter is not ready to handle these variants, it
+must stay pinned to the previous commit SHA and keep live deposit-wallet
+mutation disabled. This PR does not require a consumer to enable live submit.
+
 ## Enablement Rule
 
 Consumer live relayer mutation remains disabled until:

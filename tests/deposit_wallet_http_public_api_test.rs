@@ -13,7 +13,10 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let client = DepositWalletRelayerClient::new(url, auth, config).unwrap();
 
     let gate = DepositWalletMutationGate::Deny;
-    let permit = DepositWalletMutationPermit::new("compile-level public API check");
+    let permit = DepositWalletMutationPermit::new(
+        "compile-level public API check",
+        "compile-level owner serialization evidence",
+    );
     let policy = DepositWalletPollPolicy::default();
     let receipt = DepositWalletTransactionReceipt {
         transaction_id: "tx-public-api".to_string(),
