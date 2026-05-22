@@ -38,6 +38,18 @@ pub enum RelayerError {
     #[error("Auth error: {0}")]
     AuthError(String),
 
+    #[error("Invalid relayer URL: {0}")]
+    InvalidRelayerUrl(String),
+
+    #[error("Deposit-wallet mutation blocked: {0}")]
+    MutationBlocked(String),
+
+    #[error("Ambiguous deposit-wallet submit: {0}")]
+    AmbiguousSubmit(String),
+
+    #[error("Deposit-wallet reconciliation required: {0}")]
+    ReconciliationRequired(String),
+
     #[error("Relayer quota exhausted (429)")]
     QuotaExhausted,
 
