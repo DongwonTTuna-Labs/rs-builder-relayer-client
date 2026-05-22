@@ -14,6 +14,7 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
 
     let gate = DepositWalletMutationGate::Deny;
     let permit = DepositWalletMutationPermit::new(
+        Address::zero(),
         "compile-level public API check",
         "compile-level owner serialization evidence",
     );

@@ -184,7 +184,7 @@ let direct = DirectExecutor::new_proxy(&rpc_url, wallet, 137)?;
 let direct = DirectExecutor::new_proxy_with_address(&rpc_url, wallet, 137, proxy_addr)?;
 
 match client.execute(vec![tx], "Redeem").await {
-    Err(RelayerError::QuotaExhausted) => {
+    Err(RelayerError::QuotaExhausted { .. }) => {
         let result = direct.execute(&tx).await?;  // pays gas in MATIC
     }
     other => { /* handle normally */ }
