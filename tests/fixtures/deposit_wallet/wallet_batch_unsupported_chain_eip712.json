@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "generatedBy": "local one-off synthetic fixture signer",
+    "secretPolicy": "No production private key, API credential, auth header, or production signature is included. The synthetic fixture private key was not printed, recorded, or committed."
+  },
+  "owner": "0xeec0df01f8847c9fa35ff95c3d2ca38bc2f88b16",
+  "nonceOwner": "0xeec0df01f8847c9fa35ff95c3d2ca38bc2f88b16",
+  "submitFrom": "0xeec0df01f8847c9fa35ff95c3d2ca38bc2f88b16",
+  "depositWallet": "0x000000000000000000000000000000000000dead",
+  "chainId": 999999,
+  "nonce": "31",
+  "deadline": "1760000000",
+  "calls": [
+    {
+      "target": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+      "value": "0",
+      "data": "0x095ea7b30000000000000000000000004d97dcd97ec945f40cf65f87097ace5ea0476045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ],
+  "expectedDigest": "0x81e35a4138b3eec8448b80a361f6e3551033c723198c111ba321949ab2c5905b",
+  "ownerSignature": "0x1eab15b34b4cf33711d2278ccc70b067b2769f9a9a8ce3dc3c8dd67eabef82755aee0ae8de1cc4d465c6669031a156848b64be03acc4980c431778fb94b34bed1c",
+  "ownerRecoveredSigner": "0xeec0df01f8847c9fa35ff95c3d2ca38bc2f88b16"
+}

@@ -93,6 +93,19 @@ strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
 crate-root API; request DTO fields stay crate-private so submit bodies are
 produced through validated builders.
 
+Consumer adapter migration status for PR #8:
+
+- this crate PR records the required `0.2.0` migration boundary and rollback
+  path, but it does not claim the downstream consumer adapter has already been
+  migrated;
+- any consumer pinning this PR must update its relayer adapter call sites from
+  `build_wallet_batch_request_with_signature` to
+  `try_build_wallet_batch_request_with_signature` in the same consumer-side
+  integration change;
+- live submit enablement remains blocked by the enablement rule below, so a
+  consumer adapter that has not completed this migration must not treat this PR
+  as live-submit capable.
+
 ## Enablement Rule
 
 Consumer live relayer mutation remains disabled until:

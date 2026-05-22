@@ -1,4 +1,3 @@
-use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::to_checksum;
 use polymarket_relayer::auth::AuthMethod;
@@ -558,39 +557,41 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         "submit config does not match signed chain id",
     );
 
-    let wallet = ephemeral_wallet();
-    let owner = wallet.address();
-    let mut wrong_wallet_batch = batch;
-    wrong_wallet_batch.owner = owner;
-    wrong_wallet_batch.nonce_owner = owner;
-    wrong_wallet_batch.submit_from = owner;
-    wrong_wallet_batch.deposit_wallet = "0x000000000000000000000000000000000000dEaD"
-        .parse()
-        .unwrap();
+    let wrong_wallet_data = fixture("deposit_wallet/wallet_batch_wrong_wallet_eip712.json");
+    let wrong_wallet_batch = batch_from_fixture(&wrong_wallet_data);
     let wrong_wallet_digest = digest_deposit_wallet_batch(&wrong_wallet_batch).unwrap();
-    let wrong_wallet_signature = format!("0x{}", wallet.sign_hash(wrong_wallet_digest).unwrap());
-    let wrong_wallet_signed =
-        validate_deposit_wallet_batch_signature(wrong_wallet_batch.clone(), &wrong_wallet_signature)
-            .unwrap();
+    assert_eq!(
+        wrong_wallet_digest,
+        wrong_wallet_data["expectedDigest"]
+            .as_str()
+            .unwrap()
+            .parse::<H256>()
+            .unwrap()
+    );
+    let wrong_wallet_signed = validate_deposit_wallet_batch_signature(
+        wrong_wallet_batch,
+        wrong_wallet_data["ownerSignature"].as_str().unwrap(),
+    )
+    .unwrap();
     assert_signing_error_contains(
         build_deposit_wallet_batch_request_from_signed(wrong_wallet_signed, config),
         "wallet does not match owner/config derived wallet",
     );
 
-    let unsupported_wallet = ephemeral_wallet();
-    let unsupported_owner = unsupported_wallet.address();
-    let mut unsupported_chain_batch = batch_from_fixture(&data);
-    unsupported_chain_batch.owner = unsupported_owner;
-    unsupported_chain_batch.nonce_owner = unsupported_owner;
-    unsupported_chain_batch.submit_from = unsupported_owner;
-    unsupported_chain_batch.chain_id = 999_999;
+    let unsupported_data = fixture("deposit_wallet/wallet_batch_unsupported_chain_eip712.json");
+    let unsupported_chain_batch = batch_from_fixture(&unsupported_data);
     let unsupported_digest = digest_deposit_wallet_batch(&unsupported_chain_batch).unwrap();
-    let unsupported_signature = format!(
-        "0x{}",
-        unsupported_wallet.sign_hash(unsupported_digest).unwrap()
+    assert_eq!(
+        unsupported_digest,
+        unsupported_data["expectedDigest"]
+            .as_str()
+            .unwrap()
+            .parse::<H256>()
+            .unwrap()
     );
-    let unsupported_signed = validate_deposit_wallet_batch_signature(unsupported_chain_batch.clone(),
-        &unsupported_signature,
+    let unsupported_signed = validate_deposit_wallet_batch_signature(
+        unsupported_chain_batch,
+        unsupported_data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
     match build_deposit_wallet_batch_request_from_signed(unsupported_signed, config) {
@@ -762,22 +763,20 @@ fn wallet_batch_public_try_builder_rejects_resource_limits() {
 
 #[test]
 fn wallet_batch_public_try_builder_accepts_amoy_config_branch() {
-    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
-    let mut batch = batch_from_fixture(&data);
-    let config = deposit_wallet_contract_config(80002).unwrap();
-    let wallet = ephemeral_wallet();
-    let owner = wallet.address();
-    let deposit_wallet = derive_deposit_wallet_address(owner, config).unwrap();
+    let data = fixture("deposit_wallet/wallet_batch_eip712_amoy.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(batch.chain_id).unwrap();
+    let deposit_wallet = derive_deposit_wallet_address(batch.owner, config).unwrap();
+    assert_eq!(deposit_wallet, batch.deposit_wallet);
 
-    batch.owner = owner;
-    batch.nonce_owner = owner;
-    batch.submit_from = owner;
-    batch.deposit_wallet = deposit_wallet;
-    batch.chain_id = 80002;
     let digest = digest_deposit_wallet_batch(&batch).unwrap();
-    let signature = format!("0x{}", wallet.sign_hash(digest).unwrap());
+    assert_eq!(
+        digest,
+        data["expectedDigest"].as_str().unwrap().parse::<H256>().unwrap()
+    );
+    let signature = data["ownerSignature"].as_str().unwrap().to_string();
     let ctx = DepositWalletRequestContext {
-        owner_address: owner,
+        owner_address: batch.owner,
         deposit_wallet_address: deposit_wallet,
     };
 
@@ -790,16 +789,10 @@ fn wallet_batch_public_try_builder_accepts_amoy_config_branch() {
         signature.clone(),
     )
     .unwrap();
-    let request = serde_json::to_value(request).unwrap();
-
-    assert_eq!(request["type"], "WALLET");
-    assert_eq!(request["from"], to_checksum(&owner, None));
-    assert_eq!(request["to"], to_checksum(&config.factory, None));
     assert_eq!(
-        request["depositWalletParams"]["depositWallet"],
-        to_checksum(&deposit_wallet, None)
+        serde_json::to_value(request).unwrap(),
+        fixture("deposit_wallet/wallet_signed_submit_body_amoy.json")
     );
-    assert_eq!(request["signature"], signature);
 }
 
 #[test]
@@ -966,8 +959,4 @@ fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
     assert_eq!(signed_owner, owner);
     assert_eq!(submit_request["from"], data["submitFrom"]);
     assert_eq!(submit_request["from"], data["owner"]);
-}
-
-fn ephemeral_wallet() -> LocalWallet {
-    LocalWallet::new(&mut ethers::core::rand::thread_rng())
 }

@@ -1,10 +1,8 @@
-use std::{collections::BTreeMap, fmt};
+use std::fmt;
 
-use ethers::types::transaction::eip712::{
-    EIP712Domain, Eip712, Eip712DomainType, TypedData, Types,
-};
+use ethers::abi::{encode, Token};
 use ethers::types::{Address, H256, Signature, U256};
-use ethers::utils::to_checksum;
+use ethers::utils::{keccak256, to_checksum};
 use serde_json::{json, Value};
 
 use crate::deposit_wallet::{
@@ -17,6 +15,11 @@ use crate::error::{RelayerError, Result};
 const DEPOSIT_WALLET_DOMAIN_NAME: &str = "DepositWallet";
 const DEPOSIT_WALLET_DOMAIN_VERSION: &str = "1";
 const DEPOSIT_WALLET_PRIMARY_TYPE: &str = "Batch";
+const DEPOSIT_WALLET_DOMAIN_TYPE: &str =
+    "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)";
+const DEPOSIT_WALLET_CALL_TYPE: &str = "Call(address target,uint256 value,bytes data)";
+const DEPOSIT_WALLET_BATCH_TYPE: &str =
+    "Batch(address wallet,uint256 nonce,uint256 deadline,Call[] calls)Call(address target,uint256 value,bytes data)";
 const ECDSA_SIGNATURE_HEX_LEN: usize = 132;
 const ECDSA_SIGNATURE_PAYLOAD_HEX_LEN: usize = 130;
 const MAX_DEPOSIT_WALLET_BATCH_CALLS: usize = 256;
@@ -208,7 +211,7 @@ pub fn digest_deposit_wallet_batch(batch: &DepositWalletBatchToSign) -> Result<H
 }
 
 fn digest_deposit_wallet_batch_unchecked(batch: &DepositWalletBatchToSign) -> Result<H256> {
-    digest_deposit_wallet_typed_data(build_deposit_wallet_batch_typed_data_model(
+    Ok(digest_deposit_wallet_batch_parts(
         batch.deposit_wallet,
         batch.chain_id,
         batch.nonce,
@@ -217,88 +220,71 @@ fn digest_deposit_wallet_batch_unchecked(batch: &DepositWalletBatchToSign) -> Re
     ))
 }
 
-fn build_deposit_wallet_batch_typed_data_model(
+fn digest_deposit_wallet_batch_parts(
     deposit_wallet: Address,
     chain_id: u64,
     nonce: U256,
     deadline: U256,
     calls: &[DepositWalletCall],
-) -> TypedData {
-    TypedData {
-        domain: EIP712Domain {
-            name: Some(DEPOSIT_WALLET_DOMAIN_NAME.to_string()),
-            version: Some(DEPOSIT_WALLET_DOMAIN_VERSION.to_string()),
-            chain_id: Some(U256::from(chain_id)),
-            verifying_contract: Some(deposit_wallet),
-            salt: None,
-        },
-        types: deposit_wallet_types(),
-        primary_type: DEPOSIT_WALLET_PRIMARY_TYPE.to_string(),
-        message: batch_message(deposit_wallet, nonce, deadline, calls),
+) -> H256 {
+    let domain_separator = hash_abi(&[
+        type_hash_token(DEPOSIT_WALLET_DOMAIN_TYPE),
+        string_hash_token(DEPOSIT_WALLET_DOMAIN_NAME),
+        string_hash_token(DEPOSIT_WALLET_DOMAIN_VERSION),
+        Token::Uint(U256::from(chain_id)),
+        Token::Address(deposit_wallet),
+    ]);
+    let calls_hash = hash_call_array(calls);
+    let batch_hash = hash_abi(&[
+        type_hash_token(DEPOSIT_WALLET_BATCH_TYPE),
+        Token::Address(deposit_wallet),
+        Token::Uint(nonce),
+        Token::Uint(deadline),
+        fixed_hash_token(calls_hash),
+    ]);
+
+    let mut digest_input = Vec::with_capacity(66);
+    digest_input.extend_from_slice(b"\x19\x01");
+    digest_input.extend_from_slice(domain_separator.as_bytes());
+    digest_input.extend_from_slice(batch_hash.as_bytes());
+    H256::from(keccak256(digest_input))
+}
+
+fn hash_call_array(calls: &[DepositWalletCall]) -> H256 {
+    let mut encoded_hashes = Vec::with_capacity(calls.len() * 32);
+    for call in calls {
+        encoded_hashes.extend_from_slice(hash_call(call).as_bytes());
     }
+    H256::from(keccak256(encoded_hashes))
 }
 
-fn deposit_wallet_types() -> Types {
-    let mut types = BTreeMap::new();
-    types.insert(
-        "EIP712Domain".to_string(),
-        vec![
-            eip712_field("name", "string"),
-            eip712_field("version", "string"),
-            eip712_field("chainId", "uint256"),
-            eip712_field("verifyingContract", "address"),
-        ],
-    );
-    types.insert(
-        "Call".to_string(),
-        vec![
-            eip712_field("target", "address"),
-            eip712_field("value", "uint256"),
-            eip712_field("data", "bytes"),
-        ],
-    );
-    types.insert(
-        "Batch".to_string(),
-        vec![
-            eip712_field("wallet", "address"),
-            eip712_field("nonce", "uint256"),
-            eip712_field("deadline", "uint256"),
-            eip712_field("calls", "Call[]"),
-        ],
-    );
-    types
+fn hash_call(call: &DepositWalletCall) -> H256 {
+    hash_abi(&[
+        type_hash_token(DEPOSIT_WALLET_CALL_TYPE),
+        Token::Address(call.target),
+        Token::Uint(call.value),
+        bytes_hash_token(call.data.as_ref()),
+    ])
 }
 
-fn eip712_field(name: &str, r#type: &str) -> Eip712DomainType {
-    Eip712DomainType {
-        name: name.to_string(),
-        r#type: r#type.to_string(),
-    }
+fn hash_abi(tokens: &[Token]) -> H256 {
+    H256::from(keccak256(encode(tokens)))
 }
 
-fn batch_message(
-    deposit_wallet: Address,
-    nonce: U256,
-    deadline: U256,
-    calls: &[DepositWalletCall],
-) -> BTreeMap<String, Value> {
-    let mut message = BTreeMap::new();
-    message.insert("wallet".to_string(), Value::String(checksum(deposit_wallet)));
-    message.insert("nonce".to_string(), Value::String(nonce.to_string()));
-    message.insert("deadline".to_string(), Value::String(deadline.to_string()));
-    message.insert(
-        "calls".to_string(),
-        Value::Array(calls.iter().map(call_to_typed_data).collect()),
-    );
-    message
+fn type_hash_token(type_name: &str) -> Token {
+    fixed_hash_token(H256::from(keccak256(type_name.as_bytes())))
 }
 
-fn digest_deposit_wallet_typed_data(typed_data: TypedData) -> Result<H256> {
-    let digest = typed_data
-        .encode_eip712()
-        .map_err(|e| RelayerError::Signing(format!("could not encode EIP-712 digest: {e}")))?;
+fn string_hash_token(value: &str) -> Token {
+    fixed_hash_token(H256::from(keccak256(value.as_bytes())))
+}
 
-    Ok(H256::from(digest))
+fn bytes_hash_token(value: &[u8]) -> Token {
+    fixed_hash_token(H256::from(keccak256(value)))
+}
+
+fn fixed_hash_token(value: H256) -> Token {
+    Token::FixedBytes(value.as_bytes().to_vec())
 }
 
 pub fn recover_deposit_wallet_batch_signer(
