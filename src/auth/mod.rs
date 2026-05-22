@@ -3,6 +3,8 @@ pub mod relayer_key;
 
 use std::fmt;
 
+use ethers::types::Address;
+use ethers::utils::to_checksum;
 use reqwest::header::HeaderMap;
 
 /// Authentication method for the relayer.
@@ -21,7 +23,7 @@ impl fmt::Debug for AuthMethod {
             Self::RelayerKey { address, .. } => f
                 .debug_struct("RelayerKey")
                 .field("api_key", &"<redacted>")
-                .field("address", address)
+                .field("address", &redacted_address_text(address))
                 .finish(),
         }
     }
@@ -76,5 +78,15 @@ impl fmt::Debug for BuilderConfig {
             .field("secret", &"<redacted>")
             .field("passphrase", &"<redacted>")
             .finish()
+    }
+}
+
+fn redacted_address_text(address: &str) -> String {
+    match address.parse::<Address>() {
+        Ok(address) => {
+            let checksum = to_checksum(&address, None);
+            format!("{}...{}", &checksum[..6], &checksum[38..])
+        }
+        Err(_) => "<redacted>".to_string(),
     }
 }
