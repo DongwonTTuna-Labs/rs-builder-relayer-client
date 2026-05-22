@@ -1,10 +1,18 @@
 use ethers::types::U256;
 
-use crate::deposit_wallet::{
-    DepositWalletBatchRequest, DepositWalletCall, DepositWalletContractConfig,
-    DepositWalletCreateRequest, DepositWalletParams, DepositWalletRequestContext,
-    WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
+use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
+use crate::deposit_wallet::signing::build_deposit_wallet_batch_request_from_prechecked_signed;
+use crate::deposit_wallet::signing::{
+    validate_deposit_wallet_batch_resource_limits,
+    validate_deposit_wallet_batch_signature_with_validated_resources,
 };
+use crate::deposit_wallet::{
+    derive_deposit_wallet_address, DepositWalletBatchRequest, DepositWalletBatchToSign,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
+    DepositWalletParams, DepositWalletRequestContext, WALLET_CREATE_TRANSACTION_TYPE,
+    WALLET_TRANSACTION_TYPE,
+};
+use crate::error::{RelayerError, Result};
 
 pub fn build_wallet_create_request(
     owner_address: ethers::types::Address,
@@ -17,7 +25,49 @@ pub fn build_wallet_create_request(
     }
 }
 
-pub fn build_wallet_batch_request_with_signature(
+/// Builds a WALLET batch request from an owner-signed payload.
+///
+/// New callers should prefer this fallible compatibility entry point or
+/// `build_deposit_wallet_batch_request_from_signed` so signer/config validation
+/// failures are returned as `RelayerError` instead of producing an unchecked
+/// request body. This helper does not enforce wall-clock deadline freshness;
+/// live submit code must add a clock-injected expiry guard before calling it.
+pub fn try_build_wallet_batch_request_with_signature(
+    ctx: DepositWalletRequestContext,
+    config: DepositWalletContractConfig,
+    nonce: U256,
+    deadline: U256,
+    calls: Vec<DepositWalletCall>,
+    signature: String,
+) -> Result<DepositWalletBatchRequest> {
+    let chain_id = deposit_wallet_contract_chain_id(config)?;
+    validate_deposit_wallet_batch_resource_limits(&calls)?;
+    let derived_wallet = derive_deposit_wallet_address(ctx.owner_address, config)?;
+    if ctx.deposit_wallet_address != derived_wallet {
+        return Err(RelayerError::Signing(
+            "deposit wallet request context wallet does not match owner/config derived wallet"
+                .to_string(),
+        ));
+    }
+
+    let batch = DepositWalletBatchToSign {
+        owner: ctx.owner_address,
+        nonce_owner: ctx.owner_address,
+        submit_from: ctx.owner_address,
+        deposit_wallet: ctx.deposit_wallet_address,
+        chain_id,
+        nonce,
+        deadline,
+        calls,
+    };
+    let signed = validate_deposit_wallet_batch_signature_with_validated_resources(batch, &signature)?;
+
+    Ok(build_deposit_wallet_batch_request_from_prechecked_signed(
+        signed, config,
+    ))
+}
+
+pub(crate) fn build_wallet_batch_request_unchecked(
     ctx: DepositWalletRequestContext,
     config: DepositWalletContractConfig,
     nonce: U256,
@@ -36,5 +86,59 @@ pub fn build_wallet_batch_request_with_signature(
             deadline,
             calls,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ethers::types::{Address, Bytes, U256};
+    use serde_json::Value;
+
+    use crate::deposit_wallet::{
+        deposit_wallet_contract_config, DepositWalletCall, DepositWalletRequestContext,
+    };
+
+    fn fixture(path: &str) -> Value {
+        let full_path = format!("tests/fixtures/{path}");
+        let text = std::fs::read_to_string(&full_path).expect("fixture should be readable");
+        serde_json::from_str(&text).expect("fixture should be valid JSON")
+    }
+
+    #[test]
+    fn wallet_batch_submit_body_matches_fixture() {
+        let owner: Address = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5"
+            .parse()
+            .unwrap();
+        let deposit_wallet: Address = "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De"
+            .parse()
+            .unwrap();
+        let target: Address = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+            .parse()
+            .unwrap();
+        let config = deposit_wallet_contract_config(137).unwrap();
+        let ctx = DepositWalletRequestContext {
+            owner_address: owner,
+            deposit_wallet_address: deposit_wallet,
+        };
+        let call = DepositWalletCall {
+            target,
+            value: U256::zero(),
+            data: Bytes::from(hex::decode("095ea7b30000000000000000000000004d97dcd97ec945f40cf65f87097ace5ea0476045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff").unwrap()),
+        };
+        let signature = "0x111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221b";
+
+        let request = super::build_wallet_batch_request_unchecked(
+            ctx,
+            config,
+            U256::from(31u64),
+            U256::from(1_760_000_000u64),
+            vec![call],
+            signature.to_string(),
+        );
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            fixture("deposit_wallet/wallet_submit_body.json")
+        );
     }
 }

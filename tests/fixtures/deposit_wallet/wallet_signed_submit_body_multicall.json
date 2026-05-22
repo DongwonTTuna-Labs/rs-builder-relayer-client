@@ -1,0 +1,23 @@
+{
+  "type": "WALLET",
+  "from": "0x00D42235001cBC8F37904b275F17E4Cc8b601401",
+  "to": "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
+  "nonce": "42",
+  "signature": "0x41b9afb56e2f6965497f6df0989536e8e1330b941df96c174602de5d42e8b30e71d57445de098ad28d08cf4d5afcecc9a0c44e944775ecfc704e82533b8fe6cb1c",
+  "depositWalletParams": {
+    "depositWallet": "0xF76e98404d1BB116a8e0fA4dedef83164770189A",
+    "deadline": "1760000000",
+    "calls": [
+      {
+        "target": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+        "value": "0",
+        "data": "0x095ea7b30000000000000000000000004bfb41d5b3570defd03c39a9a4d8de6bd8b8982effffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "target": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+        "value": "123",
+        "data": "0xa22cb4650000000000000000000000004bfb41d5b3570defd03c39a9a4d8de6bd8b8982e0000000000000000000000000000000000000000000000000000000000000001"
+      }
+    ]
+  }
+}
