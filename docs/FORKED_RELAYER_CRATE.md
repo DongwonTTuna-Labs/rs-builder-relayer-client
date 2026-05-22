@@ -244,7 +244,7 @@ The nonce must be fetched fresh immediately before signing. A stale nonce is a l
 ### Transaction polling
 
 ```text
-GET /transaction?transactionID=<id>
+GET /transaction?id=<transactionID>
 ```
 
 The submit response may not contain the on-chain transaction hash immediately. The fork must track `transactionID` and poll to a terminal state.

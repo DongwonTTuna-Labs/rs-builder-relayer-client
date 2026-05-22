@@ -9,6 +9,7 @@ use ethers::types::{Address, U256};
 use ethers::utils::{keccak256, to_checksum};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, Method, StatusCode};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use url::Url;
 
@@ -69,14 +70,14 @@ impl fmt::Debug for DepositWalletRelayerUrl {
 
 #[derive(Clone)]
 pub struct RelayerKeyAuth {
-    api_key: String,
+    api_key: Arc<SecretString>,
     api_key_address: Address,
 }
 
 impl RelayerKeyAuth {
     pub fn new(api_key: impl Into<String>, api_key_address: Address) -> Self {
         Self {
-            api_key: api_key.into(),
+            api_key: Arc::new(SecretString::from(api_key.into())),
             api_key_address,
         }
     }
@@ -87,17 +88,17 @@ impl RelayerKeyAuth {
 
     fn headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "RELAYER_API_KEY",
-            HeaderValue::from_str(&self.api_key)
-                .map_err(|_| RelayerError::AuthError("invalid relayer API key".to_string()))?,
-        );
-        headers.insert(
-            "RELAYER_API_KEY_ADDRESS",
+        let mut api_key = HeaderValue::from_str(self.api_key.expose_secret())
+            .map_err(|_| RelayerError::AuthError("invalid relayer API key".to_string()))?;
+        api_key.set_sensitive(true);
+        headers.insert("RELAYER_API_KEY", api_key);
+
+        let mut api_key_address =
             HeaderValue::from_str(&to_checksum(&self.api_key_address, None)).map_err(|_| {
                 RelayerError::AuthError("invalid relayer API key address".to_string())
-            })?,
-        );
+            })?;
+        api_key_address.set_sensitive(true);
+        headers.insert("RELAYER_API_KEY_ADDRESS", api_key_address);
         Ok(headers)
     }
 }
@@ -124,12 +125,22 @@ pub enum DepositWalletMutationGate {
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletMutationPermit {
     reason: String,
+    owner_serialization_evidence: String,
 }
 
 impl DepositWalletMutationPermit {
-    pub fn new(reason: impl Into<String>) -> Self {
+    /// Creates an explicit live-mutation permit.
+    ///
+    /// `owner_serialization_evidence` must identify the caller-side guard that
+    /// prevents concurrent or restarted-process WALLET submits for the same
+    /// owner. The client's in-memory block is only a local backstop.
+    pub fn new(
+        reason: impl Into<String>,
+        owner_serialization_evidence: impl Into<String>,
+    ) -> Self {
         Self {
             reason: reason.into(),
+            owner_serialization_evidence: owner_serialization_evidence.into(),
         }
     }
 }
@@ -138,6 +149,10 @@ impl fmt::Debug for DepositWalletMutationPermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DepositWalletMutationPermit")
             .field("reason", &self.reason)
+            .field(
+                "owner_serialization_evidence",
+                &self.owner_serialization_evidence,
+            )
             .finish()
     }
 }
@@ -438,7 +453,7 @@ impl DepositWalletRelayerClient {
         let payload_hash = payload_hash_summary(body.as_bytes());
         self.reserve_owner_submit(owner, payload_hash.clone())?;
         let url = self.base_url.endpoint(SUBMIT_PATH);
-        match self.send(Method::POST, url, Some(body.clone())).await {
+        match self.send(Method::POST, url, Some(body)).await {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => self.handle_submit_receipt(owner, payload_hash, receipt),
                 Err(error) => {
@@ -777,9 +792,20 @@ fn validate_rel_url(url: &Url) -> Result<()> {
 
 fn ensure_permitted(gate: &DepositWalletMutationGate) -> Result<()> {
     match gate {
-        DepositWalletMutationGate::Permit(permit) if !permit.reason.trim().is_empty() => Ok(()),
+        DepositWalletMutationGate::Permit(permit)
+            if !permit.reason.trim().is_empty()
+                && !permit.owner_serialization_evidence.trim().is_empty() =>
+        {
+            Ok(())
+        }
+        DepositWalletMutationGate::Permit(permit) if permit.reason.trim().is_empty() => {
+            Err(RelayerError::MutationBlocked(
+                "explicit deposit-wallet mutation permit reason required".to_string(),
+            ))
+        }
         DepositWalletMutationGate::Permit(_) => Err(RelayerError::MutationBlocked(
-            "explicit deposit-wallet mutation permit reason required".to_string(),
+            "owner-scoped mutation serialization evidence required before live deposit-wallet mutation"
+                .to_string(),
         )),
         DepositWalletMutationGate::Deny => Err(RelayerError::MutationBlocked(
             "explicit deposit-wallet mutation permit required".to_string(),
@@ -1113,6 +1139,7 @@ mod tests {
     struct TestResponse {
         status: &'static str,
         headers: Vec<(String, String)>,
+        include_content_length: bool,
         body: String,
     }
 
@@ -1121,6 +1148,16 @@ mod tests {
             Self {
                 status,
                 headers: vec![("content-type".to_string(), "application/json".to_string())],
+                include_content_length: true,
+                body: body.into(),
+            }
+        }
+
+        fn json_without_content_length(status: &'static str, body: impl Into<String>) -> Self {
+            Self {
+                status,
+                headers: vec![("content-type".to_string(), "application/json".to_string())],
+                include_content_length: false,
                 body: body.into(),
             }
         }
@@ -1129,6 +1166,7 @@ mod tests {
             Self {
                 status: "307 Temporary Redirect",
                 headers: vec![("location".to_string(), location)],
+                include_content_length: true,
                 body: String::new(),
             }
         }
@@ -1157,6 +1195,7 @@ mod tests {
     fn mutation_permit() -> DepositWalletMutationGate {
         DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
             "mocked unit-test relayer call",
+            "single-process mocked owner serialization guard",
         ))
     }
 
@@ -1365,11 +1404,10 @@ mod tests {
     }
 
     async fn write_response(stream: &mut TcpStream, response: TestResponse) {
-        let mut wire = format!(
-            "HTTP/1.1 {}\r\ncontent-length: {}\r\nconnection: close\r\n",
-            response.status,
-            response.body.len()
-        );
+        let mut wire = format!("HTTP/1.1 {}\r\nconnection: close\r\n", response.status);
+        if response.include_content_length {
+            wire.push_str(&format!("content-length: {}\r\n", response.body.len()));
+        }
         for (name, value) in response.headers {
             wire.push_str(&format!("{name}: {value}\r\n"));
         }
@@ -1443,6 +1481,15 @@ mod tests {
         let rendered = format!("{auth:?}");
         assert!(!rendered.contains(API_KEY));
         assert!(!rendered.contains(&to_checksum(&address(API_KEY_ADDRESS), None)));
+        let headers = auth.headers().unwrap();
+        assert!(headers.get("RELAYER_API_KEY").unwrap().is_sensitive());
+        assert!(headers
+            .get("RELAYER_API_KEY_ADDRESS")
+            .unwrap()
+            .is_sensitive());
+        let rendered_headers = format!("{headers:?}");
+        assert!(!rendered_headers.contains(API_KEY));
+        assert!(!rendered_headers.contains(&to_checksum(&address(API_KEY_ADDRESS), None)));
 
         let builder = BuilderConfig {
             key: "builder-key-secret".to_string(),
@@ -1507,7 +1554,23 @@ mod tests {
         let error = client
             .submit_wallet_create(
                 address(WALLET_CREATE_OWNER),
-                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(" ")),
+                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                    " ",
+                    "single-process mocked owner serialization guard",
+                )),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::MutationBlocked(_)));
+
+        let error = client
+            .submit_wallet_create(
+                address(WALLET_CREATE_OWNER),
+                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                    "mocked unit-test relayer call",
+                    "",
+                )),
             )
             .await
             .unwrap_err();
@@ -1524,7 +1587,10 @@ mod tests {
         let error = client
             .submit_signed_wallet_batch(
                 signed_wallet_batch(),
-                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new("")),
+                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                    "",
+                    "single-process mocked owner serialization guard",
+                )),
             )
             .await
             .unwrap_err();
@@ -1727,7 +1793,10 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(" "),
+                DepositWalletMutationPermit::new(
+                    " ",
+                    "single-process mocked owner serialization guard",
+                ),
             )
             .unwrap_err();
         assert!(matches!(error, RelayerError::MutationBlocked(_)));
@@ -1738,7 +1807,10 @@ mod tests {
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new("checked mocked relayer state"),
+                DepositWalletMutationPermit::new(
+                    "checked mocked relayer state",
+                    "single-process mocked owner serialization guard",
+                ),
             )
             .unwrap();
         let nonce = client.get_wallet_nonce(owner).await.unwrap();
@@ -1842,6 +1914,29 @@ mod tests {
             "{}",
         )])
         .await;
+        let client = test_client(url);
+
+        let error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::AmbiguousSubmit(_)));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let duplicate = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+        assert!(matches!(duplicate, RelayerError::ReconciliationRequired(_)));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_timeout_status_records_ambiguous_submit_and_blocks_duplicate() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![TestResponse::json("408 Request Timeout", "{}")])
+            .await;
         let client = test_client(url);
 
         let error = client
@@ -2036,6 +2131,107 @@ mod tests {
         let error = client.get_wallet_nonce(address(WALLET_CREATE_OWNER)).await.unwrap_err();
         assert!(matches!(error, RelayerError::Other(message) if message.contains("maximum size")));
         let _ = handle.await.unwrap();
+
+        let (url, handle) = spawn_server(vec![TestResponse::json_without_content_length(
+            "200 OK",
+            "x".repeat(MAX_SUCCESS_BODY_BYTES + 1),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RelayerError::Other(message) if message.contains("maximum size")));
+        let _ = handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_wallet_nonce_rejects_malformed_success_payloads() {
+        for body in ["not-json".to_string(), "{}".to_string(), json!({"nonce": "nan"}).to_string()]
+        {
+            let (url, handle) =
+                spawn_server(vec![TestResponse::json("200 OK", body)]).await;
+            let client = test_client(url);
+
+            let error = client
+                .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+                .await
+                .unwrap_err();
+
+            assert!(matches!(error, RelayerError::Other(_)));
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(
+                requests[0].path,
+                format!(
+                    "/nonce?address={}&type=WALLET",
+                    to_checksum(&address(WALLET_CREATE_OWNER), None)
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_transaction_rejects_oversized_array_response() {
+        let body = (0..=MAX_TRANSACTION_RESPONSE_ITEMS)
+            .map(|index| {
+                json!({
+                    "transactionID": format!("other-tx-{index}"),
+                    "state": "STATE_CONFIRMED",
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                })
+            })
+            .collect::<Vec<_>>();
+        let (url, handle) =
+            spawn_server(vec![TestResponse::json("200 OK", json!(body).to_string())]).await;
+        let client = test_client(url);
+
+        let error = client.get_transaction("tx-array").await.unwrap_err();
+        assert!(matches!(error, RelayerError::ReconciliationRequired(_)));
+        let _ = handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn submit_terminal_states_clear_owner_block_or_return_terminal_error() {
+        let owner = address(WALLET_CREATE_OWNER);
+
+        for (transaction_id, state, expected_error) in [
+            ("tx-confirmed-now", "STATE_CONFIRMED", None),
+            ("tx-invalid-now", "STATE_INVALID", Some("invalid")),
+            ("tx-failed-now", "STATE_FAILED", Some("failed")),
+        ] {
+            let (url, handle) = spawn_server(vec![
+                TestResponse::json("200 OK", transaction_response(transaction_id, state)),
+                TestResponse::json("200 OK", json!({"nonce": "34"}).to_string()),
+            ])
+            .await;
+            let client = test_client(url);
+
+            let result = client.submit_wallet_create(owner, mutation_permit()).await;
+            match expected_error {
+                None => {
+                    let receipt = result.unwrap();
+                    assert_eq!(receipt.transaction_id, transaction_id);
+                    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+                }
+                Some("invalid") => {
+                    assert!(matches!(result.unwrap_err(), RelayerError::TransactionInvalid(_)));
+                }
+                Some("failed") => {
+                    assert!(matches!(result.unwrap_err(), RelayerError::TransactionFailed(_)));
+                }
+                _ => unreachable!(),
+            }
+
+            let nonce = client.get_wallet_nonce(owner).await.unwrap();
+            assert_eq!(nonce, U256::from(34u64));
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].path, SUBMIT_PATH);
+            assert!(requests[1].path.contains("/nonce?address="));
+        }
     }
 
     #[tokio::test]
@@ -2200,7 +2396,10 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new("checked mocked relayer state"),
+                DepositWalletMutationPermit::new(
+                    "checked mocked relayer state",
+                    "single-process mocked owner serialization guard",
+                ),
             )
             .unwrap_err();
         assert!(matches!(error, RelayerError::MutationBlocked(_)));
