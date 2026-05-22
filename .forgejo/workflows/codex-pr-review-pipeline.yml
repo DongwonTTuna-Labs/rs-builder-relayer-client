@@ -23,7 +23,7 @@ on:
 jobs:
   prepare-context:
     name: prepare-context
-    runs-on: codex
+    runs-on: dongwontuna-labs-runner
     timeout-minutes: 5
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -76,7 +76,7 @@ jobs:
   review:
     name: review (${{ matrix.axis }})
     needs: prepare-context
-    runs-on: codex
+    runs-on: dongwontuna-labs-runner
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -235,7 +235,7 @@ jobs:
     name: tech-lead
     needs: review
     if: always() && !cancelled()
-    runs-on: codex
+    runs-on: dongwontuna-labs-runner
     timeout-minutes: 20
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -340,7 +340,7 @@ jobs:
     name: post
     needs: tech-lead
     if: always() && !cancelled() && needs.tech-lead.result == 'success'
-    runs-on: codex
+    runs-on: dongwontuna-labs-runner
     timeout-minutes: 10
     env:
       PR_NUMBER: ${{ inputs.pr_number }}

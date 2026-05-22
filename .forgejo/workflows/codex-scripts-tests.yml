@@ -18,7 +18,7 @@ on:
 jobs:
   unittest:
     name: Run Forgejo Codex script tests
-    runs-on: codex
+    runs-on: dongwontuna-labs-runner
     timeout-minutes: 5
     steps:
       - name: Checkout

@@ -19,7 +19,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve PR metadata
-    runs-on: codex
+    runs-on: dongwontuna-labs-runner
     outputs:
       allowed: ${{ steps.lookup.outputs.allowed }}
       reason: ${{ steps.lookup.outputs.reason }}

@@ -140,6 +140,13 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertNotIn("NODE_VERSION", text)
         self.assertNotIn("node-v$NODE_VERSION", text)
 
+    def test_workflows_use_unified_runner_label(self) -> None:
+        text = self.forgejo_text()
+        self.assertIn("runs-on: dongwontuna-labs-runner", text)
+        self.assertNotIn("runs-on: codex", text)
+        self.assertNotIn("runs-on: rust", text)
+        self.assertNotIn("runs-on: ubuntu-latest", text)
+
     def test_manual_checkout_commands_end_before_next_step(self) -> None:
         for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
             for line in path.read_text(encoding="utf-8").splitlines():

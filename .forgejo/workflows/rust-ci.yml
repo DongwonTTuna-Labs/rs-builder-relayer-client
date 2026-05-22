@@ -25,7 +25,7 @@ jobs:
   fmt:
     name: Check formatting and whitespace
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: rust
+    runs-on: dongwontuna-labs-runner
     steps:
       - name: Checkout
         env:
@@ -65,7 +65,7 @@ jobs:
   clippy:
     name: Run Clippy lints
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: rust
+    runs-on: dongwontuna-labs-runner
     steps:
       - name: Checkout
         env:
@@ -103,7 +103,7 @@ jobs:
   test:
     name: Run test suite
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: rust
+    runs-on: dongwontuna-labs-runner
     steps:
       - name: Checkout
         env:
@@ -141,7 +141,7 @@ jobs:
   build:
     name: Build all targets
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: rust
+    runs-on: dongwontuna-labs-runner
     steps:
       - name: Checkout
         env:
