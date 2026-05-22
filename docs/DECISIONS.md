@@ -84,10 +84,10 @@ signatures or call payloads must return Result and run signer, config, derived
 wallet, signature-shape, and batch resource-limit validation before producing a
 request body. The legacy infallible
 `build_wallet_batch_request_with_signature` helper is removed from the public
-crate and `deposit_wallet` re-export surface because it cannot be made
-source-compatible, non-panicking, and validated with its original return type.
-Unchecked WALLET serialization remains crate-internal and is restricted to
-validated builders and fixture tests.
+crate and `deposit_wallet` re-export surface at the `0.2.0` migration boundary
+because it cannot be made source-compatible, non-panicking, and validated with
+its original return type. Unchecked WALLET serialization remains crate-internal
+and is restricted to validated builders and fixture tests.
 ```
 
 Reason:
@@ -100,11 +100,16 @@ Reason:
   identities;
 - compatibility callers should migrate to `try_build_wallet_batch_request_with_signature`
   or the validated signed-batch flow before wiring any live submit path.
-- the compatibility exception is intentional: the agent changed this PR after
-  review on 2026-05-22 because the old safe infallible public API could only
-  fail by panicking, silently producing a poisoned request, or returning an
-  unchecked relayer body. All three alternatives conflict with the fork's
-  security and failure-handling rules.
+- the compatibility exception is intentional:
+  - who: this PR's Codex agent changed the deposit-wallet public API boundary;
+  - what: the old safe infallible WALLET submit helper is removed from public
+    exports and replaced by the fallible `try_` API;
+  - when: 2026-05-22, recorded as the crate's `0.2.0` migration boundary;
+  - why: the old return type could only fail by panicking, silently producing a
+    poisoned request, or returning an unchecked relayer body;
+  - how: consumers must migrate call sites to
+    `try_build_wallet_batch_request_with_signature` and handle `RelayerError`
+    before any live submit wiring.
 
 Rollback:
 

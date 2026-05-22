@@ -85,6 +85,12 @@ WALLET submit request construction must use the fallible
 the public integration surface because it cannot report signer, config,
 derived-wallet, signature-shape, or resource-limit failures.
 
+This is a `0.2.0` breaking migration boundary. Consumer adapters that still
+import or call `build_wallet_batch_request_with_signature` must switch to
+`try_build_wallet_batch_request_with_signature`, propagate `RelayerError`, and
+keep the error handling inside the relayer adapter rather than domain or
+strategy layers.
+
 ## Enablement Rule
 
 Consumer live relayer mutation remains disabled until:
