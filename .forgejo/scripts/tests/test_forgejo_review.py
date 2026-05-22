@@ -107,6 +107,9 @@ class ReviewCommentTests(unittest.TestCase):
         self.assertIn("Codex Reviewer for DongwonTTuna", body)
         legacy_name = "codex-review" + "-" + "bot"
         self.assertNotIn(legacy_name, body)
+        self.assertFalse(body.startswith(" "))
+        self.assertNotIn("\n        **[", body)
+        self.assertNotIn("\n        _Codex Reviewer", body)
         parsed_key, status = extract_marker(body)
         self.assertEqual((parsed_key, status), (key, "active"))
 

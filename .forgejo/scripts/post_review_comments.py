@@ -63,15 +63,15 @@ def render_inline_body(finding: dict[str, Any], key: str) -> str:
     finding_type = str(finding.get("type") or "SUGGEST").strip()
     finding_id = str(finding.get("id") or "").strip()
     agent = str(finding.get("agent") or "").strip()
-    return textwrap.dedent(
-        f"""\
-        {marker_for(key)}
-        **[{finding_type}] {title}**
-
-        {reason}
-
-        _{DISPLAY_NAME}: `{agent}` / `{finding_id}`_
-        """
+    return "\n".join(
+        [
+            marker_for(key),
+            f"**[{finding_type}] {title}**",
+            "",
+            reason,
+            "",
+            f"_{DISPLAY_NAME}: `{agent}` / `{finding_id}`_",
+        ]
     ).strip()
 
 
