@@ -32,8 +32,8 @@ This PR proves the signed payload shape before any live HTTP client exists.
 
 - `DepositWalletBatchToSign`: owner, deposit wallet, chain id, nonce, deadline,
   and calls.
-- `build_deposit_wallet_batch_typed_data(...)`: builds the EIP-712 domain and
-  message.
+- `try_build_deposit_wallet_batch_typed_data(...)`: builds the EIP-712 domain
+  and message after call-count and calldata-size preflight.
 - `digest_deposit_wallet_batch(...)`: returns the EIP-712 digest used for
   signing and fixture comparison.
 - `SignedDepositWalletBatch`: owner-validated signed payload with digest,
@@ -44,6 +44,12 @@ This PR proves the signed payload shape before any live HTTP client exists.
 
 The names above are target API names for the implementation PR. Final exports
 must be reviewed in that PR before becoming public.
+
+Low-level typed-data and digest helpers are fixture/signing evidence APIs, not
+live-submit APIs. Public live-facing request construction must use fallible
+validation paths so signer, config, derived wallet, signature shape, and batch
+resource-limit failures return `RelayerError` instead of producing unchecked
+submit bodies.
 
 ## Fixture Requirements
 

@@ -159,25 +159,6 @@ pub fn try_build_deposit_wallet_batch_typed_data(batch: &DepositWalletBatchToSig
     ))
 }
 
-/// Unchecked compatibility wrapper for the original typed-data builder.
-///
-/// This preserves the existing infallible typed-data serialization behavior for
-/// consumers that have not migrated yet. It does not enforce batch resource
-/// limits; use `try_build_deposit_wallet_batch_typed_data` for untrusted input.
-#[deprecated(
-    since = "0.1.3",
-    note = "unchecked compatibility shim; use try_build_deposit_wallet_batch_typed_data for resource-limit validation"
-)]
-pub fn build_deposit_wallet_batch_typed_data(batch: &DepositWalletBatchToSign) -> Value {
-    build_deposit_wallet_batch_typed_data_parts(
-        batch.deposit_wallet,
-        batch.chain_id,
-        batch.nonce,
-        batch.deadline,
-        &batch.calls,
-    )
-}
-
 fn build_deposit_wallet_batch_typed_data_parts(
     deposit_wallet: Address,
     chain_id: u64,

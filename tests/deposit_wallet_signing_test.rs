@@ -10,7 +10,8 @@ use polymarket_relayer::deposit_wallet::{
 };
 use polymarket_relayer::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
-    try_build_wallet_batch_request_with_signature, DepositWalletCall,
+    derive_deposit_wallet_address, try_build_wallet_batch_request_with_signature,
+    DepositWalletCall,
     DepositWalletContractConfig, DepositWalletParams, DepositWalletRequestContext, RelayerError,
 };
 use serde_json::Value;
@@ -303,7 +304,9 @@ fn wallet_batch_resource_limits_accept_exact_boundaries() {
     );
     assert_eq!(
         digest_deposit_wallet_batch(&max_calls).unwrap(),
-        digest_deposit_wallet_batch(&max_calls).unwrap()
+        "0x6da5e0ea262125344a39794b4bd1bdcff1e31201b1dca76e8896a0a8c69af1bd"
+            .parse()
+            .unwrap()
     );
 
     let mut max_calldata = batch;
@@ -317,9 +320,18 @@ fn wallet_batch_resource_limits_accept_exact_boundaries() {
             .len(),
         2 + 1024 * 1024 * 2
     );
+    assert!(
+        max_calldata_typed_data["message"]["calls"][0]["data"]
+            .as_str()
+            .unwrap()[2..]
+            .bytes()
+            .all(|byte| byte == b'0')
+    );
     assert_eq!(
         digest_deposit_wallet_batch(&max_calldata).unwrap(),
-        digest_deposit_wallet_batch(&max_calldata).unwrap()
+        "0xb66abce2ead1d7587c1c83afa5eab0fbec2c49e26edd5982f1dc88bfe924777d"
+            .parse()
+            .unwrap()
     );
 }
 
@@ -581,6 +593,33 @@ fn wallet_batch_public_try_builder_matches_signed_submit_fixture() {
 }
 
 #[test]
+#[allow(deprecated)]
+fn wallet_batch_deprecated_public_builder_validates_and_matches_fixture() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let ctx = DepositWalletRequestContext {
+        owner_address: batch.submit_from,
+        deposit_wallet_address: batch.deposit_wallet,
+    };
+
+    let request = polymarket_relayer::build_wallet_batch_request_with_signature(
+        ctx,
+        config,
+        batch.nonce,
+        batch.deadline,
+        batch.calls,
+        data["ownerSignature"].as_str().unwrap().to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        fixture("deposit_wallet/wallet_signed_submit_body.json")
+    );
+}
+
+#[test]
 fn wallet_batch_public_try_builder_rejects_invalid_config_or_context() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
@@ -627,6 +666,87 @@ fn wallet_batch_public_try_builder_rejects_invalid_config_or_context() {
         ),
         "wallet does not match owner/config derived wallet",
     );
+}
+
+#[test]
+fn wallet_batch_public_try_builder_rejects_signature_failures() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let ctx = DepositWalletRequestContext {
+        owner_address: batch.submit_from,
+        deposit_wallet_address: batch.deposit_wallet,
+    };
+
+    assert_signing_error_contains(
+        try_build_wallet_batch_request_with_signature(
+            ctx.clone(),
+            config,
+            batch.nonce,
+            batch.deadline,
+            batch.calls.clone(),
+            data["nonOwnerSignature"].as_str().unwrap().to_string(),
+        ),
+        "signer must match owner",
+    );
+    assert_signing_error_contains(
+        try_build_wallet_batch_request_with_signature(
+            ctx,
+            config,
+            batch.nonce,
+            batch.deadline,
+            batch.calls,
+            data["ownerSignature"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("0x")
+                .to_string(),
+        ),
+        "0x-prefixed 65-byte hex",
+    );
+}
+
+#[test]
+fn wallet_batch_public_try_builder_accepts_amoy_config_branch() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let mut batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(80002).unwrap();
+    let mut rng = StdRng::seed_from_u64(3);
+    let wallet = LocalWallet::new(&mut rng);
+    let owner = wallet.address();
+    let deposit_wallet = derive_deposit_wallet_address(owner, config).unwrap();
+
+    batch.owner = owner;
+    batch.nonce_owner = owner;
+    batch.submit_from = owner;
+    batch.deposit_wallet = deposit_wallet;
+    batch.chain_id = 80002;
+    let digest = digest_deposit_wallet_batch(&batch).unwrap();
+    let signature = format!("0x{}", wallet.sign_hash(digest).unwrap());
+    let ctx = DepositWalletRequestContext {
+        owner_address: owner,
+        deposit_wallet_address: deposit_wallet,
+    };
+
+    let request = try_build_wallet_batch_request_with_signature(
+        ctx,
+        config,
+        batch.nonce,
+        batch.deadline,
+        batch.calls,
+        signature.clone(),
+    )
+    .unwrap();
+    let request = serde_json::to_value(request).unwrap();
+
+    assert_eq!(request["type"], "WALLET");
+    assert_eq!(request["from"], to_checksum(&owner, None));
+    assert_eq!(request["to"], to_checksum(&config.factory, None));
+    assert_eq!(
+        request["depositWalletParams"]["depositWallet"],
+        to_checksum(&deposit_wallet, None)
+    );
+    assert_eq!(request["signature"], signature);
 }
 
 #[test]

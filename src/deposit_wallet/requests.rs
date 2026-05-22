@@ -62,16 +62,13 @@ pub fn try_build_wallet_batch_request_with_signature(
     build_deposit_wallet_batch_request_from_signed(&signed, config)
 }
 
-/// Unchecked compatibility wrapper for the original public WALLET batch builder.
+/// Deprecated compatibility name for the original public WALLET batch builder.
 ///
-/// This preserves the existing infallible serialization behavior for consumers
-/// that have not migrated yet. It does not validate signer, config, derived
-/// wallet, signature shape, or batch resource limits; use
-/// `try_build_wallet_batch_request_with_signature` or
-/// `build_deposit_wallet_batch_request_from_signed` for untrusted input.
+/// This now enforces the same signer, config, derived wallet, signature shape,
+/// and resource-limit preflight as `try_build_wallet_batch_request_with_signature`.
 #[deprecated(
     since = "0.1.3",
-    note = "unchecked compatibility shim; use try_build_wallet_batch_request_with_signature or build_deposit_wallet_batch_request_from_signed for validation"
+    note = "use try_build_wallet_batch_request_with_signature; this compatibility name now returns Result and validates inputs"
 )]
 pub fn build_wallet_batch_request_with_signature(
     ctx: DepositWalletRequestContext,
@@ -80,8 +77,8 @@ pub fn build_wallet_batch_request_with_signature(
     deadline: U256,
     calls: Vec<DepositWalletCall>,
     signature: String,
-) -> DepositWalletBatchRequest {
-    build_wallet_batch_request_unchecked(ctx, config, nonce, deadline, calls, signature)
+) -> Result<DepositWalletBatchRequest> {
+    try_build_wallet_batch_request_with_signature(ctx, config, nonce, deadline, calls, signature)
 }
 
 pub(crate) fn build_wallet_batch_request_unchecked(

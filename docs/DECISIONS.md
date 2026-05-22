@@ -73,3 +73,32 @@ Reason:
 - the crate is high-risk venue-facing infrastructure;
 - public crates.io releases can imply unsupported SDK status;
 - audit, provenance, and pinned commit review matter more than public distribution.
+
+## ADR-0006: Deposit-Wallet Submit Builders Must Be Fallible
+
+Decision:
+
+```text
+Deposit-wallet WALLET submit request builders that accept caller-provided
+signatures or call payloads must return Result and run signer, config, derived
+wallet, signature-shape, and batch resource-limit validation before producing a
+request body.
+```
+
+Reason:
+
+- an infallible public helper cannot report invalid signatures, unsupported
+  configs, or oversized calldata without either panicking or returning an
+  unchecked relayer body;
+- unchecked WALLET submit bodies are unsafe for consumer HTTP/live paths because
+  they can mix signer, nonce owner, submit `from`, deposit wallet, and config
+  identities;
+- compatibility callers should migrate to `try_build_wallet_batch_request_with_signature`
+  or the validated signed-batch flow.
+
+Rollback:
+
+- keep the unchecked serializer crate-private for fixture serialization tests;
+- if a consumer needs raw serialization, expose a deliberately named
+  non-live/internal API with documented owner, risk, and removal condition in
+  the consumer integration PR.
