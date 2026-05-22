@@ -644,14 +644,16 @@ fn wallet_batch_deprecated_public_builder_matches_fixture_shape() {
         deposit_wallet_address: batch.deposit_wallet,
     };
 
-    let request = polymarket_relayer::build_wallet_batch_request_with_signature(
-        ctx,
-        config,
-        batch.nonce,
-        batch.deadline,
-        batch.calls,
-        data["ownerSignature"].as_str().unwrap().to_string(),
-    );
+    let request = unsafe {
+        polymarket_relayer::build_wallet_batch_request_with_signature(
+            ctx,
+            config,
+            batch.nonce,
+            batch.deadline,
+            batch.calls,
+            data["ownerSignature"].as_str().unwrap().to_string(),
+        )
+    };
 
     assert_eq!(
         serde_json::to_value(request).unwrap(),

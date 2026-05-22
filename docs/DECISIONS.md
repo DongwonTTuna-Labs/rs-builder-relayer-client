@@ -82,8 +82,8 @@ Decision:
 New deposit-wallet WALLET submit request builders that accept caller-provided
 signatures or call payloads must return Result and run signer, config, derived
 wallet, signature-shape, and batch resource-limit validation before producing a
-request body. Existing infallible serializers are legacy compatibility APIs
-only and must not be used for live or untrusted-input submit paths.
+request body. Existing infallible serializers are unsafe legacy compatibility
+APIs only and must not be used for live or untrusted-input submit paths.
 ```
 
 Reason:
@@ -96,11 +96,14 @@ Reason:
   identities;
 - compatibility callers should migrate to `try_build_wallet_batch_request_with_signature`
   or the validated signed-batch flow before wiring any live submit path.
+- the legacy `build_wallet_batch_request_with_signature` wrapper is `unsafe`
+  so unchecked serialization requires an explicit caller-side validation
+  boundary instead of relying on a deprecation warning.
 
 Rollback:
 
-- keep unchecked serializers restricted to legacy compatibility and fixture
-  serialization tests;
+- keep unchecked serializers behind an explicit `unsafe` compatibility boundary
+  and restrict them to legacy compatibility and fixture serialization tests;
 - if a consumer needs raw serialization, expose a deliberately named
   non-live/internal API with documented owner, risk, and removal condition in
   the consumer integration PR.
