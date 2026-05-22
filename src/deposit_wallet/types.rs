@@ -76,10 +76,10 @@ impl fmt::Debug for DepositWalletCreateRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DepositWalletParams {
     #[serde(serialize_with = "serialize_address")]
-    pub deposit_wallet: Address,
+    pub(crate) deposit_wallet: Address,
     #[serde(serialize_with = "serialize_u256_decimal")]
-    pub deadline: U256,
-    pub calls: Vec<DepositWalletCall>,
+    pub(crate) deadline: U256,
+    pub(crate) calls: Vec<DepositWalletCall>,
 }
 
 impl fmt::Debug for DepositWalletParams {
@@ -98,15 +98,15 @@ impl fmt::Debug for DepositWalletParams {
 #[serde(rename_all = "camelCase")]
 pub struct DepositWalletBatchRequest {
     #[serde(rename = "type")]
-    pub tx_type: String,
+    pub(crate) tx_type: String,
     #[serde(rename = "from", serialize_with = "serialize_address")]
-    pub from_address: Address,
+    pub(crate) from_address: Address,
     #[serde(serialize_with = "serialize_address")]
-    pub to: Address,
+    pub(crate) to: Address,
     #[serde(serialize_with = "serialize_u256_decimal")]
-    pub nonce: U256,
-    pub signature: String,
-    pub deposit_wallet_params: DepositWalletParams,
+    pub(crate) nonce: U256,
+    pub(crate) signature: String,
+    pub(crate) deposit_wallet_params: DepositWalletParams,
 }
 
 impl fmt::Debug for DepositWalletBatchRequest {

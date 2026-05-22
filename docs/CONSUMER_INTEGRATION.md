@@ -89,7 +89,9 @@ This is a `0.2.0` breaking migration boundary. Consumer adapters that still
 import or call `build_wallet_batch_request_with_signature` must switch to
 `try_build_wallet_batch_request_with_signature`, propagate `RelayerError`, and
 keep the error handling inside the relayer adapter rather than domain or
-strategy layers.
+strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
+crate-root API; request DTO fields stay crate-private so submit bodies are
+produced through validated builders.
 
 ## Enablement Rule
 

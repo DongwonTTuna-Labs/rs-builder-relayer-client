@@ -87,7 +87,10 @@ request body. The legacy infallible
 crate and `deposit_wallet` re-export surface at the `0.2.0` migration boundary
 because it cannot be made source-compatible, non-panicking, and validated with
 its original return type. Unchecked WALLET serialization remains crate-internal
-and is restricted to validated builders and fixture tests.
+and is restricted to validated builders and fixture tests. The raw
+`DepositWalletBatchRequest` DTO is not re-exported from the crate root, and its
+submit-body fields are crate-private so consumers cannot construct a WALLET
+submit body without a validated builder.
 ```
 
 Reason:

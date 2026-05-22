@@ -16,9 +16,9 @@ pub use direct::{DirectExecutor, DirectTxResult};
 pub use deposit_wallet::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
     derive_deposit_wallet_address, try_build_wallet_batch_request_with_signature,
-    DepositWalletBatchRequest, DepositWalletCall, DepositWalletContractConfig,
-    DepositWalletCreateRequest, DepositWalletParams, DepositWalletRequestContext,
-    RelayerSubmitResponse, RelayerTransactionState, WalletNonceRequest,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
+    DepositWalletRequestContext, RelayerSubmitResponse, RelayerTransactionState,
+    WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

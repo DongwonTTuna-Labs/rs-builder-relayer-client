@@ -11,8 +11,7 @@ use polymarket_relayer::deposit_wallet::{
 use polymarket_relayer::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
     derive_deposit_wallet_address, try_build_wallet_batch_request_with_signature,
-    DepositWalletCall,
-    DepositWalletContractConfig, DepositWalletParams, DepositWalletRequestContext, RelayerError,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletRequestContext, RelayerError,
 };
 use serde_json::Value;
 
@@ -721,6 +720,50 @@ fn wallet_batch_public_try_builder_rejects_signature_failures() {
 }
 
 #[test]
+fn wallet_batch_public_try_builder_rejects_resource_limits() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
+    let batch = batch_from_fixture(&data);
+    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
+    let ctx = DepositWalletRequestContext {
+        owner_address: batch.submit_from,
+        deposit_wallet_address: batch.deposit_wallet,
+    };
+    let owner_signature = data["ownerSignature"].as_str().unwrap().to_string();
+
+    let mut too_many_calls = batch.clone();
+    too_many_calls.calls = vec![batch.calls[0].clone(); 257];
+    assert_signing_error_contains(
+        try_build_wallet_batch_request_with_signature(
+            ctx.clone(),
+            config,
+            too_many_calls.nonce,
+            too_many_calls.deadline,
+            too_many_calls.calls,
+            owner_signature.clone(),
+        ),
+        "call count exceeds maximum",
+    );
+
+    let mut split_too_much_calldata = batch;
+    let mut first_call = split_too_much_calldata.calls[0].clone();
+    let mut second_call = split_too_much_calldata.calls[0].clone();
+    first_call.data = Bytes::from(vec![0u8; 512 * 1024 + 1]);
+    second_call.data = Bytes::from(vec![0u8; 512 * 1024]);
+    split_too_much_calldata.calls = vec![first_call, second_call];
+    assert_signing_error_contains(
+        try_build_wallet_batch_request_with_signature(
+            ctx,
+            config,
+            split_too_much_calldata.nonce,
+            split_too_much_calldata.deadline,
+            split_too_much_calldata.calls,
+            owner_signature,
+        ),
+        "calldata bytes exceed maximum",
+    );
+}
+
+#[test]
 fn wallet_batch_public_try_builder_accepts_amoy_config_branch() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let mut batch = batch_from_fixture(&data);
@@ -858,11 +901,6 @@ fn deposit_wallet_public_debug_outputs_redacted_summaries() {
         deposit_wallet_address: batch.deposit_wallet,
     };
     let create_request = build_wallet_create_request(batch.owner, config);
-    let params = DepositWalletParams {
-        deposit_wallet: batch.deposit_wallet,
-        deadline: batch.deadline,
-        calls: batch.calls.clone(),
-    };
 
     let raw_owner_debug = format!("{:?}", batch.owner);
     let raw_submit_from_debug = format!("{:?}", batch.submit_from);
@@ -878,9 +916,8 @@ fn deposit_wallet_public_debug_outputs_redacted_summaries() {
     let context_debug = format!("{context:?}");
     let create_debug = format!("{create_request:?}");
     let call_debug = format!("{:?}", batch.calls[0]);
-    let params_debug = format!("{params:?}");
 
-    for debug in [&context_debug, &create_debug, &call_debug, &params_debug] {
+    for debug in [&context_debug, &create_debug, &call_debug] {
         for raw in [
             raw_owner_debug.as_str(),
             raw_submit_from_debug.as_str(),
@@ -900,7 +937,6 @@ fn deposit_wallet_public_debug_outputs_redacted_summaries() {
     }
     assert!(call_debug.contains("data: \"<redacted>\""));
     assert!(call_debug.contains("data_len"));
-    assert!(params_debug.contains("calls_count"));
 }
 
 #[test]

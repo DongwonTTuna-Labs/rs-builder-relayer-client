@@ -1,11 +1,13 @@
 use ethers::types::U256;
 
 use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
-use crate::deposit_wallet::signing::validate_deposit_wallet_batch_resource_limits;
+use crate::deposit_wallet::signing::{
+    validate_deposit_wallet_batch_resource_limits,
+    validate_deposit_wallet_batch_signature_with_validated_resources,
+};
 use crate::deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, derive_deposit_wallet_address,
-    validate_deposit_wallet_batch_signature, DepositWalletBatchRequest, DepositWalletBatchToSign,
-    DepositWalletCall,
+    DepositWalletBatchRequest, DepositWalletBatchToSign, DepositWalletCall,
     DepositWalletContractConfig, DepositWalletCreateRequest, DepositWalletParams,
     DepositWalletRequestContext, WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
 };
@@ -57,7 +59,7 @@ pub fn try_build_wallet_batch_request_with_signature(
         deadline,
         calls,
     };
-    let signed = validate_deposit_wallet_batch_signature(batch, &signature)?;
+    let signed = validate_deposit_wallet_batch_signature_with_validated_resources(batch, &signature)?;
 
     build_deposit_wallet_batch_request_from_signed(signed, config)
 }

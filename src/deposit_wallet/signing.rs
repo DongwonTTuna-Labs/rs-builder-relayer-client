@@ -204,6 +204,10 @@ fn build_deposit_wallet_batch_typed_data_parts(
 
 pub fn digest_deposit_wallet_batch(batch: &DepositWalletBatchToSign) -> Result<H256> {
     validate_batch_resource_limits(batch)?;
+    digest_deposit_wallet_batch_unchecked(batch)
+}
+
+fn digest_deposit_wallet_batch_unchecked(batch: &DepositWalletBatchToSign) -> Result<H256> {
     digest_deposit_wallet_typed_data(build_deposit_wallet_batch_typed_data_model(
         batch.deposit_wallet,
         batch.chain_id,
@@ -303,7 +307,7 @@ pub fn recover_deposit_wallet_batch_signer(
 ) -> Result<Address> {
     let signature_payload = validate_signature_shape(signature)?;
     validate_batch_resource_limits(batch)?;
-    let digest = digest_deposit_wallet_batch(batch)?;
+    let digest = digest_deposit_wallet_batch_unchecked(batch)?;
     recover_digest_signer_payload(digest, signature_payload)
 }
 
@@ -313,8 +317,24 @@ pub fn validate_deposit_wallet_batch_signature(
 ) -> Result<SignedDepositWalletBatch> {
     let signature_payload = validate_signature_shape(signature)?;
     validate_batch_resource_limits(&batch)?;
+    validate_deposit_wallet_batch_signature_parts(batch, signature, signature_payload)
+}
+
+pub(crate) fn validate_deposit_wallet_batch_signature_with_validated_resources(
+    batch: DepositWalletBatchToSign,
+    signature: &str,
+) -> Result<SignedDepositWalletBatch> {
+    let signature_payload = validate_signature_shape(signature)?;
+    validate_deposit_wallet_batch_signature_parts(batch, signature, signature_payload)
+}
+
+fn validate_deposit_wallet_batch_signature_parts(
+    batch: DepositWalletBatchToSign,
+    signature: &str,
+    signature_payload: &str,
+) -> Result<SignedDepositWalletBatch> {
     validate_batch_identity(&batch)?;
-    let digest = digest_deposit_wallet_batch(&batch)?;
+    let digest = digest_deposit_wallet_batch_unchecked(&batch)?;
     let verified_signer = recover_digest_signer_payload(digest, signature_payload)?;
     if verified_signer != batch.owner {
         return Err(RelayerError::Signing(
