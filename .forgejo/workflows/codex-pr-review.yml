@@ -1,0 +1,28 @@
+name: Codex PR Review
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: forgejo-codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  call-pipeline:
+    name: Codex PR Review
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'DongwonTTuna' &&
+      github.actor == 'DongwonTTuna' &&
+      github.event.sender.login == 'DongwonTTuna'
+    uses: ./.forgejo/workflows/codex-pr-review-pipeline.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      base_ref: ${{ github.event.pull_request.base.ref }}
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      trigger: pull_request_target:${{ github.event.action }}
+    secrets: inherit

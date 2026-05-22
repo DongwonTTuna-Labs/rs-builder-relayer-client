@@ -1,0 +1,59 @@
+name: Rust CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  fmt:
+    name: Check formatting and whitespace
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: rust
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v4
+      - name: Show Rust toolchain
+        run: rustc --version && cargo --version
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Check whitespace errors
+        run: git diff --check
+
+  clippy:
+    name: Run Clippy lints
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: rust
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v4
+      - name: Show Rust toolchain
+        run: rustc --version && cargo --version
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Run test suite
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: rust
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v4
+      - name: Show Rust toolchain
+        run: rustc --version && cargo --version
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features
+
+  build:
+    name: Build all targets
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: rust
+    steps:
+      - name: Checkout
+        uses: https://data.forgejo.org/actions/checkout@v4
+      - name: Show Rust toolchain
+        run: rustc --version && cargo --version
+      - name: Build workspace targets
+        run: cargo build --workspace --all-targets --all-features

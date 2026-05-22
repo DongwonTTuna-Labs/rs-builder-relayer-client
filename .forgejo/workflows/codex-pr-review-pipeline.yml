@@ -1,0 +1,101 @@
+name: Codex PR Review Pipeline
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      head_sha:
+        required: true
+        type: string
+      base_ref:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      trigger:
+        required: false
+        type: string
+        default: pull_request_target
+
+jobs:
+  review:
+    name: Review and publish comments
+    runs-on: codex
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      GITHUB_HEAD_REF: refs/pull/${{ inputs.pr_number }}/head
+      FORGEJO_API_URL: ${{ github.server_url }}/api/v1
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
+      ART_DIR: ${{ github.workspace }}/artifacts
+      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: pipeline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout PR head (review data only)
+        uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          path: workspace
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare artifact directory
+        run: mkdir -p "$ART_DIR"
+
+      - name: Prepare Forgejo PR review context
+        run: python3 pipeline/.forgejo/scripts/prepare_pr_context.py
+
+      - name: Run axis reviews
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: |
+          set -euo pipefail
+          for axis in correctness security performance test-coverage domain; do
+            python3 pipeline/.github/scripts/build_prompt.py --axis "$axis"
+            PROMPT_FILE="$RUNNER_TEMP/prompt-$axis.md" \
+            SCHEMA_FILE="$PWD/pipeline/.github/scripts/schemas/findings.schema.json" \
+            OUT_FILE="$RUNNER_TEMP/codex-output-$axis.json" \
+            LOG_FILE="$RUNNER_TEMP/codex-$axis.log" \
+            bash pipeline/.github/scripts/codex_exec.sh
+            python3 pipeline/.github/scripts/normalize_codex_output.py --schema findings --axis "$axis"
+            cp "$RUNNER_TEMP/findings-$axis.json" "$ART_DIR/findings-$axis.json"
+          done
+
+      - name: Combine findings
+        run: python3 pipeline/.github/scripts/merge_and_gate.py --phase combine
+
+      - name: Run tech lead review
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: |
+          set -euo pipefail
+          cp "$ART_DIR/combined.json" "$RUNNER_TEMP/combined.json"
+          python3 pipeline/.github/scripts/build_prompt.py --axis tech-lead
+          PROMPT_FILE="$RUNNER_TEMP/prompt-tech-lead.md" \
+          SCHEMA_FILE="$PWD/pipeline/.github/scripts/schemas/decisions.schema.json" \
+          OUT_FILE="$RUNNER_TEMP/codex-output-tech-lead.json" \
+          LOG_FILE="$RUNNER_TEMP/codex-tech-lead.log" \
+          bash pipeline/.github/scripts/codex_exec.sh
+          python3 pipeline/.github/scripts/normalize_codex_output.py --schema decisions
+          cp "$RUNNER_TEMP/decisions.json" "$ART_DIR/decisions.json"
+
+      - name: Apply review gate
+        run: python3 pipeline/.github/scripts/merge_and_gate.py --phase gate
+
+      - name: Publish Forgejo review comments
+        if: always()
+        run: python3 pipeline/.forgejo/scripts/post_review_comments.py

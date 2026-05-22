@@ -1,0 +1,58 @@
+name: Codex PR Review (on comment)
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: number
+
+concurrency:
+  group: forgejo-codex-review-${{ github.event.issue.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: Resolve PR metadata
+    runs-on: codex
+    outputs:
+      allowed: ${{ steps.lookup.outputs.allowed }}
+      reason: ${{ steps.lookup.outputs.reason }}
+      pr_number: ${{ steps.lookup.outputs.pr_number }}
+      head_sha: ${{ steps.lookup.outputs.head_sha }}
+      base_sha: ${{ steps.lookup.outputs.base_sha }}
+      base_ref: ${{ steps.lookup.outputs.base_ref }}
+      trigger: ${{ steps.lookup.outputs.trigger }}
+    steps:
+      - name: Checkout trusted scripts
+        uses: https://data.forgejo.org/actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Resolve PR head / base
+        id: lookup
+        env:
+          FORGEJO_API_URL: ${{ github.server_url }}/api/v1
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 .forgejo/scripts/resolve_pr_metadata.py
+
+  call-pipeline:
+    name: Codex PR Review (comment)
+    needs: resolve
+    if: needs.resolve.outputs.allowed == 'true'
+    uses: ./.forgejo/workflows/codex-pr-review-pipeline.yml
+    with:
+      pr_number: ${{ needs.resolve.outputs.pr_number }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      base_ref: ${{ needs.resolve.outputs.base_ref }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      trigger: ${{ needs.resolve.outputs.trigger }}
+    secrets: inherit
