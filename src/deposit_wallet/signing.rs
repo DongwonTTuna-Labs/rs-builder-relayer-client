@@ -344,11 +344,11 @@ pub fn validate_deposit_wallet_batch_signature(
 /// but it intentionally does not apply wall-clock deadline freshness. Live
 /// submit code must add a clock-injected expiry guard before calling it.
 pub fn build_deposit_wallet_batch_request_from_signed(
-    signed: &SignedDepositWalletBatch,
+    signed: SignedDepositWalletBatch,
     config: DepositWalletContractConfig,
 ) -> Result<DepositWalletBatchRequest> {
     signed.validate_submit_preflight()?;
-    validate_submit_config(signed, config)?;
+    validate_submit_config(&signed, config)?;
 
     Ok(build_wallet_batch_request_unchecked(
         crate::deposit_wallet::DepositWalletRequestContext {
@@ -358,8 +358,8 @@ pub fn build_deposit_wallet_batch_request_from_signed(
         config,
         signed.nonce,
         signed.deadline,
-        signed.calls.clone(),
-        signed.signature.clone(),
+        signed.calls,
+        signed.signature,
     ))
 }
 

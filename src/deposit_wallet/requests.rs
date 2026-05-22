@@ -59,16 +59,19 @@ pub fn try_build_wallet_batch_request_with_signature(
     };
     let signed = validate_deposit_wallet_batch_signature(&batch, &signature)?;
 
-    build_deposit_wallet_batch_request_from_signed(&signed, config)
+    build_deposit_wallet_batch_request_from_signed(signed, config)
 }
 
-/// Deprecated compatibility name for the original public WALLET batch builder.
+/// Unchecked compatibility wrapper for the original public WALLET batch builder.
 ///
-/// This now enforces the same signer, config, derived wallet, signature shape,
-/// and resource-limit preflight as `try_build_wallet_batch_request_with_signature`.
+/// This preserves the existing infallible serialization signature for consumers
+/// that have not migrated yet. It does not validate signer, config, derived
+/// wallet, signature shape, or batch resource limits; live or untrusted-input
+/// paths must use `try_build_wallet_batch_request_with_signature` or
+/// `build_deposit_wallet_batch_request_from_signed`.
 #[deprecated(
     since = "0.1.3",
-    note = "use try_build_wallet_batch_request_with_signature; this compatibility name now returns Result and validates inputs"
+    note = "unchecked compatibility shim; use try_build_wallet_batch_request_with_signature or build_deposit_wallet_batch_request_from_signed for validation"
 )]
 pub fn build_wallet_batch_request_with_signature(
     ctx: DepositWalletRequestContext,
@@ -77,8 +80,8 @@ pub fn build_wallet_batch_request_with_signature(
     deadline: U256,
     calls: Vec<DepositWalletCall>,
     signature: String,
-) -> Result<DepositWalletBatchRequest> {
-    try_build_wallet_batch_request_with_signature(ctx, config, nonce, deadline, calls, signature)
+) -> DepositWalletBatchRequest {
+    build_wallet_batch_request_unchecked(ctx, config, nonce, deadline, calls, signature)
 }
 
 pub(crate) fn build_wallet_batch_request_unchecked(
@@ -108,7 +111,6 @@ mod tests {
     use ethers::types::{Address, Bytes, U256};
     use serde_json::Value;
 
-    use super::build_wallet_batch_request_unchecked;
     use crate::deposit_wallet::{
         deposit_wallet_contract_config, DepositWalletCall, DepositWalletRequestContext,
     };
@@ -142,7 +144,8 @@ mod tests {
         };
         let signature = "0x111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221b";
 
-        let request = build_wallet_batch_request_unchecked(
+        #[allow(deprecated)]
+        let request = super::build_wallet_batch_request_with_signature(
             ctx,
             config,
             U256::from(31u64),

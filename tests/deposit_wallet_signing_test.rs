@@ -145,10 +145,11 @@ fn wallet_batch_multicall_matches_official_sdk_fixture() {
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
-    let request = build_deposit_wallet_batch_request_from_signed(&signed, config).unwrap();
+    let verified_signer = signed.verified_signer();
+    let request = build_deposit_wallet_batch_request_from_signed(signed, config).unwrap();
 
     assert_eq!(recovered, expected_signer);
-    assert_eq!(signed.verified_signer(), expected_signer);
+    assert_eq!(verified_signer, expected_signer);
     assert_eq!(
         serde_json::to_value(request).unwrap(),
         fixture("deposit_wallet/wallet_signed_submit_body_multicall.json")
@@ -285,6 +286,32 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
         validate_deposit_wallet_batch_signature(&too_much_calldata, valid_signature_shape),
         "calldata bytes exceed maximum",
     );
+
+    let mut split_too_much_calldata = batch;
+    let mut first_call = split_too_much_calldata.calls[0].clone();
+    let mut second_call = split_too_much_calldata.calls[0].clone();
+    first_call.data = Bytes::from(vec![0u8; 512 * 1024 + 1]);
+    second_call.data = Bytes::from(vec![0u8; 512 * 1024]);
+    split_too_much_calldata.calls = vec![first_call, second_call];
+    assert_signing_error_contains(
+        try_build_deposit_wallet_batch_typed_data(&split_too_much_calldata),
+        "calldata bytes exceed maximum",
+    );
+    assert_signing_error_contains(
+        digest_deposit_wallet_batch(&split_too_much_calldata),
+        "calldata bytes exceed maximum",
+    );
+    assert_signing_error_contains(
+        recover_deposit_wallet_batch_signer(&split_too_much_calldata, valid_signature_shape),
+        "calldata bytes exceed maximum",
+    );
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            &split_too_much_calldata,
+            valid_signature_shape,
+        ),
+        "calldata bytes exceed maximum",
+    );
 }
 
 #[test]
@@ -308,6 +335,24 @@ fn wallet_batch_resource_limits_accept_exact_boundaries() {
             .parse()
             .unwrap()
     );
+
+    let mut split_max_calldata = batch.clone();
+    let mut first_call = split_max_calldata.calls[0].clone();
+    let mut second_call = split_max_calldata.calls[0].clone();
+    first_call.data = Bytes::from(vec![0u8; 512 * 1024]);
+    second_call.data = Bytes::from(vec![0u8; 512 * 1024]);
+    split_max_calldata.calls = vec![first_call, second_call];
+    let split_max_calldata_typed_data =
+        try_build_deposit_wallet_batch_typed_data(&split_max_calldata).unwrap();
+    let split_calls = split_max_calldata_typed_data["message"]["calls"]
+        .as_array()
+        .unwrap();
+    assert_eq!(split_calls.len(), 2);
+    let split_total_bytes: usize = split_calls
+        .iter()
+        .map(|call| (call["data"].as_str().unwrap().len() - 2) / 2)
+        .sum();
+    assert_eq!(split_total_bytes, 1024 * 1024);
 
     let mut max_calldata = batch;
     max_calldata.calls[0].data = Bytes::from(vec![0u8; 1024 * 1024]);
@@ -491,13 +536,16 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     let from_debug = format!("{:?}", batch.submit_from);
     let to_debug = format!("{:?}", config.factory);
     let deposit_wallet_debug = format!("{:?}", batch.deposit_wallet);
+    let from_checksum = to_checksum(&batch.submit_from, None);
+    let factory_checksum = to_checksum(&config.factory, None);
+    let deposit_wallet_checksum = to_checksum(&batch.deposit_wallet, None);
     let signed = validate_deposit_wallet_batch_signature(
         &batch,
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
 
-    let request = build_deposit_wallet_batch_request_from_signed(&signed, config).unwrap();
+    let request = build_deposit_wallet_batch_request_from_signed(signed.clone(), config).unwrap();
     let debug = format!("{request:?}");
 
     assert!(debug.contains("calls_count"));
@@ -505,6 +553,9 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     assert!(!debug.contains(&from_debug));
     assert!(!debug.contains(&to_debug));
     assert!(!debug.contains(&deposit_wallet_debug));
+    assert!(!debug.contains(&from_checksum));
+    assert!(!debug.contains(&factory_checksum));
+    assert!(!debug.contains(&deposit_wallet_checksum));
     assert!(!debug.contains(data["ownerSignature"].as_str().unwrap()));
     assert!(!debug.contains(data["calls"][0]["data"].as_str().unwrap()));
     assert_eq!(
@@ -514,7 +565,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
 
     let mismatched_chain_config = deposit_wallet_contract_config(80002).unwrap();
     assert_signing_error_contains(
-        build_deposit_wallet_batch_request_from_signed(&signed, mismatched_chain_config),
+        build_deposit_wallet_batch_request_from_signed(signed, mismatched_chain_config),
         "submit config does not match signed chain id",
     );
 
@@ -534,7 +585,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         validate_deposit_wallet_batch_signature(&wrong_wallet_batch, &wrong_wallet_signature)
             .unwrap();
     assert_signing_error_contains(
-        build_deposit_wallet_batch_request_from_signed(&wrong_wallet_signed, config),
+        build_deposit_wallet_batch_request_from_signed(wrong_wallet_signed, config),
         "wallet does not match owner/config derived wallet",
     );
 
@@ -556,7 +607,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         &unsupported_signature,
     )
     .unwrap();
-    match build_deposit_wallet_batch_request_from_signed(&unsupported_signed, config) {
+    match build_deposit_wallet_batch_request_from_signed(unsupported_signed, config) {
         Err(RelayerError::Other(message)) => assert!(
             message.contains("Deposit wallet contracts are not configured for chain 999999"),
             "unexpected unsupported chain error: {message:?}"
@@ -594,7 +645,7 @@ fn wallet_batch_public_try_builder_matches_signed_submit_fixture() {
 
 #[test]
 #[allow(deprecated)]
-fn wallet_batch_deprecated_public_builder_validates_and_matches_fixture() {
+fn wallet_batch_deprecated_public_builder_matches_fixture_shape() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
     let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
@@ -610,8 +661,7 @@ fn wallet_batch_deprecated_public_builder_validates_and_matches_fixture() {
         batch.deadline,
         batch.calls,
         data["ownerSignature"].as_str().unwrap().to_string(),
-    )
-    .unwrap();
+    );
 
     assert_eq!(
         serde_json::to_value(request).unwrap(),
@@ -906,9 +956,10 @@ fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
     let signed =
         validate_deposit_wallet_batch_signature(&batch, data["ownerSignature"].as_str().unwrap())
             .unwrap();
+    let signed_owner = signed.owner();
     let submit_request = serde_json::to_value(
         build_deposit_wallet_batch_request_from_signed(
-            &signed,
+            signed,
             deposit_wallet_contract_config(batch.chain_id).unwrap(),
         )
         .unwrap(),
@@ -918,7 +969,7 @@ fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
     assert_ne!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), data["owner"].as_str().unwrap());
     assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), auth_address);
     assert_eq!(nonce_request.address, owner);
-    assert_eq!(signed.owner(), owner);
+    assert_eq!(signed_owner, owner);
     assert_eq!(submit_request["from"], data["submitFrom"]);
     assert_eq!(submit_request["from"], data["owner"]);
 }
