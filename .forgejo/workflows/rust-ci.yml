@@ -14,7 +14,23 @@ jobs:
     runs-on: rust
     steps:
       - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v4
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustc --version && cargo --version
       - name: Check Rust formatting
@@ -28,7 +44,23 @@ jobs:
     runs-on: rust
     steps:
       - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v4
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustc --version && cargo --version
       - name: Run Clippy with warnings denied
@@ -40,7 +72,23 @@ jobs:
     runs-on: rust
     steps:
       - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v4
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustc --version && cargo --version
       - name: Run workspace tests
@@ -52,7 +100,23 @@ jobs:
     runs-on: rust
     steps:
       - name: Checkout
-        uses: https://data.forgejo.org/actions/checkout@v4
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustc --version && cargo --version
       - name: Build workspace targets

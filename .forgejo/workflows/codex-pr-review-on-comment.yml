@@ -30,10 +30,23 @@ jobs:
       trigger: ${{ steps.lookup.outputs.trigger }}
     steps:
       - name: Checkout trusted scripts
-        uses: https://data.forgejo.org/actions/checkout@v4
-        with:
-          ref: main
-          persist-credentials: false
+        env:
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin main
+          git checkout --detach FETCH_HEAD
 
       - name: Resolve PR head / base
         id: lookup

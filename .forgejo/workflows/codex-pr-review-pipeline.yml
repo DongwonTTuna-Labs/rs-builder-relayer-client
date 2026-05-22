@@ -38,20 +38,50 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
     steps:
       - name: Checkout base ref (trusted scripts)
-        uses: https://data.forgejo.org/actions/checkout@v4
-        with:
-          ref: ${{ inputs.base_ref }}
-          path: pipeline
-          fetch-depth: 1
-          persist-credentials: false
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git checkout --detach FETCH_HEAD
 
       - name: Checkout PR head (review data only)
-        uses: https://data.forgejo.org/actions/checkout@v4
-        with:
-          ref: refs/pull/${{ inputs.pr_number }}/head
-          path: workspace
-          fetch-depth: 1
-          persist-credentials: false
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          mkdir -p workspace
+          cd workspace
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
 
       - name: Prepare artifact directory
         run: mkdir -p "$ART_DIR"
