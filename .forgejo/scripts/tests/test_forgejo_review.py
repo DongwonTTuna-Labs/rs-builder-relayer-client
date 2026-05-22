@@ -140,6 +140,16 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertNotIn("NODE_VERSION", text)
         self.assertNotIn("node-v$NODE_VERSION", text)
 
+    def test_manual_checkout_commands_end_before_next_step(self) -> None:
+        for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "git checkout --detach FETCH_HEAD" in line:
+                    self.assertEqual(
+                        line.strip(),
+                        "git checkout --detach FETCH_HEAD",
+                        f"malformed checkout command in {path}",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

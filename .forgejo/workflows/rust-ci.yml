@@ -44,7 +44,8 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD      - name: Show Rust toolchain
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
         run: rustup show
       - name: Restore Cargo cache
         uses: https://code.forgejo.org/actions/cache@v4
@@ -83,7 +84,8 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD      - name: Show Rust toolchain
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
         run: rustup show
       - name: Restore Cargo cache
         uses: https://code.forgejo.org/actions/cache@v4
@@ -120,7 +122,8 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD      - name: Show Rust toolchain
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
         run: rustup show
       - name: Restore Cargo cache
         uses: https://code.forgejo.org/actions/cache@v4
@@ -157,7 +160,8 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
-          git checkout --detach FETCH_HEAD      - name: Show Rust toolchain
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
         run: rustup show
       - name: Restore Cargo cache
         uses: https://code.forgejo.org/actions/cache@v4
