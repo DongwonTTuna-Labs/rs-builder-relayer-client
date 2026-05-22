@@ -30,7 +30,7 @@ jobs:
       BASE_SHA: ${{ inputs.base_sha }}
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
       GITHUB_HEAD_REF: refs/pull/${{ inputs.pr_number }}/head
-      FORGEJO_API_URL: ${{ github.server_url }}/api/v1
+      FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
       FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
       ART_DIR: ${{ github.workspace }}/artifacts
@@ -40,7 +40,7 @@ jobs:
       - name: Checkout base ref (trusted scripts)
         env:
           BASE_REF: ${{ inputs.base_ref }}
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
@@ -63,7 +63,7 @@ jobs:
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
           HEAD_SHA: ${{ inputs.head_sha }}
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |

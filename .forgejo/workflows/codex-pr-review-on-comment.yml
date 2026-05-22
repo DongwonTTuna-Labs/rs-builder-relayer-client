@@ -31,7 +31,7 @@ jobs:
     steps:
       - name: Checkout trusted scripts
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
@@ -51,7 +51,7 @@ jobs:
       - name: Resolve PR head / base
         id: lookup
         env:
-          FORGEJO_API_URL: ${{ github.server_url }}/api/v1
+          FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
           FORGEJO_REPOSITORY: ${{ github.repository }}
           FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}

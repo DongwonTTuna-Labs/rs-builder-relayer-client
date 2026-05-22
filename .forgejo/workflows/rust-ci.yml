@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Checkout
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
@@ -45,7 +45,7 @@ jobs:
     steps:
       - name: Checkout
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
@@ -73,7 +73,7 @@ jobs:
     steps:
       - name: Checkout
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
@@ -101,7 +101,7 @@ jobs:
     steps:
       - name: Checkout
         env:
-          FORGEJO_SERVER_URL: ${{ github.server_url }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
