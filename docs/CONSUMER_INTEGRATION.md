@@ -78,6 +78,13 @@ RelayerTransactionStatus
 
 The consumer app must map these into its own port types and must not leak this crate's DTOs into strategy, risk, actor state, or domain types.
 
+WALLET submit request construction must use the fallible
+`try_build_wallet_batch_request_with_signature` API or the validated
+`SignedDepositWalletBatch` flow. The old infallible
+`build_wallet_batch_request_with_signature` helper is intentionally not part of
+the public integration surface because it cannot report signer, config,
+derived-wallet, signature-shape, or resource-limit failures.
+
 ## Enablement Rule
 
 Consumer live relayer mutation remains disabled until:

@@ -82,8 +82,12 @@ Decision:
 New deposit-wallet WALLET submit request builders that accept caller-provided
 signatures or call payloads must return Result and run signer, config, derived
 wallet, signature-shape, and batch resource-limit validation before producing a
-request body. Existing infallible serializers are unsafe legacy compatibility
-APIs only and must not be used for live or untrusted-input submit paths.
+request body. The legacy infallible
+`build_wallet_batch_request_with_signature` helper is removed from the public
+crate and `deposit_wallet` re-export surface because it cannot be made
+source-compatible, non-panicking, and validated with its original return type.
+Unchecked WALLET serialization remains crate-internal and is restricted to
+validated builders and fixture tests.
 ```
 
 Reason:
@@ -96,14 +100,19 @@ Reason:
   identities;
 - compatibility callers should migrate to `try_build_wallet_batch_request_with_signature`
   or the validated signed-batch flow before wiring any live submit path.
-- the legacy `build_wallet_batch_request_with_signature` wrapper is `unsafe`
-  so unchecked serialization requires an explicit caller-side validation
-  boundary instead of relying on a deprecation warning.
+- the compatibility exception is intentional: the agent changed this PR after
+  review on 2026-05-22 because the old safe infallible public API could only
+  fail by panicking, silently producing a poisoned request, or returning an
+  unchecked relayer body. All three alternatives conflict with the fork's
+  security and failure-handling rules.
 
 Rollback:
 
-- keep unchecked serializers behind an explicit `unsafe` compatibility boundary
-  and restrict them to legacy compatibility and fixture serialization tests;
-- if a consumer needs raw serialization, expose a deliberately named
-  non-live/internal API with documented owner, risk, and removal condition in
-  the consumer integration PR.
+- keep unchecked serializers crate-internal and restrict them to validated
+  builders plus fixture serialization tests;
+- if a consumer still calls `build_wallet_batch_request_with_signature`, migrate
+  it to `try_build_wallet_batch_request_with_signature` and handle
+  `RelayerError` at the relayer adapter boundary;
+- if a consumer needs raw non-live serialization, add a deliberately named
+  test-only or internal API with documented owner, risk, and removal condition
+  in the consumer integration PR.

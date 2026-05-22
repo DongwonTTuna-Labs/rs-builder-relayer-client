@@ -62,38 +62,6 @@ pub fn try_build_wallet_batch_request_with_signature(
     build_deposit_wallet_batch_request_from_signed(signed, config)
 }
 
-/// Unsafe compatibility wrapper for the original public WALLET batch builder.
-///
-/// This preserves the existing infallible serialization signature for consumers
-/// that have not migrated yet, but it is deliberately marked `unsafe` because
-/// it does not validate signer, config, derived wallet, signature shape, or
-/// batch resource limits. Live or untrusted-input paths must use
-/// `try_build_wallet_batch_request_with_signature` or
-/// `build_deposit_wallet_batch_request_from_signed`.
-///
-/// # Safety
-///
-/// The caller must guarantee that `signature` was produced by `ctx.owner_address`
-/// for the exact owner-only batch identified by `ctx`, `config`, `nonce`,
-/// `deadline`, and `calls`; that `ctx.deposit_wallet_address` is derived from
-/// `ctx.owner_address` and `config`; that the signature has already passed the
-/// canonical `0x`-prefixed 65-byte ECDSA shape check; and that batch resource
-/// limits plus any live-submit deadline guard have already been enforced.
-#[deprecated(
-    since = "0.1.3",
-    note = "unchecked compatibility shim; use try_build_wallet_batch_request_with_signature or build_deposit_wallet_batch_request_from_signed for validation"
-)]
-pub unsafe fn build_wallet_batch_request_with_signature(
-    ctx: DepositWalletRequestContext,
-    config: DepositWalletContractConfig,
-    nonce: U256,
-    deadline: U256,
-    calls: Vec<DepositWalletCall>,
-    signature: String,
-) -> DepositWalletBatchRequest {
-    build_wallet_batch_request_unchecked(ctx, config, nonce, deadline, calls, signature)
-}
-
 pub(crate) fn build_wallet_batch_request_unchecked(
     ctx: DepositWalletRequestContext,
     config: DepositWalletContractConfig,
@@ -154,17 +122,14 @@ mod tests {
         };
         let signature = "0x111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222221b";
 
-        #[allow(deprecated)]
-        let request = unsafe {
-            super::build_wallet_batch_request_with_signature(
-                ctx,
-                config,
-                U256::from(31u64),
-                U256::from(1_760_000_000u64),
-                vec![call],
-                signature.to_string(),
-            )
-        };
+        let request = super::build_wallet_batch_request_unchecked(
+            ctx,
+            config,
+            U256::from(31u64),
+            U256::from(1_760_000_000u64),
+            vec![call],
+            signature.to_string(),
+        );
 
         assert_eq!(
             serde_json::to_value(request).unwrap(),

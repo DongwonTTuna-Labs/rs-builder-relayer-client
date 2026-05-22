@@ -20,10 +20,7 @@ pub use config::{
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]
-pub use requests::{
-    build_wallet_batch_request_with_signature, build_wallet_create_request,
-    try_build_wallet_batch_request_with_signature,
-};
+pub use requests::{build_wallet_create_request, try_build_wallet_batch_request_with_signature};
 #[allow(deprecated)]
 pub use signing::{
     build_deposit_wallet_batch_request_from_signed, digest_deposit_wallet_batch,

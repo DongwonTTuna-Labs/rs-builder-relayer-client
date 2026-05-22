@@ -634,34 +634,6 @@ fn wallet_batch_public_try_builder_matches_signed_submit_fixture() {
 }
 
 #[test]
-#[allow(deprecated)]
-fn wallet_batch_deprecated_public_builder_matches_fixture_shape() {
-    let data = fixture("deposit_wallet/wallet_batch_eip712.json");
-    let batch = batch_from_fixture(&data);
-    let config = deposit_wallet_contract_config(data["chainId"].as_u64().unwrap()).unwrap();
-    let ctx = DepositWalletRequestContext {
-        owner_address: batch.submit_from,
-        deposit_wallet_address: batch.deposit_wallet,
-    };
-
-    let request = unsafe {
-        polymarket_relayer::build_wallet_batch_request_with_signature(
-            ctx,
-            config,
-            batch.nonce,
-            batch.deadline,
-            batch.calls,
-            data["ownerSignature"].as_str().unwrap().to_string(),
-        )
-    };
-
-    assert_eq!(
-        serde_json::to_value(request).unwrap(),
-        fixture("deposit_wallet/wallet_signed_submit_body.json")
-    );
-}
-
-#[test]
 fn wallet_batch_public_try_builder_rejects_invalid_config_or_context() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
