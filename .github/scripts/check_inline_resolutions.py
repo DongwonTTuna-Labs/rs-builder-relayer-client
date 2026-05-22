@@ -23,7 +23,6 @@ batch 의 흐름
 
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import os
 import re
@@ -51,7 +50,6 @@ WORKSPACE = Path(
 RUNNER_TEMP = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
 ART_DIR = Path(os.environ.get("ART_DIR", "./artifacts"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "3"))
-BATCH_PARALLELISM = int(os.environ.get("BATCH_PARALLELISM", "4"))
 SNIPPET_RADIUS = int(os.environ.get("SNIPPET_RADIUS", "15"))
 SCHEMA_FILE = SCRIPT_DIR / "schemas" / "resolutions.schema.json"
 AGENT_PROMPT_FILE = BASE_DIR / ".codex" / "agents" / "resolve-checker-reviewer.md"
@@ -296,26 +294,14 @@ def main() -> int:
             return normalize_batch_output(Path("/nonexistent"), expected)
         return normalize_batch_output(out_batch_path, expected)
 
-    # Codex 호출은 각각 외부 프로세스로 IO 바운드라 ThreadPoolExecutor 로 충분히
-    # 병렬화된다. batch_index 키로 deterministic ordering 유지.
-    workers = max(1, min(BATCH_PARALLELISM, len(batches)))
     print(
         f"resolve-check: {len(codex_managed)} comment(s) in {len(batches)} batch(es), "
-        f"running with {workers} worker(s)"
+        "running sequentially"
     )
-    results_by_index: dict[int, list[dict]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(run_batch, batch_index, batch): batch_index
-            for batch_index, batch in batches
-        }
-        for future in concurrent.futures.as_completed(futures):
-            batch_index = futures[future]
-            results_by_index[batch_index] = future.result()
 
     resolutions: list[dict] = []
-    for batch_index, _ in batches:
-        resolutions.extend(results_by_index.get(batch_index, []))
+    for batch_index, batch in batches:
+        resolutions.extend(run_batch(batch_index, batch))
 
     out_path.write_text(
         json.dumps({"resolutions": resolutions}, ensure_ascii=False, indent=2) + "\n",

@@ -8,7 +8,7 @@
 #   PROMPT_FILE — Codex 에 전달할 프롬프트 본문 (stdin 으로 들어감)
 #   SCHEMA_FILE — Codex 의 `--output-schema` 에 전달할 JSON Schema
 #   OUT_FILE    — Codex 의 마지막 메시지를 기록할 경로
-#   RUNNER_TEMP — 임시 디렉토리 (CODEX_HOME 을 만들 장소)
+#   RUNNER_TEMP — 임시 디렉토리
 #
 # 옵션:
 #   LOG_FILE          — Codex stdout+stderr 를 흘려보낼 파일 (기본: $RUNNER_TEMP/codex-run.log)
@@ -33,17 +33,32 @@ test -d "$CODEX_CD_DIR"
 GUARD_LIB="/opt/codex-runner/libcodex-deny-auth.so"
 test -r "$GUARD_LIB"
 
-export CODEX_AUTH_GUARD_PRELOAD="$GUARD_LIB"
-export LD_PRELOAD="$GUARD_LIB"
-
-# self-hosted runner 에는 `CODEX_HOME=/home/runner/.codex` 가 미리 정의되어 있어서
-# `${CODEX_HOME:-...}` 식으로 fallback 을 두면 ln 이 자기 자신을 가리키게 되어 실패한다.
-# 반드시 RUNNER_TEMP 아래에 새 CODEX_HOME 을 만들고 인증 파일을 symlink 한다.
-CODEX_HOME_DIR="$RUNNER_TEMP/codex-home"
-mkdir -p "$CODEX_HOME_DIR"
-ln -sf /home/runner/.codex/auth.json "$CODEX_HOME_DIR/auth.json"
+CODEX_HOME_DIR="${CODEX_HOME:-/home/runner/.codex}"
 export CODEX_HOME="$CODEX_HOME_DIR"
-export CODEX_AUTH_GUARD_PATH="$CODEX_HOME_DIR/auth.json"
+AUTH_FILE="$CODEX_HOME_DIR/auth.json"
+
+if [ ! -s "$AUTH_FILE" ]; then
+  echo "Codex auth missing at $AUTH_FILE." >&2
+  echo "Run scripts/codex-login-one.sh for this runner before running Codex review jobs." >&2
+  exit 1
+fi
+
+python3 - "$AUTH_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+tokens = data.get("tokens") or {}
+if data.get("auth_mode") != "chatgpt" or not tokens.get("refresh_token"):
+    raise SystemExit(f"Codex auth at {path} is not valid ChatGPT-managed auth.")
+print(f"Codex auth ready: auth_mode={data.get('auth_mode')} last_refresh={data.get('last_refresh')}")
+PY
+
+export CODEX_AUTH_GUARD_PRELOAD="$GUARD_LIB"
+export CODEX_AUTH_GUARD_PATH="$AUTH_FILE"
+export LD_PRELOAD="$GUARD_LIB"
 
 LOG_FILE="${LOG_FILE:-$RUNNER_TEMP/codex-run.log}"
 
