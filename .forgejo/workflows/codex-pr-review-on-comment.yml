@@ -47,6 +47,12 @@ jobs:
               "$@"
           }
           scripts_ref="main"
+          # Bootstrap exception: main does not contain the Forgejo review scripts
+          # until this migration PR lands. Only owner-triggered workflow_dispatch
+          # uses the selected branch SHA; comment-triggered runs stay on main.
+          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" ]]; then
+            scripts_ref="${GITHUB_SHA}"
+          fi
           git_fetch fetch --depth=1 origin "$scripts_ref"
           git checkout --detach FETCH_HEAD
 

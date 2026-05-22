@@ -252,7 +252,8 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("scripts_ref:", text)
         self.assertIn("SCRIPTS_REF", text)
         self.assertIn('scripts_ref="main"', text)
-        self.assertNotIn('scripts_ref="${GITHUB_SHA}"', text)
+        self.assertIn('scripts_ref="${GITHUB_SHA}"', text)
+        self.assertIn("Bootstrap exception", text)
 
     def test_post_job_uses_default_needs_success_gate(self) -> None:
         text = self.forgejo_text()
