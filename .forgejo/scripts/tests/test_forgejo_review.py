@@ -253,6 +253,7 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("SCRIPTS_REF", text)
         self.assertIn('scripts_ref="main"', text)
         self.assertIn('scripts_ref="${GITHUB_SHA}"', text)
+        self.assertIn("CODEX_BOOTSTRAP_SCRIPTS_REF: ${{ github.sha }}", text)
         self.assertIn("Bootstrap exception", text)
 
     def test_post_job_uses_default_needs_success_gate(self) -> None:

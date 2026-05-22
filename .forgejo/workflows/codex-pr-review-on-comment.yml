@@ -63,6 +63,7 @@ jobs:
           FORGEJO_REPOSITORY: ${{ github.repository }}
           FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
           CODEX_ALLOWED_LOGIN: ${{ vars.CODEX_ALLOWED_LOGIN || 'DongwonTTuna' }}
+          CODEX_BOOTSTRAP_SCRIPTS_REF: ${{ github.sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 .forgejo/scripts/resolve_pr_metadata.py
 
