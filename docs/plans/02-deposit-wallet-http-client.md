@@ -2,112 +2,114 @@
 
 ## Summary
 
-- Start from latest `main` on `feature/deposit-wallet-http-client`.
-- Add a mocked-only deposit-wallet relayer HTTP client for:
-  - `GET /nonce`
-  - `POST /submit` `WALLET-CREATE`
-  - `POST /submit` signed `WALLET`
-  - `GET /transaction`
-- Keep live execution gated: no default live mutation, no pUSD/CTF calldata
-  builders, and no CLOB order flow.
+Add a mocked HTTP client for relayer nonce, submit, and transaction polling.
+This PR connects existing request builders and signing outputs to HTTP behavior
+without touching live relayer endpoints.
 
-## References
+## In Scope
 
-- Deposit Wallets guide:
-  <https://docs.polymarket.com/trading/deposit-wallets>
-- Relayer submit API:
-  <https://docs.polymarket.com/api-reference/relayer/submit-a-transaction>
-- Transaction API:
-  <https://docs.polymarket.com/api-reference/relayer/get-a-transaction-by-id>
-- Nonce API:
-  <https://docs.polymarket.com/api-reference/relayer/get-current-nonce-for-a-user>
+- Add `src/deposit_wallet/http.rs` for relayer HTTP transport.
+- Add a small `DepositWalletRelayerClient` wrapper that uses deposit-wallet
+  request builders, signing outputs, and transaction state parsing.
+- Implement mocked tests for `GET /nonce`, `POST /submit` with `WALLET-CREATE`,
+  `POST /submit` with `WALLET`, and `GET /transaction`.
+- Use local test HTTP responders built with `tokio::net::TcpListener`; do not
+  add a mock-server dependency unless the PR documents the dependency risk.
 
-## Key Changes
+## Out Of Scope
 
-- Add deposit-wallet HTTP surface under `src/deposit_wallet/http.rs`.
-- Re-export only the controlled safe public types:
-  - `DepositWalletRelayerClient`
-  - `DepositWalletRelayerUrl`
-  - `RelayerKeyAuth`
-  - `DepositWalletMutationGate`
-  - `DepositWalletMutationPermit`
-  - `DepositWalletPollPolicy`
-  - `DepositWalletTransactionReceipt`
-- `DepositWalletRelayerUrl` rejects non-HTTPS URLs, userinfo, query/fragment
-  injection, non-allowlisted hosts, and lookalike hosts. The production
-  allowlist is exactly `relayer-v2.polymarket.com`; tests use a `cfg(test)`
-  loopback constructor.
-- Build the HTTP client with redirects disabled so auth headers are never
-  forwarded across redirects.
-- Add `RelayerKeyAuth` with private secret-bearing fields and redacted `Debug`.
-  Keep existing `AuthMethod` constructors and fields source-compatible while
-  redacting `Debug` for existing auth structs.
-- Keep `DepositWalletRelayerClient` free of owner private keys. It accepts owner
-  addresses, existing request builders, and already validated
-  `SignedDepositWalletBatch` values.
-- Require `DepositWalletMutationGate::Permit` for submit methods. The default
-  gate denies before URL use, auth header construction, or HTTP request
-  creation.
-- Add a live-wrapper deadline guard for signed WALLET submits using an injected
-  clock; expired signed batches fail before auth/HTTP.
+- No live network tests in the default suite.
+- No pUSD/CTF calldata builders.
+- No CLOB order flow.
+- No automatic retry after ambiguous submit responses.
 
-## Ambiguous Submit Policy
+## Target API
 
-- Compute a redacted payload hash from the serialized submit body before
-  sending.
-- If submit times out or returns a success response without a usable
-  `transactionID`, record an owner-scoped ambiguous block.
-- Same-owner nonce/sign/submit work remains blocked until explicit manual
-  reconciliation clears the block.
-- 4xx/5xx API errors do not count as success and do not clear existing
-  ambiguous blocks.
+- `RelayerKeyAuth`: relayer API key identity and credentials, separate from the
+  owner signer. Secret material must be wrapped so `Debug`, errors, logs,
+  snapshots, fixtures, and test failure output expose only redacted identity
+  metadata, never raw API keys, bearer values, auth headers, or derived signing
+  material.
+- `DepositWalletRelayerClient`: configured with relayer URL, chain id, owner
+  signer, relayer auth, and deposit-wallet contract config. The relayer URL
+  must be a validated endpoint newtype, not an arbitrary string. It must require
+  HTTPS and an approved Polymarket relayer host allowlist before any request can
+  attach relayer authentication headers.
+- `get_wallet_nonce(owner)`: fetches fresh `type=WALLET` nonce.
+- `submit_wallet_create(owner, mutation_gate)`: submits `WALLET-CREATE` only
+  when an explicit mutation gate permits relayer mutation.
+- `submit_signed_wallet_batch(batch, mutation_gate)`: submits a previously
+  signed `WALLET` request only when an explicit mutation gate permits relayer
+  mutation.
+- `poll_transaction(transaction_id, poll_policy)`: polls under a bounded policy
+  until terminal success or terminal failure, preserving unknown states.
 
-## Polling Policy
+The mutation gate must default to deny live relayer mutation. A live URL, API
+key, or signer alone must not be enough to submit `WALLET-CREATE` or `WALLET`.
+The implementation PR must document the enable flag or permit type, dry-run
+evidence requirement, rollback path, and the error returned when mutation is
+blocked.
 
-- `STATE_CONFIRMED` is the only terminal success.
-- `STATE_INVALID` and `STATE_FAILED` return terminal errors.
-- `STATE_NEW`, `STATE_EXECUTED`, and `STATE_MINED` remain pending.
-- Unknown states stop polling with a reconciliation-required error, never
-  success.
-- `DepositWalletPollPolicy` configures max attempts and fixed interval.
-- HTTP 429 returns `RelayerError::QuotaExhausted`.
+Relayer authentication headers must only be attached after endpoint validation.
+Tests must reject `http://` URLs, non-allowlisted hosts, userinfo-bearing URLs,
+host confusion such as suffix/prefix lookalikes, and redirects that would send
+credentials to an unapproved origin.
 
-## Test Plan
+The poll policy must include max attempts or total timeout, initial interval,
+backoff or rate-limit handling, and caller cancellation behavior.
 
-- Local mocked HTTP tests use `tokio::net::TcpListener`; no mock-server
-  dependency.
-- Endpoint/auth safety tests reject `http://`, userinfo URLs,
-  non-allowlisted hosts, and lookalike hosts.
-- Redirect tests prove redirects are not followed and auth is not sent to
-  redirect targets.
-- Redaction tests prove debug/error paths do not expose raw API keys,
-  passphrases, signatures, HMAC material, or auth header values.
-- Request/response tests cover exact `GET /nonce`, `WALLET-CREATE` submit
-  fixture body, signed `WALLET` submit fixture body, submit response parsing,
-  and transaction response parsing.
-- Mutation and ambiguity tests cover default-deny, explicit permit, expired
-  deadline preflight, partial submit response ambiguity, timeout ambiguity, and
-  manual reconciliation clearing.
-- Poll tests cover `STATE_NEW`, `STATE_EXECUTED`, `STATE_MINED`,
-  `STATE_CONFIRMED`, `STATE_INVALID`, `STATE_FAILED`, unknown state, exact
-  attempt counts, and injected sleeper usage.
+The implementation PR decides which target APIs are exported. Existing public
+APIs must not be removed or silently changed.
+
+## Fixture And Mock Requirements
+
+- Mocked `GET /nonce` must assert `address=<owner>` and `type=WALLET`.
+- Endpoint validation tests must prove relayer auth is never sent to
+  non-HTTPS, non-allowlisted, userinfo-bearing, or redirect targets.
+- Relayer auth redaction tests must prove `RelayerKeyAuth` and related errors
+  do not expose raw API keys, bearer values, auth headers, HMAC material, or
+  credential-derived strings through `Debug`, `Display`, error conversion,
+  logs, snapshots, or fixture output.
+- Mutation gate tests must prove both `submit_wallet_create` and
+  `submit_signed_wallet_batch` are denied by default before any HTTP request or
+  auth header construction, return a stable blocked-mutation error, and proceed
+  only when an explicit permit is supplied.
+- Mocked `POST /submit` must assert exact JSON body for both `WALLET-CREATE`
+  and `WALLET`.
+- Mocked polling must cover `STATE_NEW`, `STATE_EXECUTED`, `STATE_MINED`,
+  `STATE_CONFIRMED`, `STATE_INVALID`, `STATE_FAILED`, and unknown states with
+  exact assertions for parsed state, terminal status, success status, and the
+  client action for each state.
+- `STATE_NEW`, `STATE_EXECUTED`, and `STATE_MINED` must remain pending and
+  non-success under the bounded poll policy. `STATE_CONFIRMED` is the only
+  terminal success state for deposit-wallet readiness.
+- `STATE_INVALID` and `STATE_FAILED` must be terminal failures.
+- Unknown states and partial submit responses must not be treated as success and
+  must not trigger duplicate submit. They must stop mutation and require
+  reconciliation evidence before any new submit.
+- Submit timeouts before a `transactionID` is known must be treated as
+  owner-scoped ambiguous mutation. Tests must prove the client records a
+  redacted payload hash or equivalent idempotency evidence, blocks additional
+  same-owner nonce fetch/sign/submit work, and requires manual or authoritative
+  reconciliation before the owner can submit again.
+- Tests must prove relayer auth identity can differ from owner signer identity.
+- Ambiguous submit timeout must not create a duplicate submit.
 
 ## Validation
 
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-cargo build --workspace --all-targets --all-features
-git diff --check
-```
+- Unit tests for request construction and response parsing.
+- Unit tests for relayer auth redaction and mutation gate default-deny behavior.
+- Integration-style local HTTP tests with deterministic request/response bodies.
+- Polling tests cover timeout/max-attempt exhaustion, backoff or rate-limit
+  behavior, cancellation, and no duplicate submit after ambiguous responses.
+- Polling timeout, backoff, and cancellation tests must use deterministic time,
+  such as `tokio::time::pause`/`advance` or an injected clock/sleeper. They must
+  assert exact attempt counts and poll intervals without real sleeps or wall
+  clock timing.
+- Standard validation commands from `docs/plans/README.md`.
 
-## Assumptions
+## Residual Risk
 
-- This PR creates mocked HTTP behavior only; it must not run live relayer calls
-  in CI.
-- Existing public APIs must not be removed or silently changed.
-- New deposit-wallet HTTP APIs are introduced as a controlled `0.2.x` surface.
-- pUSD/CTF calldata builders remain PR 03, and consumer adapter/live gate
-  remains PR 04.
-- No PR merge is performed by the agent.
+- Mocked HTTP proves client behavior, not production relayer acceptance.
+- Live execution remains gated until calldata builders, dry-run evidence, and
+  operator approval are complete.
