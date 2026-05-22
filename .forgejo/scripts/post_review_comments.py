@@ -14,18 +14,20 @@ from pathlib import Path
 from typing import Any
 
 from forgejo_api import ForgejoApiError, ForgejoClient, require_env, warn
-from prepare_pr_context import INLINE_MARKER, STICKY_MARKER, fetch_review_comments
+from prepare_pr_context import INLINE_MARKER, STICKY_MARKER, fetch_review_comments, is_bot_comment
 
 DISPLAY_NAME = "Codex Reviewer for DongwonTTuna"
 RESOLVED_MARKER = "<!-- forgejo-codex-inline-resolved"
 MAX_INLINE_COMMENTS = 30
 
 
-def load_json(path: Path, default: Any) -> Any:
+def require_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return default
+    except FileNotFoundError as exc:
+        raise SystemExit(f"required review artifact is missing: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"required review artifact is invalid JSON: {path}: {exc}") from exc
 
 
 def finding_key(finding: dict[str, Any]) -> str:
@@ -35,7 +37,7 @@ def finding_key(finding: dict[str, Any]) -> str:
             str(finding.get("type") or ""),
             str(finding.get("file") or ""),
             str(finding.get("line") or ""),
-            str(finding.get("title") or ""),
+            "cross-cutting" if finding.get("cross_cutting") else "inline",
         ]
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
@@ -53,10 +55,6 @@ def extract_marker(body: str) -> tuple[str | None, str | None]:
     if not match:
         return None, None
     return match.group(1), match.group(2)
-
-
-def has_resolved_marker(body: str, key: str) -> bool:
-    return f'{RESOLVED_MARKER} key="{key}"' in body
 
 
 def render_inline_body(finding: dict[str, Any], key: str) -> str:
@@ -97,6 +95,20 @@ def render_sticky(
         status = str(judgment.get("status"))
         headline = str(judgment.get("headline") or headline)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+    cross_cutting = [
+        finding
+        for finding in allowed
+        if finding.get("cross_cutting") or not finding.get("file") or not finding.get("line")
+    ]
+    cross_cutting_lines = []
+    for finding in cross_cutting[:10]:
+        finding_type = str(finding.get("type") or "SUGGEST")
+        title = str(finding.get("title") or "").strip()
+        agent = str(finding.get("agent") or "").strip()
+        cross_cutting_lines.append(f"- **[{finding_type}]** {title} (`{agent}`)")
+    if len(cross_cutting) > 10:
+        cross_cutting_lines.append(f"- ...and {len(cross_cutting) - 10} more cross-cutting findings")
+    cross_cutting_text = "\n".join(cross_cutting_lines) or "- none"
     return textwrap.dedent(
         f"""\
         {STICKY_MARKER}
@@ -114,6 +126,9 @@ def render_sticky(
         - Bot-managed resolved comments: {resolved}
         - Missing axes: {missing_axes}
 
+        Cross-cutting findings:
+        {cross_cutting_text}
+
         재리뷰는 `/codex-review` 코멘트로 요청하세요.
         """
     ).strip()
@@ -122,6 +137,8 @@ def render_sticky(
 def existing_by_key(comments: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for comment in comments:
+        if not is_bot_comment(comment):
+            continue
         key, status = extract_marker(str(comment.get("body") or ""))
         if key and status == "active":
             result.setdefault(key, comment)
@@ -143,13 +160,21 @@ def post_inline_comments(
         if not path or not line or finding.get("cross_cutting"):
             continue
         key = finding_key(finding)
+        body = render_inline_body(finding, key)
         if key in existing:
+            comment_id = existing[key].get("id")
+            if comment_id and str(existing[key].get("body") or "") != body:
+                client.request(
+                    "PATCH",
+                    client.repo_path(f"issues/comments/{comment_id}"),
+                    {"body": body},
+                )
             skipped_existing += 1
             continue
         new_comments.append(
             {
                 "path": str(path),
-                "body": render_inline_body(finding, key),
+                "body": body,
                 "new_position": int(line),
                 "old_position": 0,
             }
@@ -180,14 +205,24 @@ def reply_resolved(
     current_keys: set[str],
 ) -> int:
     resolved = 0
-    all_bodies = "\n".join(str(c.get("body") or "") for c in comments)
+    resolved_keys = {
+        match.group(1)
+        for comment in comments
+        for match in re.finditer(
+            r"<!--\s*forgejo-codex-inline-resolved\s+key=\"([0-9a-f]+)\"\s*-->",
+            str(comment.get("body") or ""),
+        )
+        if is_bot_comment(comment)
+    }
     for comment in comments:
+        if not is_bot_comment(comment):
+            continue
         body = str(comment.get("body") or "")
         key, status = extract_marker(body)
         comment_id = comment.get("id")
         if not key or status != "active" or key in current_keys or not comment_id:
             continue
-        if has_resolved_marker(all_bodies, key):
+        if key in resolved_keys:
             continue
         reply = (
             f'{RESOLVED_MARKER} key="{key}" -->\n'
@@ -210,7 +245,7 @@ def upsert_sticky(client: ForgejoClient, pr_number: str, body: str) -> None:
     comments = client.paginated(client.repo_path(f"issues/{pr_number}/comments"))
     existing_id = None
     for comment in comments:
-        if STICKY_MARKER in str(comment.get("body") or ""):
+        if STICKY_MARKER in str(comment.get("body") or "") and is_bot_comment(comment):
             existing_id = comment.get("id")
             break
     if existing_id:
@@ -232,16 +267,16 @@ def main() -> int:
     pr_number = require_env("PR_NUMBER")
     head_sha = require_env("HEAD_SHA")
     art_dir = Path(os.environ.get("ART_DIR", "artifacts"))
-    allowed = load_json(art_dir / "allowed.json", [])
-    axes_status = load_json(art_dir / "axes_status.json", {})
-    decisions = load_json(art_dir / "decisions.json", {})
+    allowed = require_json(art_dir / "allowed.json")
+    axes_status = require_json(art_dir / "axes_status.json")
+    decisions = require_json(art_dir / "decisions.json")
     judgment = decisions.get("judgment") if isinstance(decisions, dict) else None
     if not isinstance(allowed, list):
         allowed = []
 
     review_comments = fetch_review_comments(client, pr_number)
     existing = existing_by_key(review_comments)
-    current_keys = {finding_key(f) for f in allowed if f.get("file") and f.get("line")}
+    current_keys = {finding_key(f) for f in allowed}
     resolved = reply_resolved(client, pr_number, review_comments, current_keys)
     posted, skipped_existing = post_inline_comments(client, pr_number, head_sha, allowed, existing)
     sticky = render_sticky(

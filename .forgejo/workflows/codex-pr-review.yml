@@ -10,20 +10,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resolve:
+    name: Resolve PR metadata
+    runs-on: dongwontuna-labs-runner
+    outputs:
+      allowed: ${{ steps.lookup.outputs.allowed }}
+      reason: ${{ steps.lookup.outputs.reason }}
+      pr_number: ${{ steps.lookup.outputs.pr_number }}
+      head_sha: ${{ steps.lookup.outputs.head_sha }}
+      base_sha: ${{ steps.lookup.outputs.base_sha }}
+      base_ref: ${{ steps.lookup.outputs.base_ref }}
+      scripts_ref: ${{ steps.lookup.outputs.scripts_ref }}
+      trigger: ${{ steps.lookup.outputs.trigger }}
+    steps:
+      - name: Checkout trusted scripts
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Resolve PR head / base
+        id: lookup
+        env:
+          FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
+          CODEX_ALLOWED_LOGIN: ${{ vars.CODEX_ALLOWED_LOGIN || 'DongwonTTuna' }}
+        run: python3 .forgejo/scripts/resolve_pr_metadata.py
+
   call-pipeline:
     name: Codex PR Review
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == 'DongwonTTuna' &&
-      github.actor == 'DongwonTTuna' &&
-      github.event.sender.login == 'DongwonTTuna'
+    needs: resolve
+    if: needs.resolve.outputs.allowed == 'true'
     uses: ./.forgejo/workflows/codex-pr-review-pipeline.yml
     with:
-      pr_number: ${{ github.event.pull_request.number }}
-      head_sha: ${{ github.event.pull_request.head.sha }}
-      base_ref: ${{ github.event.pull_request.base.ref }}
-      base_sha: ${{ github.event.pull_request.base.sha }}
-      scripts_ref: ${{ github.event.pull_request.base.sha }}
-      trigger: pull_request_target:${{ github.event.action }}
+      pr_number: ${{ needs.resolve.outputs.pr_number }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      base_ref: ${{ needs.resolve.outputs.base_ref }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
+      trigger: ${{ needs.resolve.outputs.trigger }}
     secrets: inherit

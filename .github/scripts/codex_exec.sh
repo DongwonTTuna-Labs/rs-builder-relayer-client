@@ -62,6 +62,17 @@ export LD_PRELOAD="$GUARD_LIB"
 
 LOG_FILE="${LOG_FILE:-$RUNNER_TEMP/codex-run.log}"
 
+# The model process never needs repository, Forgejo bot, or Actions artifact
+# credentials. Keep those tokens out of Codex subprocess environment even when
+# the runner injects them for surrounding checkout/artifact steps.
+unset GIT_AUTH_TOKEN
+unset GITHUB_TOKEN
+unset FORGEJO_BOT_TOKEN
+unset ACTIONS_RUNTIME_TOKEN
+unset ACTIONS_CACHE_URL
+unset ACTIONS_RESULTS_URL
+unset ACTIONS_RUNTIME_URL
+
 codex login status
 
 # Codex CLI 의 종료 코드 자체로 분기하고 싶으므로 일시적으로 set +e.

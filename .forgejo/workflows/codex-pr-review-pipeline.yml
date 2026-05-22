@@ -35,7 +35,6 @@ jobs:
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
       FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
-      FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
     steps:
       - name: Checkout base ref (trusted scripts)
@@ -61,6 +60,8 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Prepare Forgejo PR review context
+        env:
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
         run: python3 pipeline/.forgejo/scripts/prepare_pr_context.py
 
       - name: Stage context for upload
@@ -98,13 +99,13 @@ jobs:
       GITHUB_HEAD_REF: refs/pull/${{ inputs.pr_number }}/head
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
-      GIT_AUTH_TOKEN: ${{ github.token }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
       CODEX_WORKSPACE: ${{ github.workspace }}/workspace
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -124,6 +125,7 @@ jobs:
       - name: Checkout PR head (review data only)
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -146,6 +148,7 @@ jobs:
         env:
           BASE_REF: ${{ inputs.base_ref }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           : "${BASE_REF:?BASE_REF is required}"
@@ -246,7 +249,6 @@ jobs:
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
-      GIT_AUTH_TOKEN: ${{ github.token }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
       ART_DIR: ${{ github.workspace }}/artifacts
       CODEX_WORKSPACE: ${{ github.workspace }}/pipeline
@@ -254,6 +256,7 @@ jobs:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -350,15 +353,14 @@ jobs:
       TRIGGER: ${{ inputs.trigger }}
       FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
-      FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
-      GIT_AUTH_TOKEN: ${{ github.token }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
       ART_DIR: ${{ github.workspace }}/artifacts
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -404,5 +406,6 @@ jobs:
         run: python3 pipeline/.github/scripts/merge_and_gate.py --phase gate
 
       - name: Publish Forgejo review comments
-        if: always()
+        env:
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
         run: python3 pipeline/.forgejo/scripts/post_review_comments.py

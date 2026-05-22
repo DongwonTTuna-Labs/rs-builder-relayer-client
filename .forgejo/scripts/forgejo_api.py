@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -85,6 +86,9 @@ class ForgejoClient:
         query: dict[str, str] | None = None,
         accept: str = "application/json",
     ) -> Any:
+        safe_to_retry = method.upper() in {"GET", "HEAD"}
+        max_attempts = 3 if safe_to_retry else 1
+        backoff = 0.25
         data = None
         headers = {
             "Accept": accept,
@@ -96,23 +100,36 @@ class ForgejoClient:
             headers["Content-Type"] = "application/json"
         url = self.url(path, query)
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as response:
-                raw = response.read()
-                if not raw:
-                    return None
-                content_type = response.headers.get("Content-Type", "")
-                if "json" in content_type:
-                    return json.loads(raw.decode("utf-8"))
-                return raw.decode("utf-8", errors="replace")
-        except urllib.error.HTTPError as exc:
-            details = exc.read().decode("utf-8", errors="replace")
-            safe_details = redact_secret(details[-1200:], self.token)
-            raise ForgejoApiError(
-                f"{method} {path} failed with HTTP {exc.code}: {safe_details}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise ForgejoApiError(f"{method} {path} failed: {exc.reason}") from exc
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    raw = response.read()
+                    if not raw:
+                        return None
+                    content_type = response.headers.get("Content-Type", "")
+                    if "json" in content_type:
+                        return json.loads(raw.decode("utf-8"))
+                    return raw.decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                details = exc.read().decode("utf-8", errors="replace")
+                safe_details = redact_secret(details[-1200:], self.token)
+                if safe_to_retry and exc.code in {429, 502, 503, 504} and attempt < max_attempts:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    last_error = exc
+                    continue
+                raise ForgejoApiError(
+                    f"{method} {path} failed with HTTP {exc.code}: {safe_details}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                if safe_to_retry and attempt < max_attempts:
+                    time.sleep(backoff)
+                    backoff *= 2
+                    last_error = exc
+                    continue
+                raise ForgejoApiError(f"{method} {path} failed: {exc.reason}") from exc
+        raise ForgejoApiError(f"{method} {path} failed after {max_attempts} attempts: {last_error}")
 
     def paginated(
         self,

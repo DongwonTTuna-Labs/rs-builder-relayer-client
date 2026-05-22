@@ -35,6 +35,9 @@ def requested_pr_number(payload: dict[str, Any]) -> tuple[str | None, str]:
     if event_name == "workflow_dispatch":
         inputs = payload.get("inputs") or {}
         return str(inputs.get("pr_number") or os.environ.get("PR_NUMBER") or ""), "workflow_dispatch"
+    if event_name == "pull_request_target":
+        pr = payload.get("pull_request") or {}
+        return str(pr.get("number") or ""), f"pull_request_target:{payload.get('action') or 'unknown'}"
     if event_name in {"issue_comment", "issues"}:
         body = command_body(payload)
         issue = payload.get("issue") or {}
@@ -49,8 +52,8 @@ def requested_pr_number(payload: dict[str, Any]) -> tuple[str | None, str]:
 def same_repo(pr: dict[str, Any], repo: str) -> bool:
     head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
     if not head_repo:
-        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
-    return not head_repo or str(head_repo) == repo
+        return False
+    return str(head_repo) == repo
 
 
 def authorize(payload: dict[str, Any], pr: dict[str, Any], repo: str) -> tuple[bool, str]:
@@ -94,10 +97,7 @@ def main() -> int:
     set_output("head_sha", str(head.get("sha") or ""))
     set_output("base_sha", str(base.get("sha") or ""))
     set_output("base_ref", str(base.get("ref") or "main"))
-    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
-        set_output("scripts_ref", str(os.environ.get("GITHUB_SHA") or ""))
-    else:
-        set_output("scripts_ref", str(base.get("sha") or base.get("ref") or "main"))
+    set_output("scripts_ref", str(base.get("sha") or base.get("ref") or "main"))
     set_output("trigger", trigger)
     if not allowed:
         print(f"Codex review skipped: {reason}")

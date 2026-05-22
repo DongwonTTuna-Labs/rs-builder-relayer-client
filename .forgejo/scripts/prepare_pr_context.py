@@ -14,6 +14,22 @@ from forgejo_api import ForgejoApiError, ForgejoClient, require_env, warn
 
 INLINE_MARKER = "<!-- forgejo-codex-inline"
 STICKY_MARKER = "<!-- forgejo-codex-review-sticky -->"
+PROMPT_DIFF_LIMIT = 120000
+
+
+def comment_login(comment: dict[str, Any]) -> str:
+    user = comment.get("user") or comment.get("poster") or {}
+    if isinstance(user, dict):
+        return str(user.get("login") or user.get("username") or "")
+    return ""
+
+
+def bot_login() -> str:
+    return os.environ.get("FORGEJO_BOT_LOGIN", "codex-reviewer")
+
+
+def is_bot_comment(comment: dict[str, Any]) -> bool:
+    return comment_login(comment) == bot_login()
 
 
 def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
@@ -34,6 +50,8 @@ def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
             continue
         if current_file is None:
             continue
+        if raw.startswith("\\ "):
+            continue
         if raw.startswith("+") and not raw.startswith("+++"):
             changed[current_file].add(new_line)
             new_line += 1
@@ -45,25 +63,11 @@ def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
 
 
 def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[str, Any]]:
-    comments: list[dict[str, Any]] = []
     try:
-        reviews = client.paginated(client.repo_path(f"pulls/{pr_number}/reviews"))
+        return client.paginated(client.repo_path(f"issues/{pr_number}/comments"))
     except ForgejoApiError as exc:
-        warn(f"could not list pull reviews; inline context will be empty: {exc}")
-        return comments
-    for review in reviews:
-        review_id = review.get("id")
-        if not review_id:
-            continue
-        try:
-            review_comments = client.paginated(
-                client.repo_path(f"pulls/{pr_number}/reviews/{review_id}/comments")
-            )
-        except ForgejoApiError as exc:
-            warn(f"could not list pull review comments for review {review_id}: {exc}")
-            continue
-        comments.extend(review_comments)
-    return comments
+        warn(f"could not list issue comments; inline context will be empty: {exc}")
+        return []
 
 
 def normalize_file(row: dict[str, Any], changed_lines: dict[str, set[int]]) -> dict[str, Any]:
@@ -105,7 +109,8 @@ def main() -> int:
         accept="text/plain",
     )
     diff_text = str(diff_raw or "")
-    changed_lines = parse_changed_right_lines(diff_text)
+    prompt_diff = diff_text[:PROMPT_DIFF_LIMIT]
+    changed_lines = parse_changed_right_lines(prompt_diff)
 
     files = client.paginated(client.repo_path(f"pulls/{pr_number}/files"))
     issue_comments = client.paginated(client.repo_path(f"issues/{pr_number}/comments"))
@@ -114,7 +119,7 @@ def main() -> int:
     existing_inline = []
     for comment in review_comments:
         body = str(comment.get("body") or "")
-        if INLINE_MARKER not in body:
+        if INLINE_MARKER not in body or not is_bot_comment(comment):
             continue
         existing_inline.append(
             {
@@ -137,8 +142,8 @@ def main() -> int:
         "base_sha": base_sha or base_sha_expected,
         "head_ref": head.get("ref") or os.environ.get("GITHUB_HEAD_REF", ""),
         "head_sha": head_sha or head_sha_expected,
-        "diff": diff_text[:120000],
-        "diff_truncated": len(diff_text) > 120000,
+        "diff": prompt_diff,
+        "diff_truncated": len(diff_text) > PROMPT_DIFF_LIMIT,
         "changed_files": [normalize_file(row, changed_lines) for row in files],
         "existing_inline_comments": existing_inline,
         "existing_sticky_comments": [
@@ -148,7 +153,7 @@ def main() -> int:
                 "updated_at": c.get("updated_at") or "",
             }
             for c in issue_comments
-            if STICKY_MARKER in str(c.get("body") or "")
+            if STICKY_MARKER in str(c.get("body") or "") and is_bot_comment(c)
         ],
     }
     out = runner_temp / "pr-context.json"

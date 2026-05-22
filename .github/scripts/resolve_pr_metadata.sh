@@ -11,13 +11,28 @@ set -euo pipefail
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
 
 json="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
-head_sha="$(jq -r '.head.sha // ""' <<<"$json")"
-base_ref="$(jq -r '.base.ref // ""' <<<"$json")"
-base_sha="$(jq -r '.base.sha // ""' <<<"$json")"
-is_draft="$(jq -r '.draft // false' <<<"$json")"
-head_owner="$(jq -r '.head.repo.owner.login // ""' <<<"$json")"
-head_repo="$(jq -r '.head.repo.name // ""' <<<"$json")"
-author_login="$(jq -r '.user.login // ""' <<<"$json")"
+metadata="$(printf '%s' "$json" | python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+head = payload.get("head") or {}
+base = payload.get("base") or {}
+head_repo = head.get("repo") or {}
+head_owner = head_repo.get("owner") or {}
+user = payload.get("user") or {}
+values = [
+    str(head.get("sha") or ""),
+    str(base.get("ref") or ""),
+    str(base.get("sha") or ""),
+    "true" if payload.get("draft") else "false",
+    str(head_owner.get("login") or ""),
+    str(head_repo.get("name") or ""),
+    str(user.get("login") or ""),
+]
+print("\t".join(values))
+')"
+IFS=$'\t' read -r head_sha base_ref base_sha is_draft head_owner head_repo author_login <<<"$metadata"
 
 if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "::error::Invalid PR head sha from GitHub API: $head_sha"

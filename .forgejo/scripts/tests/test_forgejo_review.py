@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import sys
 
@@ -10,14 +11,16 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from forgejo_api import redact_secret, split_repo  # noqa: E402
+from forgejo_api import ForgejoClient, ForgejoApiError, redact_secret, split_repo  # noqa: E402
 from post_review_comments import (  # noqa: E402
+    existing_by_key,
     extract_marker,
     finding_key,
     marker_for,
     render_inline_body,
+    render_sticky,
 )
-from prepare_pr_context import parse_changed_right_lines  # noqa: E402
+from prepare_pr_context import is_bot_comment, parse_changed_right_lines  # noqa: E402
 from resolve_pr_metadata import authorize, requested_pr_number  # noqa: E402
 
 
@@ -33,6 +36,33 @@ class ForgejoApiTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             split_repo("demo")
 
+    def test_paginated_stops_on_short_page(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret")
+        with mock.patch.object(
+            client,
+            "request",
+            side_effect=[[{"id": 1}], [{"id": 2}]],
+        ) as request:
+            self.assertEqual(client.paginated("items", limit=2), [{"id": 1}])
+            request.assert_called_once()
+
+    def test_request_redacts_token_on_http_error(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        response = mock.Mock()
+        response.read.return_value = b"secret-token failed"
+        error = __import__("urllib.error").error.HTTPError(
+            "https://git.example/api/v1/items",
+            500,
+            "server error",
+            {},
+            response,
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(ForgejoApiError) as raised:
+                client.request("POST", "items", {"x": 1})
+        self.assertIn("<redacted>", str(raised.exception))
+        self.assertNotIn("secret-token", str(raised.exception))
+
 
 class DiffParserTests(unittest.TestCase):
     def test_changed_right_lines_from_unified_diff(self) -> None:
@@ -47,6 +77,17 @@ class DiffParserTests(unittest.TestCase):
  same
 """
         self.assertEqual(parse_changed_right_lines(diff), {"app.py": {2, 3}})
+
+    def test_no_newline_marker_does_not_advance_line(self) -> None:
+        diff = """diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1 +1,2 @@
++new
+\\ No newline at end of file
++next
+"""
+        self.assertEqual(parse_changed_right_lines(diff), {"app.py": {1, 2}})
 
 
 class ReviewCommentTests(unittest.TestCase):
@@ -69,6 +110,43 @@ class ReviewCommentTests(unittest.TestCase):
         parsed_key, status = extract_marker(body)
         self.assertEqual((parsed_key, status), (key, "active"))
 
+    def test_finding_key_is_stable_when_title_or_reason_changes(self) -> None:
+        base = {
+            "agent": "security",
+            "type": "MUST",
+            "file": "src/lib.rs",
+            "line": 12,
+            "title": "old",
+            "reason": "old reason",
+        }
+        changed = {**base, "title": "new", "reason": "new reason"}
+        self.assertEqual(finding_key(base), finding_key(changed))
+
+    def test_existing_marker_ignores_non_bot_comments(self) -> None:
+        finding = {"agent": "security", "type": "MUST", "file": "src/lib.rs", "line": 12}
+        key = finding_key(finding)
+        body = marker_for(key)
+        comments = [
+            {"id": 1, "body": body, "user": {"login": "attacker"}},
+            {"id": 2, "body": body, "user": {"login": "codex-reviewer"}},
+        ]
+        self.assertEqual(existing_by_key(comments)[key]["id"], 2)
+        self.assertFalse(is_bot_comment(comments[0]))
+        self.assertTrue(is_bot_comment(comments[1]))
+
+    def test_sticky_includes_cross_cutting_findings(self) -> None:
+        body = render_sticky(
+            "2",
+            [{"type": "MUST", "title": "workflow gate is unsafe", "agent": "security", "cross_cutting": True}],
+            posted=0,
+            skipped_existing=0,
+            resolved=0,
+            axes_status={"missing": []},
+            judgment=None,
+        )
+        self.assertIn("Cross-cutting findings", body)
+        self.assertIn("workflow gate is unsafe", body)
+
 
 class EventParserTests(unittest.TestCase):
     def test_issue_comment_command_resolves_pr_number(self) -> None:
@@ -78,6 +156,11 @@ class EventParserTests(unittest.TestCase):
             "issue": {"number": 7, "pull_request": {"url": "x"}},
         }
         self.assertEqual(requested_pr_number(payload), ("7", "issue_comment:/codex-review"))
+
+    def test_pull_request_target_resolves_pr_number(self) -> None:
+        os.environ["GITHUB_EVENT_NAME"] = "pull_request_target"
+        payload = {"action": "synchronize", "pull_request": {"number": 8}}
+        self.assertEqual(requested_pr_number(payload), ("8", "pull_request_target:synchronize"))
 
     def test_authorize_rejects_bot_and_non_main(self) -> None:
         os.environ["GITHUB_ACTOR"] = "DongwonTTuna[bot]"
@@ -95,6 +178,18 @@ class EventParserTests(unittest.TestCase):
         allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, pr, "DongwonTTuna-Labs/demo")
         self.assertFalse(allowed)
         self.assertIn("base ref", reason)
+
+    def test_authorize_rejects_missing_head_repo(self) -> None:
+        os.environ["GITHUB_ACTOR"] = "DongwonTTuna"
+        pr = {
+            "draft": False,
+            "base": {"ref": "main"},
+            "head": {"repo": {}},
+            "user": {"login": "DongwonTTuna"},
+        }
+        allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, pr, "DongwonTTuna-Labs/demo")
+        self.assertFalse(allowed)
+        self.assertIn("fork PR", reason)
 
 
 class WorkflowParityTests(unittest.TestCase):
@@ -156,12 +251,31 @@ class WorkflowParityTests(unittest.TestCase):
         text = self.forgejo_text()
         self.assertIn("scripts_ref:", text)
         self.assertIn("SCRIPTS_REF", text)
-        self.assertIn('GITHUB_EVENT_NAME:-}" != "workflow_dispatch"', text)
+        self.assertIn('scripts_ref="main"', text)
+        self.assertNotIn('scripts_ref="${GITHUB_SHA}"', text)
 
     def test_post_job_uses_default_needs_success_gate(self) -> None:
         text = self.forgejo_text()
         self.assertIn("needs: tech-lead", text)
         self.assertNotIn("needs.tech-lead.result", text)
+        self.assertNotIn("Publish Forgejo review comments\n        if: always()", text)
+
+    def test_bot_token_is_scoped_to_api_steps(self) -> None:
+        pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
+        self.assertEqual(pipeline.count("FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}"), 2)
+        self.assertIn("- name: Prepare Forgejo PR review context\n        env:\n          FORGEJO_BOT_TOKEN", pipeline)
+        self.assertIn("- name: Publish Forgejo review comments\n        env:\n          FORGEJO_BOT_TOKEN", pipeline)
+
+    def test_codex_exec_unsets_ci_tokens(self) -> None:
+        script = (REPO_ROOT / ".github" / "scripts" / "codex_exec.sh").read_text(encoding="utf-8")
+        for name in ["GIT_AUTH_TOKEN", "GITHUB_TOKEN", "FORGEJO_BOT_TOKEN", "ACTIONS_RUNTIME_TOKEN"]:
+            self.assertIn(f"unset {name}", script)
+
+    def test_auto_review_uses_resolver_authorization(self) -> None:
+        workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
+        self.assertIn("CODEX_ALLOWED_LOGIN: ${{ vars.CODEX_ALLOWED_LOGIN || 'DongwonTTuna' }}", workflow)
+        self.assertIn("run: python3 .forgejo/scripts/resolve_pr_metadata.py", workflow)
+        self.assertNotIn("github.event.pull_request.user.login == 'DongwonTTuna'", workflow)
 
     def test_manual_checkout_commands_end_before_next_step(self) -> None:
         for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
