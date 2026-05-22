@@ -147,6 +147,11 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertNotIn("runs-on: rust", text)
         self.assertNotIn("runs-on: ubuntu-latest", text)
 
+    def test_workflows_use_non_reserved_secret_name(self) -> None:
+        text = self.forgejo_text()
+        self.assertIn("secrets.CODEX_REVIEW_BOT_TOKEN", text)
+        self.assertNotIn("secrets.FORGEJO_BOT_TOKEN", text)
+
     def test_manual_checkout_commands_end_before_next_step(self) -> None:
         for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
             for line in path.read_text(encoding="utf-8").splitlines():

@@ -53,7 +53,7 @@ jobs:
         env:
           FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
           FORGEJO_REPOSITORY: ${{ github.repository }}
-          FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 .forgejo/scripts/resolve_pr_metadata.py
 
