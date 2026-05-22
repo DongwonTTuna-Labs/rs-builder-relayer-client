@@ -50,8 +50,8 @@ pub enum RelayerError {
     #[error("Deposit-wallet reconciliation required: {0}")]
     ReconciliationRequired(String),
 
-    #[error("Relayer quota exhausted (429)")]
-    QuotaExhausted,
+    #[error("Relayer quota exhausted (429){retry_after}")]
+    QuotaExhausted { retry_after: String },
 
     #[error("{0}")]
     Other(String),

@@ -529,7 +529,9 @@ impl RelayClient {
             let status = resp.status().as_u16();
             let err = resp.text().await.unwrap_or_default();
             if status == 429 {
-                return Err(RelayerError::QuotaExhausted);
+                return Err(RelayerError::QuotaExhausted {
+                    retry_after: String::new(),
+                });
             }
             return Err(RelayerError::Api { status, message: err });
         }
