@@ -57,7 +57,7 @@ pub fn try_build_wallet_batch_request_with_signature(
         deadline,
         calls,
     };
-    let signed = validate_deposit_wallet_batch_signature(&batch, &signature)?;
+    let signed = validate_deposit_wallet_batch_signature(batch, &signature)?;
 
     build_deposit_wallet_batch_request_from_signed(signed, config)
 }

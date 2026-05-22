@@ -109,8 +109,7 @@ fn wallet_batch_signature_recovery_accepts_owner() {
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
-    let signed = validate_deposit_wallet_batch_signature(
-        &batch,
+    let signed = validate_deposit_wallet_batch_signature(batch.clone(),
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
@@ -140,8 +139,7 @@ fn wallet_batch_multicall_matches_official_sdk_fixture() {
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
-    let signed = validate_deposit_wallet_batch_signature(
-        &batch,
+    let signed = validate_deposit_wallet_batch_signature(batch.clone(),
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
@@ -174,7 +172,7 @@ fn wallet_batch_signature_rejects_non_owner_signer() {
 
     assert_eq!(recovered, expected_signer);
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&batch, data["nonOwnerSignature"].as_str().unwrap()),
+        validate_deposit_wallet_batch_signature(batch.clone(), data["nonOwnerSignature"].as_str().unwrap()),
         "signer must match owner",
     );
 }
@@ -196,8 +194,7 @@ fn wallet_batch_signature_rejects_unauthorized_or_self_asserted_session_signer()
 
     assert_eq!(recovered, self_asserted);
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(
-            &batch,
+        validate_deposit_wallet_batch_signature(batch.clone(),
             data["unauthorizedSignature"].as_str().unwrap(),
         ),
         "signer must match owner",
@@ -223,7 +220,7 @@ fn wallet_batch_signature_rejects_malformed_signature_shapes() {
             "0x-prefixed 65-byte hex",
         );
         assert_signing_error_contains(
-            validate_deposit_wallet_batch_signature(&batch, &signature),
+            validate_deposit_wallet_batch_signature(batch.clone(), &signature),
             "0x-prefixed 65-byte hex",
         );
     }
@@ -233,7 +230,7 @@ fn wallet_batch_signature_rejects_malformed_signature_shapes() {
         "could not recover deposit wallet signer",
     );
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&batch, &unrecoverable_signature),
+        validate_deposit_wallet_batch_signature(batch.clone(), &unrecoverable_signature),
         "could not recover deposit wallet signer",
     );
 }
@@ -260,11 +257,11 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
         "call count exceeds maximum",
     );
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&too_many_calls, valid_signature_shape),
+        validate_deposit_wallet_batch_signature(too_many_calls.clone(), valid_signature_shape),
         "call count exceeds maximum",
     );
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&too_many_calls, malformed_signature),
+        validate_deposit_wallet_batch_signature(too_many_calls.clone(), malformed_signature),
         "0x-prefixed 65-byte hex",
     );
 
@@ -283,7 +280,7 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
         "calldata bytes exceed maximum",
     );
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&too_much_calldata, valid_signature_shape),
+        validate_deposit_wallet_batch_signature(too_much_calldata.clone(), valid_signature_shape),
         "calldata bytes exceed maximum",
     );
 
@@ -306,8 +303,7 @@ fn wallet_batch_signature_rejects_resource_abuse_before_digest() {
         "calldata bytes exceed maximum",
     );
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(
-            &split_too_much_calldata,
+        validate_deposit_wallet_batch_signature(split_too_much_calldata.clone(),
             valid_signature_shape,
         ),
         "calldata bytes exceed maximum",
@@ -420,7 +416,7 @@ fn wallet_batch_validation_rejects_signed_payload_mutations() {
     let mut chain_mutation = batch.clone();
     chain_mutation.chain_id = 80002;
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&chain_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(chain_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
@@ -429,21 +425,21 @@ fn wallet_batch_validation_rejects_signed_payload_mutations() {
         .parse()
         .unwrap();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&wallet_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(wallet_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
     let mut nonce_mutation = batch.clone();
     nonce_mutation.nonce += U256::one();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&nonce_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(nonce_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
     let mut deadline_mutation = batch.clone();
     deadline_mutation.deadline += U256::one();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&deadline_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(deadline_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
@@ -452,14 +448,14 @@ fn wallet_batch_validation_rejects_signed_payload_mutations() {
         .parse()
         .unwrap();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&target_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(target_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
     let mut value_mutation = batch.clone();
     value_mutation.calls[0].value += U256::one();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&value_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(value_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
@@ -468,7 +464,7 @@ fn wallet_batch_validation_rejects_signed_payload_mutations() {
     call_data.push(0);
     data_mutation.calls[0].data = Bytes::from(call_data);
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(&data_mutation, owner_signature),
+        validate_deposit_wallet_batch_signature(data_mutation.clone(), owner_signature),
         "signer must match owner",
     );
 
@@ -476,8 +472,7 @@ fn wallet_batch_validation_rejects_signed_payload_mutations() {
     let mut order_mutation = batch_from_fixture(&multicall_data);
     order_mutation.calls.swap(0, 1);
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(
-            &order_mutation,
+        validate_deposit_wallet_batch_signature(order_mutation.clone(),
             multicall_data["ownerSignature"].as_str().unwrap(),
         ),
         "signer must match owner",
@@ -496,8 +491,7 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
     owner_mutation.nonce_owner = owner_mutation.owner;
     owner_mutation.submit_from = owner_mutation.owner;
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(
-            &owner_mutation,
+        validate_deposit_wallet_batch_signature(owner_mutation.clone(),
             data["ownerSignature"].as_str().unwrap(),
         ),
         "signer must match owner",
@@ -508,8 +502,7 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
         .parse()
         .unwrap();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(
-            &nonce_owner_mutation,
+        validate_deposit_wallet_batch_signature(nonce_owner_mutation.clone(),
             data["ownerSignature"].as_str().unwrap(),
         ),
         "nonce owner must match owner signer",
@@ -520,8 +513,7 @@ fn wallet_batch_validation_rejects_owner_or_submit_identity_mutation() {
         .parse()
         .unwrap();
     assert_signing_error_contains(
-        validate_deposit_wallet_batch_signature(
-            &submit_from_mutation,
+        validate_deposit_wallet_batch_signature(submit_from_mutation.clone(),
             data["ownerSignature"].as_str().unwrap(),
         ),
         "submit from must match owner signer",
@@ -539,8 +531,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     let from_checksum = to_checksum(&batch.submit_from, None);
     let factory_checksum = to_checksum(&config.factory, None);
     let deposit_wallet_checksum = to_checksum(&batch.deposit_wallet, None);
-    let signed = validate_deposit_wallet_batch_signature(
-        &batch,
+    let signed = validate_deposit_wallet_batch_signature(batch.clone(),
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
@@ -582,7 +573,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
     let wrong_wallet_digest = digest_deposit_wallet_batch(&wrong_wallet_batch).unwrap();
     let wrong_wallet_signature = format!("0x{}", wallet.sign_hash(wrong_wallet_digest).unwrap());
     let wrong_wallet_signed =
-        validate_deposit_wallet_batch_signature(&wrong_wallet_batch, &wrong_wallet_signature)
+        validate_deposit_wallet_batch_signature(wrong_wallet_batch.clone(), &wrong_wallet_signature)
             .unwrap();
     assert_signing_error_contains(
         build_deposit_wallet_batch_request_from_signed(wrong_wallet_signed, config),
@@ -602,8 +593,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         "0x{}",
         unsupported_wallet.sign_hash(unsupported_digest).unwrap()
     );
-    let unsupported_signed = validate_deposit_wallet_batch_signature(
-        &unsupported_chain_batch,
+    let unsupported_signed = validate_deposit_wallet_batch_signature(unsupported_chain_batch.clone(),
         &unsupported_signature,
     )
     .unwrap();
@@ -803,8 +793,7 @@ fn wallet_batch_public_try_builder_accepts_amoy_config_branch() {
 fn signed_batch_debug_redacts_signature_and_payload_material() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
-    let signed = validate_deposit_wallet_batch_signature(
-        &batch,
+    let signed = validate_deposit_wallet_batch_signature(batch.clone(),
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
@@ -847,8 +836,7 @@ fn signed_batch_debug_redacts_signature_and_payload_material() {
 fn signed_batch_accessors_expose_safe_metadata() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let batch = batch_from_fixture(&data);
-    let signed = validate_deposit_wallet_batch_signature(
-        &batch,
+    let signed = validate_deposit_wallet_batch_signature(batch.clone(),
         data["ownerSignature"].as_str().unwrap(),
     )
     .unwrap();
@@ -954,7 +942,7 @@ fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
         .headers("GET", nonce_request.path_and_query.as_str(), "")
         .unwrap();
     let signed =
-        validate_deposit_wallet_batch_signature(&batch, data["ownerSignature"].as_str().unwrap())
+        validate_deposit_wallet_batch_signature(batch.clone(), data["ownerSignature"].as_str().unwrap())
             .unwrap();
     let signed_owner = signed.owner();
     let submit_request = serde_json::to_value(

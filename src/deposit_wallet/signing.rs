@@ -308,13 +308,13 @@ pub fn recover_deposit_wallet_batch_signer(
 }
 
 pub fn validate_deposit_wallet_batch_signature(
-    batch: &DepositWalletBatchToSign,
+    batch: DepositWalletBatchToSign,
     signature: &str,
 ) -> Result<SignedDepositWalletBatch> {
     let signature_payload = validate_signature_shape(signature)?;
-    validate_batch_resource_limits(batch)?;
-    validate_batch_identity(batch)?;
-    let digest = digest_deposit_wallet_batch(batch)?;
+    validate_batch_resource_limits(&batch)?;
+    validate_batch_identity(&batch)?;
+    let digest = digest_deposit_wallet_batch(&batch)?;
     let verified_signer = recover_digest_signer_payload(digest, signature_payload)?;
     if verified_signer != batch.owner {
         return Err(RelayerError::Signing(
@@ -330,7 +330,7 @@ pub fn validate_deposit_wallet_batch_signature(
         chain_id: batch.chain_id,
         nonce: batch.nonce,
         deadline: batch.deadline,
-        calls: batch.calls.clone(),
+        calls: batch.calls,
         digest,
         signature: signature.to_string(),
         verified_signer,
@@ -540,11 +540,8 @@ mod tests {
     fn signed_fixture() -> SignedDepositWalletBatch {
         let data = fixture();
         let batch = batch_from_fixture(&data);
-        validate_deposit_wallet_batch_signature(
-            &batch,
-            data["ownerSignature"].as_str().unwrap(),
-        )
-        .unwrap()
+        validate_deposit_wallet_batch_signature(batch, data["ownerSignature"].as_str().unwrap())
+            .unwrap()
     }
 
     fn assert_signing_error_contains(result: Result<()>, expected: &str) {
