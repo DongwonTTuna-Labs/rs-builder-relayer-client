@@ -1,15 +1,30 @@
 pub mod builder;
 pub mod relayer_key;
 
+use std::fmt;
+
 use reqwest::header::HeaderMap;
 
 /// Authentication method for the relayer.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AuthMethod {
     /// Builder Program HMAC-SHA256 authentication.
     Builder(BuilderConfig),
     /// Simple Relayer API key authentication.
     RelayerKey { api_key: String, address: String },
+}
+
+impl fmt::Debug for AuthMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Builder(config) => f.debug_tuple("Builder").field(config).finish(),
+            Self::RelayerKey { address, .. } => f
+                .debug_struct("RelayerKey")
+                .field("api_key", &"<redacted>")
+                .field("address", address)
+                .finish(),
+        }
+    }
 }
 
 impl AuthMethod {
@@ -47,9 +62,19 @@ impl AuthMethod {
 }
 
 /// Builder Program API key credentials.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BuilderConfig {
     pub key: String,
     pub secret: String,
     pub passphrase: String,
+}
+
+impl fmt::Debug for BuilderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BuilderConfig")
+            .field("key", &"<redacted>")
+            .field("secret", &"<redacted>")
+            .field("passphrase", &"<redacted>")
+            .finish()
+    }
 }
