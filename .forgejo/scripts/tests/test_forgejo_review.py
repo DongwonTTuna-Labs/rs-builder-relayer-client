@@ -158,6 +158,11 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("SCRIPTS_REF", text)
         self.assertIn('GITHUB_EVENT_NAME:-}" != "workflow_dispatch"', text)
 
+    def test_post_job_uses_default_needs_success_gate(self) -> None:
+        text = self.forgejo_text()
+        self.assertIn("needs: tech-lead", text)
+        self.assertNotIn("needs.tech-lead.result", text)
+
     def test_manual_checkout_commands_end_before_next_step(self) -> None:
         for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
             for line in path.read_text(encoding="utf-8").splitlines():

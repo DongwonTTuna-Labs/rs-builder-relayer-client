@@ -342,7 +342,6 @@ jobs:
   post:
     name: post
     needs: tech-lead
-    if: always() && !cancelled() && needs.tech-lead.result == 'success'
     runs-on: dongwontuna-labs-runner
     timeout-minutes: 10
     env:
