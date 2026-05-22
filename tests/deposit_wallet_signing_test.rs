@@ -1,4 +1,3 @@
-use ethers::core::rand::{rngs::StdRng, SeedableRng};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::to_checksum;
@@ -559,8 +558,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         "submit config does not match signed chain id",
     );
 
-    let mut rng = StdRng::seed_from_u64(1);
-    let wallet = LocalWallet::new(&mut rng);
+    let wallet = ephemeral_wallet();
     let owner = wallet.address();
     let mut wrong_wallet_batch = batch;
     wrong_wallet_batch.owner = owner;
@@ -579,8 +577,7 @@ fn signed_batch_submit_request_matches_fixture_and_rejects_config_mismatch() {
         "wallet does not match owner/config derived wallet",
     );
 
-    let mut rng = StdRng::seed_from_u64(2);
-    let unsupported_wallet = LocalWallet::new(&mut rng);
+    let unsupported_wallet = ephemeral_wallet();
     let unsupported_owner = unsupported_wallet.address();
     let mut unsupported_chain_batch = batch_from_fixture(&data);
     unsupported_chain_batch.owner = unsupported_owner;
@@ -768,8 +765,7 @@ fn wallet_batch_public_try_builder_accepts_amoy_config_branch() {
     let data = fixture("deposit_wallet/wallet_batch_eip712.json");
     let mut batch = batch_from_fixture(&data);
     let config = deposit_wallet_contract_config(80002).unwrap();
-    let mut rng = StdRng::seed_from_u64(3);
-    let wallet = LocalWallet::new(&mut rng);
+    let wallet = ephemeral_wallet();
     let owner = wallet.address();
     let deposit_wallet = derive_deposit_wallet_address(owner, config).unwrap();
 
@@ -949,7 +945,7 @@ fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
 
     let nonce_request = build_wallet_nonce_request(owner);
     let headers = auth
-        .headers("GET", nonce_request.path_and_query.as_str(), "")
+        .headers("GET", nonce_request.path_and_query().as_str(), "")
         .unwrap();
     let signed =
         validate_deposit_wallet_batch_signature(batch.clone(), data["ownerSignature"].as_str().unwrap())
@@ -966,8 +962,12 @@ fn wallet_nonce_signing_and_submit_keep_auth_identity_separate_from_owner() {
 
     assert_ne!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), data["owner"].as_str().unwrap());
     assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), auth_address);
-    assert_eq!(nonce_request.address, owner);
+    assert_eq!(nonce_request.address(), owner);
     assert_eq!(signed_owner, owner);
     assert_eq!(submit_request["from"], data["submitFrom"]);
     assert_eq!(submit_request["from"], data["owner"]);
+}
+
+fn ephemeral_wallet() -> LocalWallet {
+    LocalWallet::new(&mut ethers::core::rand::thread_rng())
 }

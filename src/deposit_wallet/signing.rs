@@ -370,7 +370,16 @@ pub fn build_deposit_wallet_batch_request_from_signed(
     signed.validate_submit_preflight()?;
     validate_submit_config(&signed, config)?;
 
-    Ok(build_wallet_batch_request_unchecked(
+    Ok(build_deposit_wallet_batch_request_from_prechecked_signed(
+        signed, config,
+    ))
+}
+
+pub(crate) fn build_deposit_wallet_batch_request_from_prechecked_signed(
+    signed: SignedDepositWalletBatch,
+    config: DepositWalletContractConfig,
+) -> DepositWalletBatchRequest {
+    build_wallet_batch_request_unchecked(
         crate::deposit_wallet::DepositWalletRequestContext {
             owner_address: signed.submit_from,
             deposit_wallet_address: signed.deposit_wallet,
@@ -380,7 +389,7 @@ pub fn build_deposit_wallet_batch_request_from_signed(
         signed.deadline,
         signed.calls,
         signed.signature,
-    ))
+    )
 }
 
 fn validate_batch_resource_limits(batch: &DepositWalletBatchToSign) -> Result<()> {

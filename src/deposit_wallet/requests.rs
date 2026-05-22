@@ -1,15 +1,16 @@
 use ethers::types::U256;
 
 use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
+use crate::deposit_wallet::signing::build_deposit_wallet_batch_request_from_prechecked_signed;
 use crate::deposit_wallet::signing::{
     validate_deposit_wallet_batch_resource_limits,
     validate_deposit_wallet_batch_signature_with_validated_resources,
 };
 use crate::deposit_wallet::{
-    build_deposit_wallet_batch_request_from_signed, derive_deposit_wallet_address,
-    DepositWalletBatchRequest, DepositWalletBatchToSign, DepositWalletCall,
-    DepositWalletContractConfig, DepositWalletCreateRequest, DepositWalletParams,
-    DepositWalletRequestContext, WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
+    derive_deposit_wallet_address, DepositWalletBatchRequest, DepositWalletBatchToSign,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
+    DepositWalletParams, DepositWalletRequestContext, WALLET_CREATE_TRANSACTION_TYPE,
+    WALLET_TRANSACTION_TYPE,
 };
 use crate::error::{RelayerError, Result};
 
@@ -61,7 +62,9 @@ pub fn try_build_wallet_batch_request_with_signature(
     };
     let signed = validate_deposit_wallet_batch_signature_with_validated_resources(batch, &signature)?;
 
-    build_deposit_wallet_batch_request_from_signed(signed, config)
+    Ok(build_deposit_wallet_batch_request_from_prechecked_signed(
+        signed, config,
+    ))
 }
 
 pub(crate) fn build_wallet_batch_request_unchecked(
