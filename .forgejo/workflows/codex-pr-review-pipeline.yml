@@ -21,20 +21,18 @@ on:
         default: pull_request_target
 
 jobs:
-  review:
-    name: Review and publish comments
+  prepare-context:
+    name: prepare-context
     runs-on: codex
+    timeout-minutes: 5
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
       HEAD_SHA: ${{ inputs.head_sha }}
       BASE_SHA: ${{ inputs.base_sha }}
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
-      GITHUB_HEAD_REF: refs/pull/${{ inputs.pr_number }}/head
       FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
       FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
-      ART_DIR: ${{ github.workspace }}/artifacts
-      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
     steps:
       - name: Checkout base ref (trusted scripts)
@@ -59,13 +57,70 @@ jobs:
           git_fetch fetch --depth=1 origin "$BASE_REF"
           git checkout --detach FETCH_HEAD
 
+      - name: Prepare Forgejo PR review context
+        run: python3 pipeline/.forgejo/scripts/prepare_pr_context.py
+
+      - name: Stage context for upload
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp "$RUNNER_TEMP/pr-context.json" artifacts/pr-context.json
+
+      - name: Upload PR context artifact
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: codex-review-context
+          path: artifacts/pr-context.json
+          retention-days: 7
+
+  review:
+    name: review (${{ matrix.axis }})
+    needs: prepare-context
+    runs-on: codex
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        axis:
+          - correctness
+          - security
+          - performance
+          - test-coverage
+          - domain
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      GITHUB_HEAD_REF: refs/pull/${{ inputs.pr_number }}/head
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      GIT_AUTH_TOKEN: ${{ github.token }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
+      CODEX_WORKSPACE: ${{ github.workspace }}/workspace
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git checkout --detach FETCH_HEAD
+
       - name: Checkout PR head (review data only)
         env:
           PR_NUMBER: ${{ inputs.pr_number }}
-          HEAD_SHA: ${{ inputs.head_sha }}
-          FORGEJO_SERVER_URL: https://git.dongwontuna.net
-          FORGEJO_REPOSITORY: ${{ github.repository }}
-          GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -83,47 +138,267 @@ jobs:
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
 
-      - name: Prepare artifact directory
-        run: mkdir -p "$ART_DIR"
-
-      - name: Prepare Forgejo PR review context
-        run: python3 pipeline/.forgejo/scripts/prepare_pr_context.py
-
-      - name: Run axis reviews
+      - name: Prepare review git context
+        working-directory: workspace
         env:
-          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+          BASE_REF: ${{ inputs.base_ref }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          for axis in correctness security performance test-coverage domain; do
-            python3 pipeline/.github/scripts/build_prompt.py --axis "$axis"
-            PROMPT_FILE="$RUNNER_TEMP/prompt-$axis.md" \
-            SCHEMA_FILE="$PWD/pipeline/.github/scripts/schemas/findings.schema.json" \
-            OUT_FILE="$RUNNER_TEMP/codex-output-$axis.json" \
-            LOG_FILE="$RUNNER_TEMP/codex-$axis.log" \
-            bash pipeline/.github/scripts/codex_exec.sh
-            python3 pipeline/.github/scripts/normalize_codex_output.py --schema findings --axis "$axis"
-            cp "$RUNNER_TEMP/findings-$axis.json" "$ART_DIR/findings-$axis.json"
+          : "${BASE_REF:?BASE_REF is required}"
+          : "${BASE_SHA:?BASE_SHA is required}"
+          : "${HEAD_SHA:?HEAD_SHA is required}"
+          : "${PR_NUMBER:?PR_NUMBER is required}"
+
+          remote_name="origin"
+          deepen_step=256
+          max_deepen_rounds=8
+
+          if ! git check-ref-format "refs/remotes/$remote_name/$BASE_REF"; then
+            echo "::error::Invalid base ref name: $BASE_REF"
+            exit 1
+          fi
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid base sha format: $BASE_SHA"
+            exit 1
+          fi
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid head sha format: $HEAD_SHA"
+            exit 1
+          fi
+
+          git_fetch() {
+            git \
+              -c core.commitGraph=false \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+
+          base_ref="refs/remotes/$remote_name/$BASE_REF"
+          git_fetch fetch --depth="$deepen_step" "$remote_name" "$BASE_SHA" "$HEAD_SHA"
+          git update-ref "$base_ref" "$BASE_SHA"
+
+          if [[ "$(git rev-parse HEAD)" != "$HEAD_SHA" ]]; then
+            echo "::error::Checked out head does not match workflow input HEAD_SHA."
+            exit 1
+          fi
+
+          round=0
+          until git merge-base "$base_ref" HEAD >/dev/null 2>&1; do
+            round=$((round + 1))
+            if (( round > max_deepen_rounds )); then
+              echo "::error::Could not find merge-base after $max_deepen_rounds deepen rounds."
+              exit 1
+            fi
+            git_fetch fetch --deepen="$deepen_step" "$remote_name" "$BASE_SHA" "$HEAD_SHA"
           done
+          git_fetch diff --no-ext-diff "$base_ref...HEAD" >/dev/null
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Build axis prompt
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.github/scripts/build_prompt.py --axis ${{ matrix.axis }}
+
+      - name: Run Codex review (${{ matrix.axis }})
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-${{ matrix.axis }}.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.github/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-${{ matrix.axis }}.json
+          LOG_FILE: ${{ runner.temp }}/codex-${{ matrix.axis }}.log
+        run: bash pipeline/.github/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.github/scripts/normalize_codex_output.py --schema findings --axis ${{ matrix.axis }}
+
+      - name: Stage findings into artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp "$RUNNER_TEMP/findings-${{ matrix.axis }}.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: codex-review-${{ matrix.axis }}-findings
+          path: artifacts/findings-${{ matrix.axis }}.json
+          retention-days: 7
+
+  tech-lead:
+    name: tech-lead
+    needs: review
+    if: always() && !cancelled()
+    runs-on: codex
+    timeout-minutes: 20
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      GIT_AUTH_TOKEN: ${{ github.token }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
+      ART_DIR: ${{ github.workspace }}/artifacts
+      CODEX_WORKSPACE: ${{ github.workspace }}/pipeline
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download all findings
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts/
+          merge-multiple: true
 
       - name: Combine findings
-        run: python3 pipeline/.github/scripts/merge_and_gate.py --phase combine
-
-      - name: Run tech lead review
-        env:
-          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        id: combine
         run: |
           set -euo pipefail
-          cp "$ART_DIR/combined.json" "$RUNNER_TEMP/combined.json"
-          python3 pipeline/.github/scripts/build_prompt.py --axis tech-lead
-          PROMPT_FILE="$RUNNER_TEMP/prompt-tech-lead.md" \
-          SCHEMA_FILE="$PWD/pipeline/.github/scripts/schemas/decisions.schema.json" \
-          OUT_FILE="$RUNNER_TEMP/codex-output-tech-lead.json" \
-          LOG_FILE="$RUNNER_TEMP/codex-tech-lead.log" \
-          bash pipeline/.github/scripts/codex_exec.sh
-          python3 pipeline/.github/scripts/normalize_codex_output.py --schema decisions
-          cp "$RUNNER_TEMP/decisions.json" "$ART_DIR/decisions.json"
+          python3 pipeline/.github/scripts/merge_and_gate.py --phase combine
+          count=$(python3 -c "import json; print(len(json.load(open('artifacts/combined.json'))))")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          cp artifacts/combined.json "$RUNNER_TEMP/combined.json"
 
-      - name: Apply review gate
+      - name: Build tech-lead prompt
+        if: steps.combine.outputs.count != '0'
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.github/scripts/build_prompt.py --axis tech-lead
+
+      - name: Run Codex tech-lead gate
+        if: steps.combine.outputs.count != '0'
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-tech-lead.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.github/scripts/schemas/decisions.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-tech-lead.json
+          LOG_FILE: ${{ runner.temp }}/codex-tech-lead.log
+        run: bash pipeline/.github/scripts/codex_exec.sh
+
+      - name: Normalize decisions
+        if: steps.combine.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          python3 pipeline/.github/scripts/normalize_codex_output.py --schema decisions
+          cp "$RUNNER_TEMP/decisions.json" artifacts/
+
+      - name: Emit empty decisions when no findings
+        if: steps.combine.outputs.count == '0'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          printf '%s\n' '{"decisions": [], "merge_notes": [], "judgment": null}' > artifacts/decisions.json
+
+      - name: Upload decisions artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: codex-tech-lead-decisions
+          path: artifacts/decisions.json
+          retention-days: 7
+
+      - name: Upload combined findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: codex-combined-findings
+          path: artifacts/combined.json
+          retention-days: 7
+
+      - name: Upload axes status artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: codex-axes-status
+          path: artifacts/axes_status.json
+          retention-days: 7
+
+  post:
+    name: post
+    needs: tech-lead
+    if: always() && !cancelled() && needs.tech-lead.result == 'success'
+    runs-on: codex
+    timeout-minutes: 10
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      TRIGGER: ${{ inputs.trigger }}
+      FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      FORGEJO_BOT_TOKEN: ${{ secrets.FORGEJO_BOT_TOKEN }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      GIT_AUTH_TOKEN: ${{ github.token }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
+      ART_DIR: ${{ github.workspace }}/artifacts
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download findings artifacts
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download combined findings
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          name: codex-combined-findings
+          path: artifacts/
+
+      - name: Download decisions artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          name: codex-tech-lead-decisions
+          path: artifacts/
+
+      - name: Download axes status artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          name: codex-axes-status
+          path: artifacts/
+
+      - name: Apply hard rules
         run: python3 pipeline/.github/scripts/merge_and_gate.py --phase gate
 
       - name: Publish Forgejo review comments

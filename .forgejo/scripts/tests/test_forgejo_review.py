@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from forgejo_api import redact_secret, split_repo  # noqa: E402
@@ -94,6 +95,50 @@ class EventParserTests(unittest.TestCase):
         allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, pr, "DongwonTTuna-Labs/demo")
         self.assertFalse(allowed)
         self.assertIn("base ref", reason)
+
+
+class WorkflowParityTests(unittest.TestCase):
+    def forgejo_text(self) -> str:
+        chunks = []
+        for path in (REPO_ROOT / ".forgejo").rglob("*"):
+            if "tests" in path.parts:
+                continue
+            if path.suffix not in {".yml", ".yaml", ".py", ".sh"}:
+                continue
+            chunks.append(path.read_text(encoding="utf-8"))
+        return "\n".join(chunks)
+
+    def test_workflows_do_not_keep_legacy_github_review_integrations(self) -> None:
+        text = self.forgejo_text()
+        forbidden = [
+            "api.github.com",
+            "gh api",
+            "actions/create-github-app-token",
+            "CODEX_APP_",
+            "codex-review-bot",
+            "data.forgejo.org",
+        ]
+        for value in forbidden:
+            self.assertNotIn(value, text)
+
+    def test_actions_use_canonical_forgejo_sources(self) -> None:
+        text = self.forgejo_text()
+        self.assertIn("https://code.forgejo.org/forgejo/upload-artifact@v4", text)
+        self.assertIn("https://code.forgejo.org/forgejo/download-artifact@v4", text)
+        self.assertNotIn("https://data.forgejo.org/actions/cache", text)
+        self.assertNotIn("https://data.forgejo.org/actions/upload-artifact", text)
+        self.assertNotIn("https://data.forgejo.org/actions/download-artifact", text)
+        if "actions/cache@v4" in text:
+            self.assertIn("https://code.forgejo.org/actions/cache@v4", text)
+
+    def test_workflows_do_not_bootstrap_runner_toolchains(self) -> None:
+        text = self.forgejo_text()
+        self.assertNotIn("setup-node", text)
+        self.assertNotIn("setup-rust", text)
+        self.assertNotIn("install_node_action_runtime", text)
+        self.assertNotIn("NODE_MAJOR", text)
+        self.assertNotIn("NODE_VERSION", text)
+        self.assertNotIn("node-v$NODE_VERSION", text)
 
 
 if __name__ == "__main__":
