@@ -15,6 +15,9 @@ on:
       base_sha:
         required: true
         type: string
+      scripts_ref:
+        required: true
+        type: string
       trigger:
         required: false
         type: string
@@ -37,7 +40,7 @@ jobs:
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
-          BASE_REF: ${{ inputs.base_ref }}
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
           FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
@@ -54,7 +57,7 @@ jobs:
               -c credential.useHttpPath=true \
               "$@"
           }
-          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
           git checkout --detach FETCH_HEAD
 
       - name: Prepare Forgejo PR review context
@@ -101,7 +104,7 @@ jobs:
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
-          BASE_REF: ${{ inputs.base_ref }}
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -115,7 +118,7 @@ jobs:
               -c credential.useHttpPath=true \
               "$@"
           }
-          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
           git checkout --detach FETCH_HEAD
 
       - name: Checkout PR head (review data only)
@@ -250,7 +253,7 @@ jobs:
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
-          BASE_REF: ${{ inputs.base_ref }}
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -264,7 +267,7 @@ jobs:
               -c credential.useHttpPath=true \
               "$@"
           }
-          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
           git checkout --detach FETCH_HEAD
 
       - name: Download all findings
@@ -356,7 +359,7 @@ jobs:
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
-          BASE_REF: ${{ inputs.base_ref }}
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -370,7 +373,7 @@ jobs:
               -c credential.useHttpPath=true \
               "$@"
           }
-          git_fetch fetch --depth=1 origin "$BASE_REF"
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
           git checkout --detach FETCH_HEAD
 
       - name: Download findings artifacts

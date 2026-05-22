@@ -27,6 +27,7 @@ jobs:
       head_sha: ${{ steps.lookup.outputs.head_sha }}
       base_sha: ${{ steps.lookup.outputs.base_sha }}
       base_ref: ${{ steps.lookup.outputs.base_ref }}
+      scripts_ref: ${{ steps.lookup.outputs.scripts_ref }}
       trigger: ${{ steps.lookup.outputs.trigger }}
     steps:
       - name: Checkout trusted scripts
@@ -45,7 +46,11 @@ jobs:
               -c credential.useHttpPath=true \
               "$@"
           }
-          git_fetch fetch --depth=1 origin main
+          scripts_ref="${GITHUB_SHA}"
+          if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]]; then
+            scripts_ref="main"
+          fi
+          git_fetch fetch --depth=1 origin "$scripts_ref"
           git checkout --detach FETCH_HEAD
 
       - name: Resolve PR head / base
@@ -67,5 +72,6 @@ jobs:
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       base_ref: ${{ needs.resolve.outputs.base_ref }}
       base_sha: ${{ needs.resolve.outputs.base_sha }}
+      scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
       trigger: ${{ needs.resolve.outputs.trigger }}
     secrets: inherit

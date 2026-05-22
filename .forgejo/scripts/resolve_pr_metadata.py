@@ -94,6 +94,10 @@ def main() -> int:
     set_output("head_sha", str(head.get("sha") or ""))
     set_output("base_sha", str(base.get("sha") or ""))
     set_output("base_ref", str(base.get("ref") or "main"))
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        set_output("scripts_ref", str(os.environ.get("GITHUB_SHA") or ""))
+    else:
+        set_output("scripts_ref", str(base.get("sha") or base.get("ref") or "main"))
     set_output("trigger", trigger)
     if not allowed:
         print(f"Codex review skipped: {reason}")

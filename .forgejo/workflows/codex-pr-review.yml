@@ -24,5 +24,6 @@ jobs:
       head_sha: ${{ github.event.pull_request.head.sha }}
       base_ref: ${{ github.event.pull_request.base.ref }}
       base_sha: ${{ github.event.pull_request.base.sha }}
+      scripts_ref: ${{ github.event.pull_request.base.sha }}
       trigger: pull_request_target:${{ github.event.action }}
     secrets: inherit

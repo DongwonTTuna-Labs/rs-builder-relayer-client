@@ -152,6 +152,12 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("secrets.CODEX_REVIEW_BOT_TOKEN", text)
         self.assertNotIn("secrets.FORGEJO_BOT_TOKEN", text)
 
+    def test_manual_dispatch_can_use_bootstrap_scripts_ref(self) -> None:
+        text = self.forgejo_text()
+        self.assertIn("scripts_ref:", text)
+        self.assertIn("SCRIPTS_REF", text)
+        self.assertIn('GITHUB_EVENT_NAME:-}" != "workflow_dispatch"', text)
+
     def test_manual_checkout_commands_end_before_next_step(self) -> None:
         for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
             for line in path.read_text(encoding="utf-8").splitlines():
