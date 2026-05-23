@@ -17,6 +17,7 @@ from post_review_comments import (  # noqa: E402
     extract_marker,
     finding_key,
     marker_for,
+    post_inline_comments,
     render_inline_body,
     render_sticky,
 )
@@ -136,6 +137,62 @@ class ReviewCommentTests(unittest.TestCase):
         self.assertEqual(existing_by_key(comments)[key]["id"], 2)
         self.assertFalse(is_bot_comment(comments[0]))
         self.assertTrue(is_bot_comment(comments[1]))
+
+    def test_changed_existing_inline_comment_is_deleted_and_reposted(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                self.calls.append((method, path, data))
+                return {}
+
+        finding = {
+            "agent": "test-coverage",
+            "id": "test-coverage-4",
+            "type": "MUST",
+            "file": ".forgejo/scripts/forgejo_api.py",
+            "line": 81,
+            "title": "Forgejo API request 실패 경로 테스트가 없습니다",
+            "reason": "urllib.request.urlopen mock coverage를 추가해야 합니다.",
+        }
+        key = finding_key(finding)
+        stale_body = "\n".join(
+            [
+                marker_for(key),
+                "        **[MUST] Forgejo API request 실패 경로 테스트가 없습니다**",
+                "",
+                "urllib.request.urlopen mock coverage를 추가해야 합니다.",
+                "",
+                "        _Codex Reviewer for DongwonTTuna: `test-coverage` / `test-coverage-4`_",
+            ]
+        )
+        client = FakeClient()
+
+        posted, skipped = post_inline_comments(
+            client,
+            "4",
+            "abc123",
+            [finding],
+            {
+                key: {
+                    "id": 61,
+                    "pull_request_review_id": 1,
+                    "body": stale_body,
+                    "user": {"login": "codex-reviewer"},
+                }
+            },
+        )
+
+        self.assertEqual((posted, skipped), (1, 0))
+        self.assertEqual(client.calls[0][0], "DELETE")
+        self.assertIn("pulls/4/reviews/1/comments/61", client.calls[0][1])
+        self.assertEqual(client.calls[1][0], "POST")
+        self.assertIn("pulls/4/reviews", client.calls[1][1])
+        self.assertEqual(client.calls[1][2]["comments"][0]["body"], render_inline_body(finding, key))
 
     def test_sticky_includes_cross_cutting_findings(self) -> None:
         body = render_sticky(

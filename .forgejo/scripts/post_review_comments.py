@@ -145,6 +145,23 @@ def existing_by_key(comments: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     return result
 
 
+def delete_review_comment(client: ForgejoClient, pr_number: str, comment: dict[str, Any]) -> bool:
+    comment_id = comment.get("id")
+    review_id = comment.get("pull_request_review_id")
+    if not comment_id or not review_id:
+        warn(f"could not replace review comment without review/comment id: {comment_id}")
+        return False
+    try:
+        client.request(
+            "DELETE",
+            client.repo_path(f"pulls/{pr_number}/reviews/{review_id}/comments/{comment_id}"),
+        )
+        return True
+    except ForgejoApiError as exc:
+        warn(f"could not delete stale review comment {comment_id}: {exc}")
+        return False
+
+
 def post_inline_comments(
     client: ForgejoClient,
     pr_number: str,
@@ -162,15 +179,12 @@ def post_inline_comments(
         key = finding_key(finding)
         body = render_inline_body(finding, key)
         if key in existing:
-            comment_id = existing[key].get("id")
-            if comment_id and str(existing[key].get("body") or "") != body:
-                client.request(
-                    "PATCH",
-                    client.repo_path(f"issues/comments/{comment_id}"),
-                    {"body": body},
-                )
-            skipped_existing += 1
-            continue
+            if str(existing[key].get("body") or "") == body:
+                skipped_existing += 1
+                continue
+            if not delete_review_comment(client, pr_number, existing[key]):
+                skipped_existing += 1
+                continue
         new_comments.append(
             {
                 "path": str(path),

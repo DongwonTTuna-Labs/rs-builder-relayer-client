@@ -63,11 +63,26 @@ def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
 
 
 def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[str, Any]]:
+    comments: list[dict[str, Any]] = []
     try:
-        return client.paginated(client.repo_path(f"issues/{pr_number}/comments"))
+        reviews = client.paginated(client.repo_path(f"pulls/{pr_number}/reviews"), max_pages=5)
     except ForgejoApiError as exc:
-        warn(f"could not list issue comments; inline context will be empty: {exc}")
+        warn(f"could not list pull reviews; inline context will be empty: {exc}")
         return []
+    for review in reviews:
+        review_id = review.get("id")
+        if not review_id:
+            continue
+        try:
+            review_comments = client.paginated(
+                client.repo_path(f"pulls/{pr_number}/reviews/{review_id}/comments"),
+                max_pages=5,
+            )
+        except ForgejoApiError as exc:
+            warn(f"could not list pull review comments for review {review_id}: {exc}")
+            continue
+        comments.extend(review_comments)
+    return comments
 
 
 def normalize_file(row: dict[str, Any], changed_lines: dict[str, set[int]]) -> dict[str, Any]:
