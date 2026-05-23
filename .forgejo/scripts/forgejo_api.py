@@ -136,11 +136,12 @@ class ForgejoClient:
         path: str,
         query: dict[str, str] | None = None,
         limit: int = 100,
-        max_pages: int = 20,
+        max_pages: int | None = None,
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         base_query = dict(query or {})
-        for page in range(1, max_pages + 1):
+        page = 1
+        while max_pages is None or page <= max_pages:
             page_query = {**base_query, "page": str(page), "limit": str(limit)}
             payload = self.request("GET", path, query=page_query)
             if not isinstance(payload, list):
@@ -148,6 +149,7 @@ class ForgejoClient:
             items.extend(item for item in payload if isinstance(item, dict))
             if len(payload) < limit:
                 break
+            page += 1
         return items
 
 

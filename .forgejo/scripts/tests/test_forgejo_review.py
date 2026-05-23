@@ -47,6 +47,13 @@ class ForgejoApiTests(unittest.TestCase):
             self.assertEqual(client.paginated("items", limit=2), [{"id": 1}])
             request.assert_called_once()
 
+    def test_paginated_default_reads_until_empty_page(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret")
+        pages = [[{"id": page}] for page in range(1, 22)] + [[]]
+        with mock.patch.object(client, "request", side_effect=pages) as request:
+            self.assertEqual(len(client.paginated("items", limit=1)), 21)
+            self.assertEqual(request.call_count, 22)
+
     def test_request_redacts_token_on_http_error(self) -> None:
         client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
         response = mock.Mock()
@@ -132,11 +139,12 @@ class ReviewCommentTests(unittest.TestCase):
         body = marker_for(key)
         comments = [
             {"id": 1, "body": body, "user": {"login": "attacker"}},
-            {"id": 2, "body": body, "user": {"login": "codex-reviewer"}},
+            {"id": 2, "body": body, "user": {"login": "codex-reviewer-for-dongwonttuna"}},
         ]
         self.assertEqual(existing_by_key(comments)[key]["id"], 2)
         self.assertFalse(is_bot_comment(comments[0]))
         self.assertTrue(is_bot_comment(comments[1]))
+        self.assertTrue(is_bot_comment({"user": {"login": "codex-reviewer"}}))
 
     def test_changed_existing_inline_comment_is_deleted_and_reposted(self) -> None:
         class FakeClient:

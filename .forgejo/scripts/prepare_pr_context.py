@@ -15,6 +15,8 @@ from forgejo_api import ForgejoApiError, ForgejoClient, require_env, warn
 INLINE_MARKER = "<!-- forgejo-codex-inline"
 STICKY_MARKER = "<!-- forgejo-codex-review-sticky -->"
 PROMPT_DIFF_LIMIT = 120000
+DEFAULT_BOT_LOGIN = "codex-reviewer-for-dongwonttuna"
+LEGACY_BOT_LOGINS = {"codex-reviewer"}
 
 
 def comment_login(comment: dict[str, Any]) -> str:
@@ -25,11 +27,15 @@ def comment_login(comment: dict[str, Any]) -> str:
 
 
 def bot_login() -> str:
-    return os.environ.get("FORGEJO_BOT_LOGIN", "codex-reviewer")
+    return os.environ.get("FORGEJO_BOT_LOGIN", DEFAULT_BOT_LOGIN).strip() or DEFAULT_BOT_LOGIN
+
+
+def bot_logins() -> set[str]:
+    return {bot_login(), DEFAULT_BOT_LOGIN, *LEGACY_BOT_LOGINS}
 
 
 def is_bot_comment(comment: dict[str, Any]) -> bool:
-    return comment_login(comment) == bot_login()
+    return comment_login(comment) in bot_logins()
 
 
 def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
@@ -65,7 +71,7 @@ def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
 def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[str, Any]]:
     comments: list[dict[str, Any]] = []
     try:
-        reviews = client.paginated(client.repo_path(f"pulls/{pr_number}/reviews"), max_pages=5)
+        reviews = client.paginated(client.repo_path(f"pulls/{pr_number}/reviews"))
     except ForgejoApiError as exc:
         warn(f"could not list pull reviews; inline context will be empty: {exc}")
         return []
@@ -76,7 +82,6 @@ def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[st
         try:
             review_comments = client.paginated(
                 client.repo_path(f"pulls/{pr_number}/reviews/{review_id}/comments"),
-                max_pages=5,
             )
         except ForgejoApiError as exc:
             warn(f"could not list pull review comments for review {review_id}: {exc}")
