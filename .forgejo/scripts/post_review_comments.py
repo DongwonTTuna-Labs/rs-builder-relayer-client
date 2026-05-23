@@ -75,6 +75,16 @@ def render_inline_body(finding: dict[str, Any], key: str) -> str:
     ).strip()
 
 
+def render_resolved_body(key: str) -> str:
+    return "\n".join(
+        [
+            marker_for(key, "resolved"),
+            f"_{DISPLAY_NAME}: 현재 PR head 기준으로 더 이상 게시 대상 finding에 포함되지 않아 "
+            "bot-managed resolved 상태로 표시합니다._",
+        ]
+    ).strip()
+
+
 def render_sticky(
     pr_number: str,
     allowed: list[dict[str, Any]],
@@ -238,20 +248,15 @@ def reply_resolved(
             continue
         if key in resolved_keys:
             continue
-        reply = (
-            f'{RESOLVED_MARKER} key="{key}" -->\n'
-            f"{DISPLAY_NAME}: 현재 PR head 기준으로 더 이상 게시 대상 finding에 포함되지 않아 "
-            "bot-managed resolved 상태로 표시합니다."
-        )
         try:
             client.request(
-                "POST",
-                client.repo_path(f"pulls/{pr_number}/comments/{comment_id}/replies"),
-                {"body": reply},
+                "PATCH",
+                client.repo_path(f"issues/comments/{comment_id}"),
+                {"body": render_resolved_body(key)},
             )
             resolved += 1
         except ForgejoApiError as exc:
-            warn(f"could not reply with resolved marker for review comment {comment_id}: {exc}")
+            warn(f"could not mark review comment {comment_id} as bot-managed resolved: {exc}")
     return resolved
 
 

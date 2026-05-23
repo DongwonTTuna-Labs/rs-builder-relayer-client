@@ -19,7 +19,9 @@ from post_review_comments import (  # noqa: E402
     marker_for,
     post_inline_comments,
     render_inline_body,
+    render_resolved_body,
     render_sticky,
+    reply_resolved,
 )
 from prepare_pr_context import is_bot_comment, parse_changed_right_lines  # noqa: E402
 from resolve_pr_metadata import authorize, requested_pr_number  # noqa: E402
@@ -201,6 +203,38 @@ class ReviewCommentTests(unittest.TestCase):
         self.assertEqual(client.calls[1][0], "POST")
         self.assertIn("pulls/4/reviews", client.calls[1][1])
         self.assertEqual(client.calls[1][2]["comments"][0]["body"], render_inline_body(finding, key))
+
+    def test_stale_inline_comment_is_marked_resolved_without_delete(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                self.calls.append((method, path, data))
+                return {}
+
+        key = "0123456789abcdef"
+        client = FakeClient()
+        resolved = reply_resolved(
+            client,
+            "4",
+            [
+                {
+                    "id": 61,
+                    "pull_request_review_id": 1,
+                    "body": marker_for(key),
+                    "user": {"login": "codex-reviewer-for-dongwonttuna"},
+                }
+            ],
+            current_keys=set(),
+        )
+
+        self.assertEqual(resolved, 1)
+        self.assertEqual(client.calls, [("PATCH", "repos/owner/repo/issues/comments/61", {"body": render_resolved_body(key)})])
+        self.assertNotIn("DELETE", [call[0] for call in client.calls])
 
     def test_sticky_includes_cross_cutting_findings(self) -> None:
         body = render_sticky(
