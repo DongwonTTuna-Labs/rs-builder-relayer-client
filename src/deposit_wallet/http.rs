@@ -28,7 +28,10 @@ const SUBMIT_PATH: &str = "/submit";
 const TRANSACTION_PATH: &str = "/transaction";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
 const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
+#[cfg(not(test))]
 const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(test)]
+const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BACKGROUND_ERROR_BODY_DRAINS: usize = 64;
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
@@ -159,7 +162,8 @@ impl DepositWalletMutationPermit {
     /// `owner_serialization_evidence` must identify the caller-side guard that
     /// prevents concurrent or restarted-process WALLET submits for the same
     /// owner. The client's in-memory block is only a local backstop.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         owner: Address,
         reason: impl Into<String>,
         owner_serialization_evidence: impl Into<String>,
@@ -772,6 +776,11 @@ impl DepositWalletRelayerClient {
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
         }
+        if state.transaction_owners.len() >= MAX_OWNER_MUTATION_RECORDS {
+            return Err(RelayerError::mutation_blocked(format!(
+                "owner mutation state already tracks {MAX_OWNER_MUTATION_RECORDS} transactions; reconcile terminal transactions before accepting another submit"
+            )));
+        }
         ensure_owner_mutation_capacity(&state, owner, None)?;
 
         state.owner_blocks.insert(
@@ -819,6 +828,18 @@ impl DepositWalletRelayerClient {
                 )))
             }
             RelayerTransactionState::Confirmed => {
+                if receipt.transaction_hash.is_none() {
+                    self.record_ambiguous(owner, payload_hash.clone())?;
+                    self.record_transaction_owner(
+                        &receipt.transaction_id,
+                        owner,
+                        payload_hash,
+                    )?;
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "confirmed deposit wallet submit transaction {} did not include transactionHash; manual reconciliation required",
+                        sanitized_external_token(&receipt.transaction_id)
+                    )));
+                }
                 self.clear_owner_block_if_payload(owner, &payload_hash)?;
                 Ok(receipt)
             }
@@ -3067,6 +3088,33 @@ mod tests {
     }
 
     #[test]
+    fn owner_submit_reservation_rejects_full_transaction_map_before_post() {
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let owner = address(WALLET_CREATE_OWNER);
+        {
+            let mut state = client.mutation_state().unwrap();
+            for index in 0..MAX_OWNER_MUTATION_RECORDS {
+                state.transaction_owners.insert(
+                    format!("tx-{index}"),
+                    OwnerTransactionRecord {
+                        owner: Address::from_low_u64_be(index as u64 + 1),
+                        payload_hash: format!("payload-{index}"),
+                    },
+                );
+            }
+        }
+
+        let error = client
+            .reserve_owner_submit(owner, "payload-preflight".to_string())
+            .err()
+            .expect("submit reservation should reject full transaction map before HTTP");
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        client.ensure_owner_unblocked(owner).unwrap();
+    }
+
+    #[test]
     fn owner_mutation_state_rejects_transaction_owner_mapping_conflicts() {
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
@@ -3291,13 +3339,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submit_receipt_recording_failure_leaves_clearable_ambiguous_block() {
+    async fn submit_preflight_rejects_full_transaction_map_before_http() {
         let owner = address(WALLET_CREATE_OWNER);
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            transaction_response("tx-overflow", "STATE_NEW"),
-        )])
-        .await;
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
         let client = test_client(url);
         {
             let mut state = client.mutation_state().unwrap();
@@ -3318,20 +3362,8 @@ mod tests {
             .unwrap_err();
 
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
-        assert!(client.ambiguous_submit_block(owner).is_some());
-        client
-            .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked mocked submit recording failure",
-                    "single-process mocked owner serialization guard",
-                ),
-            )
-            .unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
     }
 
     #[tokio::test]
@@ -3596,6 +3628,34 @@ mod tests {
             assert_eq!(requests[0].path, SUBMIT_PATH);
             assert!(requests[1].path.contains("/nonce?address="));
         }
+    }
+
+    #[tokio::test]
+    async fn immediate_confirmed_submit_without_transaction_hash_requires_reconciliation() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "tx-submit-no-hash",
+                "state": "STATE_CONFIRMED"
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
     }
 
     #[tokio::test]
