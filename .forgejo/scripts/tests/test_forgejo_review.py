@@ -636,10 +636,19 @@ class WorkflowParityTests(unittest.TestCase):
         text = self.forgejo_text()
         self.assertIn("scripts_ref:", text)
         self.assertIn("SCRIPTS_REF", text)
-        self.assertIn('scripts_ref="main"', text)
+        self.assertIn("SCRIPTS_REF: main", text)
         self.assertNotIn('scripts_ref="${GITHUB_SHA}"', text)
         self.assertNotIn("CODEX_BOOTSTRAP_SCRIPTS_REF", text)
         self.assertNotIn("Bootstrap exception", text)
+
+    def test_trusted_script_checkout_fetches_branch_before_sha_checkout(self) -> None:
+        text = self.forgejo_text()
+        self.assertNotIn('git_fetch fetch --depth=1 origin "$SCRIPTS_REF"', text)
+        self.assertNotIn('git_fetch fetch --depth=1 origin "$scripts_ref"', text)
+        self.assertIn('git_fetch fetch --depth=256 origin "refs/heads/$trusted_ref"', text)
+        self.assertIn('git cat-file -e "$SCRIPTS_REF^{commit}"', text)
+        self.assertIn('git_fetch fetch --deepen=256 origin "refs/heads/$trusted_ref"', text)
+        self.assertIn('git checkout --detach "$SCRIPTS_REF"', text)
 
     def test_post_job_uses_default_needs_success_gate(self) -> None:
         text = self.forgejo_text()

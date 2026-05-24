@@ -33,6 +33,8 @@ jobs:
           FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: main
+          TRUSTED_REF: main
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -44,10 +46,30 @@ jobs:
               -c credential.useHttpPath=true \
               "$@"
           }
-          scripts_ref="main"
-          git_fetch fetch --depth=1 origin "$scripts_ref"
+          trusted_ref="${TRUSTED_REF:-main}"
+          if ! git check-ref-format "refs/heads/$trusted_ref"; then
+            echo "::error::Invalid trusted scripts ref: $trusted_ref"
+            exit 1
+          fi
+          git_fetch fetch --depth=256 origin "refs/heads/$trusted_ref"
+          if [[ "$SCRIPTS_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            deepen_round=0
+            until git cat-file -e "$SCRIPTS_REF^{commit}" 2>/dev/null; do
+              deepen_round=$((deepen_round + 1))
+              if (( deepen_round > 8 )); then
+                echo "::error::Could not fetch trusted scripts commit $SCRIPTS_REF from $trusted_ref"
+                exit 1
+              fi
+              git_fetch fetch --deepen=256 origin "refs/heads/$trusted_ref"
+            done
+          fi
           unset GIT_AUTH_TOKEN
-          git checkout --detach FETCH_HEAD
+          if [[ "$SCRIPTS_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            git checkout --detach "$SCRIPTS_REF"
+            test "$(git rev-parse HEAD)" = "$SCRIPTS_REF"
+          else
+            git checkout --detach FETCH_HEAD
+          fi
 
       - name: Resolve PR head / base
         id: lookup
