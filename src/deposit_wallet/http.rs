@@ -118,11 +118,20 @@ impl fmt::Debug for RelayerKeyAuth {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub enum DepositWalletMutationGate {
     #[default]
     Deny,
     Permit(DepositWalletMutationPermit),
+}
+
+impl fmt::Debug for DepositWalletMutationGate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Deny => f.write_str("Deny"),
+            Self::Permit(permit) => f.debug_tuple("Permit").field(permit).finish(),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -138,7 +147,8 @@ impl DepositWalletMutationPermit {
     /// `owner_serialization_evidence` must identify the caller-side guard that
     /// prevents concurrent or restarted-process WALLET submits for the same
     /// owner. The client's in-memory block is only a local backstop.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         owner: Address,
         reason: impl Into<String>,
         owner_serialization_evidence: impl Into<String>,
@@ -155,11 +165,8 @@ impl fmt::Debug for DepositWalletMutationPermit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DepositWalletMutationPermit")
             .field("owner", &redacted_address(self.owner))
-            .field("reason", &self.reason)
-            .field(
-                "owner_serialization_evidence",
-                &self.owner_serialization_evidence,
-            )
+            .field("reason", &"<redacted>")
+            .field("owner_serialization_evidence", &"<redacted>")
             .finish()
     }
 }
@@ -2093,6 +2100,25 @@ mod tests {
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
+    #[test]
+    fn mutation_permit_debug_redacts_approval_evidence() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let permit = DepositWalletMutationPermit::new(
+            owner,
+            "ticket-123 caller lock",
+            "owner-lock-key-456",
+        );
+        let rendered_permit = format!("{permit:?}");
+        let rendered_gate = format!("{:?}", DepositWalletMutationGate::Permit(permit));
+
+        assert!(rendered_permit.contains("DepositWalletMutationPermit"));
+        assert!(rendered_permit.contains("<redacted>"));
+        assert!(!rendered_permit.contains("ticket-123"));
+        assert!(!rendered_permit.contains("owner-lock-key-456"));
+        assert!(!rendered_gate.contains("ticket-123"));
+        assert!(!rendered_gate.contains("owner-lock-key-456"));
+    }
+
     #[tokio::test]
     async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
         let expected = fixture_value("wallet_nonce_request.json");
@@ -2837,7 +2863,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_transaction_sanitizes_unknown_state_in_public_receipt() {
+    async fn get_transaction_preserves_unknown_state_wire_value_in_public_receipt() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
             transaction_response("tx-unknown", "STATE_WEIRD\nforged"),
@@ -2849,8 +2875,7 @@ mod tests {
 
         match receipt.state {
             RelayerTransactionState::Unknown(raw) => {
-                assert!(!raw.contains('\n'));
-                assert!(raw.contains('?'));
+                assert_eq!(raw, "STATE_WEIRD\nforged");
             }
             state => panic!("expected unknown state, got {state:?}"),
         }
