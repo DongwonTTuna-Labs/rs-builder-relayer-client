@@ -247,6 +247,9 @@ class WorkflowParityTests(unittest.TestCase):
         for job_name in guarded_jobs:
             with self.subTest(job=job_name):
                 self.assertIn(required_guard, workflow["jobs"][job_name].get("if", ""))
+        self.assertIn("always()", workflow["jobs"]["tech-lead"].get("if", ""))
+        self.assertIn("!cancelled()", workflow["jobs"]["tech-lead"].get("if", ""))
+        self.assertIn("always()", workflow["jobs"]["cleanup-codex-auth"].get("if", ""))
 
     def test_forgejo_script_tests_remain(self) -> None:
         self.assertTrue((REPO_ROOT / ".forgejo" / "scripts" / "tests" / "test_forgejo_review.py").exists())
