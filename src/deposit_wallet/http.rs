@@ -3703,6 +3703,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn terminal_error_poll_clears_owner_inflight_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+
+        for (transaction_id, terminal_state, expected_error) in [
+            (
+                "tx-terminal-invalid",
+                "STATE_INVALID",
+                "transaction invalid",
+            ),
+            ("tx-terminal-failed", "STATE_FAILED", "transaction failed"),
+        ] {
+            let (url, handle) = spawn_server(vec![
+                TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_NEW")),
+                TestResponse::json("200 OK", transaction_response(transaction_id, terminal_state)),
+                TestResponse::json("200 OK", json!({"nonce": "37"}).to_string()),
+            ])
+            .await;
+            let client = test_client(url);
+
+            let receipt = client
+                .submit_wallet_create(owner, mutation_permit())
+                .await
+                .unwrap();
+            assert_eq!(receipt.transaction_id, transaction_id);
+            assert!(client.get_wallet_nonce(owner).await.is_err());
+
+            let error = client
+                .poll_transaction(
+                    transaction_id,
+                    DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    (&expected_error, &error),
+                    (&"transaction invalid", RelayerError::TransactionInvalid(_))
+                        | (&"transaction failed", RelayerError::TransactionFailed(_))
+                ),
+                "expected {expected_error}, got {error:?}"
+            );
+
+            client.ensure_owner_unblocked(owner).unwrap();
+            {
+                let state = client.mutation_state().unwrap();
+                assert!(!state.transaction_owners.contains_key(transaction_id));
+            }
+            let nonce = client.get_wallet_nonce(owner).await.unwrap();
+            assert_eq!(nonce, U256::from(37u64));
+
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 3);
+        }
+    }
+
+    #[test]
+    fn manual_clear_removes_only_matching_owner_transaction_records() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let other_owner = address("0x0000000000000000000000000000000000000001");
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::Ambiguous {
+                    payload_hash: "payload-owner".to_string(),
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-owner-stale".to_string(),
+                OwnerTransactionRecord {
+                    owner,
+                    payload_hash: "payload-owner".to_string(),
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-other-live".to_string(),
+                OwnerTransactionRecord {
+                    owner: other_owner,
+                    payload_hash: "payload-other".to_string(),
+                },
+            );
+        }
+
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                owner,
+                DepositWalletMutationPermit::new(
+                    owner,
+                    "checked mocked owner transaction map cleanup",
+                    "single-process mocked owner serialization guard",
+                ),
+            )
+            .unwrap();
+
+        client.ensure_owner_unblocked(owner).unwrap();
+        let state = client.mutation_state().unwrap();
+        assert!(!state.transaction_owners.contains_key("tx-owner-stale"));
+        assert_eq!(
+            state
+                .transaction_owners
+                .get("tx-other-live")
+                .map(|record| record.owner),
+            Some(other_owner)
+        );
+    }
+
+    #[tokio::test]
     async fn manual_clear_rejects_known_inflight_submit_until_terminal_poll() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
