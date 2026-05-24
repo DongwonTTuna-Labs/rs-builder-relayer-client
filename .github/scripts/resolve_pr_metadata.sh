@@ -11,7 +11,7 @@ set -euo pipefail
 : "${GITHUB_OUTPUT:?GITHUB_OUTPUT is required}"
 
 json="$(gh api "repos/$REPO/pulls/$PR_NUMBER")"
-metadata="$(printf '%s' "$json" | python3 -c '
+mapfile -t metadata < <(printf '%s' "$json" | python3 -c '
 import json
 import sys
 
@@ -30,9 +30,20 @@ values = [
     str(head_repo.get("name") or ""),
     str(user.get("login") or ""),
 ]
-print("\t".join(values))
-')"
-IFS=$'\t' read -r head_sha base_ref base_sha is_draft head_owner head_repo author_login <<<"$metadata"
+for value in values:
+    print(value)
+')
+if [[ "${#metadata[@]}" -ne 7 ]]; then
+  echo "::error::Invalid PR metadata field count from GitHub API: ${#metadata[@]}"
+  exit 1
+fi
+head_sha="${metadata[0]}"
+base_ref="${metadata[1]}"
+base_sha="${metadata[2]}"
+is_draft="${metadata[3]}"
+head_owner="${metadata[4]}"
+head_repo="${metadata[5]}"
+author_login="${metadata[6]}"
 
 if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
   echo "::error::Invalid PR head sha from GitHub API: $head_sha"

@@ -48,6 +48,12 @@ def redact_secret(text: str, *secrets: str) -> str:
     return redacted
 
 
+def sanitized_url_error(reason: object) -> str:
+    """Return a generic network error without proxy/TLS detail leakage."""
+    name = reason.__class__.__name__
+    return name if name and name != "str" else "network error"
+
+
 def split_repo(repo: str) -> tuple[str, str]:
     owner, sep, name = repo.partition("/")
     if not sep or not owner or not name:
@@ -128,8 +134,40 @@ class ForgejoClient:
                     backoff *= 2
                     last_error = exc
                     continue
-                raise ForgejoApiError(f"{method} {path} failed: {exc.reason}") from exc
+                raise ForgejoApiError(f"{method} {path} failed: {sanitized_url_error(exc.reason)}") from exc
         raise ForgejoApiError(f"{method} {path} failed after {max_attempts} attempts: {last_error}")
+
+    def request_text_limited(self, path: str, limit: int, accept: str = "text/plain") -> tuple[str, bool]:
+        headers = {
+            "Accept": accept,
+            "Authorization": f"token {self.token}",
+            "User-Agent": "forgejo-codex-review",
+        }
+        req = urllib.request.Request(self.url(path), headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                raw = response.read(limit + 1)
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            safe_details = redact_secret(details[-1200:], self.token)
+            raise ForgejoApiError(
+                f"GET {path} failed with HTTP {exc.code}: {safe_details}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise ForgejoApiError(f"GET {path} failed: {sanitized_url_error(exc.reason)}") from exc
+        truncated = len(raw) > limit
+        if truncated:
+            raw = raw[:limit]
+        return raw.decode("utf-8", errors="replace"), truncated
+
+    def authenticated_login(self) -> str:
+        payload = self.request("GET", "user")
+        if not isinstance(payload, dict):
+            raise ForgejoApiError("GET user returned an unexpected payload")
+        login = str(payload.get("login") or payload.get("username") or "").strip()
+        if not login:
+            raise ForgejoApiError("GET user did not include a login")
+        return login
 
     def paginated(
         self,

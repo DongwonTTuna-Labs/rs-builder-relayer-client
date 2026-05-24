@@ -160,7 +160,7 @@ def changed_right_lines(patch: str | None) -> set[int]:
             continue
         if right_line is None:
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if raw.startswith("+") and not raw.startswith("+++ b/") and raw != "+++ /dev/null":
             result.add(right_line)
             right_line += 1
         elif raw.startswith("-") and not raw.startswith("---"):

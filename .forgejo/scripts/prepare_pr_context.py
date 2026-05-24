@@ -15,8 +15,8 @@ from forgejo_api import ForgejoApiError, ForgejoClient, require_env, warn
 INLINE_MARKER = "<!-- forgejo-codex-inline"
 STICKY_MARKER = "<!-- forgejo-codex-review-sticky -->"
 PROMPT_DIFF_LIMIT = 120000
-DEFAULT_BOT_LOGIN = "codex-reviewer-for-dongwonttuna"
-LEGACY_BOT_LOGINS = {"codex-reviewer"}
+DIFF_FETCH_LIMIT = 2_000_000
+MAX_REVIEW_COMMENT_REVIEW_SCAN = 80
 
 
 def comment_login(comment: dict[str, Any]) -> str:
@@ -27,15 +27,22 @@ def comment_login(comment: dict[str, Any]) -> str:
 
 
 def bot_login() -> str:
-    return os.environ.get("FORGEJO_BOT_LOGIN", DEFAULT_BOT_LOGIN).strip() or DEFAULT_BOT_LOGIN
+    return os.environ.get("FORGEJO_BOT_LOGIN", "").strip()
 
 
 def bot_logins() -> set[str]:
-    return {bot_login(), DEFAULT_BOT_LOGIN, *LEGACY_BOT_LOGINS}
+    login = bot_login()
+    return {login} if login else set()
 
 
 def is_bot_comment(comment: dict[str, Any]) -> bool:
     return comment_login(comment) in bot_logins()
+
+
+def configure_bot_login(client: ForgejoClient) -> str:
+    login = client.authenticated_login()
+    os.environ["FORGEJO_BOT_LOGIN"] = login
+    return login
 
 
 def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
@@ -58,7 +65,7 @@ def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
             continue
         if raw.startswith("\\ "):
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if raw.startswith("+") and not raw.startswith("+++ b/") and raw != "+++ /dev/null":
             changed[current_file].add(new_line)
             new_line += 1
         elif raw.startswith("-") and not raw.startswith("---"):
@@ -75,7 +82,12 @@ def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[st
     except ForgejoApiError as exc:
         warn(f"could not list pull reviews; inline context will be empty: {exc}")
         return []
-    for review in reviews:
+    if len(reviews) > MAX_REVIEW_COMMENT_REVIEW_SCAN:
+        warn(
+            "review comment scan capped at latest "
+            f"{MAX_REVIEW_COMMENT_REVIEW_SCAN} reviews because Forgejo REST exposes comments per review"
+        )
+    for review in reviews[-MAX_REVIEW_COMMENT_REVIEW_SCAN:]:
         review_id = review.get("id")
         if not review_id:
             continue
@@ -123,14 +135,16 @@ def main() -> int:
     if base_sha_expected and base_sha and base_sha != base_sha_expected:
         raise SystemExit("PR base SHA changed while preparing review context")
 
-    diff_raw = client.request(
-        "GET",
+    configure_bot_login(client)
+
+    diff_text, diff_truncated_for_scan = client.request_text_limited(
         client.repo_path(f"pulls/{pr_number}.diff"),
-        accept="text/plain",
+        DIFF_FETCH_LIMIT,
     )
-    diff_text = str(diff_raw or "")
+    if diff_truncated_for_scan:
+        raise SystemExit("PR diff exceeds Forgejo review scan limit; refusing partial review context")
     prompt_diff = diff_text[:PROMPT_DIFF_LIMIT]
-    changed_lines = parse_changed_right_lines(prompt_diff)
+    changed_lines = parse_changed_right_lines(diff_text)
 
     files = client.paginated(client.repo_path(f"pulls/{pr_number}/files"))
     issue_comments = client.paginated(client.repo_path(f"issues/{pr_number}/comments"))

@@ -2,9 +2,7 @@ name: Codex PR Review (on comment)
 
 on:
   issue_comment:
-    types: [created]
-  issues:
-    types: [edited]
+    types: [created, edited]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -14,7 +12,7 @@ on:
 
 concurrency:
   group: forgejo-codex-review-${{ github.event.issue.number || inputs.pr_number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   resolve:
@@ -47,13 +45,8 @@ jobs:
               "$@"
           }
           scripts_ref="main"
-          # Bootstrap exception: main does not contain the Forgejo review scripts
-          # until this migration PR lands. Only owner-triggered workflow_dispatch
-          # uses the selected branch SHA; comment-triggered runs stay on main.
-          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" ]]; then
-            scripts_ref="${GITHUB_SHA}"
-          fi
           git_fetch fetch --depth=1 origin "$scripts_ref"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
 
       - name: Resolve PR head / base
@@ -63,7 +56,6 @@ jobs:
           FORGEJO_REPOSITORY: ${{ github.repository }}
           FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
           CODEX_ALLOWED_LOGIN: ${{ vars.CODEX_ALLOWED_LOGIN || 'DongwonTTuna' }}
-          CODEX_BOOTSTRAP_SCRIPTS_REF: ${{ github.sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 .forgejo/scripts/resolve_pr_metadata.py
 
@@ -79,4 +71,5 @@ jobs:
       base_sha: ${{ needs.resolve.outputs.base_sha }}
       scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
       trigger: ${{ needs.resolve.outputs.trigger }}
-    secrets: inherit
+    secrets:
+      CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}

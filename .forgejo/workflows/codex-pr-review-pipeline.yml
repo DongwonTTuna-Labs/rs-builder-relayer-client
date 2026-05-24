@@ -57,6 +57,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
 
       - name: Prepare Forgejo PR review context
@@ -120,6 +121,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
 
       - name: Checkout PR head (review data only)
@@ -140,6 +142,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
 
@@ -271,6 +274,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
 
       - name: Download all findings
@@ -375,6 +379,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
 
       - name: Download findings artifacts
@@ -400,6 +405,12 @@ jobs:
         uses: https://code.forgejo.org/forgejo/download-artifact@v4
         with:
           name: codex-axes-status
+          path: artifacts/
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@v4
+        with:
+          name: codex-review-context
           path: artifacts/
 
       - name: Apply hard rules

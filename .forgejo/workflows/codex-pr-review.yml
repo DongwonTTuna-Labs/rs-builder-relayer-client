@@ -41,6 +41,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
 
       - name: Resolve PR head / base
@@ -64,4 +65,5 @@ jobs:
       base_sha: ${{ needs.resolve.outputs.base_sha }}
       scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
       trigger: ${{ needs.resolve.outputs.trigger }}
-    secrets: inherit
+    secrets:
+      CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}

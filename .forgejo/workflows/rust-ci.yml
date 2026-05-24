@@ -44,6 +44,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
@@ -84,6 +85,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
@@ -122,6 +124,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
@@ -160,6 +163,7 @@ jobs:
               "$@"
           }
           git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show

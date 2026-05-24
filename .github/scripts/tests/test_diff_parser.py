@@ -69,6 +69,9 @@ class DiffParserBothImplsTest(unittest.TestCase):
         # `+++ b/new.py` is the file-header marker, not an added line.
         self.assertSameLines(WITH_PLUS_PLUS_PLUS_HEADER, [1, 2])
 
+    def test_literal_plus_plus_plus_added_line_is_counted(self) -> None:
+        self.assertSameLines("@@ -1 +1,2 @@\n keep\n++++literal\n", [2])
+
     def test_empty_patch(self) -> None:
         self.assertSameLines(EMPTY, [])
 

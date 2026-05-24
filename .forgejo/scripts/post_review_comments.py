@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -14,7 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from forgejo_api import ForgejoApiError, ForgejoClient, require_env, warn
-from prepare_pr_context import INLINE_MARKER, STICKY_MARKER, fetch_review_comments, is_bot_comment
+from prepare_pr_context import (
+    INLINE_MARKER,
+    STICKY_MARKER,
+    configure_bot_login,
+    fetch_review_comments,
+    is_bot_comment,
+)
 
 DISPLAY_NAME = "Codex Reviewer for DongwonTTuna"
 RESOLVED_MARKER = "<!-- forgejo-codex-inline-resolved"
@@ -30,11 +37,22 @@ def require_json(path: Path) -> Any:
         raise SystemExit(f"required review artifact is invalid JSON: {path}: {exc}") from exc
 
 
+def require_json_list(path: Path) -> list[dict[str, Any]]:
+    payload = require_json(path)
+    if not isinstance(payload, list):
+        raise SystemExit(f"required review artifact must be a JSON list: {path}")
+    result: list[dict[str, Any]] = []
+    for idx, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise SystemExit(f"required review artifact contains non-object finding at {path}:{idx}")
+        result.append(item)
+    return result
+
+
 def finding_key(finding: dict[str, Any]) -> str:
     material = "\n".join(
         [
             str(finding.get("agent") or ""),
-            str(finding.get("type") or ""),
             str(finding.get("file") or ""),
             str(finding.get("line") or ""),
             "cross-cutting" if finding.get("cross_cutting") else "inline",
@@ -57,12 +75,19 @@ def extract_marker(body: str) -> tuple[str | None, str | None]:
     return match.group(1), match.group(2)
 
 
+def sanitize_model_text(value: object) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    text = text.replace("@", "@\u200b")
+    return html.escape(text, quote=False)
+
+
 def render_inline_body(finding: dict[str, Any], key: str) -> str:
-    title = str(finding.get("title") or "").strip()
-    reason = str(finding.get("reason") or "").strip()
+    title = sanitize_model_text(finding.get("title"))
+    reason = sanitize_model_text(finding.get("reason"))
     finding_type = str(finding.get("type") or "SUGGEST").strip()
-    finding_id = str(finding.get("id") or "").strip()
-    agent = str(finding.get("agent") or "").strip()
+    finding_id = sanitize_model_text(finding.get("id"))
+    agent = sanitize_model_text(finding.get("agent"))
     return "\n".join(
         [
             marker_for(key),
@@ -112,10 +137,14 @@ def render_sticky(
     ]
     cross_cutting_lines = []
     for finding in cross_cutting[:10]:
-        finding_type = str(finding.get("type") or "SUGGEST")
-        title = str(finding.get("title") or "").strip()
-        agent = str(finding.get("agent") or "").strip()
-        cross_cutting_lines.append(f"- **[{finding_type}]** {title} (`{agent}`)")
+        finding_type = sanitize_model_text(finding.get("type") or "SUGGEST")
+        title = sanitize_model_text(finding.get("title"))
+        reason = sanitize_model_text(finding.get("reason"))
+        agent = sanitize_model_text(finding.get("agent"))
+        line = f"- **[{finding_type}]** {title} (`{agent}`)"
+        if reason:
+            line += f"\n  - Reason: {reason[:500]}"
+        cross_cutting_lines.append(line)
     if len(cross_cutting) > 10:
         cross_cutting_lines.append(f"- ...and {len(cross_cutting) - 10} more cross-cutting findings")
     cross_cutting_text = "\n".join(cross_cutting_lines) or "- none"
@@ -155,6 +184,32 @@ def existing_by_key(comments: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     return result
 
 
+def changed_line_map(context: dict[str, Any]) -> dict[str, set[int]]:
+    result: dict[str, set[int]] = {}
+    for row in context.get("changed_files") or []:
+        if not isinstance(row, dict):
+            continue
+        path = str(row.get("filename") or "")
+        if not path:
+            continue
+        lines: set[int] = set()
+        for line in row.get("changed_right_lines") or []:
+            try:
+                lines.add(int(line))
+            except (TypeError, ValueError):
+                continue
+        result[path] = lines
+    return result
+
+
+def current_pr_head(client: ForgejoClient, pr_number: str) -> str:
+    payload = client.request("GET", client.repo_path(f"pulls/{pr_number}"))
+    if not isinstance(payload, dict):
+        raise SystemExit("unexpected Forgejo PR response before posting review")
+    head = payload.get("head") or {}
+    return str(head.get("sha") or "")
+
+
 def delete_review_comment(client: ForgejoClient, pr_number: str, comment: dict[str, Any]) -> bool:
     comment_id = comment.get("id")
     review_id = comment.get("pull_request_review_id")
@@ -178,6 +233,7 @@ def post_inline_comments(
     head_sha: str,
     allowed: list[dict[str, Any]],
     existing: dict[str, dict[str, Any]],
+    changed_lines: dict[str, set[int]],
 ) -> tuple[int, int]:
     new_comments: list[dict[str, Any]] = []
     skipped_existing = 0
@@ -185,6 +241,9 @@ def post_inline_comments(
         path = finding.get("file")
         line = finding.get("line")
         if not path or not line or finding.get("cross_cutting"):
+            continue
+        line_number = int(line)
+        if line_number not in changed_lines.get(str(path), set()):
             continue
         key = finding_key(finding)
         body = render_inline_body(finding, key)
@@ -199,7 +258,7 @@ def post_inline_comments(
             {
                 "path": str(path),
                 "body": body,
-                "new_position": int(line),
+                "new_position": line_number,
                 "old_position": 0,
             }
         )
@@ -261,7 +320,7 @@ def reply_resolved(
 
 
 def upsert_sticky(client: ForgejoClient, pr_number: str, body: str) -> None:
-    comments = client.paginated(client.repo_path(f"issues/{pr_number}/comments"))
+    comments = client.paginated(client.repo_path(f"issues/{pr_number}/comments"), limit=100)
     existing_id = None
     for comment in comments:
         if STICKY_MARKER in str(comment.get("body") or "") and is_bot_comment(comment):
@@ -283,21 +342,33 @@ def upsert_sticky(client: ForgejoClient, pr_number: str, body: str) -> None:
 
 def main() -> int:
     client = ForgejoClient.from_env()
+    configure_bot_login(client)
     pr_number = require_env("PR_NUMBER")
     head_sha = require_env("HEAD_SHA")
     art_dir = Path(os.environ.get("ART_DIR", "artifacts"))
-    allowed = require_json(art_dir / "allowed.json")
+    allowed = require_json_list(art_dir / "allowed.json")
     axes_status = require_json(art_dir / "axes_status.json")
     decisions = require_json(art_dir / "decisions.json")
+    context = require_json(art_dir / "pr-context.json")
+    if not isinstance(context, dict):
+        raise SystemExit("required review artifact must be a JSON object: pr-context.json")
+    latest_head = current_pr_head(client, pr_number)
+    if latest_head and latest_head != head_sha:
+        raise SystemExit("PR head SHA changed before publishing review comments")
     judgment = decisions.get("judgment") if isinstance(decisions, dict) else None
-    if not isinstance(allowed, list):
-        allowed = []
 
     review_comments = fetch_review_comments(client, pr_number)
     existing = existing_by_key(review_comments)
     current_keys = {finding_key(f) for f in allowed}
     resolved = reply_resolved(client, pr_number, review_comments, current_keys)
-    posted, skipped_existing = post_inline_comments(client, pr_number, head_sha, allowed, existing)
+    posted, skipped_existing = post_inline_comments(
+        client,
+        pr_number,
+        head_sha,
+        allowed,
+        existing,
+        changed_line_map(context),
+    )
     sticky = render_sticky(
         pr_number,
         allowed,

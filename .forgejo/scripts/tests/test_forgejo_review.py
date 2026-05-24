@@ -11,19 +11,24 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from forgejo_api import ForgejoClient, ForgejoApiError, redact_secret, split_repo  # noqa: E402
+from forgejo_api import ForgejoApiError, ForgejoClient, redact_secret, sanitized_url_error, split_repo  # noqa: E402
 from post_review_comments import (  # noqa: E402
+    changed_line_map,
     existing_by_key,
     extract_marker,
     finding_key,
     marker_for,
     post_inline_comments,
+    require_json_list,
     render_inline_body,
     render_resolved_body,
     render_sticky,
     reply_resolved,
+    sanitize_model_text,
 )
-from prepare_pr_context import is_bot_comment, parse_changed_right_lines  # noqa: E402
+import prepare_pr_context  # noqa: E402
+import resolve_pr_metadata  # noqa: E402
+from prepare_pr_context import configure_bot_login, fetch_review_comments, is_bot_comment, parse_changed_right_lines  # noqa: E402
 from resolve_pr_metadata import authorize, requested_pr_number  # noqa: E402
 
 
@@ -73,6 +78,56 @@ class ForgejoApiTests(unittest.TestCase):
         self.assertIn("<redacted>", str(raised.exception))
         self.assertNotIn("secret-token", str(raised.exception))
 
+    def test_request_builds_json_auth_payload_and_parses_json(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=None)
+        response.read.return_value = b'{"ok": true}'
+        response.headers = {"Content-Type": "application/json; charset=utf-8"}
+        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+            self.assertEqual(client.request("POST", "items", {"x": 1}), {"ok": True})
+        req = urlopen.call_args.args[0]
+        self.assertEqual(req.get_method(), "POST")
+        self.assertEqual(req.get_header("Authorization"), "token secret-token")
+        self.assertEqual(json.loads(req.data.decode("utf-8")), {"x": 1})
+
+    def test_get_retries_transient_http_error(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        error = __import__("urllib.error").error.HTTPError(
+            "https://git.example/api/v1/items",
+            503,
+            "temporary",
+            {},
+            mock.Mock(read=lambda: b"try again"),
+        )
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=None)
+        response.read.return_value = b"[]"
+        response.headers = {"Content-Type": "application/json"}
+        with mock.patch("time.sleep"), mock.patch("urllib.request.urlopen", side_effect=[error, response]) as urlopen:
+            self.assertEqual(client.request("GET", "items"), [])
+        self.assertEqual(urlopen.call_count, 2)
+
+    def test_url_error_reason_is_sanitized(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        error = __import__("urllib.error").error.URLError("proxy leaked secret-token")
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(ForgejoApiError) as raised:
+                client.request("POST", "items", {"x": 1})
+        self.assertNotIn("secret-token", str(raised.exception))
+        self.assertEqual(sanitized_url_error(error.reason), "network error")
+
+    def test_authenticated_login_comes_from_token_owner(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            client,
+            "request",
+            return_value={"login": "codex-reviewer-for-dongwonttuna"},
+        ):
+            self.assertEqual(configure_bot_login(client), "codex-reviewer-for-dongwonttuna")
+
 
 class DiffParserTests(unittest.TestCase):
     def test_changed_right_lines_from_unified_diff(self) -> None:
@@ -99,6 +154,28 @@ class DiffParserTests(unittest.TestCase):
 """
         self.assertEqual(parse_changed_right_lines(diff), {"app.py": {1, 2}})
 
+    def test_multiple_files_new_file_delete_file_and_literal_header_lines(self) -> None:
+        diff = """diff --git a/a.py b/a.py
+--- a/a.py
++++ b/a.py
+@@ -1 +1,3 @@
+ keep
++++literal
++added
+diff --git a/new.py b/new.py
+--- /dev/null
++++ b/new.py
+@@ -0,0 +1,2 @@
++n1
++n2
+diff --git a/deleted.py b/deleted.py
+--- a/deleted.py
++++ /dev/null
+@@ -1 +0,0 @@
+-gone
+"""
+        self.assertEqual(parse_changed_right_lines(diff), {"a.py": {2, 3}, "new.py": {1, 2}})
+
 
 class ReviewCommentTests(unittest.TestCase):
     def test_inline_payload_contains_marker_and_no_login_default(self) -> None:
@@ -123,6 +200,28 @@ class ReviewCommentTests(unittest.TestCase):
         parsed_key, status = extract_marker(body)
         self.assertEqual((parsed_key, status), (key, "active"))
 
+    def test_model_markdown_is_escaped_before_posting(self) -> None:
+        finding = {
+            "agent": "security",
+            "id": "security-1",
+            "type": "MUST",
+            "file": "src/lib.rs",
+            "line": 12,
+            "title": "@all <script>",
+            "reason": "![x](http://example.test) @here",
+        }
+        body = render_inline_body(finding, finding_key(finding))
+        self.assertIn("@\u200ball &lt;script&gt;", body)
+        self.assertIn("@\u200bhere", body)
+        self.assertNotIn("<script>", body)
+
+    def test_require_json_list_rejects_wrong_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "allowed.json"
+            path.write_text(json.dumps({"findings": []}), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                require_json_list(path)
+
     def test_finding_key_is_stable_when_title_or_reason_changes(self) -> None:
         base = {
             "agent": "security",
@@ -143,10 +242,14 @@ class ReviewCommentTests(unittest.TestCase):
             {"id": 1, "body": body, "user": {"login": "attacker"}},
             {"id": 2, "body": body, "user": {"login": "codex-reviewer-for-dongwonttuna"}},
         ]
-        self.assertEqual(existing_by_key(comments)[key]["id"], 2)
+        self.assertEqual(existing_by_key(comments), {})
         self.assertFalse(is_bot_comment(comments[0]))
-        self.assertTrue(is_bot_comment(comments[1]))
-        self.assertTrue(is_bot_comment({"user": {"login": "codex-reviewer"}}))
+        self.assertFalse(is_bot_comment(comments[1]))
+        with mock.patch.dict(os.environ, {"FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna"}, clear=False):
+            self.assertEqual(existing_by_key(comments)[key]["id"], 2)
+            self.assertFalse(is_bot_comment(comments[0]))
+            self.assertTrue(is_bot_comment(comments[1]))
+            self.assertFalse(is_bot_comment({"user": {"login": "codex-reviewer"}}))
 
     def test_changed_existing_inline_comment_is_deleted_and_reposted(self) -> None:
         class FakeClient:
@@ -195,6 +298,7 @@ class ReviewCommentTests(unittest.TestCase):
                     "user": {"login": "codex-reviewer"},
                 }
             },
+            {".forgejo/scripts/forgejo_api.py": {81}},
         )
 
         self.assertEqual((posted, skipped), (1, 0))
@@ -203,6 +307,27 @@ class ReviewCommentTests(unittest.TestCase):
         self.assertEqual(client.calls[1][0], "POST")
         self.assertIn("pulls/4/reviews", client.calls[1][1])
         self.assertEqual(client.calls[1][2]["comments"][0]["body"], render_inline_body(finding, key))
+
+    def test_inline_post_skips_finding_outside_changed_lines(self) -> None:
+        class FakeClient:
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                raise AssertionError("HTTP request should not be made")
+
+        finding = {
+            "agent": "security",
+            "type": "MUST",
+            "file": "src/lib.rs",
+            "line": 99,
+            "title": "x",
+            "reason": "y",
+        }
+        self.assertEqual(
+            post_inline_comments(FakeClient(), "4", "abc123", [finding], {}, {"src/lib.rs": {10}}),
+            (0, 0),
+        )
 
     def test_stale_inline_comment_is_marked_resolved_without_delete(self) -> None:
         class FakeClient:
@@ -218,19 +343,31 @@ class ReviewCommentTests(unittest.TestCase):
 
         key = "0123456789abcdef"
         client = FakeClient()
-        resolved = reply_resolved(
-            client,
-            "4",
-            [
+        comments = [
                 {
                     "id": 61,
                     "pull_request_review_id": 1,
                     "body": marker_for(key),
                     "user": {"login": "codex-reviewer-for-dongwonttuna"},
                 }
-            ],
-            current_keys=set(),
-        )
+            ]
+        with mock.patch.dict(os.environ, {"FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna"}, clear=False):
+            resolved = reply_resolved(
+                client,
+                "4",
+                comments,
+                current_keys=set(),
+            )
+
+            resolved_again = reply_resolved(
+                client,
+                "4",
+                [{**comments[0], "body": render_resolved_body(key)}],
+                current_keys=set(),
+            )
+
+        self.assertEqual(resolved_again, 0)
+        self.assertEqual(len(client.calls), 1)
 
         self.assertEqual(resolved, 1)
         self.assertEqual(client.calls, [("PATCH", "repos/owner/repo/issues/comments/61", {"body": render_resolved_body(key)})])
@@ -249,11 +386,36 @@ class ReviewCommentTests(unittest.TestCase):
         self.assertIn("Cross-cutting findings", body)
         self.assertIn("workflow gate is unsafe", body)
 
+    def test_changed_line_map_ignores_bad_context_rows(self) -> None:
+        context = {
+            "changed_files": [
+                {"filename": "src/lib.rs", "changed_right_lines": [1, "2", "bad"]},
+                {"filename": "", "changed_right_lines": [99]},
+            ]
+        }
+        self.assertEqual(changed_line_map(context), {"src/lib.rs": {1, 2}})
+
 
 class EventParserTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.env_patch = mock.patch.dict(os.environ, {}, clear=True)
+        self.env_patch.start()
+
+    def tearDown(self) -> None:
+        self.env_patch.stop()
+
     def test_issue_comment_command_resolves_pr_number(self) -> None:
         os.environ["GITHUB_EVENT_NAME"] = "issue_comment"
         payload = {
+            "comment": {"body": "/codex-review"},
+            "issue": {"number": 7, "pull_request": {"url": "x"}},
+        }
+        self.assertEqual(requested_pr_number(payload), ("7", "issue_comment:/codex-review"))
+
+    def test_issue_comment_edited_command_resolves_pr_number(self) -> None:
+        os.environ["GITHUB_EVENT_NAME"] = "issue_comment"
+        payload = {
+            "action": "edited",
             "comment": {"body": "/codex-review"},
             "issue": {"number": 7, "pull_request": {"url": "x"}},
         }
@@ -292,6 +454,127 @@ class EventParserTests(unittest.TestCase):
         allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, pr, "DongwonTTuna-Labs/demo")
         self.assertFalse(allowed)
         self.assertIn("fork PR", reason)
+
+    def test_resolver_main_outputs_snapshot_and_scripts_ref(self) -> None:
+        class FakeClient:
+            repo = "DongwonTTuna-Labs/demo"
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/DongwonTTuna-Labs/demo/{path}"
+
+            def request(self, method: str, path: str, **_kwargs):
+                self.seen = (method, path)
+                return {
+                    "number": 7,
+                    "draft": False,
+                    "user": {"login": "DongwonTTuna"},
+                    "head": {
+                        "sha": "1" * 40,
+                        "repo": {"full_name": "DongwonTTuna-Labs/demo"},
+                    },
+                    "base": {"ref": "main", "sha": "2" * 40},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            event = Path(tmp) / "event.json"
+            output = Path(tmp) / "outputs"
+            event.write_text(json.dumps({"inputs": {"pr_number": "7"}, "sender": {"login": "DongwonTTuna"}}))
+            env = {
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+                "GITHUB_EVENT_PATH": str(event),
+                "GITHUB_OUTPUT": str(output),
+                "GITHUB_ACTOR": "DongwonTTuna",
+            }
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                ForgejoClient,
+                "from_env",
+                return_value=FakeClient(),
+            ):
+                self.assertEqual(resolve_pr_metadata.main(), 0)
+            lines = output.read_text(encoding="utf-8").splitlines()
+        self.assertIn("allowed=true", lines)
+        self.assertIn("head_sha=" + "1" * 40, lines)
+        self.assertIn("base_sha=" + "2" * 40, lines)
+        self.assertIn("scripts_ref=" + "2" * 40, lines)
+
+
+class PrepareContextMainTests(unittest.TestCase):
+    def test_fetch_review_comments_caps_review_comment_api_calls(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.comment_calls = 0
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                if path.endswith("pulls/7/reviews"):
+                    return [{"id": i} for i in range(100)]
+                if "/reviews/" in path and path.endswith("/comments"):
+                    self.comment_calls += 1
+                    return [{"id": self.comment_calls}]
+                return []
+
+        client = FakeClient()
+        comments = fetch_review_comments(client, "7")
+        self.assertEqual(len(comments), prepare_pr_context.MAX_REVIEW_COMMENT_REVIEW_SCAN)
+        self.assertEqual(client.comment_calls, prepare_pr_context.MAX_REVIEW_COMMENT_REVIEW_SCAN)
+
+    def test_main_writes_context_with_token_owner_and_full_diff_line_scan(self) -> None:
+        class FakeClient:
+            repo = "DongwonTTuna-Labs/demo"
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/DongwonTTuna-Labs/demo/{path}"
+
+            def authenticated_login(self) -> str:
+                return "codex-reviewer-for-dongwonttuna"
+
+            def request(self, method: str, path: str, **_kwargs):
+                self.requested = (method, path)
+                return {
+                    "title": "PR",
+                    "body": "",
+                    "head": {"sha": "1" * 40, "ref": "feature"},
+                    "base": {"sha": "2" * 40, "ref": "main"},
+                }
+
+            def request_text_limited(self, path: str, limit: int, accept: str = "text/plain"):
+                return (
+                    "diff --git a/a.py b/a.py\n"
+                    "--- a/a.py\n"
+                    "+++ b/a.py\n"
+                    "@@ -1 +1,2 @@\n"
+                    " keep\n"
+                    "+added\n",
+                    False,
+                )
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                if path.endswith("/files"):
+                    return [{"filename": "a.py", "status": "modified"}]
+                if path.endswith("/comments"):
+                    return []
+                if path.endswith("/reviews"):
+                    return []
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "PR_NUMBER": "7",
+                "RUNNER_TEMP": tmp,
+                "HEAD_SHA": "1" * 40,
+                "BASE_SHA": "2" * 40,
+            }
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                ForgejoClient,
+                "from_env",
+                return_value=FakeClient(),
+            ):
+                self.assertEqual(prepare_pr_context.main(), 0)
+            context = json.loads((Path(tmp) / "pr-context.json").read_text(encoding="utf-8"))
+        self.assertEqual(context["changed_files"][0]["changed_right_lines"], [2])
+        self.assertEqual(os.environ.get("FORGEJO_BOT_LOGIN"), None)
 
 
 class WorkflowParityTests(unittest.TestCase):
@@ -354,9 +637,9 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("scripts_ref:", text)
         self.assertIn("SCRIPTS_REF", text)
         self.assertIn('scripts_ref="main"', text)
-        self.assertIn('scripts_ref="${GITHUB_SHA}"', text)
-        self.assertIn("CODEX_BOOTSTRAP_SCRIPTS_REF: ${{ github.sha }}", text)
-        self.assertIn("Bootstrap exception", text)
+        self.assertNotIn('scripts_ref="${GITHUB_SHA}"', text)
+        self.assertNotIn("CODEX_BOOTSTRAP_SCRIPTS_REF", text)
+        self.assertNotIn("Bootstrap exception", text)
 
     def test_post_job_uses_default_needs_success_gate(self) -> None:
         text = self.forgejo_text()
@@ -369,11 +652,43 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertEqual(pipeline.count("FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}"), 2)
         self.assertIn("- name: Prepare Forgejo PR review context\n        env:\n          FORGEJO_BOT_TOKEN", pipeline)
         self.assertIn("- name: Publish Forgejo review comments\n        env:\n          FORGEJO_BOT_TOKEN", pipeline)
+        for workflow in ("codex-pr-review.yml", "codex-pr-review-on-comment.yml"):
+            text = (REPO_ROOT / ".forgejo" / "workflows" / workflow).read_text(encoding="utf-8")
+            self.assertNotIn("secrets: inherit", text)
+            self.assertIn("CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}", text)
 
     def test_codex_exec_unsets_ci_tokens(self) -> None:
         script = (REPO_ROOT / ".github" / "scripts" / "codex_exec.sh").read_text(encoding="utf-8")
-        for name in ["GIT_AUTH_TOKEN", "GITHUB_TOKEN", "FORGEJO_BOT_TOKEN", "ACTIONS_RUNTIME_TOKEN"]:
+        for name in [
+            "GIT_AUTH_TOKEN",
+            "GITHUB_TOKEN",
+            "FORGEJO_BOT_TOKEN",
+            "ACTIONS_RUNTIME_TOKEN",
+            "ACTIONS_CACHE_URL",
+            "ACTIONS_RESULTS_URL",
+            "ACTIONS_RUNTIME_URL",
+        ]:
             self.assertIn(f"unset {name}", script)
+
+    def test_comment_review_trigger_uses_issue_comment_created_and_edited(self) -> None:
+        workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-on-comment.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("issue_comment:", workflow)
+        self.assertIn("types: [created, edited]", workflow)
+        self.assertNotIn("issues:\n    types: [edited]", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+
+    def test_workflows_unset_fetch_token_before_checkout(self) -> None:
+        for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"git_fetch fetch --depth=1 origin [^\n]+\n\s+git checkout --detach FETCH_HEAD")
+
+    def test_codex_scripts_tests_watch_github_scripts(self) -> None:
+        workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-scripts-tests.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertGreaterEqual(workflow.count('".github/scripts/**"'), 2)
 
     def test_auto_review_uses_resolver_authorization(self) -> None:
         workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")

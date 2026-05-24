@@ -83,6 +83,24 @@ class ResolvePrMetadataTest(unittest.TestCase):
                 ["head_sha=" + "1" * 40, "base_ref=main", "base_sha=" + "2" * 40],
             )
 
+    def test_preserves_empty_metadata_fields_without_tab_shift(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            payload = {
+                "head": {
+                    "sha": "1" * 40,
+                    "repo": {"owner": {"login": ""}, "name": "demo"},
+                },
+                "base": {"ref": "main", "sha": "2" * 40},
+                "user": {"login": "DongwonTTuna"},
+                "draft": False,
+            }
+            completed = self.run_helper(tmp, payload)
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("fork PR", completed.stdout)
+            self.assertFalse((tmp / "outputs").exists())
+
     def test_rejects_unsafe_pr_metadata(self) -> None:
         base_payload = {
             "head": {

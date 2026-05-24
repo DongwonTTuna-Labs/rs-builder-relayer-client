@@ -12,7 +12,36 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts"))
 
-from merge_and_gate import gate  # noqa: E402
+from merge_and_gate import combine, gate  # noqa: E402
+
+
+class CombineArtifactShapeTest(unittest.TestCase):
+    def test_malformed_findings_json_hard_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            art_dir = Path(tmp)
+            (art_dir / "findings-correctness.json").write_text("{not json", encoding="utf-8")
+            with self.assertRaises(SystemExit) as raised:
+                combine(art_dir)
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_non_object_findings_artifact_hard_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            art_dir = Path(tmp)
+            (art_dir / "findings-correctness.json").write_text("[]", encoding="utf-8")
+            with self.assertRaises(SystemExit) as raised:
+                combine(art_dir)
+        self.assertEqual(raised.exception.code, 1)
+
+    def test_missing_findings_array_hard_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            art_dir = Path(tmp)
+            (art_dir / "findings-correctness.json").write_text(
+                json.dumps({"agent": "correctness"}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit) as raised:
+                combine(art_dir)
+        self.assertEqual(raised.exception.code, 1)
 
 
 class GateHardRuleTest(unittest.TestCase):
