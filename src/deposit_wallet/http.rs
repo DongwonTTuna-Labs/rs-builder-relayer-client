@@ -23,7 +23,6 @@ use crate::error::{RelayerError, Result};
 const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const SUBMIT_PATH: &str = "/submit";
 const TRANSACTION_PATH: &str = "/transaction";
-const MAX_ERROR_BODY_DRAIN_BYTES: usize = 4096;
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
@@ -664,7 +663,6 @@ impl DepositWalletRelayerClient {
         if !response.status().is_success() {
             let status = response.status();
             let retry_after = retry_after_summary(response.headers());
-            let _ = drain_limited_error_body(response).await;
             if status == StatusCode::TOO_MANY_REQUESTS {
                 return Err(RelayerError::QuotaExhausted);
             }
@@ -1210,17 +1208,6 @@ fn validate_permit_owner(permit: &DepositWalletMutationPermit, owner: Address) -
             redacted_address(permit.owner),
             redacted_address(owner)
         )));
-    }
-    Ok(())
-}
-
-async fn drain_limited_error_body(mut response: reqwest::Response) -> Result<()> {
-    let mut drained = 0usize;
-    while drained < MAX_ERROR_BODY_DRAIN_BYTES {
-        let Some(chunk) = response.chunk().await? else {
-            return Ok(());
-        };
-        drained = drained.saturating_add(chunk.len());
     }
     Ok(())
 }
@@ -2878,7 +2865,9 @@ mod tests {
             "http://{target_addr}/redirect-target"
         ))])
         .await;
-        let client = test_client(url);
+        let client =
+            DepositWalletRelayerClient::new(url, relayer_auth(), deposit_wallet_contract_config(137).unwrap())
+                .unwrap();
 
         let error = client
             .get_wallet_nonce(address(WALLET_CREATE_OWNER))
