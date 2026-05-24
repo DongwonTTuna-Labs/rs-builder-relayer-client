@@ -183,6 +183,13 @@ class WorkflowParityTests(unittest.TestCase):
                 with path.open(encoding="utf-8") as handle:
                     self.assertIsInstance(yaml.safe_load(handle), dict)
 
+    def test_workflow_set_matches_forgejo_only_stack(self) -> None:
+        expected_required = {"codex-pr-review.yml", "codex-pr-review-pipeline.yml"}
+        expected_optional = {"rust-ci.yml", "metadata.yml"}
+        actual = {path.name for path in (REPO_ROOT / ".forgejo" / "workflows").glob("*.yml")}
+        self.assertTrue(expected_required.issubset(actual))
+        self.assertLessEqual(actual, expected_required | expected_optional)
+
     def test_no_legacy_action_metadata_remains_in_forgejo_or_agents(self) -> None:
         legacy_dir = "." + "github"
         forbidden = [
@@ -206,7 +213,6 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("CODEX_DEFAULT_BRANCH=$default_branch", workflow)
         self.assertIn("CODEX_DEFAULT_SHA=$(git rev-parse HEAD)", workflow)
         self.assertNotIn("branches: [main]", workflow)
-        self.assertFalse((REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-on-comment.yml").exists())
 
     def test_pipeline_uses_forgejo_scripts_and_shared_codex_auth(self) -> None:
         pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
@@ -221,8 +227,7 @@ class WorkflowParityTests(unittest.TestCase):
             self.assertIn(f"review-{axis}:", pipeline)
             self.assertIn(f"review-{axis}/auth.json", pipeline)
 
-    def test_codex_script_tests_workflow_is_removed_but_tests_remain(self) -> None:
-        self.assertFalse((REPO_ROOT / ".forgejo" / "workflows" / "codex-scripts-tests.yml").exists())
+    def test_forgejo_script_tests_remain(self) -> None:
         self.assertTrue((REPO_ROOT / ".forgejo" / "scripts" / "tests" / "test_forgejo_review.py").exists())
 
     def test_runner_label_and_toolchain_assumptions(self) -> None:
