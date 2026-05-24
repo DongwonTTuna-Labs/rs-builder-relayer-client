@@ -1,7 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-const MAX_UNKNOWN_STATE_LEN: usize = 96;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayerTransactionState {
     New,
@@ -25,7 +23,7 @@ impl RelayerTransactionState {
             "CONFIRMED" => Self::Confirmed,
             "INVALID" => Self::Invalid,
             "FAILED" => Self::Failed,
-            _ => Self::Unknown(sanitize_unknown_state(raw)),
+            _ => Self::Unknown(raw.to_string()),
         }
     }
 
@@ -60,21 +58,6 @@ impl RelayerTransactionState {
             Self::Unknown(raw) => raw.as_str(),
         }
     }
-}
-
-fn sanitize_unknown_state(raw: &str) -> String {
-    let mut sanitized = String::new();
-    for ch in raw.chars().take(MAX_UNKNOWN_STATE_LEN) {
-        if ch.is_ascii_graphic() || ch == ' ' {
-            sanitized.push(ch);
-        } else {
-            sanitized.push('?');
-        }
-    }
-    if raw.chars().count() > MAX_UNKNOWN_STATE_LEN {
-        sanitized.push_str("...");
-    }
-    sanitized
 }
 
 impl Serialize for RelayerTransactionState {
