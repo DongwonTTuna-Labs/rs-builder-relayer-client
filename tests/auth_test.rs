@@ -78,6 +78,22 @@ fn test_relayer_key_auth_identity_can_differ_from_wallet_owner() {
 }
 
 #[test]
+fn test_relayer_key_debug_redacts_malformed_address() {
+    let secret_key = "secret-relayer-key";
+    let malformed_address = "not-a-valid-address-secret";
+    let auth = AuthMethod::RelayerKey {
+        api_key: secret_key.to_string(),
+        address: malformed_address.to_string(),
+    };
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(secret_key));
+    assert!(!rendered.contains(malformed_address));
+    assert!(rendered.contains("<redacted>"));
+}
+
+#[test]
 fn test_auth_method_builder_convenience() {
     let auth = AuthMethod::builder("k", "s", "p");
     match auth {

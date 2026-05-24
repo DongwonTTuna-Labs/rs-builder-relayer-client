@@ -80,6 +80,9 @@ Relayer SDK support is official for TypeScript/Python. Rust relayer functionalit
   - Relayer SDK is listed for TypeScript and Python; Rust relayer support must be raw REST, sidecar, or reviewed internal fork.
 - Deposit Wallet guide: `https://docs.polymarket.com/trading/deposit-wallets`
   - Rust supports deposit-wallet CLOB order path but not builder relayer client; WALLET-CREATE and WALLET are relayer/raw API flows.
+- Relayer transaction polling: `https://docs.polymarket.com/api-reference/relayer/get-a-transaction-by-id`
+  - Official wire contract uses `GET /transaction` with required query parameter `id`, where the value is the `transactionID` returned by `POST /submit`.
+  - The documented response includes `owner`, which is required evidence before owner-scoped recovery polling may record or clear local owner mutation state.
 - Gasless transactions: `https://docs.polymarket.com/trading/gasless`
   - relayer auth headers, transaction states, pUSD approvals, CTF operations.
 - Third-party reference only: `https://github.com/OrderBookTrade/rs-builder-relayer-client`

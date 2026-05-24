@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
                 success_count += 1;
                 continue;
             }
-            Err(RelayerError::QuotaExhausted { .. }) => {
+            Err(RelayerError::QuotaExhausted) => {
                 println!("  [429]  \"{}\" | quota hit — direct fallback", title);
             }
             Err(e) => {
