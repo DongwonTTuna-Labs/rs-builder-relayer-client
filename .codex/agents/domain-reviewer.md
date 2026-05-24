@@ -57,7 +57,7 @@ deposit-wallet / signer / relayer 의 경계, 공개 API 의 보수성, AGENTS.m
 
 ## 출력 (필수)
 
-`.github/scripts/schemas/findings.schema.json` 만족 JSON.
+`.forgejo/scripts/schemas/findings.schema.json` 만족 JSON.
 
 - `agent`: `"domain"` 고정
 - `id`: `"domain-<seq>"`

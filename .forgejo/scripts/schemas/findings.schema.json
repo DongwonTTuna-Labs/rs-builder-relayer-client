@@ -8,13 +8,7 @@
   "properties": {
     "agent": {
       "type": "string",
-      "enum": [
-        "correctness",
-        "security",
-        "performance",
-        "test-coverage",
-        "domain"
-      ]
+      "enum": ["correctness", "security", "performance", "test-coverage", "domain"]
     },
     "findings": {
       "type": "array",
@@ -22,16 +16,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "id",
-          "type",
-          "file",
-          "line",
-          "title",
-          "reason",
-          "rule_ref",
-          "cross_cutting"
-        ],
+        "required": ["id", "type", "file", "line", "title", "reason", "rule_ref", "cross_cutting"],
         "properties": {
           "id": {
             "type": "string",

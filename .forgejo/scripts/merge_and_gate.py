@@ -62,12 +62,22 @@ def combine(art_dir: Path) -> None:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            warn(f"skipping {path.name}: {exc}")
-            continue
+            error(f"{path.name} is not valid JSON: {exc}")
+            raise SystemExit(1) from exc
+        if not isinstance(data, dict):
+            error(f"{path.name} must contain a JSON object")
+            raise SystemExit(1)
         agent = data.get("agent")
         if agent:
             received_axes.add(str(agent))
-        for finding in data.get("findings") or []:
+        findings = data.get("findings")
+        if not isinstance(findings, list):
+            error(f"{path.name} must contain a findings array")
+            raise SystemExit(1)
+        for finding in findings:
+            if not isinstance(finding, dict):
+                error(f"{path.name} contains a non-object finding")
+                raise SystemExit(1)
             row = dict(finding)
             row["agent"] = agent
             combined.append(row)
@@ -108,7 +118,11 @@ def is_domain_critical(finding: dict) -> bool:
 def gate(art_dir: Path) -> None:
     combined_path = art_dir / "combined.json"
     decisions_path = art_dir / "decisions.json"
+    if not combined_path.exists():
+        raise SystemExit(f"combined findings artifact is missing: {combined_path}")
     combined = json.loads(combined_path.read_text(encoding="utf-8"))
+    if not isinstance(combined, list):
+        raise SystemExit(f"combined findings artifact must be a list: {combined_path}")
     if not decisions_path.exists():
         warn("decisions.json missing; falling back to hard rules only")
         decisions_doc: dict = {"decisions": [], "merge_notes": []}

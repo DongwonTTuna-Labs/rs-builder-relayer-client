@@ -2,7 +2,7 @@
 
 Codex PR Review v2 의 **Stage 0** 게이트.
 
-기존 codex-managed inline 코멘트를 한 번에 3 개 배치로 받아, 각 코멘트가 **PR head 의 현재 코드에서 이미 해소되었는지** 판정한다. LLM 출력은 `.github/scripts/schemas/resolutions.schema.json` 스키마에 따른 JSON 만 반환.
+기존 codex-managed inline 코멘트를 한 번에 3 개 배치로 받아, 각 코멘트가 **PR head 의 현재 코드에서 이미 해소되었는지** 판정한다. LLM 출력은 `.forgejo/scripts/schemas/resolutions.schema.json` 스키마에 따른 JSON 만 반환.
 
 ## 역할
 

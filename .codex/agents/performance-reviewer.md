@@ -35,7 +35,7 @@ N+1, allocation, 동기 블로킹, 재렌더링, Worker cold start 를 중심으
 
 ## 출력 (필수)
 
-`.github/scripts/schemas/findings.schema.json` 만족 JSON.
+`.forgejo/scripts/schemas/findings.schema.json` 만족 JSON.
 
 - `agent`: `"performance"` 고정
 - `id`: `"performance-<seq>"`

@@ -12,7 +12,7 @@ rs-builder-relayer-client = { path = "../rs-builder-relayer-client" }
 
 # production after review
 rs-builder-relayer-client = {
-  git = "ssh://git@github.com/DongwonTTuna/rs-builder-relayer-client.git",
+  git = "ssh://git@ssh.dongwontuna.net/DongwonTTuna-Labs/rs-builder-relayer-client.git",
   rev = "<audited_commit_sha>"
 }
 ```
