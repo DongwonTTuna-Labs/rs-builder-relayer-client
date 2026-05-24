@@ -2,7 +2,7 @@ use std::fmt;
 
 use ethers::types::{Address, Bytes, U256};
 use ethers::utils::to_checksum;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Serialize, Serializer};
 
 pub const WALLET_CREATE_TRANSACTION_TYPE: &str = "WALLET-CREATE";
 pub const WALLET_TRANSACTION_TYPE: &str = "WALLET";
@@ -127,7 +127,7 @@ impl fmt::Debug for DepositWalletBatchRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayerSubmitResponse {
     #[serde(rename = "transactionID", alias = "transactionId")]
@@ -135,18 +135,6 @@ pub struct RelayerSubmitResponse {
     pub state: crate::deposit_wallet::RelayerTransactionState,
     #[serde(default, rename = "transactionHash")]
     pub transaction_hash: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_address")]
-    pub owner: Option<Address>,
-}
-
-fn deserialize_optional_address<'de, D>(deserializer: D) -> Result<Option<Address>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let Some(raw) = Option::<String>::deserialize(deserializer)? else {
-        return Ok(None);
-    };
-    raw.parse().map(Some).map_err(serde::de::Error::custom)
 }
 
 pub(crate) fn serialize_address<S>(address: &Address, serializer: S) -> Result<S::Ok, S::Error>
