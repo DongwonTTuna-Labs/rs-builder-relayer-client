@@ -458,7 +458,7 @@ impl DepositWalletRelayerClient {
             }
             let receipt = parsed.receipt;
             match &receipt.state {
-                RelayerTransactionState::Mined | RelayerTransactionState::Confirmed => {
+                RelayerTransactionState::Confirmed => {
                     self.clear_transaction_block(&transaction_id)?;
                     return Ok(receipt);
                 }
@@ -490,7 +490,8 @@ impl DepositWalletRelayerClient {
                     )));
                 }
                 RelayerTransactionState::New
-                | RelayerTransactionState::Executed => {
+                | RelayerTransactionState::Executed
+                | RelayerTransactionState::Mined => {
                     if let Some(owner) = expected_owner {
                         self.record_recovered_inflight_transaction(owner, &transaction_id)?;
                     }
@@ -751,11 +752,13 @@ impl DepositWalletRelayerClient {
                     sanitized_external_token(&receipt.transaction_id)
                 )))
             }
-            RelayerTransactionState::Mined | RelayerTransactionState::Confirmed => {
+            RelayerTransactionState::Confirmed => {
                 self.clear_owner_block_if_payload(owner, &payload_hash)?;
                 Ok(receipt)
             }
-            RelayerTransactionState::New | RelayerTransactionState::Executed => {
+            RelayerTransactionState::New
+            | RelayerTransactionState::Executed
+            | RelayerTransactionState::Mined => {
                 self.record_inflight_transaction(
                     owner,
                     payload_hash,
@@ -824,8 +827,8 @@ impl DepositWalletRelayerClient {
         owner: Address,
         transaction_id: &str,
     ) -> Result<()> {
-        let payload_hash = recovered_payload_hash(transaction_id);
         let mut state = self.mutation_state()?;
+        let payload_hash = recovered_or_existing_payload_hash(&state, transaction_id, owner)?;
         ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
         if let Some(block) = state.owner_blocks.get(&owner) {
             match block {
@@ -876,7 +879,7 @@ impl DepositWalletRelayerClient {
                 return Ok(());
             }
             Some(block) => return Err(owner_block_error(owner, block)),
-            None => recovered_payload_hash(transaction_id),
+            None => recovered_or_existing_payload_hash(&state, transaction_id, owner)?,
         };
         ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
@@ -1503,6 +1506,23 @@ fn ensure_transaction_owner_mapping_available(
         }
     }
     Ok(())
+}
+
+fn recovered_or_existing_payload_hash(
+    state: &OwnerMutationState,
+    transaction_id: &str,
+    owner: Address,
+) -> Result<String> {
+    if let Some(existing) = state.transaction_owners.get(transaction_id) {
+        if existing.owner != owner {
+            return Err(RelayerError::reconciliation_required(format!(
+                "transaction {} is already associated with a different owner; manual reconciliation required",
+                sanitized_external_token(transaction_id)
+            )));
+        }
+        return Ok(existing.payload_hash.clone());
+    }
+    Ok(recovered_payload_hash(transaction_id))
 }
 
 #[cfg(test)]
@@ -3111,27 +3131,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn polling_treats_mined_or_confirmed_as_success_and_uses_injected_sleeper() {
+    async fn polling_treats_only_confirmed_as_success_and_uses_injected_sleeper() {
         let (result, requests, sleeper, _policy) = poll_sequence(
             &[
                 "STATE_NEW",
                 "STATE_EXECUTED",
                 "STATE_MINED",
+                "STATE_CONFIRMED",
             ],
-            3,
+            4,
         )
         .await;
 
         let receipt = result.unwrap();
-        assert_eq!(receipt.state, RelayerTransactionState::Mined);
-        assert_eq!(requests.len(), 3);
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(requests.len(), 4);
         assert!(requests
             .iter()
             .all(|request| request.path == "/transaction?id=tx-123"));
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps.len(), 2);
+        assert_eq!(sleeps.len(), 3);
         assert!((Duration::from_millis(100)..=Duration::from_millis(125)).contains(&sleeps[0]));
         assert!((Duration::from_millis(200)..=Duration::from_millis(250)).contains(&sleeps[1]));
+        assert!((Duration::from_millis(400)..=Duration::from_millis(500)).contains(&sleeps[2]));
         assert_ne!(sleeps[0], Duration::from_millis(100));
 
         let (result, _, _, _) = poll_sequence(&["STATE_INVALID"], 1).await;
@@ -3241,6 +3263,7 @@ mod tests {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![
             TestResponse::json("200 OK", transaction_response("tx-owner-aware", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-owner-aware", "STATE_NEW")),
             TestResponse::json(
                 "200 OK",
                 transaction_response("tx-owner-aware", "STATE_CONFIRMED"),
@@ -3260,7 +3283,7 @@ mod tests {
             .poll_owner_transaction(
                 owner,
                 "tx-owner-aware",
-                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap(),
             )
             .await
             .unwrap();
@@ -3269,7 +3292,7 @@ mod tests {
         let nonce = client.get_wallet_nonce(owner).await.unwrap();
         assert_eq!(nonce, U256::from(35u64));
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 4);
     }
 
     #[tokio::test]
