@@ -24,6 +24,8 @@ const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const SUBMIT_PATH: &str = "/submit";
 const TRANSACTION_PATH: &str = "/transaction";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
+const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
+const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
 const MAX_TRANSACTION_RESPONSE_ITEMS: usize = 32;
@@ -667,6 +669,7 @@ impl DepositWalletRelayerClient {
         if !response.status().is_success() {
             let status = response.status();
             let retry_after = retry_after_summary(response.headers());
+            drain_error_response_body(response).await;
             if status == StatusCode::TOO_MANY_REQUESTS {
                 return Err(RelayerError::QuotaExhausted);
             }
@@ -1235,6 +1238,11 @@ async fn read_limited_response_body(
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+async fn drain_error_response_body(response: reqwest::Response) {
+    let drain = read_limited_response_body(response, MAX_ERROR_BODY_DRAIN_BYTES);
+    let _ = tokio::time::timeout(ERROR_BODY_DRAIN_TIMEOUT, drain).await;
 }
 
 fn retry_after_summary(headers: &HeaderMap) -> String {
@@ -2695,9 +2703,12 @@ mod tests {
         let (url, handle) = spawn_truncated_error_body_server("400 Bad Request").await;
         let client = test_client(url);
 
-        let error = client
-            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
-            .await
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.get_wallet_nonce(address(WALLET_CREATE_OWNER)),
+        )
+        .await
+        .expect("truncated 400 drain should not wait for the client timeout")
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Api { status: 400, .. }));
@@ -2707,9 +2718,12 @@ mod tests {
 
         let (url, handle) = spawn_truncated_error_body_server("429 Too Many Requests").await;
         let client = test_client(url);
-        let error = client
-            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
-            .await
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.get_wallet_nonce(address(WALLET_CREATE_OWNER)),
+        )
+        .await
+        .expect("truncated 429 drain should not wait for the client timeout")
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::QuotaExhausted));
