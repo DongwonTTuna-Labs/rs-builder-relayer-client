@@ -93,16 +93,15 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
-      - name: Restore Cargo cache
+      - name: Restore Cargo dependency cache
         uses: https://code.forgejo.org/actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-deps-
       - name: Run Clippy with warnings denied
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -133,16 +132,15 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
-      - name: Restore Cargo cache
+      - name: Restore Cargo dependency cache
         uses: https://code.forgejo.org/actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-deps-
       - name: Run workspace tests
         run: cargo test --workspace --all-features
 
@@ -173,15 +171,14 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
-      - name: Restore Cargo cache
+      - name: Restore Cargo dependency cache
         uses: https://code.forgejo.org/actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-deps-
       - name: Build workspace targets
         run: cargo build --workspace --all-targets --all-features

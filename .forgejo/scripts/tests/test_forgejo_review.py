@@ -249,6 +249,22 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("https://code.forgejo.org/actions/cache@v4", workflow)
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", workflow)
 
+        parsed = yaml.safe_load(workflow)
+        for job_name in ["clippy", "test", "build"]:
+            with self.subTest(job=job_name):
+                cache_steps = [
+                    step
+                    for step in parsed["jobs"][job_name]["steps"]
+                    if step.get("uses") == "https://code.forgejo.org/actions/cache@v4"
+                ]
+                self.assertEqual(len(cache_steps), 1)
+                cache_step = cache_steps[0]
+                self.assertEqual(cache_step["name"], "Restore Cargo dependency cache")
+                cache_paths = cache_step["with"]["path"].splitlines()
+                self.assertEqual(cache_paths, ["~/.cargo/registry", "~/.cargo/git"])
+                self.assertIn("-cargo-deps-", cache_step["with"]["key"])
+                self.assertIn("-cargo-deps-", cache_step["with"]["restore-keys"])
+
     def test_metadata_workflow_checks_forgejo_layout_when_present(self) -> None:
         metadata = REPO_ROOT / ".forgejo" / "workflows" / "metadata.yml"
         if not metadata.exists():
