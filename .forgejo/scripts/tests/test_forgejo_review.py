@@ -227,6 +227,27 @@ class WorkflowParityTests(unittest.TestCase):
             self.assertIn(f"review-{axis}:", pipeline)
             self.assertIn(f"review-{axis}/auth.json", pipeline)
 
+    def test_pipeline_jobs_skip_when_resolver_denies_review(self) -> None:
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
+        )
+        required_guard = "inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''"
+        guarded_jobs = [
+            "prepare-context",
+            "prepare-codex-auth",
+            "review-correctness",
+            "review-security",
+            "review-performance",
+            "review-test-coverage",
+            "review-domain",
+            "tech-lead",
+            "post",
+            "cleanup-codex-auth",
+        ]
+        for job_name in guarded_jobs:
+            with self.subTest(job=job_name):
+                self.assertIn(required_guard, workflow["jobs"][job_name].get("if", ""))
+
     def test_forgejo_script_tests_remain(self) -> None:
         self.assertTrue((REPO_ROOT / ".forgejo" / "scripts" / "tests" / "test_forgejo_review.py").exists())
 
