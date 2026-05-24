@@ -22,8 +22,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare-actions:
+    name: Prepare action cache
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: dongwontuna-labs-runner
+    steps:
+      - name: Warm cache action
+        uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: rust-toolchain.toml
+          key: ${{ runner.os }}-actions-cache-prewarm-${{ hashFiles('rust-toolchain.toml') }}
+          lookup-only: true
+
   fmt:
     name: Check formatting and whitespace
+    needs: prepare-actions
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: dongwontuna-labs-runner
     steps:
@@ -65,6 +78,7 @@ jobs:
 
   clippy:
     name: Run Clippy lints
+    needs: prepare-actions
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: dongwontuna-labs-runner
     steps:
@@ -104,6 +118,7 @@ jobs:
 
   test:
     name: Run test suite
+    needs: prepare-actions
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: dongwontuna-labs-runner
     steps:
@@ -143,6 +158,7 @@ jobs:
 
   build:
     name: Build all targets
+    needs: prepare-actions
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: dongwontuna-labs-runner
     steps:

@@ -627,6 +627,13 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertNotIn("runs-on: rust", text)
         self.assertNotIn("runs-on: ubuntu-latest", text)
 
+    def test_rust_ci_prewarms_action_cache_before_parallel_jobs(self) -> None:
+        workflow = (REPO_ROOT / ".forgejo" / "workflows" / "rust-ci.yml").read_text(encoding="utf-8")
+        self.assertIn("prepare-actions:", workflow)
+        self.assertIn("name: Prepare action cache", workflow)
+        self.assertIn("lookup-only: true", workflow)
+        self.assertEqual(workflow.count("needs: prepare-actions"), 4)
+
     def test_workflows_use_non_reserved_secret_name(self) -> None:
         text = self.forgejo_text()
         self.assertIn("secrets.CODEX_REVIEW_BOT_TOKEN", text)
