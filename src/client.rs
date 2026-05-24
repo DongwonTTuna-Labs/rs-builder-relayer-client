@@ -767,8 +767,11 @@ mod tests {
     use ethers::signers::LocalWallet;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::time::timeout;
 
     use super::*;
+
+    const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 
     #[tokio::test]
     async fn legacy_submit_maps_429_to_unit_quota_exhausted() {
@@ -777,9 +780,15 @@ mod tests {
             .expect("test server should bind");
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("server should accept");
+            let (mut stream, _) = timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                .await
+                .expect("server accept should not hang")
+                .expect("server should accept");
             let mut buffer = [0u8; 1024];
-            let _ = stream.read(&mut buffer).await.expect("request should read");
+            let _ = timeout(TEST_SERVER_TIMEOUT, stream.read(&mut buffer))
+                .await
+                .expect("request read should not hang")
+                .expect("request should read");
             stream
                 .write_all(
                     b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
@@ -820,6 +829,9 @@ mod tests {
         let error = client.submit(request).await.unwrap_err();
 
         assert!(matches!(error, RelayerError::QuotaExhausted));
-        server.await.unwrap();
+        timeout(TEST_SERVER_TIMEOUT, server)
+            .await
+            .expect("server task should not hang")
+            .unwrap();
     }
 }

@@ -1553,6 +1553,7 @@ mod tests {
     const MUTATION_BLOCKED_PREFIX: &str = "Deposit-wallet mutation blocked:";
     const AMBIGUOUS_SUBMIT_PREFIX: &str = "Ambiguous deposit-wallet submit:";
     const RECONCILIATION_REQUIRED_PREFIX: &str = "Deposit-wallet reconciliation required:";
+    const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 
     #[derive(Clone)]
     struct FixedClock {
@@ -1797,7 +1798,10 @@ mod tests {
         let handle = tokio::spawn(async move {
             let mut requests = Vec::with_capacity(responses.len());
             for response in responses {
-                let (mut stream, _) = listener.accept().await.expect("server should accept");
+                let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                    .await
+                    .expect("server accept should not hang")
+                    .expect("server should accept");
                 let request = read_request(&mut stream).await;
                 write_response(&mut stream, response).await;
                 requests.push(request);
@@ -1817,7 +1821,10 @@ mod tests {
             .expect("test server should bind");
         let addr = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("server should accept");
+            let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                .await
+                .expect("server accept should not hang")
+                .expect("server should accept");
             let request = read_request(&mut stream).await;
             drop(stream);
             vec![request]
@@ -1837,7 +1844,10 @@ mod tests {
             .expect("test server should bind");
         let addr = listener.local_addr().unwrap();
         let handle = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("server should accept");
+            let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                .await
+                .expect("server accept should not hang")
+                .expect("server should accept");
             let request = read_request(&mut stream).await;
             let wire = format!(
                 "HTTP/1.1 {status}\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 1024\r\n\r\npartial"
@@ -1859,7 +1869,10 @@ mod tests {
         let mut buffer = Vec::new();
         let headers_end = loop {
             let mut chunk = [0u8; 1024];
-            let read = stream.read(&mut chunk).await.expect("request should read");
+            let read = tokio::time::timeout(TEST_SERVER_TIMEOUT, stream.read(&mut chunk))
+                .await
+                .expect("header read should not hang")
+                .expect("request should read");
             assert!(read > 0, "request ended before headers completed");
             buffer.extend_from_slice(&chunk[..read]);
             if let Some(index) = find_headers_end(&buffer) {
@@ -1888,7 +1901,10 @@ mod tests {
 
         while buffer.len() < body_start + content_length {
             let mut chunk = [0u8; 1024];
-            let read = stream.read(&mut chunk).await.expect("body should read");
+            let read = tokio::time::timeout(TEST_SERVER_TIMEOUT, stream.read(&mut chunk))
+                .await
+                .expect("body read should not hang")
+                .expect("body should read");
             assert!(read > 0, "request ended before body completed");
             buffer.extend_from_slice(&chunk[..read]);
         }
