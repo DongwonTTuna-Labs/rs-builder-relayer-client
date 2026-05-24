@@ -41,7 +41,7 @@ jobs:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
-          TRUSTED_REF: ${{ inputs.base_ref }}
+          TRUSTED_REF: feature/forgejo-codex-review-bot
           FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
@@ -129,7 +129,7 @@ jobs:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
-          TRUSTED_REF: ${{ inputs.base_ref }}
+          TRUSTED_REF: feature/forgejo-codex-review-bot
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -304,7 +304,7 @@ jobs:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
-          TRUSTED_REF: ${{ inputs.base_ref }}
+          TRUSTED_REF: feature/forgejo-codex-review-bot
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -432,7 +432,7 @@ jobs:
       - name: Checkout base ref (trusted scripts)
         env:
           SCRIPTS_REF: ${{ inputs.scripts_ref }}
-          TRUSTED_REF: ${{ inputs.base_ref }}
+          TRUSTED_REF: feature/forgejo-codex-review-bot
           GIT_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

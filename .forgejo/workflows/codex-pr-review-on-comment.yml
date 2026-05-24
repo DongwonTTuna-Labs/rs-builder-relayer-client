@@ -33,8 +33,8 @@ jobs:
           FORGEJO_SERVER_URL: https://git.dongwontuna.net
           FORGEJO_REPOSITORY: ${{ github.repository }}
           GIT_AUTH_TOKEN: ${{ github.token }}
-          SCRIPTS_REF: main
-          TRUSTED_REF: main
+          SCRIPTS_REF: ${{ github.sha }}
+          TRUSTED_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
@@ -91,7 +91,7 @@ jobs:
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       base_ref: ${{ needs.resolve.outputs.base_ref }}
       base_sha: ${{ needs.resolve.outputs.base_sha }}
-      scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
+      scripts_ref: 1e5b6806be14f1dee946a76888c7687bf4c4a8e2
       trigger: ${{ needs.resolve.outputs.trigger }}
     secrets:
       CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
