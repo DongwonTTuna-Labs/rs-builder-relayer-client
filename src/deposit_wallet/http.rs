@@ -446,7 +446,11 @@ impl DepositWalletRelayerClient {
                 None => self.transaction_owner(&transaction_id)?,
             };
             if let Some(owner) = owner_to_verify {
-                self.require_transaction_owner(&transaction_id, &parsed, owner)?;
+                if let Err(error) = self.require_transaction_owner(&transaction_id, &parsed, owner)
+                {
+                    self.mark_transaction_reconciliation_required(&transaction_id)?;
+                    return Err(error);
+                }
             }
             let receipt = parsed.receipt;
             match &receipt.state {
@@ -575,6 +579,7 @@ impl DepositWalletRelayerClient {
         let owner = reservation.owner();
         let payload_hash = reservation.payload_hash().to_string();
         let url = self.base_url.endpoint(SUBMIT_PATH);
+        reservation.arm_ambiguous_on_drop();
         match self.send(Method::POST, url, Some(body)).await {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => {
@@ -996,7 +1001,14 @@ struct OwnerSubmitReservation {
     state: Arc<Mutex<OwnerMutationState>>,
     owner: Address,
     payload_hash: String,
-    armed: bool,
+    drop_action: OwnerSubmitReservationDropAction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OwnerSubmitReservationDropAction {
+    Clear,
+    Ambiguous,
+    Disarmed,
 }
 
 impl OwnerSubmitReservation {
@@ -1009,7 +1021,7 @@ impl OwnerSubmitReservation {
             state,
             owner,
             payload_hash,
-            armed: true,
+            drop_action: OwnerSubmitReservationDropAction::Clear,
         }
     }
 
@@ -1058,26 +1070,37 @@ impl OwnerSubmitReservation {
             )
         })?;
         clear_owner_block_if_payload(&mut state, self.owner, &self.payload_hash);
-        self.armed = false;
+        self.drop_action = OwnerSubmitReservationDropAction::Disarmed;
         Ok(())
     }
 
+    fn arm_ambiguous_on_drop(&mut self) {
+        self.drop_action = OwnerSubmitReservationDropAction::Ambiguous;
+    }
+
     fn disarm(&mut self) {
-        self.armed = false;
+        self.drop_action = OwnerSubmitReservationDropAction::Disarmed;
     }
 }
 
 impl Drop for OwnerSubmitReservation {
     fn drop(&mut self) {
-        if !self.armed {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state
+            .owner_blocks
+            .get(&self.owner)
+            .is_none_or(|block| block.payload_hash() != self.payload_hash)
+        {
             return;
         }
-        if let Ok(mut state) = self.state.lock() {
-            if state
-                .owner_blocks
-                .get(&self.owner)
-                .is_some_and(|block| block.payload_hash() == self.payload_hash)
-            {
+
+        match self.drop_action {
+            OwnerSubmitReservationDropAction::Clear => {
+                clear_owner_block_if_payload(&mut state, self.owner, &self.payload_hash);
+            }
+            OwnerSubmitReservationDropAction::Ambiguous => {
                 state.owner_blocks.insert(
                     self.owner,
                     OwnerMutationBlock::Ambiguous {
@@ -1085,6 +1108,7 @@ impl Drop for OwnerSubmitReservation {
                     },
                 );
             }
+            OwnerSubmitReservationDropAction::Disarmed => {}
         }
     }
 }
@@ -2419,7 +2443,7 @@ mod tests {
     }
 
     #[test]
-    fn dropped_owner_submit_reservation_records_ambiguous_block() {
+    fn dropped_pre_submit_owner_reservation_clears_owner_block() {
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let client =
@@ -2434,6 +2458,23 @@ mod tests {
             Err(error) => error,
         };
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+
+        drop(reservation);
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+    }
+
+    #[test]
+    fn dropped_post_submit_owner_reservation_records_ambiguous_block() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = signed_digest_payload_hash(signed.digest());
+        let mut reservation = client
+            .reserve_owner_submit(owner, payload_hash.clone())
+            .unwrap();
+        reservation.arm_ambiguous_on_drop();
 
         drop(reservation);
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
@@ -3260,8 +3301,20 @@ mod tests {
             .unwrap_err();
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                owner,
+                DepositWalletMutationPermit::new(
+                    owner,
+                    "checked mocked owner mismatch",
+                    "single-process mocked owner serialization guard",
+                ),
+            )
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }
