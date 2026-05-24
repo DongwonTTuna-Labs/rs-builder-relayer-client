@@ -232,24 +232,21 @@ class WorkflowParityTests(unittest.TestCase):
             (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
         )
         required_guard = "inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''"
-        guarded_jobs = [
-            "prepare-context",
-            "prepare-codex-auth",
-            "review-correctness",
-            "review-security",
-            "review-performance",
-            "review-test-coverage",
-            "review-domain",
-            "tech-lead",
-            "post",
-            "cleanup-codex-auth",
-        ]
-        for job_name in guarded_jobs:
+        expected_if = {
+            "prepare-context": required_guard,
+            "prepare-codex-auth": required_guard,
+            "review-correctness": required_guard,
+            "review-security": required_guard,
+            "review-performance": required_guard,
+            "review-test-coverage": required_guard,
+            "review-domain": required_guard,
+            "tech-lead": f"{required_guard} && always() && !cancelled()",
+            "post": required_guard,
+            "cleanup-codex-auth": f"{required_guard} && always()",
+        }
+        for job_name, expected in expected_if.items():
             with self.subTest(job=job_name):
-                self.assertIn(required_guard, workflow["jobs"][job_name].get("if", ""))
-        self.assertIn("always()", workflow["jobs"]["tech-lead"].get("if", ""))
-        self.assertIn("!cancelled()", workflow["jobs"]["tech-lead"].get("if", ""))
-        self.assertIn("always()", workflow["jobs"]["cleanup-codex-auth"].get("if", ""))
+                self.assertEqual(workflow["jobs"][job_name].get("if"), expected)
 
     def test_forgejo_script_tests_remain(self) -> None:
         self.assertTrue((REPO_ROOT / ".forgejo" / "scripts" / "tests" / "test_forgejo_review.py").exists())
