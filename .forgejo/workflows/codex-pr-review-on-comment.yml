@@ -45,6 +45,9 @@ jobs:
               "$@"
           }
           scripts_ref="main"
+          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" ]]; then
+            scripts_ref="${GITHUB_SHA}"
+          fi
           git_fetch fetch --depth=1 origin "$scripts_ref"
           unset GIT_AUTH_TOKEN
           git checkout --detach FETCH_HEAD
@@ -69,7 +72,7 @@ jobs:
       head_sha: ${{ needs.resolve.outputs.head_sha }}
       base_ref: ${{ needs.resolve.outputs.base_ref }}
       base_sha: ${{ needs.resolve.outputs.base_sha }}
-      scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
+      scripts_ref: a69bf764d5a3093f40da6dc1d9b4d24d72936e4
       trigger: ${{ needs.resolve.outputs.trigger }}
     secrets:
       CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
