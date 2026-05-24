@@ -10,8 +10,7 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let auth = RelayerKeyAuth::new("compile-test-api-key", Address::zero());
     let config = deposit_wallet_contract_config(137).unwrap();
-    let client = DepositWalletRelayerClient::new(url, auth, config)
-        .expect_err("mocked-only PR must not expose live client construction");
+    let client = DepositWalletRelayerClient::new(url, auth, config).unwrap();
 
     let gate = DepositWalletMutationGate::Deny;
     let permit = DepositWalletMutationPermit::new(
@@ -26,11 +25,9 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
         transaction_hash: None,
     };
 
-    assert!(
-        client
-            .to_string()
-            .contains("live deposit-wallet relayer client construction is disabled")
-    );
+    let rendered = format!("{client:?}");
+    assert!(rendered.contains("DepositWalletRelayerClient"));
+    assert!(!rendered.contains("compile-test-api-key"));
 
     let _ = (gate, permit, policy, receipt);
 }
