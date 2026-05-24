@@ -529,9 +529,7 @@ impl RelayClient {
             let status = resp.status().as_u16();
             let err = resp.text().await.unwrap_or_default();
             if status == 429 {
-                return Err(RelayerError::QuotaExhausted {
-                    retry_after: String::new(),
-                });
+                return Err(RelayerError::QuotaExhausted);
             }
             return Err(RelayerError::Api { status, message: err });
         }
@@ -759,4 +757,69 @@ fn extract_error_from_response(text: &str) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use ethers::signers::LocalWallet;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn legacy_submit_maps_429_to_unit_quota_exhausted() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("server should accept");
+            let mut buffer = [0u8; 1024];
+            let _ = stream.read(&mut buffer).await.expect("request should read");
+            stream
+                .write_all(
+                    b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+                )
+                .await
+                .expect("response should write");
+        });
+
+        let wallet: LocalWallet =
+            "0000000000000000000000000000000000000000000000000000000000000001"
+                .parse()
+                .unwrap();
+        let client = RelayClient {
+            http: Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{addr}"),
+            chain_id: 137,
+            signer: Arc::new(wallet),
+            auth: AuthMethod::relayer_key("test-key", "0x1234"),
+            tx_type: RelayerTxType::Safe,
+            rpc_url: None,
+        };
+        let request = TransactionRequest {
+            tx_type: "SAFE".to_string(),
+            from: "0x0000000000000000000000000000000000000001".to_string(),
+            to: "0x0000000000000000000000000000000000000002".to_string(),
+            proxy_wallet: None,
+            data: "0x".to_string(),
+            signature: "0x".to_string(),
+            nonce: Some("0".to_string()),
+            signature_params: serde_json::json!({}),
+            metadata: None,
+            value: Some("0".to_string()),
+        };
+
+        let error = client.submit(request).await.unwrap_err();
+
+        assert!(matches!(error, RelayerError::QuotaExhausted));
+        server.await.unwrap();
+    }
 }

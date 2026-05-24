@@ -38,23 +38,32 @@ pub enum RelayerError {
     #[error("Auth error: {0}")]
     AuthError(String),
 
-    #[error("Invalid relayer URL: {0}")]
-    InvalidRelayerUrl(String),
-
-    #[error("Deposit-wallet mutation blocked: {0}")]
-    MutationBlocked(String),
-
-    #[error("Ambiguous deposit-wallet submit: {0}")]
-    AmbiguousSubmit(String),
-
-    #[error("Deposit-wallet reconciliation required: {0}")]
-    ReconciliationRequired(String),
-
-    #[error("Relayer quota exhausted (429){retry_after}")]
-    QuotaExhausted { retry_after: String },
+    #[error("Relayer quota exhausted (429)")]
+    QuotaExhausted,
 
     #[error("{0}")]
     Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, RelayerError>;
+
+impl RelayerError {
+    pub(crate) fn invalid_relayer_url(message: impl Into<String>) -> Self {
+        Self::Other(format!("Invalid relayer URL: {}", message.into()))
+    }
+
+    pub(crate) fn mutation_blocked(message: impl Into<String>) -> Self {
+        Self::Other(format!("Deposit-wallet mutation blocked: {}", message.into()))
+    }
+
+    pub(crate) fn ambiguous_submit(message: impl Into<String>) -> Self {
+        Self::Other(format!("Ambiguous deposit-wallet submit: {}", message.into()))
+    }
+
+    pub(crate) fn reconciliation_required(message: impl Into<String>) -> Self {
+        Self::Other(format!(
+            "Deposit-wallet reconciliation required: {}",
+            message.into()
+        ))
+    }
+}
