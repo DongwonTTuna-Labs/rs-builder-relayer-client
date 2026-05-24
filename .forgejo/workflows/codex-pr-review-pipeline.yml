@@ -27,6 +27,7 @@ on:
 jobs:
   prepare-context:
     name: prepare-context
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     timeout-minutes: 5
     env:
@@ -83,6 +84,7 @@ jobs:
   prepare-codex-auth:
     name: prepare-codex-auth
     needs: prepare-context
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -148,6 +150,7 @@ jobs:
     needs:
       - prepare-context
       - prepare-codex-auth
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -233,6 +236,7 @@ jobs:
     needs:
       - prepare-context
       - prepare-codex-auth
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -318,6 +322,7 @@ jobs:
     needs:
       - prepare-context
       - prepare-codex-auth
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -403,6 +408,7 @@ jobs:
     needs:
       - prepare-context
       - prepare-codex-auth
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -488,6 +494,7 @@ jobs:
     needs:
       - prepare-context
       - prepare-codex-auth
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -577,7 +584,7 @@ jobs:
       - review-test-coverage
       - review-domain
       - prepare-codex-auth
-    if: always() && !cancelled()
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != '' && always() && !cancelled()
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
@@ -695,6 +702,7 @@ jobs:
   post:
     name: post
     needs: tech-lead
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
     timeout-minutes: 10
     env:
@@ -786,7 +794,7 @@ jobs:
       - review-domain
       - tech-lead
       - post
-    if: always()
+    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != '' && always()
     runs-on: dongwontuna-labs-runner
     container:
       volumes:
