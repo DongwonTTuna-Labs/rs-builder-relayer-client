@@ -2005,14 +2005,18 @@ mod tests {
         )
     }
 
-    async fn spawn_slow_error_body_server() -> (
+    async fn spawn_controlled_error_body_server() -> (
         DepositWalletRelayerUrl,
         JoinHandle<Vec<CapturedRequest>>,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
     ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind");
         let addr = listener.local_addr().unwrap();
+        let (headers_sent_tx, headers_sent_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
             let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
                 .await
@@ -2024,13 +2028,16 @@ mod tests {
                 .write_all(wire.as_bytes())
                 .await
                 .expect("partial response should write");
-            tokio::time::sleep(Duration::from_millis(750)).await;
+            let _ = headers_sent_tx.send(());
+            let _ = release_rx.await;
             vec![request]
         });
 
         (
             DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
             handle,
+            headers_sent_rx,
+            release_tx,
         )
     }
 
@@ -2280,22 +2287,28 @@ mod tests {
 
     #[tokio::test]
     async fn non_success_error_body_drain_does_not_delay_caller() {
-        let (url, handle) = spawn_slow_error_body_server().await;
+        let (url, handle, headers_sent, release_server) =
+            spawn_controlled_error_body_server().await;
         let client = test_client_with_auth_clock_timeout(
             url,
             relayer_auth(),
             1_700_000_000,
             Duration::from_secs(1),
         );
+        let owner = address(WALLET_CREATE_OWNER);
 
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            client.get_wallet_nonce(address(WALLET_CREATE_OWNER)),
-        )
+        let client_task = tokio::spawn(async move { client.get_wallet_nonce(owner).await });
+        headers_sent
+            .await
+            .expect("server should send non-success headers");
+
+        let result = tokio::time::timeout(TEST_SERVER_TIMEOUT, client_task)
         .await
-        .expect("non-success status should return before slow body drain");
+        .expect("non-success status should return while error body is still held")
+        .expect("client task should not panic");
         assert!(matches!(result.unwrap_err(), RelayerError::Api { status: 500, .. }));
 
+        let _ = release_server.send(());
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
