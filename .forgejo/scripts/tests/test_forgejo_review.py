@@ -12,19 +12,24 @@ REPO_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from forgejo_api import ForgejoApiError, ForgejoClient, redact_secret, sanitized_url_error, split_repo  # noqa: E402
+import post_review_comments  # noqa: E402
 from post_review_comments import (  # noqa: E402
     changed_line_map,
+    context_inline_comments,
+    current_pr_refs,
     existing_by_key,
     extract_marker,
     finding_key,
     marker_for,
     post_inline_comments,
+    postable_finding_keys,
     require_json_list,
     render_inline_body,
     render_resolved_body,
     render_sticky,
     reply_resolved,
     sanitize_model_text,
+    upsert_sticky,
 )
 import prepare_pr_context  # noqa: E402
 import resolve_pr_metadata  # noqa: E402
@@ -110,6 +115,57 @@ class ForgejoApiTests(unittest.TestCase):
             self.assertEqual(client.request("GET", "items"), [])
         self.assertEqual(urlopen.call_count, 2)
 
+    def test_non_idempotent_request_does_not_retry_transient_http_error(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        error = __import__("urllib.error").error.HTTPError(
+            "https://git.example/api/v1/items",
+            503,
+            "temporary",
+            {},
+            mock.Mock(read=lambda: b"try again"),
+        )
+        with mock.patch("time.sleep") as sleep, mock.patch("urllib.request.urlopen", side_effect=error) as urlopen:
+            with self.assertRaises(ForgejoApiError):
+                client.request("POST", "items", {"x": 1})
+        sleep.assert_not_called()
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_request_text_limited_reports_truncation_boundary(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        response = mock.Mock()
+        response.__enter__ = mock.Mock(return_value=response)
+        response.__exit__ = mock.Mock(return_value=None)
+        response.read.return_value = b"abcde"
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            text, truncated = client.request_text_limited("items.diff", 5)
+        self.assertEqual((text, truncated), ("abcde", False))
+
+        response.read.return_value = b"abcdef"
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            text, truncated = client.request_text_limited("items.diff", 5)
+        self.assertEqual((text, truncated), ("abcde", True))
+
+    def test_request_text_limited_sanitizes_failures(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        http_error = __import__("urllib.error").error.HTTPError(
+            "https://git.example/api/v1/items.diff",
+            500,
+            "server error",
+            {},
+            mock.Mock(read=lambda: b"secret-token failed"),
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=http_error):
+            with self.assertRaises(ForgejoApiError) as raised:
+                client.request_text_limited("items.diff", 10)
+        self.assertIn("<redacted>", str(raised.exception))
+        self.assertNotIn("secret-token", str(raised.exception))
+
+        url_error = __import__("urllib.error").error.URLError("proxy leaked secret-token")
+        with mock.patch("urllib.request.urlopen", side_effect=url_error):
+            with self.assertRaises(ForgejoApiError) as raised:
+                client.request_text_limited("items.diff", 10)
+        self.assertNotIn("secret-token", str(raised.exception))
+
     def test_url_error_reason_is_sanitized(self) -> None:
         client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
         error = __import__("urllib.error").error.URLError("proxy leaked secret-token")
@@ -185,6 +241,17 @@ diff --git a/deleted.py b/deleted.py
 -gone
 """
         self.assertEqual(parse_changed_right_lines(diff), {"a.py": {2, 3}, "new.py": {1, 2}})
+
+    def test_added_literal_header_lines_inside_hunk_are_not_file_headers(self) -> None:
+        diff = """diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1 +1,3 @@
++before
++++ b/not-a-header.py
++++ /dev/null
+"""
+        self.assertEqual(parse_changed_right_lines(diff), {"app.py": {1, 2, 3}})
 
 
 class ReviewCommentTests(unittest.TestCase):
@@ -396,6 +463,20 @@ class ReviewCommentTests(unittest.TestCase):
         self.assertIn("Cross-cutting findings", body)
         self.assertIn("workflow gate is unsafe", body)
 
+    def test_sticky_sanitizes_tech_lead_headline(self) -> None:
+        body = render_sticky(
+            "2",
+            [],
+            posted=0,
+            skipped_existing=0,
+            resolved=0,
+            axes_status={"missing": []},
+            judgment={"status": "LGTM<script>", "headline": "@all <script>alert(1)</script>"},
+        )
+        self.assertIn("Status: **LGTM&lt;script&gt;**", body)
+        self.assertIn("@\u200ball &lt;script&gt;alert(1)&lt;/script&gt;", body)
+        self.assertNotIn("<script>", body)
+
     def test_changed_line_map_ignores_bad_context_rows(self) -> None:
         context = {
             "changed_files": [
@@ -404,6 +485,78 @@ class ReviewCommentTests(unittest.TestCase):
             ]
         }
         self.assertEqual(changed_line_map(context), {"src/lib.rs": {1, 2}})
+
+    def test_postable_finding_keys_only_tracks_inline_changed_lines(self) -> None:
+        inline = {"agent": "security", "file": "src/lib.rs", "line": 12, "type": "MUST"}
+        cross = {"agent": "security", "file": "src/lib.rs", "line": 12, "type": "MUST", "cross_cutting": True}
+        off_diff = {"agent": "security", "file": "src/lib.rs", "line": 99, "type": "MUST"}
+        self.assertEqual(postable_finding_keys([inline, cross, off_diff], {"src/lib.rs": {12}}), {finding_key(inline)})
+
+    def test_context_inline_comments_filters_non_object_rows(self) -> None:
+        self.assertEqual(
+            context_inline_comments({"existing_inline_comments": [{"id": 1}, "bad", None]}),
+            [{"id": 1}],
+        )
+
+    def test_current_pr_refs_reads_head_and_base_sha(self) -> None:
+        class FakeClient:
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def request(self, method: str, path: str):
+                self.seen = (method, path)
+                return {"head": {"sha": "1" * 40}, "base": {"sha": "2" * 40}}
+
+        client = FakeClient()
+        self.assertEqual(current_pr_refs(client, "4"), ("1" * 40, "2" * 40))
+        self.assertEqual(client.seen, ("GET", "repos/owner/repo/pulls/4"))
+
+    def test_upsert_sticky_updates_existing_bot_comment_and_ignores_others(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                return [
+                    {"id": 1, "body": prepare_pr_context.STICKY_MARKER, "user": {"login": "other"}},
+                    {
+                        "id": 2,
+                        "body": prepare_pr_context.STICKY_MARKER,
+                        "user": {"login": "codex-reviewer-for-dongwonttuna"},
+                    },
+                ]
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                self.calls.append((method, path, data))
+                return {}
+
+        client = FakeClient()
+        with mock.patch.dict(os.environ, {"FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna"}, clear=False):
+            upsert_sticky(client, "4", "body")
+        self.assertEqual(client.calls, [("PATCH", "repos/owner/repo/issues/comments/2", {"body": "body"})])
+
+    def test_upsert_sticky_creates_when_missing(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                return [{"id": 1, "body": prepare_pr_context.STICKY_MARKER, "user": {"login": "other"}}]
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                self.calls.append((method, path, data))
+                return {}
+
+        client = FakeClient()
+        with mock.patch.dict(os.environ, {"FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna"}, clear=False):
+            upsert_sticky(client, "4", "body")
+        self.assertEqual(client.calls, [("POST", "repos/owner/repo/issues/4/comments", {"body": "body"})])
 
 
 class EventParserTests(unittest.TestCase):
@@ -452,6 +605,29 @@ class EventParserTests(unittest.TestCase):
         allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, pr, "DongwonTTuna-Labs/demo")
         self.assertFalse(allowed)
         self.assertIn("base ref", reason)
+
+    def test_authorize_rejects_actor_mismatch_draft_and_author_mismatch(self) -> None:
+        pr = {
+            "draft": False,
+            "base": {"ref": "main"},
+            "head": {"repo": {"full_name": "DongwonTTuna-Labs/demo"}},
+            "user": {"login": "DongwonTTuna"},
+        }
+        os.environ["GITHUB_ACTOR"] = "someone-else"
+        allowed, reason = authorize({"sender": {"login": "someone-else"}}, pr, "DongwonTTuna-Labs/demo")
+        self.assertFalse(allowed)
+        self.assertIn("actor", reason)
+
+        os.environ["GITHUB_ACTOR"] = "DongwonTTuna"
+        draft = {**pr, "draft": True}
+        allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, draft, "DongwonTTuna-Labs/demo")
+        self.assertFalse(allowed)
+        self.assertIn("draft", reason)
+
+        author_mismatch = {**pr, "user": {"login": "other-author"}}
+        allowed, reason = authorize({"sender": {"login": "DongwonTTuna"}}, author_mismatch, "DongwonTTuna-Labs/demo")
+        self.assertFalse(allowed)
+        self.assertIn("PR author", reason)
 
     def test_authorize_rejects_missing_head_repo(self) -> None:
         os.environ["GITHUB_ACTOR"] = "DongwonTTuna"
@@ -530,6 +706,31 @@ class PrepareContextMainTests(unittest.TestCase):
         self.assertEqual(len(comments), prepare_pr_context.MAX_REVIEW_COMMENT_REVIEW_SCAN)
         self.assertEqual(client.comment_calls, prepare_pr_context.MAX_REVIEW_COMMENT_REVIEW_SCAN)
 
+    def test_fetch_review_comments_only_loads_configured_bot_reviews(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.comment_paths = []
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                if path.endswith("pulls/7/reviews"):
+                    return [
+                        {"id": 1, "user": {"login": "someone-else"}},
+                        {"id": 2, "user": {"login": "codex-reviewer-for-dongwonttuna"}},
+                    ]
+                if "/reviews/" in path and path.endswith("/comments"):
+                    self.comment_paths.append(path)
+                    return [{"id": 10, "user": {"login": "codex-reviewer-for-dongwonttuna"}}]
+                return []
+
+        client = FakeClient()
+        with mock.patch.dict(os.environ, {"FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna"}, clear=False):
+            comments = fetch_review_comments(client, "7")
+        self.assertEqual(comments[0]["pull_request_review_id"], 2)
+        self.assertEqual(client.comment_paths, ["repos/owner/repo/pulls/7/reviews/2/comments"])
+
     def test_main_writes_context_with_token_owner_and_full_diff_line_scan(self) -> None:
         class FakeClient:
             repo = "DongwonTTuna-Labs/demo"
@@ -585,6 +786,138 @@ class PrepareContextMainTests(unittest.TestCase):
             context = json.loads((Path(tmp) / "pr-context.json").read_text(encoding="utf-8"))
         self.assertEqual(context["changed_files"][0]["changed_right_lines"], [2])
         self.assertEqual(os.environ.get("FORGEJO_BOT_LOGIN"), None)
+
+
+class PostReviewMainTests(unittest.TestCase):
+    def write_artifacts(self, directory: Path, allowed: list[dict[str, Any]] | None = None) -> None:
+        (directory / "allowed.json").write_text(json.dumps(allowed or []), encoding="utf-8")
+        (directory / "axes_status.json").write_text(json.dumps({"missing": []}), encoding="utf-8")
+        (directory / "decisions.json").write_text(json.dumps({"judgment": None}), encoding="utf-8")
+        (directory / "pr-context.json").write_text(
+            json.dumps(
+                {
+                    "existing_inline_comments": [],
+                    "changed_files": [{"filename": "src/lib.rs", "changed_right_lines": [12]}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_main_refuses_to_post_when_head_or_base_changed(self) -> None:
+        class FakeClient:
+            repo = "owner/repo"
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                self.calls.append((method, path, data))
+                return {"head": {"sha": self.head_sha}, "base": {"sha": self.base_sha}}
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                self.calls.append(("PAGINATED", path, None))
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            art_dir = Path(tmp)
+            self.write_artifacts(art_dir)
+            base_env = {
+                "PR_NUMBER": "4",
+                "HEAD_SHA": "1" * 40,
+                "BASE_SHA": "2" * 40,
+                "ART_DIR": str(art_dir),
+                "FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna",
+            }
+
+            client = FakeClient()
+            client.calls = []
+            client.head_sha = "9" * 40
+            client.base_sha = "2" * 40
+            with mock.patch.dict(os.environ, base_env, clear=True), mock.patch.object(
+                ForgejoClient, "from_env", return_value=client
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    post_review_comments.main()
+            self.assertIn("head SHA changed", str(raised.exception))
+            self.assertEqual([call[0] for call in client.calls], ["GET"])
+
+            client = FakeClient()
+            client.calls = []
+            client.head_sha = "1" * 40
+            client.base_sha = "9" * 40
+            with mock.patch.dict(os.environ, base_env, clear=True), mock.patch.object(
+                ForgejoClient, "from_env", return_value=client
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    post_review_comments.main()
+            self.assertIn("base SHA changed", str(raised.exception))
+            self.assertEqual([call[0] for call in client.calls], ["GET"])
+
+    def test_main_uses_context_inline_comments_without_rescanning_reviews(self) -> None:
+        class FakeClient:
+            repo = "owner/repo"
+
+            def __init__(self) -> None:
+                self.calls = []
+
+            def repo_path(self, path: str) -> str:
+                return f"repos/owner/repo/{path}"
+
+            def request(self, method: str, path: str, data=None, **kwargs):
+                self.calls.append((method, path, data))
+                if path.endswith("pulls/4"):
+                    return {"head": {"sha": "1" * 40}, "base": {"sha": "2" * 40}}
+                return {}
+
+            def paginated(self, path: str, query=None, limit: int = 100, max_pages=None):
+                self.calls.append(("PAGINATED", path, None))
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            art_dir = Path(tmp)
+            finding = {
+                "agent": "security",
+                "type": "MUST",
+                "file": "src/lib.rs",
+                "line": 12,
+                "title": "x",
+                "reason": "y",
+            }
+            key = finding_key(finding)
+            self.write_artifacts(art_dir, [finding])
+            (art_dir / "pr-context.json").write_text(
+                json.dumps(
+                    {
+                        "existing_inline_comments": [
+                            {
+                                "id": 61,
+                                "pull_request_review_id": 7,
+                                "body": render_inline_body(finding, key),
+                                "user": {"login": "codex-reviewer-for-dongwonttuna"},
+                            }
+                        ],
+                        "changed_files": [{"filename": "src/lib.rs", "changed_right_lines": [12]}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = {
+                "PR_NUMBER": "4",
+                "HEAD_SHA": "1" * 40,
+                "BASE_SHA": "2" * 40,
+                "ART_DIR": str(art_dir),
+                "FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna",
+            }
+            client = FakeClient()
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                ForgejoClient, "from_env", return_value=client
+            ):
+                self.assertEqual(post_review_comments.main(), 0)
+
+        paths = [call[1] for call in client.calls]
+        self.assertNotIn("repos/owner/repo/pulls/4/reviews", paths)
+        self.assertNotIn("repos/owner/repo/pulls/4/reviews/7/comments", paths)
+        self.assertEqual([call[0] for call in client.calls], ["GET", "PAGINATED", "POST"])
 
 
 class WorkflowParityTests(unittest.TestCase):
@@ -644,6 +977,20 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("lookup-only: true", workflow)
         self.assertEqual(workflow.count("needs: prepare-actions"), 4)
 
+    def test_self_hosted_pr_jobs_are_restricted_to_owner_same_repo_prs(self) -> None:
+        guard = (
+            "github.event_name != 'pull_request' || "
+            "(github.event.pull_request.draft == false && "
+            "github.event.pull_request.user.login == 'DongwonTTuna' && "
+            "github.event.pull_request.head.repo.full_name == github.repository)"
+        )
+        rust_ci = (REPO_ROOT / ".forgejo" / "workflows" / "rust-ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(rust_ci.count(f"if: {guard}"), 5)
+        script_tests = (REPO_ROOT / ".forgejo" / "workflows" / "codex-scripts-tests.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"if: {guard}", script_tests)
+
     def test_workflows_use_non_reserved_secret_name(self) -> None:
         text = self.forgejo_text()
         self.assertIn("secrets.CODEX_REVIEW_BOT_TOKEN", text)
@@ -690,6 +1037,22 @@ class WorkflowParityTests(unittest.TestCase):
             text = (REPO_ROOT / ".forgejo" / "workflows" / workflow).read_text(encoding="utf-8")
             self.assertNotIn("secrets: inherit", text)
             self.assertIn("CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}", text)
+
+    def test_post_job_rechecks_trusted_scripts_after_external_artifact_actions(self) -> None:
+        pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("BASE_SHA: ${{ inputs.base_sha }}", pipeline)
+        self.assertIn("Re-checkout trusted scripts after artifact actions", pipeline)
+        self.assertLess(
+            pipeline.index("Download PR context artifact"),
+            pipeline.index("Re-checkout trusted scripts after artifact actions"),
+        )
+        self.assertLess(
+            pipeline.index("Re-checkout trusted scripts after artifact actions"),
+            pipeline.index("Apply hard rules"),
+        )
+        self.assertIn("rm -rf pipeline", pipeline)
 
     def test_codex_jobs_mount_auth_volume_explicitly(self) -> None:
         pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(

@@ -429,6 +429,7 @@ jobs:
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
       HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
       TRIGGER: ${{ inputs.trigger }}
       FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
@@ -510,6 +511,50 @@ jobs:
         with:
           name: codex-review-context
           path: artifacts/
+
+      - name: Re-checkout trusted scripts after artifact actions
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          TRUSTED_REF: ${{ inputs.base_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          trusted_ref="${TRUSTED_REF:-main}"
+          if ! git check-ref-format "refs/heads/$trusted_ref"; then
+            echo "::error::Invalid trusted scripts ref: $trusted_ref"
+            exit 1
+          fi
+          git_fetch fetch --depth=256 origin "refs/heads/$trusted_ref"
+          if [[ "$SCRIPTS_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            deepen_round=0
+            until git cat-file -e "$SCRIPTS_REF^{commit}" 2>/dev/null; do
+              deepen_round=$((deepen_round + 1))
+              if (( deepen_round > 8 )); then
+                echo "::error::Could not fetch trusted scripts commit $SCRIPTS_REF from $trusted_ref"
+                exit 1
+              fi
+              git_fetch fetch --deepen=256 origin "refs/heads/$trusted_ref"
+            done
+          fi
+          unset GIT_AUTH_TOKEN
+          if [[ "$SCRIPTS_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            git checkout --detach "$SCRIPTS_REF"
+            test "$(git rev-parse HEAD)" = "$SCRIPTS_REF"
+          else
+            git checkout --detach FETCH_HEAD
+          fi
 
       - name: Apply hard rules
         run: python3 pipeline/.github/scripts/merge_and_gate.py --phase gate

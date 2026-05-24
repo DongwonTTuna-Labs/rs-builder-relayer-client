@@ -20,6 +20,7 @@ on:
 jobs:
   unittest:
     name: Run Forgejo Codex script tests
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.user.login == 'DongwonTTuna' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: dongwontuna-labs-runner
     timeout-minutes: 5
     steps:

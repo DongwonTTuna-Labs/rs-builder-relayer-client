@@ -52,23 +52,29 @@ def parse_changed_right_lines(diff: str) -> dict[str, set[int]]:
     changed: dict[str, set[int]] = {}
     current_file: str | None = None
     new_line = 0
+    in_hunk = False
     for raw in diff.splitlines():
-        if raw.startswith("+++ b/"):
+        if raw.startswith("diff --git "):
+            current_file = None
+            in_hunk = False
+            continue
+        if not in_hunk and raw.startswith("+++ b/"):
             current_file = raw[6:]
             changed.setdefault(current_file, set())
             continue
-        if raw.startswith("+++ /dev/null"):
+        if not in_hunk and raw.startswith("+++ /dev/null"):
             current_file = None
             continue
         match = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
         if match:
             new_line = int(match.group(1))
+            in_hunk = True
             continue
         if current_file is None:
             continue
         if raw.startswith("\\ "):
             continue
-        if raw.startswith("+") and not raw.startswith("+++ b/") and raw != "+++ /dev/null":
+        if raw.startswith("+"):
             changed[current_file].add(new_line)
             new_line += 1
         elif raw.startswith("-") and not raw.startswith("---"):
@@ -90,7 +96,10 @@ def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[st
             "review comment scan capped at latest "
             f"{MAX_REVIEW_COMMENT_REVIEW_SCAN} reviews because Forgejo REST exposes comments per review"
         )
-    for review in reviews[-MAX_REVIEW_COMMENT_REVIEW_SCAN:]:
+    scanned_reviews = reviews[-MAX_REVIEW_COMMENT_REVIEW_SCAN:]
+    if bot_login():
+        scanned_reviews = [review for review in scanned_reviews if is_bot_comment(review)]
+    for review in scanned_reviews:
         review_id = review.get("id")
         if not review_id:
             continue
@@ -101,6 +110,8 @@ def fetch_review_comments(client: ForgejoClient, pr_number: str) -> list[dict[st
         except ForgejoApiError as exc:
             warn(f"could not list pull review comments for review {review_id}: {exc}")
             continue
+        for comment in review_comments:
+            comment.setdefault("pull_request_review_id", review_id)
         comments.extend(review_comments)
     return comments
 
@@ -161,6 +172,8 @@ def main() -> int:
         existing_inline.append(
             {
                 "id": comment.get("id"),
+                "pull_request_review_id": comment.get("pull_request_review_id"),
+                "user": comment.get("user") or comment.get("poster") or {},
                 "path": comment.get("path") or "",
                 "line": comment.get("position") or comment.get("line") or 0,
                 "body": body,

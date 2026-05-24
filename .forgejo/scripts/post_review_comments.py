@@ -19,7 +19,6 @@ from prepare_pr_context import (
     INLINE_MARKER,
     STICKY_MARKER,
     configure_bot_login,
-    fetch_review_comments,
     is_bot_comment,
 )
 
@@ -82,10 +81,17 @@ def sanitize_model_text(value: object) -> str:
     return html.escape(text, quote=False)
 
 
+def limited_model_text(value: object, limit: int) -> str:
+    text = sanitize_model_text(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def render_inline_body(finding: dict[str, Any], key: str) -> str:
     title = sanitize_model_text(finding.get("title"))
     reason = sanitize_model_text(finding.get("reason"))
-    finding_type = str(finding.get("type") or "SUGGEST").strip()
+    finding_type = sanitize_model_text(finding.get("type") or "SUGGEST")
     finding_id = sanitize_model_text(finding.get("id"))
     agent = sanitize_model_text(finding.get("agent"))
     return "\n".join(
@@ -127,8 +133,8 @@ def render_sticky(
     status = "NEEDS_WORK" if allowed else "LGTM"
     headline = "리뷰 코멘트가 있습니다." if allowed else "게시할 신규 리뷰 코멘트가 없습니다."
     if isinstance(judgment, dict) and judgment.get("status"):
-        status = str(judgment.get("status"))
-        headline = str(judgment.get("headline") or headline)
+        status = limited_model_text(judgment.get("status"), 40)
+        headline = limited_model_text(judgment.get("headline") or headline, 500)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
     cross_cutting = [
         finding
@@ -202,12 +208,38 @@ def changed_line_map(context: dict[str, Any]) -> dict[str, set[int]]:
     return result
 
 
-def current_pr_head(client: ForgejoClient, pr_number: str) -> str:
+def postable_finding_keys(allowed: list[dict[str, Any]], changed_lines: dict[str, set[int]]) -> set[str]:
+    keys: set[str] = set()
+    for finding in allowed:
+        path = finding.get("file")
+        line = finding.get("line")
+        if not path or not line or finding.get("cross_cutting"):
+            continue
+        try:
+            line_number = int(line)
+        except (TypeError, ValueError):
+            continue
+        if line_number not in changed_lines.get(str(path), set()):
+            continue
+        keys.add(finding_key(finding))
+    return keys
+
+
+def context_inline_comments(context: dict[str, Any]) -> list[dict[str, Any]]:
+    comments: list[dict[str, Any]] = []
+    for comment in context.get("existing_inline_comments") or []:
+        if isinstance(comment, dict):
+            comments.append(comment)
+    return comments
+
+
+def current_pr_refs(client: ForgejoClient, pr_number: str) -> tuple[str, str]:
     payload = client.request("GET", client.repo_path(f"pulls/{pr_number}"))
     if not isinstance(payload, dict):
         raise SystemExit("unexpected Forgejo PR response before posting review")
     head = payload.get("head") or {}
-    return str(head.get("sha") or "")
+    base = payload.get("base") or {}
+    return str(head.get("sha") or ""), str(base.get("sha") or "")
 
 
 def delete_review_comment(client: ForgejoClient, pr_number: str, comment: dict[str, Any]) -> bool:
@@ -345,6 +377,7 @@ def main() -> int:
     configure_bot_login(client)
     pr_number = require_env("PR_NUMBER")
     head_sha = require_env("HEAD_SHA")
+    base_sha = require_env("BASE_SHA")
     art_dir = Path(os.environ.get("ART_DIR", "artifacts"))
     allowed = require_json_list(art_dir / "allowed.json")
     axes_status = require_json(art_dir / "axes_status.json")
@@ -352,14 +385,17 @@ def main() -> int:
     context = require_json(art_dir / "pr-context.json")
     if not isinstance(context, dict):
         raise SystemExit("required review artifact must be a JSON object: pr-context.json")
-    latest_head = current_pr_head(client, pr_number)
+    latest_head, latest_base = current_pr_refs(client, pr_number)
     if latest_head and latest_head != head_sha:
         raise SystemExit("PR head SHA changed before publishing review comments")
+    if latest_base and latest_base != base_sha:
+        raise SystemExit("PR base SHA changed before publishing review comments")
     judgment = decisions.get("judgment") if isinstance(decisions, dict) else None
 
-    review_comments = fetch_review_comments(client, pr_number)
+    review_comments = context_inline_comments(context)
     existing = existing_by_key(review_comments)
-    current_keys = {finding_key(f) for f in allowed}
+    changed_lines = changed_line_map(context)
+    current_keys = postable_finding_keys(allowed, changed_lines)
     resolved = reply_resolved(client, pr_number, review_comments, current_keys)
     posted, skipped_existing = post_inline_comments(
         client,
@@ -367,7 +403,7 @@ def main() -> int:
         head_sha,
         allowed,
         existing,
-        changed_line_map(context),
+        changed_lines,
     )
     sticky = render_sticky(
         pr_number,
