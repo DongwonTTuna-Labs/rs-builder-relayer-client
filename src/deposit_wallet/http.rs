@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ethers::types::{Address, H256, U256};
@@ -26,6 +26,7 @@ const TRANSACTION_PATH: &str = "/transaction";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
 const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
 const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
+const MAX_BACKGROUND_ERROR_BODY_DRAINS: usize = 64;
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
 const MAX_TRANSACTION_RESPONSE_ITEMS: usize = 32;
@@ -686,7 +687,7 @@ impl DepositWalletRelayerClient {
         if !response.status().is_success() {
             let status = response.status();
             let retry_after = retry_after_summary(response.headers());
-            tokio::spawn(drain_error_response_body(response));
+            try_spawn_error_response_body_drain(response);
             if status == StatusCode::TOO_MANY_REQUESTS {
                 return Err(RelayerError::QuotaExhausted);
             }
@@ -850,8 +851,11 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
     ) -> Result<()> {
         let mut state = self.mutation_state()?;
-        let recovered_payload_hash =
-            recovered_or_existing_payload_hash(&state, transaction_id, owner)?;
+        let Some(recovered_payload_hash) =
+            current_recovery_payload_hash(&state, transaction_id, owner)?
+        else {
+            return Ok(());
+        };
         ensure_transaction_owner_mapping_available(
             &state,
             transaction_id,
@@ -904,6 +908,10 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
     ) -> Result<()> {
         let mut state = self.mutation_state()?;
+        let Some(current_payload_hash) = current_recovery_payload_hash(&state, transaction_id, owner)?
+        else {
+            return Ok(());
+        };
         let payload_hash = match state.owner_blocks.get(&owner) {
             Some(OwnerMutationBlock::InFlight {
                 payload_hash,
@@ -918,7 +926,7 @@ impl DepositWalletRelayerClient {
                 return Ok(());
             }
             Some(block) => return Err(owner_block_error(owner, block)),
-            None => recovered_or_existing_payload_hash(&state, transaction_id, owner)?,
+            None => current_payload_hash,
         };
         ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
@@ -1321,6 +1329,20 @@ async fn drain_error_response_body(response: reqwest::Response) {
     let _ = tokio::time::timeout(ERROR_BODY_DRAIN_TIMEOUT, drain).await;
 }
 
+fn try_spawn_error_response_body_drain(response: reqwest::Response) {
+    static DRAIN_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    let semaphore = DRAIN_SEMAPHORE
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_BACKGROUND_ERROR_BODY_DRAINS)))
+        .clone();
+    let Ok(permit) = semaphore.try_acquire_owned() else {
+        return;
+    };
+    tokio::spawn(async move {
+        let _permit = permit;
+        drain_error_response_body(response).await;
+    });
+}
+
 fn retry_after_summary(headers: &HeaderMap) -> String {
     headers
         .get(RETRY_AFTER)
@@ -1489,6 +1511,7 @@ fn signed_digest_payload_hash(digest: H256) -> String {
     format!("signed-digest:0x{hex}")
 }
 
+#[cfg(test)]
 fn recovered_payload_hash(transaction_id: &str) -> String {
     let hex = hex::encode(keccak256(transaction_id.as_bytes()));
     format!("recovered:0x{hex}")
@@ -1593,11 +1616,11 @@ fn ensure_transaction_owner_mapping_available(
     Ok(())
 }
 
-fn recovered_or_existing_payload_hash(
+fn current_recovery_payload_hash(
     state: &OwnerMutationState,
     transaction_id: &str,
     owner: Address,
-) -> Result<String> {
+) -> Result<Option<String>> {
     if let Some(existing) = state.transaction_owners.get(transaction_id) {
         if existing.owner != owner {
             return Err(RelayerError::reconciliation_required(format!(
@@ -1605,9 +1628,17 @@ fn recovered_or_existing_payload_hash(
                 sanitized_external_token(transaction_id)
             )));
         }
-        return Ok(existing.payload_hash.clone());
+        return Ok(Some(existing.payload_hash.clone()));
     }
-    Ok(recovered_payload_hash(transaction_id))
+
+    match state.owner_blocks.get(&owner) {
+        Some(OwnerMutationBlock::InFlight {
+            payload_hash,
+            transaction_id: Some(existing_transaction_id),
+        }) if existing_transaction_id == transaction_id => Ok(Some(payload_hash.clone())),
+        Some(block) => Err(owner_block_error(owner, block)),
+        None => Ok(None),
+    }
 }
 
 #[cfg(test)]
