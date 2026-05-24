@@ -440,7 +440,11 @@ impl DepositWalletRelayerClient {
             let parsed = match self.fetch_transaction(&transaction_id).await {
                 Ok(parsed) => parsed,
                 Err(error) => {
-                    self.mark_transaction_reconciliation_required(&transaction_id)?;
+                    if let Some(owner) = expected_owner {
+                        self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                    } else {
+                        self.mark_transaction_reconciliation_required(&transaction_id)?;
+                    }
                     return Err(error);
                 }
             };
@@ -596,9 +600,9 @@ impl DepositWalletRelayerClient {
                     reservation.disarm();
                     self.record_ambiguous(owner, payload_hash.clone())?;
                     Err(RelayerError::ambiguous_submit(format!(
-                        "submit response did not include a usable transactionID for owner {} payload {}: {}",
-                        redacted_address(owner),
-                        payload_hash,
+                    "submit response did not include a usable transactionID for owner {} payload {}: {}",
+                    redacted_address(owner),
+                        display_payload_hash(&payload_hash),
                         error
                     )))
                 }
@@ -609,7 +613,7 @@ impl DepositWalletRelayerClient {
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit transport failed for owner {} payload {}; retry status is ambiguous: {}",
                     redacted_address(owner),
-                    payload_hash,
+                    display_payload_hash(&payload_hash),
                     sanitized_external_token(&error.to_string())
                 )))
             }
@@ -623,7 +627,7 @@ impl DepositWalletRelayerClient {
                     "submit returned ambiguous HTTP status {} for owner {} payload {}",
                     status,
                     redacted_address(owner),
-                    payload_hash
+                    display_payload_hash(&payload_hash)
                 )))
             }
             Err(RelayerError::Other(message)) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => {
@@ -632,7 +636,7 @@ impl DepositWalletRelayerClient {
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit success response exceeded maximum size for owner {} payload {}; manual reconciliation required",
                     redacted_address(owner),
-                    payload_hash
+                    display_payload_hash(&payload_hash)
                 )))
             }
             Err(error) => {
@@ -1393,17 +1397,27 @@ fn sanitized_external_token(value: &str) -> String {
 
 fn payload_hash_summary(bytes: &[u8]) -> String {
     let hex = hex::encode(keccak256(bytes));
-    format!("0x{}...{}", &hex[..8], &hex[56..])
+    format!("0x{hex}")
 }
 
 fn signed_digest_payload_hash(digest: H256) -> String {
     let hex = hex::encode(digest.as_bytes());
-    format!("signed-digest:0x{}...{}", &hex[..8], &hex[56..])
+    format!("signed-digest:0x{hex}")
 }
 
 fn recovered_payload_hash(transaction_id: &str) -> String {
     let hex = hex::encode(keccak256(transaction_id.as_bytes()));
-    format!("recovered:0x{}...{}", &hex[..8], &hex[56..])
+    format!("recovered:0x{hex}")
+}
+
+fn display_payload_hash(payload_hash: &str) -> String {
+    let Some((prefix, hex)) = payload_hash.rsplit_once("0x") else {
+        return sanitized_external_token(payload_hash);
+    };
+    if hex.len() != 64 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return sanitized_external_token(payload_hash);
+    }
+    format!("{prefix}0x{}...{}", &hex[..8], &hex[56..])
 }
 
 fn redacted_address(address: Address) -> String {
@@ -1420,7 +1434,7 @@ fn owner_block_error(owner: Address, block: &OwnerMutationBlock) -> RelayerError
             "owner {} has in-flight submit transaction {} payload {}; poll to terminal state before another owner mutation",
             redacted_address(owner),
             sanitized_external_token(transaction_id),
-            payload_hash
+            display_payload_hash(payload_hash)
         )),
         OwnerMutationBlock::InFlight {
             payload_hash,
@@ -1428,13 +1442,13 @@ fn owner_block_error(owner: Address, block: &OwnerMutationBlock) -> RelayerError
         } => RelayerError::reconciliation_required(format!(
             "owner {} has in-flight submit payload {}; wait for the submit response before another owner mutation",
             redacted_address(owner),
-            payload_hash
+            display_payload_hash(payload_hash)
         )),
         OwnerMutationBlock::Ambiguous { payload_hash } => RelayerError::reconciliation_required(
             format!(
                 "owner {} has ambiguous submit payload {}; manual reconciliation required",
                 redacted_address(owner),
-                payload_hash
+                display_payload_hash(payload_hash)
             ),
         ),
     }
@@ -3338,6 +3352,41 @@ mod tests {
         client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_poll_fetch_failure_blocks_owner_until_manual_reconciliation() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_reset_server().await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                "tx-recovery-fetch-failed",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Http(_)));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                owner,
+                DepositWalletMutationPermit::new(
+                    owner,
+                    "checked recovery fetch failure",
+                    "single-process mocked owner serialization guard",
+                ),
+            )
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
     }
 
     #[tokio::test]
