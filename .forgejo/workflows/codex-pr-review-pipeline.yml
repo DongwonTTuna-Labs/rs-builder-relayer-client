@@ -105,6 +105,10 @@ jobs:
     name: review (${{ matrix.axis }})
     needs: prepare-context
     runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-home:/home/runner/.codex
+        - /codex-runner-locks:/var/lib/codex-runner/locks
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -290,6 +294,10 @@ jobs:
     needs: review
     if: always() && !cancelled()
     runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-home:/home/runner/.codex
+        - /codex-runner-locks:/var/lib/codex-runner/locks
     timeout-minutes: 20
     env:
       PR_NUMBER: ${{ inputs.pr_number }}

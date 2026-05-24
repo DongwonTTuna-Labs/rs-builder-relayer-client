@@ -691,6 +691,13 @@ class WorkflowParityTests(unittest.TestCase):
             self.assertNotIn("secrets: inherit", text)
             self.assertIn("CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}", text)
 
+    def test_codex_jobs_mount_auth_volume_explicitly(self) -> None:
+        pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(pipeline.count("/codex-runner-home:/home/runner/.codex"), 2)
+        self.assertEqual(pipeline.count("/codex-runner-locks:/var/lib/codex-runner/locks"), 2)
+
     def test_codex_exec_unsets_ci_tokens(self) -> None:
         script = (REPO_ROOT / ".github" / "scripts" / "codex_exec.sh").read_text(encoding="utf-8")
         for name in [
