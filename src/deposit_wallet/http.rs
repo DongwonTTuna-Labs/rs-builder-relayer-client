@@ -443,7 +443,9 @@ impl DepositWalletRelayerClient {
                 Ok(parsed) => parsed,
                 Err(error) => {
                     if let Some(owner) = expected_owner {
-                        self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        if self.has_recovery_owner_evidence(owner, &transaction_id)? {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        }
                     } else {
                         self.mark_transaction_reconciliation_required(&transaction_id)?;
                     }
@@ -902,6 +904,28 @@ impl DepositWalletRelayerClient {
             },
         );
         Ok(())
+    }
+
+    fn has_recovery_owner_evidence(&self, owner: Address, transaction_id: &str) -> Result<bool> {
+        let state = self.mutation_state()?;
+        if let Some(record) = state.transaction_owners.get(transaction_id) {
+            if record.owner != owner {
+                return Err(RelayerError::reconciliation_required(format!(
+                    "transaction {} is already associated with a different owner; manual reconciliation required",
+                    sanitized_external_token(transaction_id)
+                )));
+            }
+            return Ok(true);
+        }
+
+        match state.owner_blocks.get(&owner) {
+            Some(OwnerMutationBlock::InFlight {
+                transaction_id: Some(existing_transaction_id),
+                ..
+            }) if existing_transaction_id == transaction_id => Ok(true),
+            Some(block) => Err(owner_block_error(owner, block)),
+            None => Ok(false),
+        }
     }
 
     fn transaction_owner(&self, transaction_id: &str) -> Result<Option<Address>> {
@@ -3385,7 +3409,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_aware_poll_fetch_failure_blocks_owner_until_manual_reconciliation() {
+    async fn owner_aware_poll_fetch_failure_without_evidence_does_not_block_owner() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_reset_server().await;
         let client = test_client(url);
@@ -3394,6 +3418,48 @@ mod tests {
             .poll_owner_transaction(
                 owner,
                 "tx-recovery-fetch-failed",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Http(_)));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
+    }
+
+    #[tokio::test]
+    async fn owner_aware_poll_fetch_failure_blocks_known_owner_transaction() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-known-fetch-failed";
+        let (url, handle) = spawn_reset_server().await;
+        let client = test_client(url);
+        {
+            let payload_hash = recovered_payload_hash(transaction_id);
+            let mut state = client.mutation_state().unwrap();
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::InFlight {
+                    payload_hash: payload_hash.clone(),
+                    transaction_id: Some(transaction_id.to_string()),
+                },
+            );
+            state.transaction_owners.insert(
+                transaction_id.to_string(),
+                OwnerTransactionRecord {
+                    owner,
+                    payload_hash,
+                },
+            );
+        }
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
             .await
@@ -3416,7 +3482,7 @@ mod tests {
         client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
+        assert_eq!(requests[0].path, "/transaction?id=tx-known-fetch-failed");
     }
 
     #[tokio::test]
