@@ -846,9 +846,15 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
     ) -> Result<()> {
         let mut state = self.mutation_state()?;
-        let payload_hash = recovered_or_existing_payload_hash(&state, transaction_id, owner)?;
-        ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
-        if let Some(block) = state.owner_blocks.get(&owner) {
+        let recovered_payload_hash =
+            recovered_or_existing_payload_hash(&state, transaction_id, owner)?;
+        ensure_transaction_owner_mapping_available(
+            &state,
+            transaction_id,
+            owner,
+            &recovered_payload_hash,
+        )?;
+        let payload_hash = if let Some(block) = state.owner_blocks.get(&owner) {
             match block {
                 OwnerMutationBlock::InFlight {
                     transaction_id: Some(existing_transaction_id),
@@ -856,10 +862,21 @@ impl DepositWalletRelayerClient {
                 } if existing_transaction_id == transaction_id => {
                     return Ok(());
                 }
+                OwnerMutationBlock::Ambiguous { payload_hash }
+                    if state.transaction_owners.get(transaction_id).is_some_and(|record| {
+                        record.owner == owner && record.payload_hash == *payload_hash
+                    }) =>
+                {
+                    payload_hash.clone()
+                }
                 _ => return Err(owner_block_error(owner, block)),
             }
+        } else {
+            recovered_payload_hash
+        };
+        if !state.owner_blocks.contains_key(&owner) {
+            ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         }
-        ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         state.owner_blocks.insert(
             owner,
             OwnerMutationBlock::InFlight {
@@ -3426,6 +3443,53 @@ mod tests {
 
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_repoll_can_continue_known_ambiguous_transaction() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response("tx-repoll", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-repoll", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-repoll", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-repoll", "STATE_CONFIRMED")),
+            TestResponse::json("200 OK", json!({"nonce": "38"}).to_string()),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, "tx-repoll");
+
+        let timeout = client
+            .poll_owner_transaction(
+                owner,
+                "tx-repoll",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(timeout, RelayerError::Timeout));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+
+        let receipt = client
+            .poll_owner_transaction(
+                owner,
+                "tx-repoll",
+                DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+
+        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        assert_eq!(nonce, U256::from(38u64));
+
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 5);
     }
 
     #[tokio::test]
