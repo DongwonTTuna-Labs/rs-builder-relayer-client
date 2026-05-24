@@ -128,6 +128,16 @@ class ForgejoApiTests(unittest.TestCase):
         ):
             self.assertEqual(configure_bot_login(client), "codex-reviewer-for-dongwonttuna")
 
+    def test_configured_bot_login_avoids_extra_user_scope(self) -> None:
+        client = ForgejoClient("https://git.example/api/v1", "owner/repo", "secret-token")
+        with mock.patch.dict(
+            os.environ,
+            {"FORGEJO_BOT_LOGIN": "codex-reviewer-for-dongwonttuna"},
+            clear=True,
+        ), mock.patch.object(client, "request") as request:
+            self.assertEqual(configure_bot_login(client), "codex-reviewer-for-dongwonttuna")
+            request.assert_not_called()
+
 
 class DiffParserTests(unittest.TestCase):
     def test_changed_right_lines_from_unified_diff(self) -> None:
@@ -638,6 +648,14 @@ class WorkflowParityTests(unittest.TestCase):
         text = self.forgejo_text()
         self.assertIn("secrets.CODEX_REVIEW_BOT_TOKEN", text)
         self.assertNotIn("secrets.FORGEJO_BOT_TOKEN", text)
+
+    def test_pipeline_uses_configured_bot_login_without_requiring_user_scope(self) -> None:
+        pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("FORGEJO_BOT_LOGIN:", pipeline)
+        self.assertIn("vars.FORGEJO_BOT_LOGIN", pipeline)
+        self.assertIn("codex-reviewer-for-dongwontuna", pipeline)
 
     def test_manual_dispatch_can_use_bootstrap_scripts_ref(self) -> None:
         text = self.forgejo_text()

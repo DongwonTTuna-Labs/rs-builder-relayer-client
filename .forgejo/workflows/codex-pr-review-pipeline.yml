@@ -35,6 +35,7 @@ jobs:
       GITHUB_BASE_REF: ${{ inputs.base_ref }}
       FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
+      FORGEJO_BOT_LOGIN: ${{ vars.FORGEJO_BOT_LOGIN || 'codex-reviewer-for-dongwontuna' }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
     steps:
       - name: Checkout base ref (trusted scripts)
@@ -424,6 +425,7 @@ jobs:
       FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
       FORGEJO_REPOSITORY: ${{ github.repository }}
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_BOT_LOGIN: ${{ vars.FORGEJO_BOT_LOGIN || 'codex-reviewer-for-dongwontuna' }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts:${{ github.workspace }}/pipeline/.github/scripts
       ART_DIR: ${{ github.workspace }}/artifacts
     steps:

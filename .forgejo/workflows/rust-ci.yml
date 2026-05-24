@@ -61,16 +61,6 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Show Rust toolchain
         run: rustup show
-      - name: Restore Cargo cache
-        uses: https://code.forgejo.org/actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-fmt-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
       - name: Check Rust formatting
         run: cargo fmt --all --check
       - name: Check whitespace errors

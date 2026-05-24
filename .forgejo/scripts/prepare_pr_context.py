@@ -40,6 +40,9 @@ def is_bot_comment(comment: dict[str, Any]) -> bool:
 
 
 def configure_bot_login(client: ForgejoClient) -> str:
+    configured = bot_login()
+    if configured:
+        return configured
     login = client.authenticated_login()
     os.environ["FORGEJO_BOT_LOGIN"] = login
     return login
