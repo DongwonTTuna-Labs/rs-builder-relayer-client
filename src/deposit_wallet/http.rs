@@ -849,8 +849,23 @@ impl DepositWalletRelayerClient {
         owner: Address,
         transaction_id: &str,
     ) -> Result<()> {
-        let payload_hash = recovered_payload_hash(transaction_id);
         let mut state = self.mutation_state()?;
+        let payload_hash = match state.owner_blocks.get(&owner) {
+            Some(OwnerMutationBlock::InFlight {
+                payload_hash,
+                transaction_id: Some(existing_transaction_id),
+            }) if existing_transaction_id == transaction_id => payload_hash.clone(),
+            Some(OwnerMutationBlock::Ambiguous { payload_hash })
+                if state
+                    .transaction_owners
+                    .get(transaction_id)
+                    .is_some_and(|record| record.owner == owner && record.payload_hash == *payload_hash) =>
+            {
+                return Ok(());
+            }
+            Some(block) => return Err(owner_block_error(owner, block)),
+            None => recovered_payload_hash(transaction_id),
+        };
         ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         state.owner_blocks.insert(
             owner,
@@ -1744,6 +1759,32 @@ mod tests {
         )
     }
 
+    async fn spawn_truncated_error_body_server(
+        status: &'static str,
+    ) -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("server should accept");
+            let request = read_request(&mut stream).await;
+            let wire = format!(
+                "HTTP/1.1 {status}\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 1024\r\n\r\npartial"
+            );
+            stream
+                .write_all(wire.as_bytes())
+                .await
+                .expect("partial response should write");
+            vec![request]
+        });
+
+        (
+            DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+            handle,
+        )
+    }
+
     async fn read_request(stream: &mut TcpStream) -> CapturedRequest {
         let mut buffer = Vec::new();
         let headers_end = loop {
@@ -2329,6 +2370,34 @@ mod tests {
         assert_eq!(requests[0].path, SUBMIT_PATH);
     }
 
+    #[tokio::test]
+    async fn signed_submit_nonce_failure_clears_owner_reservation() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "400 Bad Request",
+            json!({"error": "nonce unavailable"}).to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Api { status: 400, .. }));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut retry_reservation = client
+            .reserve_owner_submit(owner, "payload:retry-after-nonce-error".to_string())
+            .unwrap();
+        retry_reservation.clear().unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.contains("/nonce?address="));
+    }
+
     #[test]
     fn owner_submit_reservation_blocks_duplicate_and_clears_cleanly() {
         let owner = address(WALLET_CREATE_OWNER);
@@ -2437,6 +2506,34 @@ mod tests {
         ));
         assert!(client.ambiguous_submit_block(owner).is_none());
         let _ = handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn non_success_status_survives_truncated_error_body() {
+        let (url, handle) = spawn_truncated_error_body_server("400 Bad Request").await;
+        let client = test_client(url);
+
+        let error = client
+            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Api { status: 400, .. }));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.contains("/nonce?address="));
+
+        let (url, handle) = spawn_truncated_error_body_server("429 Too Many Requests").await;
+        let client = test_client(url);
+        let error = client
+            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::QuotaExhausted));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.contains("/nonce?address="));
     }
 
     #[tokio::test]
@@ -3043,6 +3140,64 @@ mod tests {
         client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_poll_unknown_state_does_not_overwrite_existing_owner_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response("tx-original", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-other", "STATE_UNKNOWN_NEW")),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, "tx-original");
+
+        let original_hash = {
+            let state = client.mutation_state().unwrap();
+            match state.owner_blocks.get(&owner) {
+                Some(OwnerMutationBlock::InFlight {
+                    payload_hash,
+                    transaction_id: Some(transaction_id),
+                }) => {
+                    assert_eq!(transaction_id, "tx-original");
+                    payload_hash.clone()
+                }
+                block => panic!("expected in-flight owner block, got {block:?}"),
+            }
+        };
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                "tx-other",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        {
+            let state = client.mutation_state().unwrap();
+            match state.owner_blocks.get(&owner) {
+                Some(OwnerMutationBlock::InFlight {
+                    payload_hash,
+                    transaction_id: Some(transaction_id),
+                }) => {
+                    assert_eq!(transaction_id, "tx-original");
+                    assert_eq!(payload_hash, &original_hash);
+                }
+                block => panic!("expected original in-flight owner block, got {block:?}"),
+            }
+            assert!(!state.transaction_owners.contains_key("tx-other"));
+        }
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
     #[tokio::test]
