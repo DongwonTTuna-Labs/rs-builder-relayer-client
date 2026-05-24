@@ -837,20 +837,12 @@ impl DepositWalletRelayerClient {
                 )))
             }
             RelayerTransactionState::Confirmed => {
-                if receipt.transaction_hash.is_none() {
-                    self.record_ambiguous(owner, payload_hash.clone())?;
-                    self.record_transaction_owner(
-                        &receipt.transaction_id,
-                        owner,
-                        payload_hash,
-                    )?;
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "confirmed deposit wallet submit transaction {} did not include transactionHash; manual reconciliation required",
-                        sanitized_external_token(&receipt.transaction_id)
-                    )));
-                }
-                self.clear_owner_block_if_payload(owner, &payload_hash)?;
-                Ok(receipt)
+                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                Err(RelayerError::reconciliation_required(format!(
+                    "deposit wallet submit transaction {} returned terminal state before transaction polling; manual reconciliation required",
+                    sanitized_external_token(&receipt.transaction_id)
+                )))
             }
             RelayerTransactionState::New
             | RelayerTransactionState::Executed
@@ -1560,7 +1552,10 @@ fn receipt_from_submit_response(
     })?;
     let transaction_hash = response
         .transaction_hash
-        .map(|hash| validate_transaction_hash(&hash))
+        .as_deref()
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty())
+        .map(validate_transaction_hash)
         .transpose()?;
 
     Ok(ParsedTransactionReceipt {
@@ -3580,7 +3575,6 @@ mod tests {
         let owner = address(WALLET_CREATE_OWNER);
 
         for (transaction_id, state, expected_error) in [
-            ("tx-confirmed-now", "STATE_CONFIRMED", None),
             ("tx-invalid-now", "STATE_INVALID", Some("invalid")),
             ("tx-failed-now", "STATE_FAILED", Some("failed")),
         ] {
@@ -3617,15 +3611,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn immediate_confirmed_submit_without_transaction_hash_requires_reconciliation() {
+    async fn immediate_confirmed_submit_requires_transaction_poll_reconciliation() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
-            json!({
-                "transactionID": "tx-submit-no-hash",
-                "state": "STATE_CONFIRMED"
-            })
-            .to_string(),
+            transaction_response("tx-submit-confirmed", "STATE_CONFIRMED"),
         )])
         .await;
         let client = test_client(url);
@@ -3642,6 +3632,39 @@ mod tests {
 
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pending_transaction_response_treats_empty_hash_as_unavailable() {
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json(
+                "200 OK",
+                json!({
+                    "transactionID": "tx-empty-hash",
+                    "state": "STATE_NEW",
+                    "transactionHash": ""
+                })
+                .to_string(),
+            ),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-empty-hash", "STATE_CONFIRMED"),
+            ),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .poll_transaction(
+                "tx-empty-hash",
+                DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
     #[tokio::test]
@@ -4162,6 +4185,41 @@ mod tests {
         assert!(client.ambiguous_submit_block(owner).is_some());
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn local_transaction_poll_unknown_state_keeps_owner_blocked_for_reconciliation() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response("tx-local-unknown", "STATE_NEW")),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-local-unknown", "STATE_UNKNOWN_NEW"),
+            ),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, "tx-local-unknown");
+
+        let error = client
+            .poll_transaction(
+                "tx-local-unknown",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
     #[tokio::test]
