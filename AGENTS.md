@@ -6,6 +6,8 @@
 
 - PR은 절대 직접 머지하지 말 것.
 - private key, API key, bot token, OAuth secret 같은 비밀값은 로그, 응답, 커밋에 노출하지 말 것.
+- 이 repo는 Forgejo Actions를 사용한다. CI와 Codex review workflow는 `.forgejo/workflows`에 두고, workflow helper는 `.forgejo/scripts`에 둔다.
+- Legacy GitHub Actions metadata directory를 다시 추가하지 않는다.
 - 이 fork는 공식 Polymarket Rust relayer SDK가 아니다. venue-facing 동작은 공식 문서, Python/TypeScript relayer SDK, 로컬 테스트 벡터를 먼저 대조한 뒤 구현한다.
 - branch dependency는 production에서 사용하지 않는다. consumer repo는 commit SHA pin 또는 path dependency만 사용한다.
 - `WALLET-CREATE`, `WALLET`, EIP-712 DepositWallet Batch, nonce, polling, pUSD/CTF adapter calldata를 구현하기 전까지 deposit-wallet live execution 가능하다고 말하지 않는다.

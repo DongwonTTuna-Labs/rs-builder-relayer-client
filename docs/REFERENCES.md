@@ -35,7 +35,7 @@
 
 - Rust language: `https://www.rust-lang.org/`
   - type/ownership/concurrency safety.
-- Rust API Guidelines: `https://rust-lang.github.io/api-guidelines/`
+- Rust API Guidelines: official Rust API design guideline reference.
   - public API naming, docs, metadata, consistency.
 - Clippy docs: `https://doc.rust-lang.org/clippy/`
   - lint categories and configuration.
@@ -45,7 +45,7 @@
   - async runtime.
 - Tokio channel tutorial: `https://tokio.rs/tokio/tutorial/channels`
   - mpsc/oneshot command manager pattern.
-- Rust Design Patterns - Newtype: `https://rust-unofficial.github.io/patterns/patterns/behavioural/newtype.html`
+- Rust Design Patterns - Newtype: official/community Rust newtype pattern reference.
   - type safety and encapsulation pattern.
 - The Rust Book - OOP state pattern: `https://doc.rust-lang.org/book/ch18-03-oo-design-patterns.html`
   - state pattern concept and why Rust enum/typestate alternatives may be preferable.

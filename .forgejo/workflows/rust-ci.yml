@@ -1,0 +1,187 @@
+name: Rust CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare-actions:
+    name: Prepare action cache
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.user.login == 'DongwonTTuna' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: dongwontuna-labs-runner
+    steps:
+      - name: Warm cache action
+        uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: rust-toolchain.toml
+          key: ${{ runner.os }}-actions-cache-prewarm-${{ hashFiles('rust-toolchain.toml') }}
+          lookup-only: true
+
+  fmt:
+    name: Check formatting and whitespace
+    needs: prepare-actions
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.user.login == 'DongwonTTuna' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: dongwontuna-labs-runner
+    steps:
+      - name: Checkout
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
+        run: rustup show
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+      - name: Check whitespace errors
+        run: git diff --check
+
+  clippy:
+    name: Run Clippy lints
+    needs: prepare-actions
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.user.login == 'DongwonTTuna' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: dongwontuna-labs-runner
+    steps:
+      - name: Checkout
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
+        run: rustup show
+      - name: Restore Cargo cache
+        uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: Run test suite
+    needs: prepare-actions
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.user.login == 'DongwonTTuna' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: dongwontuna-labs-runner
+    steps:
+      - name: Checkout
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
+        run: rustup show
+      - name: Restore Cargo cache
+        uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features
+
+  build:
+    name: Build all targets
+    needs: prepare-actions
+    if: github.event_name != 'pull_request' || (github.event.pull_request.draft == false && github.event.pull_request.user.login == 'DongwonTTuna' && github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: dongwontuna-labs-runner
+    steps:
+      - name: Checkout
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$GITHUB_SHA"
+          unset GIT_AUTH_TOKEN
+          git checkout --detach FETCH_HEAD
+      - name: Show Rust toolchain
+        run: rustup show
+      - name: Restore Cargo cache
+        uses: https://code.forgejo.org/actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Build workspace targets
+        run: cargo build --workspace --all-targets --all-features

@@ -36,7 +36,7 @@ PR 을 **테스트 커버리지** 관점에서 리뷰하는 Codex axis.
 
 ## 출력 (필수)
 
-`.github/scripts/schemas/findings.schema.json` 만족 JSON.
+`.forgejo/scripts/schemas/findings.schema.json` 만족 JSON.
 
 - `agent`: `"test-coverage"` 고정
 - `id`: `"test-coverage-<seq>"`

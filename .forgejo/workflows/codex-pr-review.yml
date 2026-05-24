@@ -1,0 +1,91 @@
+name: Codex PR Review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: number
+
+concurrency:
+  group: forgejo-codex-review-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve PR metadata
+    runs-on: dongwontuna-labs-runner
+    outputs:
+      allowed: ${{ steps.lookup.outputs.allowed }}
+      reason: ${{ steps.lookup.outputs.reason }}
+      pr_number: ${{ steps.lookup.outputs.pr_number }}
+      head_sha: ${{ steps.lookup.outputs.head_sha }}
+      base_sha: ${{ steps.lookup.outputs.base_sha }}
+      base_ref: ${{ steps.lookup.outputs.base_ref }}
+      scripts_ref: ${{ steps.lookup.outputs.scripts_ref }}
+      trigger: ${{ steps.lookup.outputs.trigger }}
+    steps:
+      - name: Checkout trusted scripts
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          find "$PWD" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          default_branch="$(
+            git_fetch ls-remote --symref origin HEAD |
+              awk '$1 == "ref:" { sub("^refs/heads/", "", $2); print $2; exit }'
+          )"
+          if [ -z "$default_branch" ]; then
+            echo "could not resolve repository default branch from remote HEAD" >&2
+            exit 1
+          fi
+          git_fetch fetch --depth=1 origin "refs/heads/$default_branch"
+          git checkout --detach FETCH_HEAD
+          {
+            echo "CODEX_DEFAULT_BRANCH=$default_branch"
+            echo "CODEX_DEFAULT_SHA=$(git rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+
+      - name: Resolve PR head / base
+        id: lookup
+        env:
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
+          FORGEJO_BOT_LOGIN: codex-reviewer-for-dongwonttuna
+          CODEX_ALLOWED_LOGIN: ${{ vars.CODEX_ALLOWED_LOGIN || 'DongwonTTuna' }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 .forgejo/scripts/resolve_pr_metadata.py
+
+  call-pipeline:
+    name: Codex PR Review
+    needs: resolve
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.allowed == 'true'
+    uses: ./.forgejo/workflows/codex-pr-review-pipeline.yml
+    with:
+      pr_number: ${{ needs.resolve.outputs.pr_number }}
+      head_sha: ${{ needs.resolve.outputs.head_sha }}
+      base_ref: ${{ needs.resolve.outputs.base_ref }}
+      base_sha: ${{ needs.resolve.outputs.base_sha }}
+      scripts_ref: ${{ needs.resolve.outputs.scripts_ref }}
+      trigger: ${{ needs.resolve.outputs.trigger }}
+    secrets:
+      CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}

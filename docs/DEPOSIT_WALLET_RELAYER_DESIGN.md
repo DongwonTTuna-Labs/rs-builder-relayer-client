@@ -220,7 +220,7 @@ Production dependency:
 
 ```toml
 rs-builder-relayer-client = {
-  git = "ssh://git@github.com/DongwonTTuna/rs-builder-relayer-client.git",
+  git = "ssh://git@ssh.dongwontuna.net/DongwonTTuna-Labs/rs-builder-relayer-client.git",
   rev = "<audited_commit_sha>"
 }
 ```

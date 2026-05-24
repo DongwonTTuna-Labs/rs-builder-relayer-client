@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+from codex_redaction import PLACEHOLDER, find_unredacted_secret_risks, redact
+
 VALID_TYPES = {"MUST", "SUGGEST", "IMO", "NITS", "ASK"}
 VALID_AGENTS = {"correctness", "security", "performance", "test-coverage", "domain"}
 VALID_STATUSES = {"LGTM", "NEEDS_CLARIFICATION", "NEEDS_WORK"}
@@ -36,6 +38,29 @@ VALID_STATUSES = {"LGTM", "NEEDS_CLARIFICATION", "NEEDS_WORK"}
 
 def warn(msg: str) -> None:
     sys.stderr.write(f"::warning::{msg}\n")
+
+
+def safe_artifact_text(value: object, max_len: int | None = None) -> str:
+    raw = str(value or "").strip()
+    text = redact(raw)
+    redacted_sensitive_literal = text != raw
+    if find_unredacted_secret_risks(text):
+        text = PLACEHOLDER
+    elif redacted_sensitive_literal:
+        text = PLACEHOLDER
+    if max_len is not None:
+        text = text[:max_len]
+    return text
+
+
+def safe_artifact_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {safe_artifact_text(key): safe_artifact_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [safe_artifact_value(item) for item in value]
+    if isinstance(value, str):
+        return safe_artifact_text(value)
+    return value
 
 
 def normalize_findings(raw: dict, axis: str) -> dict:
@@ -56,9 +81,9 @@ def normalize_findings(raw: dict, axis: str) -> dict:
         finding_type = str(entry.get("type") or "").upper()
         if finding_type not in VALID_TYPES:
             continue
-        title = str(entry.get("title") or "").strip()
-        reason = str(entry.get("reason") or "").strip()
-        finding_id = str(entry.get("id") or "").strip()
+        title = safe_artifact_text(entry.get("title"), 200)
+        reason = safe_artifact_text(entry.get("reason"), 1000)
+        finding_id = safe_artifact_text(entry.get("id"), 200)
         if not title or not reason or not finding_id:
             continue
         # 스키마는 file / line / rule_ref 를 required 로 선언하고 null 을 허용한다.
@@ -66,7 +91,7 @@ def normalize_findings(raw: dict, axis: str) -> dict:
         # KeyError / silent skip 을 방지한다.
         file_value: str | None = None
         if entry.get("file"):
-            file_value = str(entry["file"]).strip() or None
+            file_value = safe_artifact_text(entry.get("file"), 500) or None
         line_value: int | None = None
         if entry.get("line"):
             try:
@@ -77,14 +102,14 @@ def normalize_findings(raw: dict, axis: str) -> dict:
                 line_value = None
         rule_ref_value: str | None = None
         if entry.get("rule_ref"):
-            rule_ref_value = str(entry["rule_ref"])[:200] or None
+            rule_ref_value = safe_artifact_text(entry.get("rule_ref"), 200) or None
         row: dict = {
             "id": finding_id,
             "type": finding_type,
             "file": file_value,
             "line": line_value,
-            "title": title[:200],
-            "reason": reason[:1000],
+            "title": title,
+            "reason": reason,
             "rule_ref": rule_ref_value,
             "cross_cutting": bool(entry.get("cross_cutting") or False),
         }
@@ -93,13 +118,15 @@ def normalize_findings(raw: dict, axis: str) -> dict:
     positive_raw = raw.get("positive") or []
     if not isinstance(positive_raw, list):
         positive_raw = []
-    positive = [str(p).strip()[:200] for p in positive_raw if str(p).strip()][:2]
+    positive = [safe_artifact_text(p, 200) for p in positive_raw if str(p).strip()][:2]
 
     impact_summary = raw.get("impact_summary")
     if axis != "domain":
         impact_summary = None
     elif not isinstance(impact_summary, dict):
         impact_summary = None
+    else:
+        impact_summary = safe_artifact_value(impact_summary)
 
     return {
         "agent": axis,
@@ -123,19 +150,19 @@ def normalize_decisions(raw: dict) -> dict:
     for entry in decisions_raw:
         if not isinstance(entry, dict):
             continue
-        decision_id = str(entry.get("id") or "").strip()
-        reason = str(entry.get("reason") or "").strip()
-        allow = bool(entry.get("allow") or False)
+        decision_id = safe_artifact_text(entry.get("id"), 200)
+        reason = safe_artifact_text(entry.get("reason"), 300)
+        allow = entry.get("allow") is True
         if not decision_id or not reason:
             continue
-        decisions.append({"id": decision_id, "allow": allow, "reason": reason[:300]})
+        decisions.append({"id": decision_id, "allow": allow, "reason": reason})
 
     judgment = raw.get("judgment")
     if isinstance(judgment, dict):
         status = str(judgment.get("status") or "").upper()
-        headline = str(judgment.get("headline") or "").strip()
+        headline = safe_artifact_text(judgment.get("headline"), 200)
         if status in VALID_STATUSES and headline:
-            judgment = {"status": status, "headline": headline[:200]}
+            judgment = {"status": status, "headline": headline}
         else:
             judgment = None
     else:
@@ -148,19 +175,19 @@ def normalize_decisions(raw: dict) -> dict:
     for note in merge_notes_raw:
         if not isinstance(note, dict):
             continue
-        primary = str(note.get("primary_id") or "").strip()
+        primary = safe_artifact_text(note.get("primary_id"), 200)
         merged = note.get("merged_ids") or []
-        merge_reason = str(note.get("reason") or "").strip()
+        merge_reason = safe_artifact_text(note.get("reason"), 300)
         if not primary or not isinstance(merged, list) or not merge_reason:
             continue
-        merged_ids = [str(m).strip() for m in merged if str(m).strip()]
+        merged_ids = [safe_artifact_text(m, 200) for m in merged if safe_artifact_text(m, 200)]
         if not merged_ids:
             continue
         merge_notes.append(
             {
                 "primary_id": primary,
                 "merged_ids": merged_ids,
-                "reason": merge_reason[:300],
+                "reason": merge_reason,
             }
         )
 

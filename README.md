@@ -90,7 +90,7 @@ No Builder keys? Use `AuthMethod::relayer_key("key", "address")` instead — sam
 ```toml
 [dependencies]
 rs-builder-relayer-client = {
-  git = "ssh://git@github.com/DongwonTTuna/rs-builder-relayer-client.git",
+  git = "ssh://git@ssh.dongwontuna.net/DongwonTTuna-Labs/rs-builder-relayer-client.git",
   rev = "<commit-sha>"
 }
 ethers = "2"

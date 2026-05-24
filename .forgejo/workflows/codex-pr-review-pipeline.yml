@@ -1,0 +1,804 @@
+name: Codex PR Review Pipeline
+
+on:
+  workflow_call:
+    # Forgejo Actions currently rejects workflow_call.secrets
+    # declaration on this instance; callers still pass only the scoped bot token.
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      head_sha:
+        required: true
+        type: string
+      base_ref:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      scripts_ref:
+        required: true
+        type: string
+      trigger:
+        required: false
+        type: string
+        default: pull_request_target
+jobs:
+  prepare-context:
+    name: prepare-context
+    runs-on: dongwontuna-labs-runner
+    timeout-minutes: 5
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          FORGEJO_SERVER_URL: https://git.dongwontuna.net
+          FORGEJO_REPOSITORY: ${{ github.repository }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Prepare Forgejo PR review context
+        env:
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
+          FORGEJO_BOT_LOGIN: codex-reviewer-for-dongwonttuna
+        run: python3 pipeline/.forgejo/scripts/prepare_pr_context.py
+
+      - name: Stage context for upload
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp "$RUNNER_TEMP/pr-context.json" artifacts/pr-context.json
+
+      - name: Upload PR context artifact
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-review-context
+          path: artifacts/pr-context.json
+          retention-days: 7
+
+  prepare-codex-auth:
+    name: prepare-codex-auth
+    needs: prepare-context
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-home:/home/runner/.codex
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 5
+    env:
+      CODEX_AUTH_COPY_DIR: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}
+    steps:
+      - name: Prepare short-lived per-job Codex auth files
+        run: |
+          set -euo pipefail
+          source_auth=/home/runner/.codex/auth.json
+          auth_lock_dir=/var/lib/codex-runner/auth-runs-root/auth
+          auth_lock_file="$auth_lock_dir/forgejo-shared.lock"
+          install -d -m 700 "$auth_lock_dir"
+          exec 9>"$auth_lock_file"
+          flock 9
+          test -s "$source_auth"
+          source_mode="$(stat -c '%a' "$source_auth" 2>/dev/null || printf '600')"
+          if [ "$source_mode" = "0" ] || [ "$source_mode" = "000" ]; then
+            source_mode=600
+          fi
+          restore_source_mode() {
+            chmod "$source_mode" "$source_auth" 2>/dev/null || true
+          }
+          trap restore_source_mode EXIT
+          chmod u+rw "$source_auth"
+          python3 - "$source_auth" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          data = json.loads(path.read_text(encoding="utf-8"))
+          tokens = data.get("tokens") or {}
+          if data.get("auth_mode") != "chatgpt" or not tokens.get("refresh_token"):
+              raise SystemExit(f"Codex auth at {path} is not valid ChatGPT-managed auth.")
+          print(f"Codex auth source validated: auth_mode={data.get('auth_mode')}")
+          PY
+          env -u GITHUB_TOKEN -u GIT_AUTH_TOKEN -u FORGEJO_BOT_TOKEN \
+            CODEX_HOME=/home/runner/.codex \
+            codex login status
+          install -d -m 700 "$CODEX_AUTH_COPY_DIR"
+          for name in \
+            review-correctness \
+            review-security \
+            review-performance \
+            review-test-coverage \
+            review-domain \
+            tech-lead
+          do
+            install -d -m 700 "$CODEX_AUTH_COPY_DIR/$name"
+            find "$CODEX_AUTH_COPY_DIR/$name" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+            cp "$source_auth" "$CODEX_AUTH_COPY_DIR/$name/auth.json"
+            chmod 400 "$CODEX_AUTH_COPY_DIR/$name/auth.json"
+          done
+          restore_source_mode
+          trap - EXIT
+
+  review-correctness:
+    name: review (correctness)
+    needs:
+      - prepare-context
+      - prepare-codex-auth
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-correctness/auth.json
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Prepare clean findings artifact directory
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Build axis prompt
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.forgejo/scripts/build_prompt.py --axis correctness
+
+      - name: Run Codex review (correctness)
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-correctness.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-correctness.json
+          LOG_FILE: ${{ runner.temp }}/codex-correctness.log
+          CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
+          CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
+          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
+        run: bash pipeline/.forgejo/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.forgejo/scripts/normalize_codex_output.py --schema findings --axis correctness
+
+      - name: Stage findings into artifacts
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/findings-correctness.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-review-correctness-findings
+          path: artifacts/findings-correctness.json
+          retention-days: 7
+
+  review-security:
+    name: review (security)
+    needs:
+      - prepare-context
+      - prepare-codex-auth
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-security/auth.json
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Prepare clean findings artifact directory
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Build axis prompt
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.forgejo/scripts/build_prompt.py --axis security
+
+      - name: Run Codex review (security)
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-security.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-security.json
+          LOG_FILE: ${{ runner.temp }}/codex-security.log
+          CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
+          CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
+          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
+        run: bash pipeline/.forgejo/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.forgejo/scripts/normalize_codex_output.py --schema findings --axis security
+
+      - name: Stage findings into artifacts
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/findings-security.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-review-security-findings
+          path: artifacts/findings-security.json
+          retention-days: 7
+
+  review-performance:
+    name: review (performance)
+    needs:
+      - prepare-context
+      - prepare-codex-auth
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-performance/auth.json
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Prepare clean findings artifact directory
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Build axis prompt
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.forgejo/scripts/build_prompt.py --axis performance
+
+      - name: Run Codex review (performance)
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-performance.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-performance.json
+          LOG_FILE: ${{ runner.temp }}/codex-performance.log
+          CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
+          CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
+          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
+        run: bash pipeline/.forgejo/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.forgejo/scripts/normalize_codex_output.py --schema findings --axis performance
+
+      - name: Stage findings into artifacts
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/findings-performance.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-review-performance-findings
+          path: artifacts/findings-performance.json
+          retention-days: 7
+
+  review-test-coverage:
+    name: review (test-coverage)
+    needs:
+      - prepare-context
+      - prepare-codex-auth
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-test-coverage/auth.json
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Prepare clean findings artifact directory
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Build axis prompt
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.forgejo/scripts/build_prompt.py --axis test-coverage
+
+      - name: Run Codex review (test-coverage)
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-test-coverage.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-test-coverage.json
+          LOG_FILE: ${{ runner.temp }}/codex-test-coverage.log
+          CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
+          CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
+          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
+        run: bash pipeline/.forgejo/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.forgejo/scripts/normalize_codex_output.py --schema findings --axis test-coverage
+
+      - name: Stage findings into artifacts
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/findings-test-coverage.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-review-test-coverage-findings
+          path: artifacts/findings-test-coverage.json
+          retention-days: 7
+
+  review-domain:
+    name: review (domain)
+    needs:
+      - prepare-context
+      - prepare-codex-auth
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 30
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-domain/auth.json
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-review-context
+          path: ${{ runner.temp }}
+
+      - name: Prepare clean findings artifact directory
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Build axis prompt
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.forgejo/scripts/build_prompt.py --axis domain
+
+      - name: Run Codex review (domain)
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-domain.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-domain.json
+          LOG_FILE: ${{ runner.temp }}/codex-domain.log
+          CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
+          CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
+          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
+        run: bash pipeline/.forgejo/scripts/codex_exec.sh
+
+      - name: Normalize findings
+        run: python3 pipeline/.forgejo/scripts/normalize_codex_output.py --schema findings --axis domain
+
+      - name: Stage findings into artifacts
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/findings-domain.json" artifacts/
+
+      - name: Upload findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-review-domain-findings
+          path: artifacts/findings-domain.json
+          retention-days: 7
+
+  tech-lead:
+    name: tech-lead
+    needs:
+      - review-correctness
+      - review-security
+      - review-performance
+      - review-test-coverage
+      - review-domain
+      - prepare-codex-auth
+    if: always() && !cancelled()
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 20
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      GITHUB_BASE_REF: ${{ inputs.base_ref }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      ART_DIR: ${{ github.workspace }}/artifacts
+      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/tech-lead/auth.json
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Download all findings
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Download all findings artifacts
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Combine findings
+        id: combine
+        run: |
+          set -euo pipefail
+          python3 pipeline/.forgejo/scripts/merge_and_gate.py --phase combine
+          count=$(python3 -c "import json; print(len(json.load(open('artifacts/combined.json'))))")
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          cp artifacts/combined.json "$RUNNER_TEMP/combined.json"
+
+      - name: Build tech-lead prompt
+        if: steps.combine.outputs.count != '0'
+        env:
+          GITHUB_WORKSPACE: ${{ github.workspace }}/pipeline
+        run: python3 pipeline/.forgejo/scripts/build_prompt.py --axis tech-lead
+
+      - name: Run Codex tech-lead gate
+        if: steps.combine.outputs.count != '0'
+        env:
+          PROMPT_FILE: ${{ runner.temp }}/prompt-tech-lead.md
+          SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/decisions.schema.json
+          OUT_FILE: ${{ runner.temp }}/codex-output-tech-lead.json
+          LOG_FILE: ${{ runner.temp }}/codex-tech-lead.log
+          CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
+          CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
+          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
+        run: bash pipeline/.forgejo/scripts/codex_exec.sh
+
+      - name: Normalize decisions
+        if: steps.combine.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          python3 pipeline/.forgejo/scripts/normalize_codex_output.py --schema decisions
+          cp "$RUNNER_TEMP/decisions.json" artifacts/
+
+      - name: Emit empty decisions when no findings
+        if: steps.combine.outputs.count == '0'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          printf '%s\n' '{"decisions": [], "merge_notes": [], "judgment": null}' > artifacts/decisions.json
+
+      - name: Upload decisions artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-tech-lead-decisions
+          path: artifacts/decisions.json
+          retention-days: 7
+
+      - name: Upload combined findings artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-combined-findings
+          path: artifacts/combined.json
+          retention-days: 7
+
+      - name: Upload axes status artifact
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e
+        with:
+          name: codex-axes-status
+          path: artifacts/axes_status.json
+          retention-days: 7
+
+  post:
+    name: post
+    needs: tech-lead
+    runs-on: dongwontuna-labs-runner
+    timeout-minutes: 10
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      HEAD_SHA: ${{ inputs.head_sha }}
+      BASE_SHA: ${{ inputs.base_sha }}
+      TRIGGER: ${{ inputs.trigger }}
+      FORGEJO_API_URL: https://git.dongwontuna.net/api/v1
+      FORGEJO_REPOSITORY: ${{ github.repository }}
+      FORGEJO_SERVER_URL: https://git.dongwontuna.net
+      PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
+      ART_DIR: ${{ github.workspace }}/artifacts
+    steps:
+      - name: Checkout base ref (trusted scripts)
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts_ref }}
+          GIT_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo_url="${FORGEJO_SERVER_URL%/}/${FORGEJO_REPOSITORY}.git"
+          rm -rf -- pipeline
+          mkdir -p pipeline
+          cd pipeline
+          git init .
+          git remote add origin "$repo_url"
+          git_fetch() {
+            git \
+              -c credential.helper='!f() { echo username=x-access-token; echo "password=$GIT_AUTH_TOKEN"; }; f' \
+              -c credential.useHttpPath=true \
+              "$@"
+          }
+          git_fetch fetch --depth=1 origin "$SCRIPTS_REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Prepare clean review artifacts directory
+        run: |
+          set -euo pipefail
+          rm -rf -- artifacts
+          mkdir -p artifacts
+
+      - name: Download findings artifacts
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download combined findings
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-combined-findings
+          path: artifacts/
+
+      - name: Download decisions artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-tech-lead-decisions
+          path: artifacts/
+
+      - name: Download axes status artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-axes-status
+          path: artifacts/
+
+      - name: Download PR context artifact
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e
+        with:
+          name: codex-review-context
+          path: artifacts/
+
+      - name: Apply hard rules
+        run: python3 pipeline/.forgejo/scripts/merge_and_gate.py --phase gate
+
+      - name: Publish Forgejo review comments
+        env:
+          FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
+          FORGEJO_BOT_LOGIN: codex-reviewer-for-dongwonttuna
+        run: python3 pipeline/.forgejo/scripts/post_review_comments.py
+
+  cleanup-codex-auth:
+    name: cleanup-codex-auth
+    needs:
+      - prepare-codex-auth
+      - review-correctness
+      - review-security
+      - review-performance
+      - review-test-coverage
+      - review-domain
+      - tech-lead
+      - post
+    if: always()
+    runs-on: dongwontuna-labs-runner
+    container:
+      volumes:
+        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
+    timeout-minutes: 5
+    env:
+      CODEX_AUTH_COPY_DIR: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}
+    steps:
+      - name: Remove remaining per-job Codex auth files
+        run: |
+          case "$CODEX_AUTH_COPY_DIR" in
+            /var/lib/codex-runner/auth-runs-root/auth-runs/*/*/[0-9]*) ;;
+            *) echo "Refusing unexpected auth cleanup path" >&2; exit 1 ;;
+          esac
+          rm -rf -- "$CODEX_AUTH_COPY_DIR"

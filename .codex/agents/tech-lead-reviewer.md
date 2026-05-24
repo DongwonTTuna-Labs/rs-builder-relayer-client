@@ -48,7 +48,7 @@ Codex PR Review v2 파이프라인의 **Stage 2 게이트**.
 
 ## 출력 (필수)
 
-`.github/scripts/schemas/decisions.schema.json` 만족 JSON.
+`.forgejo/scripts/schemas/decisions.schema.json` 만족 JSON.
 코드 펜스나 전후 문장 금지.
 
 ```json

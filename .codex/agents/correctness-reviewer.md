@@ -19,7 +19,7 @@ PR 을 **정확성 (correctness)** 관점에서 리뷰하는 Codex axis.
 
 ## 출력 (필수)
 
-`.github/scripts/schemas/findings.schema.json` 을 만족하는 JSON 만 반환한다.
+`.forgejo/scripts/schemas/findings.schema.json` 을 만족하는 JSON 만 반환한다.
 코드 펜스나 전후 문장 금지.
 
 - `agent`: `"correctness"` 고정

@@ -20,7 +20,7 @@ PR 을 **보안** 관점에서 리뷰하는 Codex axis.
 
 ## 출력 (필수)
 
-`.github/scripts/schemas/findings.schema.json` 을 만족하는 JSON 만.
+`.forgejo/scripts/schemas/findings.schema.json` 을 만족하는 JSON 만.
 코드 펜스나 전후 문장 금지.
 
 - `agent`: `"security"` 고정
