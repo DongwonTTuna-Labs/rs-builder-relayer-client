@@ -442,17 +442,16 @@ impl DepositWalletRelayerClient {
         expected_owner: Option<Address>,
     ) -> Result<DepositWalletTransactionReceipt> {
         let transaction_id_for_error = sanitized_external_token(&transaction_id);
-        let owner_state_authorized = match expected_owner {
-            Some(owner) => self.has_recovery_owner_evidence(owner, &transaction_id)?,
-            None => true,
-        };
+        if let Some(owner) = expected_owner {
+            let _ = self.has_recovery_owner_evidence(owner, &transaction_id)?;
+        }
 
         for attempt in 0..policy.max_attempts {
             let parsed = match self.fetch_transaction(&transaction_id).await {
                 Ok(parsed) => parsed,
                 Err(error) => {
                     if let Some(owner) = expected_owner {
-                        if owner_state_authorized {
+                        if self.has_recovery_owner_evidence(owner, &transaction_id)? {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                         }
                     } else {
@@ -494,7 +493,12 @@ impl DepositWalletRelayerClient {
                 }
                 RelayerTransactionState::Unknown(raw) => {
                     match owner_to_verify {
-                        Some(owner) if expected_owner.is_none() || owner_state_authorized => {
+                        Some(owner) if expected_owner.is_none() => {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?
+                        }
+                        Some(owner)
+                            if self.has_recovery_owner_evidence(owner, &transaction_id)? =>
+                        {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?
                         }
                         _ => self.mark_transaction_reconciliation_required(&transaction_id)?,
@@ -508,8 +512,8 @@ impl DepositWalletRelayerClient {
                 RelayerTransactionState::New
                 | RelayerTransactionState::Executed
                 | RelayerTransactionState::Mined => {
-                    if owner_state_authorized {
-                        if let Some(owner) = expected_owner {
+                    if let Some(owner) = expected_owner {
+                        if self.has_recovery_owner_evidence(owner, &transaction_id)? {
                             self.record_recovered_inflight_transaction(owner, &transaction_id)?;
                         }
                     }
@@ -1690,6 +1694,34 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct ClearingSleeper {
+        sleeps: Mutex<Vec<Duration>>,
+        state: Mutex<Option<Arc<Mutex<OwnerMutationState>>>>,
+    }
+
+    impl ClearingSleeper {
+        fn attach_state(&self, state: Arc<Mutex<OwnerMutationState>>) {
+            *self.state.lock().unwrap() = Some(state);
+        }
+    }
+
+    impl DepositWalletSleeper for ClearingSleeper {
+        fn sleep<'a>(
+            &'a self,
+            duration: Duration,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            self.sleeps.lock().unwrap().push(duration);
+            let state = self.state.lock().unwrap().clone();
+            if let Some(state) = state {
+                let mut state = state.lock().unwrap();
+                state.owner_blocks.clear();
+                state.transaction_owners.clear();
+            }
+            Box::pin(async {})
+        }
+    }
+
     #[derive(Debug)]
     struct CapturedRequest {
         method: String,
@@ -1992,7 +2024,7 @@ mod tests {
                 .write_all(wire.as_bytes())
                 .await
                 .expect("partial response should write");
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            tokio::time::sleep(Duration::from_millis(750)).await;
             vec![request]
         });
 
@@ -2211,7 +2243,7 @@ mod tests {
             url,
             relayer_auth(),
             1_700_000_000,
-            Duration::from_millis(100),
+            Duration::from_millis(500),
         );
         let owner = address(WALLET_CREATE_OWNER);
 
@@ -3490,6 +3522,53 @@ mod tests {
 
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_poll_rechecks_owner_evidence_before_each_state_mutation() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response("tx-cleared", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-cleared", "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response("tx-cleared", "STATE_NEW")),
+            TestResponse::json("200 OK", json!({"nonce": "39"}).to_string()),
+        ])
+        .await;
+        let sleeper = Arc::new(ClearingSleeper::default());
+        let sleeper_trait: Arc<dyn DepositWalletSleeper> = sleeper.clone();
+        let client = DepositWalletRelayerClient::from_parts(
+            reqwest_client(Duration::from_secs(2)),
+            url,
+            relayer_auth(),
+            deposit_wallet_contract_config(137).unwrap(),
+            Arc::new(FixedClock { now: 1_700_000_000 }),
+            sleeper_trait,
+        );
+        sleeper.attach_state(client.mutation_state.clone());
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, "tx-cleared");
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                "tx-cleared",
+                DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Timeout));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        assert_eq!(nonce, U256::from(39u64));
+
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 4);
     }
 
     #[tokio::test]
