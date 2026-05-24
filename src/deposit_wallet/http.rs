@@ -440,7 +440,13 @@ impl DepositWalletRelayerClient {
         let transaction_id_for_error = sanitized_external_token(&transaction_id);
 
         for attempt in 0..policy.max_attempts {
-            let parsed = self.fetch_transaction(&transaction_id).await?;
+            let parsed = match self.fetch_transaction(&transaction_id).await {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    self.mark_transaction_reconciliation_required(&transaction_id)?;
+                    return Err(error);
+                }
+            };
             let owner_to_verify = match expected_owner {
                 Some(owner) => Some(owner),
                 None => self.transaction_owner(&transaction_id)?,
@@ -1997,7 +2003,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_errors_do_not_echo_full_nonce_url() {
-        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
+        let (url, handle) = spawn_reset_server().await;
         let client = test_client_with_auth_clock_timeout(
             url,
             relayer_auth(),
@@ -2011,6 +2017,9 @@ mod tests {
 
         assert!(!rendered.contains("/nonce"));
         assert!(!rendered.contains(&to_checksum(&owner, None)));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.contains("/nonce?address="));
     }
 
     #[tokio::test]
@@ -2511,6 +2520,32 @@ mod tests {
             .expect("new owner reservation should respect capacity");
 
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+    }
+
+    #[test]
+    fn owner_mutation_state_rejects_new_transactions_after_transaction_capacity() {
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let owner = address(WALLET_CREATE_OWNER);
+        {
+            let mut state = client.mutation_state().unwrap();
+            for index in 0..MAX_OWNER_MUTATION_RECORDS {
+                state.transaction_owners.insert(
+                    format!("tx-{index}"),
+                    OwnerTransactionRecord {
+                        owner: Address::from_low_u64_be(index as u64 + 1),
+                        payload_hash: format!("payload-{index}"),
+                    },
+                );
+            }
+        }
+
+        let error = client
+            .record_transaction_owner("tx-overflow", owner, "payload-overflow".to_string())
+            .expect_err("new transaction owner should respect transaction capacity");
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        client.ensure_owner_unblocked(owner).unwrap();
     }
 
     #[tokio::test]
@@ -3310,6 +3345,49 @@ mod tests {
                 DepositWalletMutationPermit::new(
                     owner,
                     "checked mocked owner mismatch",
+                    "single-process mocked owner serialization guard",
+                ),
+            )
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn local_transaction_poll_parse_error_marks_inflight_block_reconciliation_required() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response("tx-malformed", "STATE_NEW")),
+            TestResponse::json("200 OK", "{\"transactionID\":\"tx-malformed\""),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, "tx-malformed");
+
+        let error = client
+            .poll_transaction(
+                "tx-malformed",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Other(_)));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                owner,
+                DepositWalletMutationPermit::new(
+                    owner,
+                    "checked malformed transaction response",
                     "single-process mocked owner serialization guard",
                 ),
             )
