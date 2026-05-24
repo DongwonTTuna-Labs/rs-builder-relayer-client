@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use tokio::sync::OwnedSemaphorePermit;
 
 use ethers::types::{Address, H256, U256};
 use ethers::utils::{keccak256, to_checksum};
@@ -41,9 +43,6 @@ const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_POLL_ATTEMPTS: usize = 120;
 const MAX_OWNER_MUTATION_RECORDS: usize = 1024;
-
-#[cfg(test)]
-static DROPPED_BACKGROUND_ERROR_BODY_DRAINS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletRelayerUrl {
@@ -268,6 +267,13 @@ struct RelayerTransactionResponseWithOwner {
     owner: Option<Address>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RelayerTransactionResponseEnvelope {
+    Single(RelayerTransactionResponseWithOwner),
+    Many(Vec<RelayerTransactionResponseWithOwner>),
+}
+
 #[derive(Clone)]
 pub struct DepositWalletRelayerClient {
     http: Client,
@@ -275,6 +281,7 @@ pub struct DepositWalletRelayerClient {
     auth: RelayerKeyAuth,
     config: DepositWalletContractConfig,
     mutation_state: Arc<Mutex<OwnerMutationState>>,
+    error_body_drain_limiter: ErrorBodyDrainLimiter,
     clock: Arc<dyn DepositWalletClock>,
     sleeper: Arc<dyn DepositWalletSleeper>,
 }
@@ -315,6 +322,7 @@ impl DepositWalletRelayerClient {
             auth,
             config,
             mutation_state: Arc::new(Mutex::new(OwnerMutationState::default())),
+            error_body_drain_limiter: ErrorBodyDrainLimiter::new(MAX_BACKGROUND_ERROR_BODY_DRAINS),
             clock,
             sleeper,
         }
@@ -734,7 +742,8 @@ impl DepositWalletRelayerClient {
         if !response.status().is_success() {
             let status = response.status();
             let retry_after = retry_after_summary(response.headers());
-            try_spawn_error_response_body_drain(response);
+            self.error_body_drain_limiter
+                .try_spawn_error_response_body_drain(response);
             if status == StatusCode::TOO_MANY_REQUESTS {
                 return Err(RelayerError::QuotaExhausted);
             }
@@ -1133,6 +1142,16 @@ impl DepositWalletRelayerClient {
             )
         })
     }
+
+    #[cfg(test)]
+    fn hold_error_body_drain_permits_for_test(&self) -> Vec<OwnedSemaphorePermit> {
+        self.error_body_drain_limiter.hold_all_permits_for_test()
+    }
+
+    #[cfg(test)]
+    fn dropped_error_body_drains_for_test(&self) -> usize {
+        self.error_body_drain_limiter.dropped_for_test()
+    }
 }
 
 impl fmt::Debug for DepositWalletRelayerClient {
@@ -1166,6 +1185,52 @@ enum OwnerMutationBlock {
     Ambiguous {
         payload_hash: String,
     },
+}
+
+#[derive(Clone)]
+struct ErrorBodyDrainLimiter {
+    semaphore: Arc<tokio::sync::Semaphore>,
+    #[cfg(test)]
+    dropped: Arc<AtomicUsize>,
+}
+
+impl ErrorBodyDrainLimiter {
+    fn new(limit: usize) -> Self {
+        Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(limit)),
+            #[cfg(test)]
+            dropped: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn try_spawn_error_response_body_drain(&self, response: reqwest::Response) {
+        let Ok(permit) = self.semaphore.clone().try_acquire_owned() else {
+            #[cfg(test)]
+            self.dropped.fetch_add(1, Ordering::SeqCst);
+            return;
+        };
+        tokio::spawn(async move {
+            let _permit = permit;
+            drain_error_response_body(response).await;
+        });
+    }
+
+    #[cfg(test)]
+    fn hold_all_permits_for_test(&self) -> Vec<OwnedSemaphorePermit> {
+        (0..MAX_BACKGROUND_ERROR_BODY_DRAINS)
+            .map(|_| {
+                self.semaphore
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("test should be able to hold all drain permits")
+            })
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn dropped_for_test(&self) -> usize {
+        self.dropped.load(Ordering::SeqCst)
+    }
 }
 
 impl OwnerMutationBlock {
@@ -1430,32 +1495,6 @@ async fn drain_error_response_body(response: reqwest::Response) {
     let _ = tokio::time::timeout(ERROR_BODY_DRAIN_TIMEOUT, drain).await;
 }
 
-fn try_spawn_error_response_body_drain(response: reqwest::Response) {
-    static DRAIN_SEMAPHORE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
-    let semaphore = DRAIN_SEMAPHORE
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_BACKGROUND_ERROR_BODY_DRAINS)))
-        .clone();
-    let Ok(permit) = semaphore.try_acquire_owned() else {
-        #[cfg(test)]
-        DROPPED_BACKGROUND_ERROR_BODY_DRAINS.fetch_add(1, Ordering::SeqCst);
-        return;
-    };
-    tokio::spawn(async move {
-        let _permit = permit;
-        drain_error_response_body(response).await;
-    });
-}
-
-#[cfg(test)]
-fn reset_dropped_background_error_body_drains() {
-    DROPPED_BACKGROUND_ERROR_BODY_DRAINS.store(0, Ordering::SeqCst);
-}
-
-#[cfg(test)]
-fn dropped_background_error_body_drains() -> usize {
-    DROPPED_BACKGROUND_ERROR_BODY_DRAINS.load(Ordering::SeqCst)
-}
-
 fn retry_after_summary(headers: &HeaderMap) -> String {
     headers
         .get(RETRY_AFTER)
@@ -1480,13 +1519,15 @@ fn parse_transaction_response(
     expected_transaction_id: &str,
     bytes: &[u8],
 ) -> Result<ParsedTransactionReceipt> {
-    if let Ok(response) = serde_json::from_slice::<RelayerTransactionResponseWithOwner>(bytes) {
-        let receipt = receipt_from_submit_response(response.response, response.owner)?;
-        return require_transaction_id_match(expected_transaction_id, receipt);
-    }
-
-    let responses = serde_json::from_slice::<Vec<RelayerTransactionResponseWithOwner>>(bytes)
+    let envelope = serde_json::from_slice::<RelayerTransactionResponseEnvelope>(bytes)
         .map_err(|e| RelayerError::Other(format!("could not parse transaction response: {e}")))?;
+    let responses = match envelope {
+        RelayerTransactionResponseEnvelope::Single(response) => {
+            let receipt = receipt_from_submit_response(response.response, response.owner)?;
+            return require_transaction_id_match(expected_transaction_id, receipt);
+        }
+        RelayerTransactionResponseEnvelope::Many(responses) => responses,
+    };
     if responses.len() > MAX_TRANSACTION_RESPONSE_ITEMS {
         return Err(RelayerError::reconciliation_required(format!(
             "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
@@ -2185,51 +2226,6 @@ mod tests {
         )
     }
 
-    async fn spawn_held_error_body_server(
-        count: usize,
-    ) -> (
-        DepositWalletRelayerUrl,
-        JoinHandle<Vec<CapturedRequest>>,
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test server should bind");
-        let addr = listener.local_addr().unwrap();
-        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        let handle = tokio::spawn(async move {
-            let mut requests = Vec::with_capacity(count);
-            let mut streams = Vec::with_capacity(count);
-            for _ in 0..count {
-                let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
-                    .await
-                    .expect("server accept should not hang")
-                    .expect("server should accept");
-                let request = read_request(&mut stream).await;
-                let wire = "HTTP/1.1 500 Internal Server Error\r\nconnection: keep-alive\r\ncontent-type: application/json\r\ncontent-length: 1024\r\n\r\npartial";
-                stream
-                    .write_all(wire.as_bytes())
-                    .await
-                    .expect("partial response should write");
-                requests.push(request);
-                streams.push(stream);
-            }
-            let _ = accepted_tx.send(());
-            let _ = release_rx.await;
-            drop(streams);
-            requests
-        });
-
-        (
-            DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
-            handle,
-            accepted_rx,
-            release_tx,
-        )
-    }
-
     async fn read_request(stream: &mut TcpStream) -> CapturedRequest {
         let mut buffer = Vec::new();
         let headers_end = loop {
@@ -2504,42 +2500,32 @@ mod tests {
 
     #[tokio::test]
     async fn background_error_body_drain_limit_drops_excess_drains() {
-        reset_dropped_background_error_body_drains();
-        let request_count = MAX_BACKGROUND_ERROR_BODY_DRAINS + 1;
-        let (url, handle, all_requests_accepted, release_server) =
-            spawn_held_error_body_server(request_count).await;
-        let client = Arc::new(test_client_with_auth_clock_timeout(
+        let (url, handle, headers_sent, release_server) =
+            spawn_controlled_error_body_server().await;
+        let client = test_client_with_auth_clock_timeout(
             url,
             relayer_auth(),
             1_700_000_000,
             Duration::from_secs(1),
-        ));
+        );
+        let _held_permits = client.hold_error_body_drain_permits_for_test();
         let owner = address(WALLET_CREATE_OWNER);
 
-        let mut tasks = Vec::with_capacity(request_count);
-        for _ in 0..request_count {
-            let client = client.clone();
-            tasks.push(tokio::spawn(async move { client.get_wallet_nonce(owner).await }));
-        }
-
-        all_requests_accepted
+        let client_for_request = client.clone();
+        let client_task = tokio::spawn(async move { client_for_request.get_wallet_nonce(owner).await });
+        headers_sent
             .await
-            .expect("server should accept all concurrent error responses");
-        for task in tasks {
-            let result = tokio::time::timeout(TEST_SERVER_TIMEOUT, task)
-                .await
-                .expect("non-success responses should return without waiting for held bodies")
-                .expect("client task should not panic");
-            assert!(matches!(result.unwrap_err(), RelayerError::Api { status: 500, .. }));
-        }
-        assert!(
-            dropped_background_error_body_drains() >= 1,
-            "expected at least one drain to be dropped after the global limit was exhausted"
-        );
+            .expect("server should send non-success headers");
+        let result = tokio::time::timeout(TEST_SERVER_TIMEOUT, client_task)
+            .await
+            .expect("non-success response should return while all drain permits are held")
+            .expect("client task should not panic");
+        assert!(matches!(result.unwrap_err(), RelayerError::Api { status: 500, .. }));
+        assert_eq!(client.dropped_error_body_drains_for_test(), 1);
 
         let _ = release_server.send(());
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), request_count);
+        assert_eq!(requests.len(), 1);
     }
 
     #[tokio::test]
