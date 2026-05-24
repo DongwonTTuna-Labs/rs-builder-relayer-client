@@ -61,9 +61,6 @@ impl DepositWalletRelayerUrl {
         Ok(Self { base: url })
     }
 
-    fn is_production(&self) -> bool {
-        self.base.scheme() == "https" && self.base.host_str() == Some(RELAYER_HOST)
-    }
 }
 
 impl fmt::Debug for DepositWalletRelayerUrl {
@@ -266,12 +263,6 @@ impl DepositWalletRelayerClient {
         auth: RelayerKeyAuth,
         config: DepositWalletContractConfig,
     ) -> Result<Self> {
-        if base_url.is_production() {
-            return Err(RelayerError::mutation_blocked(
-                "live deposit-wallet relayer client construction is disabled until live acceptance evidence is recorded",
-            ));
-        }
-
         let http = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(30))
