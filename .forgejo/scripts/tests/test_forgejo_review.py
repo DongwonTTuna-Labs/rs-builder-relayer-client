@@ -233,9 +233,11 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertNotIn("branches: [main]", workflow)
 
     def test_pipeline_uses_forgejo_scripts_and_org_codex_lb_secret(self) -> None:
+        auto = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
         pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
         self.assertIn("python3 pipeline/.forgejo/scripts/build_prompt.py", pipeline)
         self.assertIn("bash pipeline/.forgejo/scripts/codex_exec.sh", pipeline)
+        self.assertIn("      CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}", auto)
         self.assertNotIn("/codex-runner-home", pipeline)
         self.assertNotIn("/codex-runner-locks", pipeline)
         self.assertNotIn("auth_lock_file", pipeline)

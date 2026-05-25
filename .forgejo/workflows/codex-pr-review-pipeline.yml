@@ -2,8 +2,8 @@ name: Codex PR Review Pipeline
 
 on:
   workflow_call:
-    # Forgejo Actions currently rejects workflow_call.secrets
-    # declaration on this instance; callers still pass only the scoped bot token.
+    # Forgejo Actions currently rejects workflow_call.secrets declarations on
+    # this instance; callers still pass required secrets through the uses job.
     inputs:
       pr_number:
         required: true
