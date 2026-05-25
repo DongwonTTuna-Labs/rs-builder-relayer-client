@@ -324,11 +324,12 @@ use super::*;
                 "tx-no-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
                 mutation_permit_for(owner),
-            )
-            .await
-            .unwrap_err();
+        )
+        .await
+        .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert!(client.ambiguous_submit_block(owner).is_some());
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
 
@@ -355,14 +356,8 @@ use super::*;
             .await
             .unwrap_err();
         assert!(matches!(error, RelayerError::Other(_)));
-        assert!(client.ambiguous_submit_block(owner).is_some());
-        {
-            let state = client.mutation_state().unwrap();
-            assert!(state
-                .transaction_owners
-                .get("tx-bad-owner")
-                .is_some_and(|record| record.owner == owner));
-        }
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
 
@@ -512,7 +507,8 @@ use super::*;
             .await
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert!(client.ambiguous_submit_block(owner).is_some());
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
@@ -538,7 +534,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn owner_aware_recovery_permit_fetch_failure_blocks_owner() {
+    async fn owner_aware_recovery_permit_fetch_failure_without_owner_evidence_does_not_block_owner() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_reset_server().await;
         let client = test_client(url);
@@ -554,9 +550,8 @@ use super::*;
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Http(_)));
-        assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
-        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
@@ -627,11 +622,7 @@ use super::*;
                 .await
                 .unwrap_err();
 
-            match state {
-                "STATE_INVALID" => assert!(matches!(error, RelayerError::TransactionInvalid(_))),
-                "STATE_FAILED" => assert!(matches!(error, RelayerError::TransactionFailed(_))),
-                _ => unreachable!(),
-            }
+            assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
             assert_eq!(
                 client.ambiguous_submit_block(owner),
                 Some("payload:ambiguous-before-recovery".to_string())
@@ -643,7 +634,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn owner_aware_recovery_permit_blocks_same_owner_submit_while_polling() {
+    async fn owner_aware_recovery_permit_waits_for_response_owner_before_blocking_owner() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-recovery-race";
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -684,12 +675,8 @@ use super::*;
             .await
             .expect("poll request should reach test server");
 
-        let blocked = client.submit_wallet_create(owner, mutation_permit()).await;
-
-        assert!(error_has_prefix(
-            &blocked.unwrap_err(),
-            RECONCILIATION_REQUIRED_PREFIX
-        ));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
         release_tx.send(()).unwrap();
         let poll_error = poll.await.unwrap().unwrap_err();
         assert!(matches!(poll_error, RelayerError::Timeout));
@@ -741,7 +728,7 @@ use super::*;
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 mutation_permit_token_for(owner),
             )
             .unwrap();
@@ -1016,7 +1003,7 @@ use super::*;
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 mutation_permit_token_for(owner),
             )
             .unwrap();
@@ -1055,7 +1042,7 @@ use super::*;
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 mutation_permit_token_for(owner),
             )
             .unwrap();

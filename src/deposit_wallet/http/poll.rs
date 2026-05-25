@@ -144,9 +144,7 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         let transaction_id_for_error = sanitized_external_token(&transaction_id);
         if let Some(owner) = expected_owner {
-            if trusted_owner_recovery {
-                self.record_recovered_inflight_transaction(owner, &transaction_id)?;
-            } else {
+            if !trusted_owner_recovery {
                 let _ = self.has_recovery_owner_evidence(owner, &transaction_id)?;
             }
         }
@@ -170,12 +168,9 @@ impl DepositWalletRelayerClient {
                         continue;
                     }
                     let response_owner = poll_error.owner;
-                    let trusted_recovery_owner_block =
-                        trusted_owner_recovery && poll_error.trusted_recovery_owner_block;
                     let error = poll_error.error;
                     if let Some(owner) = expected_owner {
                         if response_owner == Some(owner)
-                            || trusted_recovery_owner_block
                             || self.has_recovery_owner_evidence(owner, &transaction_id)?
                         {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
@@ -310,14 +305,6 @@ pub(super) fn is_transient_poll_error(error: &RelayerError) -> bool {
             matches!(*status, 408 | 425 | 429) || (500..=599).contains(status)
         }
         RelayerError::Other(message) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => false,
-        _ => false,
-    }
-}
-
-pub(super) fn is_trusted_recovery_fetch_failure(error: &RelayerError) -> bool {
-    match error {
-        RelayerError::Http(_) | RelayerError::QuotaExhausted | RelayerError::Api { .. } => true,
-        RelayerError::Other(message) => message == RESPONSE_BODY_TOO_LARGE_MESSAGE,
         _ => false,
     }
 }

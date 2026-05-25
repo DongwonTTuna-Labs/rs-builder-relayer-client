@@ -506,6 +506,58 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn signed_wallet_batch_rechecks_permit_after_nonce_lookup_before_post() {
+        let signed = signed_wallet_batch();
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({"nonce": signed.nonce().to_string()}).to_string(),
+        )])
+        .await;
+        let clock: Arc<dyn DepositWalletClock> = Arc::new(SequenceClock::new([
+            1_700_000_000,
+            1_700_000_000,
+            1_700_000_001,
+        ]));
+        let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
+        let client = DepositWalletRelayerClient::from_parts(
+            reqwest_client(Duration::from_secs(2)),
+            url,
+            relayer_auth(),
+            deposit_wallet_contract_config(137).unwrap(),
+            clock,
+            sleeper,
+        );
+        let owner = signed.owner();
+        let evidence = DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            "unit-test short owner serialization guard",
+            "unit-test-short-owner-lease",
+            1_600_000_000,
+            1_700_000_001,
+        )
+        .unwrap();
+        let gate = DepositWalletMutationGate::Permit(
+            DepositWalletMutationPermit::from_owner_serialization_evidence(
+                "unit-test permit expires after nonce lookup",
+                evidence,
+            )
+            .unwrap(),
+        );
+
+        let error = client
+            .submit_signed_wallet_batch(signed, gate)
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
+#[tokio::test]
     async fn expired_signed_wallet_batch_fails_before_auth_or_http() {
         let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
         let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
@@ -547,7 +599,7 @@ use super::*;
 
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 unchecked_mutation_permit(
                     owner,
                     " ",
@@ -562,7 +614,7 @@ use super::*;
 
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 unchecked_mutation_permit(
                     owner,
                     "checked mocked relayer state",
@@ -582,7 +634,7 @@ use super::*;
 
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 unchecked_mutation_permit(
                     Address::from_low_u64_be(99),
                     "checked mocked relayer state",
@@ -595,7 +647,7 @@ use super::*;
 
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 mutation_permit_token_for(owner),
             )
             .unwrap();

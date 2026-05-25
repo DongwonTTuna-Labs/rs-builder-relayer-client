@@ -22,7 +22,8 @@ pub use config::{
 pub use http::{
     DepositWalletMutationGate, DepositWalletMutationPermit,
     DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
-    DepositWalletRelayerUrl, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    DepositWalletRelayerUrl, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletTransactionReceipt, RelayerKeyAuth,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

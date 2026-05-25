@@ -19,8 +19,9 @@ pub use deposit_wallet::{
     DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
     DepositWalletMutationGate, DepositWalletMutationPermit,
     DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
-    DepositWalletRelayerUrl, DepositWalletRequestContext, DepositWalletTransactionReceipt,
-    RelayerKeyAuth, RelayerSubmitResponse, RelayerTransactionState, WalletNonceRequest,
+    DepositWalletRelayerUrl, DepositWalletRequestContext, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerSubmitResponse,
+    RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

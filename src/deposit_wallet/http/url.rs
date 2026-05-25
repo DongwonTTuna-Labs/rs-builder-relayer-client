@@ -16,9 +16,12 @@ pub(super) enum DepositWalletRelayerUrlKind {
 impl DepositWalletRelayerUrl {
     /// Builds a production relayer URL.
     ///
-    /// This PR keeps live submit mutations disabled for production URLs. The
-    /// loopback submit transport is intentionally limited to crate-local tests
-    /// until a later live-gate PR adds approved external integration hooks.
+    /// Production URLs are endpoint-capable for nonce, transaction polling, and
+    /// gated submit requests. Mutating submit methods still require an explicit
+    /// owner-scoped permit before auth headers, request bodies, or HTTP requests
+    /// are built. This client is not an end-to-end live trading adapter by
+    /// itself; calldata construction, consumer-side owner serialization, manual
+    /// operator approval, and rollback handling remain outside this URL type.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)
             .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;

@@ -239,6 +239,29 @@
         }
     }
 
+    fn submit_reconciliation_evidence_for_payload(
+        owner: Address,
+        payload_hash: impl Into<String>,
+    ) -> DepositWalletSubmitReconciliationEvidence {
+        DepositWalletSubmitReconciliationEvidence::new(
+            owner,
+            payload_hash,
+            "unit-test manual submit reconciliation",
+            1_700_000_001,
+        )
+        .unwrap()
+    }
+
+    fn submit_reconciliation_evidence_for(
+        client: &DepositWalletRelayerClient,
+        owner: Address,
+    ) -> DepositWalletSubmitReconciliationEvidence {
+        let payload_hash = client
+            .ambiguous_submit_block(owner)
+            .expect("test owner should have an ambiguous submit block");
+        submit_reconciliation_evidence_for_payload(owner, payload_hash)
+    }
+
     fn reqwest_client(timeout: Duration) -> Client {
         Client::builder()
             .redirect(reqwest::redirect::Policy::none())

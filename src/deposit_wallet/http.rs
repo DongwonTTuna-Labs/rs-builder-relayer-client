@@ -63,6 +63,7 @@ mod url;
 pub use auth::RelayerKeyAuth;
 pub use permit::{
     DepositWalletMutationGate, DepositWalletMutationPermit, DepositWalletOwnerSerializationEvidence,
+    DepositWalletSubmitReconciliationEvidence,
 };
 pub use poll::DepositWalletPollPolicy;
 pub use response::DepositWalletTransactionReceipt;

@@ -9,7 +9,7 @@ use super::*;
 
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for_payload(owner, payload_hash.clone()),
                 mutation_permit_token_for(owner),
             )
             .unwrap_err();
@@ -84,6 +84,28 @@ use super::*;
         reservation.arm_ambiguous_on_drop();
 
         drop(reservation);
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+    }
+
+#[test]
+    fn manual_clear_requires_matching_reconciliation_payload_hash() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload(
+                    owner,
+                    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                ),
+                mutation_permit_token_for(owner),
+            )
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
     }
 
@@ -241,7 +263,7 @@ use super::*;
 
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for(&client, owner),
                 mutation_permit_token_for(owner),
             )
             .unwrap();
@@ -276,7 +298,10 @@ use super::*;
 
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
-                owner,
+                submit_reconciliation_evidence_for_payload(
+                    owner,
+                    "0x1111111111111111111111111111111111111111111111111111111111111111",
+                ),
                 mutation_permit_token_for(owner),
             )
             .unwrap_err();

@@ -69,6 +69,71 @@ pub struct DepositWalletOwnerSerializationEvidence {
     expires_at_unix_seconds: u64,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct DepositWalletSubmitReconciliationEvidence {
+    owner: Address,
+    payload_hash: String,
+    reason: String,
+    checked_at_unix_seconds: u64,
+}
+
+impl DepositWalletSubmitReconciliationEvidence {
+    /// Records audited evidence that an ambiguous submit payload was manually
+    /// reconciled outside this client before clearing the owner block.
+    pub fn new(
+        owner: Address,
+        payload_hash: impl Into<String>,
+        reason: impl Into<String>,
+        checked_at_unix_seconds: u64,
+    ) -> Result<Self> {
+        let payload_hash = payload_hash.into();
+        if payload_hash.trim().is_empty()
+            || payload_hash.chars().any(char::is_whitespace)
+            || payload_hash.len() > MAX_ERROR_TOKEN_LEN
+        {
+            return Err(RelayerError::mutation_blocked(
+                "submit reconciliation evidence payload hash is invalid".to_string(),
+            ));
+        }
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(RelayerError::mutation_blocked(
+                "submit reconciliation evidence reason required".to_string(),
+            ));
+        }
+        if checked_at_unix_seconds == 0 {
+            return Err(RelayerError::mutation_blocked(
+                "submit reconciliation evidence check timestamp required".to_string(),
+            ));
+        }
+        Ok(Self {
+            owner,
+            payload_hash,
+            reason,
+            checked_at_unix_seconds,
+        })
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn payload_hash(&self) -> &str {
+        &self.payload_hash
+    }
+}
+
+impl fmt::Debug for DepositWalletSubmitReconciliationEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletSubmitReconciliationEvidence")
+            .field("owner", &redacted_address(self.owner))
+            .field("payload_hash", &display_payload_hash(&self.payload_hash))
+            .field("reason", &"<redacted>")
+            .field("checked_at_unix_seconds", &self.checked_at_unix_seconds)
+            .finish()
+    }
+}
+
 impl DepositWalletOwnerSerializationEvidence {
     /// Records caller-side proof that same-owner submit work is serialized.
     ///

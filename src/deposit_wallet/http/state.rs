@@ -165,18 +165,29 @@ impl Drop for OwnerSubmitReservation {
 impl DepositWalletRelayerClient {
     pub fn clear_ambiguous_submit_after_manual_reconciliation(
         &self,
-        owner: Address,
+        evidence: DepositWalletSubmitReconciliationEvidence,
         permit: DepositWalletMutationPermit,
     ) -> Result<()> {
+        let owner = evidence.owner();
         self.ensure_permitted(&DepositWalletMutationGate::Permit(permit), owner)?;
 
         let mut state = self.mutation_state()?;
         match state.owner_blocks.get(&owner).cloned() {
-            Some(OwnerMutationBlock::Ambiguous { .. }) => {
+            Some(OwnerMutationBlock::Ambiguous { payload_hash })
+                if payload_hash == evidence.payload_hash() =>
+            {
                 state.owner_blocks.remove(&owner);
-                state
-                    .transaction_owners
-                    .retain(|_, record| record.owner != owner);
+                state.transaction_owners.retain(|_, record| {
+                    record.owner != owner || record.payload_hash != evidence.payload_hash()
+                });
+            }
+            Some(OwnerMutationBlock::Ambiguous { payload_hash }) => {
+                return Err(RelayerError::reconciliation_required(format!(
+                    "manual reconciliation evidence payload {} did not match current ambiguous payload {} for owner {}",
+                    display_payload_hash(evidence.payload_hash()),
+                    display_payload_hash(&payload_hash),
+                    redacted_address(owner)
+                )));
             }
             Some(OwnerMutationBlock::InFlight {
                 transaction_id: Some(transaction_id),

@@ -8,7 +8,6 @@
     "data": "0x",
     "nonce": "60",
     "value": "",
-    "signature": "0x01a060c734d7bdf4adde50c4a7e574036b1f8b12890911bdd1c1cfdcd77502381b89fa8a47c36f62a0b9f1cdfee7b260fd8108536db9f6b2089c02637e7de9fc20",
     "state": "STATE_CONFIRMED",
     "type": "SAFE",
     "owner": "0x6e0c80c90ea6c15917308f820eac91ce2724b5b5",

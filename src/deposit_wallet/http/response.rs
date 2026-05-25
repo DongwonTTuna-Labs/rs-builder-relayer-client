@@ -1,5 +1,4 @@
 use super::*;
-use super::poll::is_trusted_recovery_fetch_failure;
 use super::redaction::sanitized_external_token;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,17 +32,14 @@ pub(super) struct PollFetchError {
     pub(super) error: RelayerError,
     pub(super) retry_after: Option<Duration>,
     pub(super) owner: Option<Address>,
-    pub(super) trusted_recovery_owner_block: bool,
 }
 
 impl PollFetchError {
     pub(super) fn from_response_error(error: ResponseError) -> Self {
-        let trusted_recovery_owner_block = is_trusted_recovery_fetch_failure(&error.error);
         Self {
             error: error.error,
             retry_after: error.retry_after,
             owner: None,
-            trusted_recovery_owner_block,
         }
     }
 
@@ -52,7 +48,6 @@ impl PollFetchError {
             error: error.error,
             retry_after: None,
             owner: error.owner,
-            trusted_recovery_owner_block: false,
         }
     }
 }

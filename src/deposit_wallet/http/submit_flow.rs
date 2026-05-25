@@ -39,6 +39,10 @@ impl DepositWalletRelayerClient {
                 return Err(error);
             }
         };
+        if let Err(error) = self.ensure_permitted(&gate, owner) {
+            reservation.clear()?;
+            return Err(error);
+        }
         if nonce != signed.nonce() {
             reservation.clear()?;
             return Err(RelayerError::Signing(

@@ -2,7 +2,8 @@ use ethers::types::Address;
 use polymarket_relayer::{
     deposit_wallet_contract_config, DepositWalletMutationGate, DepositWalletMutationPermit,
     DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
-    DepositWalletRelayerUrl, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    DepositWalletRelayerUrl, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletTransactionReceipt, RelayerKeyAuth,
     RelayerTransactionState,
 };
 
@@ -29,6 +30,13 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     .unwrap();
     let permit_gate = DepositWalletMutationGate::Permit(permit);
     let policy = DepositWalletPollPolicy::default();
+    let reconciliation = DepositWalletSubmitReconciliationEvidence::new(
+        Address::zero(),
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "compile-test manual reconciliation",
+        1,
+    )
+    .unwrap();
     let receipt = DepositWalletTransactionReceipt {
         transaction_id: "tx-public-api".to_string(),
         state: RelayerTransactionState::New,
@@ -40,5 +48,5 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     assert!(rendered.contains("DepositWalletRelayerClient"));
     assert!(!rendered.contains("compile-test-api-key"));
 
-    let _ = (gate, permit_gate, policy, receipt);
+    let _ = (gate, permit_gate, policy, reconciliation, receipt);
 }
