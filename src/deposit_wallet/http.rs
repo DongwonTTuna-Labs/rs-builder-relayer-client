@@ -581,7 +581,11 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         let transaction_id_for_error = sanitized_external_token(&transaction_id);
         if let Some(owner) = expected_owner {
-            let _ = self.has_recovery_owner_evidence(owner, &transaction_id)?;
+            if trusted_owner_recovery {
+                self.record_recovered_inflight_transaction(owner, &transaction_id)?;
+            } else {
+                let _ = self.has_recovery_owner_evidence(owner, &transaction_id)?;
+            }
         }
 
         for attempt in 0..policy.max_attempts {
@@ -1108,14 +1112,6 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
     ) -> Result<()> {
         let mut state = self.mutation_state()?;
-        let recovered_payload_hash = current_recovery_payload_hash(&state, transaction_id, owner)?
-            .unwrap_or_else(|| recovered_payload_hash(transaction_id));
-        ensure_transaction_owner_mapping_available(
-            &state,
-            transaction_id,
-            owner,
-            &recovered_payload_hash,
-        )?;
         let payload_hash = if let Some(block) = state.owner_blocks.get(&owner) {
             match block {
                 OwnerMutationBlock::InFlight {
@@ -1124,21 +1120,16 @@ impl DepositWalletRelayerClient {
                 } if existing_transaction_id == transaction_id => {
                     return Ok(());
                 }
-                OwnerMutationBlock::Ambiguous { payload_hash }
-                    if state.transaction_owners.get(transaction_id).is_some_and(|record| {
-                        record.owner == owner && record.payload_hash == *payload_hash
-                    }) =>
-                {
-                    payload_hash.clone()
-                }
+                OwnerMutationBlock::Ambiguous { payload_hash } => payload_hash.clone(),
                 _ => return Err(owner_block_error(owner, block)),
             }
         } else {
-            recovered_payload_hash
+            recovered_payload_hash(transaction_id)
         };
         if !state.owner_blocks.contains_key(&owner) {
             ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         }
+        ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
         state.owner_blocks.insert(
             owner,
             OwnerMutationBlock::InFlight {
@@ -1819,7 +1810,7 @@ fn select_transaction_response_from_array(
     }
 
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    deserializer
+    let response = deserializer
         .deserialize_seq(SelectTransactionVisitor {
             expected_transaction_id,
         })
@@ -1854,7 +1845,14 @@ fn select_transaction_response_from_array(
                     None,
                 )
             }
-        })
+        })?;
+    deserializer.end().map_err(|error| {
+        TransactionParseError::new(
+            RelayerError::Other(format!("could not parse transaction response: {error}")),
+            None,
+        )
+    })?;
+    Ok(response)
 }
 
 fn receipt_from_submit_response(
@@ -2122,6 +2120,7 @@ mod tests {
     use serde_json::{json, Value};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
 
     use crate::auth::{AuthMethod, BuilderConfig};
@@ -3958,6 +3957,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_transaction_rejects_array_response_with_trailing_bytes() {
+        let mut body = json!([
+            {
+                "transactionID": "tx-array",
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+            }
+        ])
+        .to_string();
+        body.push_str(" trailing");
+        let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", body)]).await;
+        let client = test_client(url);
+
+        let error = client.get_transaction("tx-array").await.unwrap_err();
+
+        assert!(matches!(error, RelayerError::Other(_)));
+        assert!(error.to_string().contains("trailing characters"));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests[0].path, "/transaction?id=tx-array");
+    }
+
+    #[tokio::test]
     async fn get_transaction_rejects_duplicate_matching_response_ids() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
@@ -4686,7 +4707,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_some());
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
 
@@ -4713,10 +4734,13 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, RelayerError::Other(_)));
-        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_some());
         {
             let state = client.mutation_state().unwrap();
-            assert!(!state.transaction_owners.contains_key("tx-bad-owner"));
+            assert!(state
+                .transaction_owners
+                .get("tx-bad-owner")
+                .is_some_and(|record| record.owner == owner));
         }
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -4867,7 +4891,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_some());
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
@@ -4915,6 +4939,98 @@ mod tests {
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
+    }
+
+    #[tokio::test]
+    async fn owner_aware_recovery_permit_can_poll_existing_ambiguous_owner_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-recovered-from-ambiguous";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response(transaction_id, "STATE_CONFIRMED"),
+        )])
+        .await;
+        let client = test_client(url);
+        client
+            .record_ambiguous(owner, "payload:ambiguous-before-recovery".to_string())
+            .unwrap();
+
+        let receipt = client
+            .poll_owner_transaction_with_reconciliation_permit(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].path,
+            "/transaction?id=tx-recovered-from-ambiguous"
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_aware_recovery_permit_blocks_same_owner_submit_while_polling() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-recovery-race";
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().unwrap();
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                .await
+                .expect("server accept should not hang")
+                .expect("server should accept");
+            let request = read_request(&mut stream).await;
+            let _ = request_seen_tx.send(());
+            let _ = release_rx.await;
+            write_response(
+                &mut stream,
+                TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_NEW")),
+            )
+            .await;
+            vec![request]
+        });
+        let url = DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap();
+        let client = test_client(url);
+        let polling_client = client.clone();
+        let poll = tokio::spawn(async move {
+            polling_client
+                .poll_owner_transaction_with_reconciliation_permit(
+                    owner,
+                    transaction_id,
+                    DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                    mutation_permit_for(owner),
+                )
+                .await
+        });
+        request_seen_rx
+            .await
+            .expect("poll request should reach test server");
+
+        let blocked = client.submit_wallet_create(owner, mutation_permit()).await;
+
+        assert!(error_has_prefix(
+            &blocked.unwrap_err(),
+            RECONCILIATION_REQUIRED_PREFIX
+        ));
+        release_tx.send(()).unwrap();
+        let poll_error = poll.await.unwrap().unwrap_err();
+        assert!(matches!(poll_error, RelayerError::Timeout));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/transaction?id=tx-recovery-race");
     }
 
     #[tokio::test]
