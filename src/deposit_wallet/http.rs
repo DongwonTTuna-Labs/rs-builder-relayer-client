@@ -12,7 +12,7 @@ use tokio::sync::OwnedSemaphorePermit;
 
 use ethers::types::{Address, H256, U256};
 use ethers::utils::{keccak256, to_checksum};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::{self, SeqAccess, Visitor};
@@ -132,14 +132,14 @@ impl RelayerKeyAuth {
         let mut api_key = HeaderValue::from_str(self.api_key.expose_secret())
             .map_err(|_| RelayerError::AuthError("invalid relayer API key".to_string()))?;
         api_key.set_sensitive(true);
-        headers.insert("RELAYER_API_KEY", api_key);
+        headers.insert(relayer_api_key_header()?, api_key);
 
         let mut api_key_address =
             HeaderValue::from_str(&to_checksum(&self.api_key_address, None)).map_err(|_| {
                 RelayerError::AuthError("invalid relayer API key address".to_string())
             })?;
         api_key_address.set_sensitive(true);
-        headers.insert("RELAYER_API_KEY_ADDRESS", api_key_address);
+        headers.insert(relayer_api_key_address_header()?, api_key_address);
         Ok(headers)
     }
 }
@@ -154,6 +154,17 @@ impl fmt::Debug for RelayerKeyAuth {
             )
             .finish()
     }
+}
+
+fn relayer_api_key_header() -> Result<HeaderName> {
+    HeaderName::from_bytes(b"RELAYER_API_KEY")
+        .map_err(|_| RelayerError::AuthError("invalid relayer API key header name".to_string()))
+}
+
+fn relayer_api_key_address_header() -> Result<HeaderName> {
+    HeaderName::from_bytes(b"RELAYER_API_KEY_ADDRESS").map_err(|_| {
+        RelayerError::AuthError("invalid relayer API key address header name".to_string())
+    })
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
