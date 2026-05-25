@@ -151,8 +151,9 @@ Confirmed:
   terminal success; deposit-wallet effects may be used by later actions
 
 Mined:
-  pending/non-terminal; included onchain but do not rely on deposit-wallet
-  readiness or wallet action effects until STATE_CONFIRMED
+  terminal relayer success per the Deposit Wallets guide; callers that need
+  stronger finality may continue polling or require STATE_CONFIRMED in their
+  own operator gate before dependent wallet effects
 
 Failed / Invalid:
   terminal failure; do not blindly retry

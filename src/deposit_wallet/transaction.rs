@@ -40,11 +40,11 @@ impl RelayerTransactionState {
     }
 
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Confirmed | Self::Invalid | Self::Failed)
+        matches!(self, Self::Mined | Self::Confirmed | Self::Invalid | Self::Failed)
     }
 
     pub fn is_success(&self) -> bool {
-        matches!(self, Self::Confirmed)
+        matches!(self, Self::Mined | Self::Confirmed)
     }
 
     fn as_wire_str(&self) -> &str {

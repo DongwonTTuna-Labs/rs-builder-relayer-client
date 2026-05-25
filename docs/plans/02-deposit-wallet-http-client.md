@@ -80,9 +80,9 @@ APIs must not be removed or silently changed.
   `STATE_CONFIRMED`, `STATE_INVALID`, `STATE_FAILED`, and unknown states with
   exact assertions for parsed state, terminal status, success status, and the
   client action for each state.
-- `STATE_NEW`, `STATE_EXECUTED`, and `STATE_MINED` must remain pending and
-  non-success under the bounded poll policy. `STATE_CONFIRMED` is the only
-  terminal success state for deposit-wallet readiness.
+- `STATE_NEW` and `STATE_EXECUTED` must remain pending and non-success under the
+  bounded poll policy. `STATE_MINED` and `STATE_CONFIRMED` are terminal relayer
+  success states per the Deposit Wallets guide.
 - `STATE_INVALID` and `STATE_FAILED` must be terminal failures.
 - Unknown states and partial submit responses must not be treated as success and
   must not trigger duplicate submit. They must stop mutation and require

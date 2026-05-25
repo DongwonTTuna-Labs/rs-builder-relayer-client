@@ -47,9 +47,10 @@ the required dry-run and manual live gates are satisfied.
   summaries, method selectors, owner/deposit-wallet addresses, nonce metadata,
   and explicit redaction markers.
 - Polling handles new, executed, mined, confirmed, failed, invalid, and unknown
-  states under the configured timeout/backoff policy. `STATE_NEW`,
-  `STATE_EXECUTED`, and `STATE_MINED` remain pending; `STATE_CONFIRMED` is the
-  only success state for relying on deposit-wallet action effects.
+  states under the configured timeout/backoff policy. `STATE_NEW` and
+  `STATE_EXECUTED` remain pending. `STATE_MINED` and `STATE_CONFIRMED` satisfy
+  relayer polling completion; consumer code that requires stronger finality can
+  keep polling or require `STATE_CONFIRMED` before relying on wallet effects.
 - Ambiguous timeout does not duplicate submit. After ambiguous submit, unknown
   state, or timeout for an owner, the adapter must reconcile the known
   `transactionID` before re-signing or submitting another batch for that owner.
@@ -72,9 +73,8 @@ the required dry-run and manual live gates are satisfied.
   as barriers, channels, or a controlled mock relayer. The first batch must be
   held pending while the test proves the second same-owner batch does not call
   nonce fetch, signing, or submit before reconciliation.
-- Pending-state tests prove `STATE_NEW`, `STATE_EXECUTED`, and `STATE_MINED`
-  keep polling under the timeout policy and do not trigger success, duplicate
-  submit, or re-signing.
+- Pending-state tests prove `STATE_NEW` and `STATE_EXECUTED` keep polling under
+  the timeout policy and do not trigger success, duplicate submit, or re-signing.
 - Id-less submit timeout tests prove payload-hash blocked state is written,
   same-owner mutation is denied, and recovery requires explicit reconciliation.
 - Dry-run evidence tests prove signatures, authorization headers, raw signed

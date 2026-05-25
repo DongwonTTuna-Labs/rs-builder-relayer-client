@@ -523,7 +523,7 @@ impl DepositWalletRelayerClient {
                 .transpose()?
                 .flatten();
             match &receipt.state {
-                RelayerTransactionState::Confirmed => {
+                RelayerTransactionState::Mined | RelayerTransactionState::Confirmed => {
                     if receipt.transaction_hash.is_none() {
                         if let Some((owner, payload_hash)) = &terminal_evidence {
                             self.mark_transaction_reconciliation_required_if_current(
@@ -590,9 +590,7 @@ impl DepositWalletRelayerClient {
                         sanitized_external_token(raw)
                     )));
                 }
-                RelayerTransactionState::New
-                | RelayerTransactionState::Executed
-                | RelayerTransactionState::Mined => {
+                RelayerTransactionState::New | RelayerTransactionState::Executed => {
                     if let Some(owner) = expected_owner {
                         if self.has_recovery_owner_evidence(owner, &transaction_id)? {
                             self.record_recovered_inflight_transaction(owner, &transaction_id)?;
@@ -1462,6 +1460,11 @@ fn validate_rel_url(url: &Url) -> Result<()> {
     if url.host_str() != Some(RELAYER_HOST) {
         return Err(RelayerError::invalid_relayer_url(
             "relayer URL host is not allowlisted".to_string(),
+        ));
+    }
+    if !matches!(url.port(), None | Some(443)) {
+        return Err(RelayerError::invalid_relayer_url(
+            "relayer URL must use the default HTTPS port".to_string(),
         ));
     }
     if url.query().is_some() || url.fragment().is_some() {
@@ -2451,6 +2454,7 @@ mod tests {
             "https://relayer-v2.polymarket.com?api_key=leak",
             "https://relayer-v2.polymarket.com#fragment",
             "https://relayer-v2.polymarket.com/token-like-path",
+            "https://relayer-v2.polymarket.com:444",
             "https://example.com",
             "https://relayer-v2.polymarket.com.evil.example",
         ];
@@ -2462,6 +2466,7 @@ mod tests {
         }
 
         DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+        DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com:443").unwrap();
     }
 
     #[test]
@@ -4023,29 +4028,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn polling_treats_only_confirmed_as_success_and_uses_injected_sleeper() {
+    async fn polling_treats_mined_or_confirmed_as_success_and_uses_injected_sleeper() {
         let (result, requests, sleeper, _policy) = poll_sequence(
             &[
                 "STATE_NEW",
                 "STATE_EXECUTED",
                 "STATE_MINED",
-                "STATE_CONFIRMED",
             ],
             4,
         )
         .await;
 
         let receipt = result.unwrap();
-        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
-        assert_eq!(requests.len(), 4);
+        assert_eq!(receipt.state, RelayerTransactionState::Mined);
+        assert_eq!(requests.len(), 3);
         assert!(requests
             .iter()
             .all(|request| request.path == "/transaction?id=tx-123"));
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps.len(), 3);
+        assert_eq!(sleeps.len(), 2);
         assert!((Duration::from_millis(100)..=Duration::from_millis(125)).contains(&sleeps[0]));
         assert!((Duration::from_millis(200)..=Duration::from_millis(250)).contains(&sleeps[1]));
-        assert!((Duration::from_millis(400)..=Duration::from_millis(500)).contains(&sleeps[2]));
         assert_ne!(sleeps[0], Duration::from_millis(100));
 
         let (result, _, _, _) = poll_sequence(&["STATE_INVALID"], 1).await;
