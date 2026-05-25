@@ -84,7 +84,7 @@ drop_codex_subprocess_tokens
 # stdout / stderr 는 LOG_FILE 에 모아두고 본체 로그에는 흘리지 않는다 (PR 컨텍스트 유출 방지).
 set +e
 # shellcheck disable=SC2086  # EXTRA_CODEX_FLAGS 는 의도적으로 word split 한다
-codex --enable use_legacy_landlock --ask-for-approval never exec \
+codex --enable use_legacy_landlock --disable shell_tool --ask-for-approval never exec \
   --ephemeral \
   --ignore-user-config \
   --ignore-rules \
