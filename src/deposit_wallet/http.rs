@@ -634,12 +634,7 @@ impl DepositWalletRelayerClient {
                 }
                 RelayerTransactionState::Unknown(raw) => {
                     match owner_to_verify {
-                        Some(owner) if expected_owner.is_none() => {
-                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?
-                        }
-                        Some(owner)
-                            if self.has_recovery_owner_evidence(owner, &transaction_id)? =>
-                        {
+                        Some(owner) => {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?
                         }
                         _ => self.mark_transaction_reconciliation_required(&transaction_id)?,
@@ -1113,10 +1108,8 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
     ) -> Result<()> {
         let mut state = self.mutation_state()?;
-        let Some(current_payload_hash) = current_recovery_payload_hash(&state, transaction_id, owner)?
-        else {
-            return Ok(());
-        };
+        let current_payload_hash = current_recovery_payload_hash(&state, transaction_id, owner)?
+            .unwrap_or_else(|| recovered_payload_hash(transaction_id));
         let payload_hash = match state.owner_blocks.get(&owner) {
             Some(OwnerMutationBlock::InFlight {
                 payload_hash,
@@ -2838,6 +2831,18 @@ mod tests {
         assert!(error
             .to_string()
             .contains("production deposit-wallet submit is disabled"));
+
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let error = client
+            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(error
+            .to_string()
+            .contains("production deposit-wallet submit is disabled"));
     }
 
     #[tokio::test]
@@ -3180,6 +3185,39 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].path, SUBMIT_PATH);
         assert!(requests[1].path.contains("/nonce?address="));
+    }
+
+    #[tokio::test]
+    async fn manual_clear_rejects_active_submit_before_response() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "test-active-submit-payload".to_string();
+        let _reservation = client.reserve_owner_submit(owner, payload_hash.clone()).unwrap();
+
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                owner,
+                DepositWalletMutationPermit::new(
+                    owner,
+                    "checked active mocked relayer state",
+                    "single-process mocked owner serialization guard",
+                ),
+            )
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        {
+            let state = client.mutation_state().unwrap();
+            match state.owner_blocks.get(&owner) {
+                Some(OwnerMutationBlock::InFlight {
+                    payload_hash: current_payload_hash,
+                    transaction_id: None,
+                }) => assert_eq!(current_payload_hash, &payload_hash),
+                block => panic!("expected active in-flight owner block, got {block:?}"),
+            }
+        }
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
     }
 
     #[tokio::test]
@@ -4620,11 +4658,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_aware_poll_unknown_state_without_local_evidence_does_not_block_owner() {
+    async fn owner_aware_poll_unknown_state_without_local_evidence_blocks_owner() {
         let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-no-local-evidence";
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
-            transaction_response("tx-no-local-evidence", "STATE_UNKNOWN_NEW"),
+            transaction_response(transaction_id, "STATE_UNKNOWN_NEW"),
         )])
         .await;
         let client = test_client(url);
@@ -4632,15 +4671,30 @@ mod tests {
         let error = client
             .poll_owner_transaction(
                 owner,
-                "tx-no-local-evidence",
+                transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
             .await
             .unwrap_err();
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            match state.owner_blocks.get(&owner) {
+                Some(OwnerMutationBlock::Ambiguous {
+                    payload_hash,
+                }) => {
+                    assert_eq!(payload_hash, &recovered_payload_hash(transaction_id));
+                }
+                block => panic!("expected recovered ambiguous owner block, got {block:?}"),
+            }
+            assert!(state
+                .transaction_owners
+                .get(transaction_id)
+                .is_some_and(|record| record.owner == owner));
+        }
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
