@@ -15,7 +15,7 @@ use ethers::utils::{keccak256, to_checksum};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
-use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
+use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use url::Url;
 
@@ -41,6 +41,8 @@ const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded ma
 const MAX_TRANSACTION_ID_LEN: usize = 128;
 const MAX_TRANSACTION_RESPONSE_ITEMS: usize = 32;
 const TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR: &str = "transaction response item limit exceeded";
+const TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR: &str = "transaction response duplicate id";
+const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missing requested id";
 const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -297,14 +299,17 @@ struct PollFetchError {
     error: RelayerError,
     retry_after: Option<Duration>,
     owner: Option<Address>,
+    trusted_recovery_owner_block: bool,
 }
 
 impl PollFetchError {
     fn from_response_error(error: ResponseError) -> Self {
+        let trusted_recovery_owner_block = is_trusted_recovery_fetch_failure(&error.error);
         Self {
             error: error.error,
             retry_after: error.retry_after,
             owner: None,
+            trusted_recovery_owner_block,
         }
     }
 
@@ -313,6 +318,7 @@ impl PollFetchError {
             error: error.error,
             retry_after: None,
             owner: error.owner,
+            trusted_recovery_owner_block: false,
         }
     }
 }
@@ -530,7 +536,8 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
         let transaction_id = validate_transaction_id(transaction_id)?;
-        self.poll_validated_transaction(transaction_id, policy, None).await
+        self.poll_validated_transaction(transaction_id, policy, None, false)
+            .await
     }
 
     pub async fn poll_owner_transaction(
@@ -547,7 +554,8 @@ impl DepositWalletRelayerClient {
                     .to_string(),
             ));
         }
-        self.poll_validated_transaction(transaction_id, policy, Some(owner)).await
+        self.poll_validated_transaction(transaction_id, policy, Some(owner), false)
+            .await
     }
 
     pub async fn poll_owner_transaction_with_reconciliation_permit(
@@ -560,7 +568,8 @@ impl DepositWalletRelayerClient {
         policy.validate()?;
         ensure_permitted(&gate, owner)?;
         let transaction_id = validate_transaction_id(transaction_id)?;
-        self.poll_validated_transaction(transaction_id, policy, Some(owner)).await
+        self.poll_validated_transaction(transaction_id, policy, Some(owner), true)
+            .await
     }
 
     async fn poll_validated_transaction(
@@ -568,6 +577,7 @@ impl DepositWalletRelayerClient {
         transaction_id: String,
         policy: DepositWalletPollPolicy,
         expected_owner: Option<Address>,
+        trusted_owner_recovery: bool,
     ) -> Result<DepositWalletTransactionReceipt> {
         let transaction_id_for_error = sanitized_external_token(&transaction_id);
         if let Some(owner) = expected_owner {
@@ -593,9 +603,12 @@ impl DepositWalletRelayerClient {
                         continue;
                     }
                     let response_owner = poll_error.owner;
+                    let trusted_recovery_owner_block =
+                        trusted_owner_recovery && poll_error.trusted_recovery_owner_block;
                     let error = poll_error.error;
                     if let Some(owner) = expected_owner {
                         if response_owner == Some(owner)
+                            || trusted_recovery_owner_block
                             || self.has_recovery_owner_evidence(owner, &transaction_id)?
                         {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
@@ -1714,6 +1727,14 @@ fn is_transient_poll_error(error: &RelayerError) -> bool {
     }
 }
 
+fn is_trusted_recovery_fetch_failure(error: &RelayerError) -> bool {
+    match error {
+        RelayerError::Http(_) | RelayerError::QuotaExhausted | RelayerError::Api { .. } => true,
+        RelayerError::Other(message) => message == RESPONSE_BODY_TOO_LARGE_MESSAGE,
+        _ => false,
+    }
+}
+
 fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt> {
     let response = serde_json::from_slice::<RelayerSubmitResponse>(bytes)
         .map_err(|e| RelayerError::Other(format!("could not parse submit response: {e}")))?;
@@ -1751,43 +1772,7 @@ fn parse_transaction_response(
         }
     }
 
-    ensure_transaction_response_array_item_limit(bytes)?;
-    let responses = serde_json::from_slice::<Vec<RelayerTransactionResponseWithOwner>>(bytes)
-        .map_err(|e| {
-            TransactionParseError::new(
-                RelayerError::Other(format!("could not parse transaction response: {e}")),
-                None,
-            )
-        })?;
-    if responses.len() > MAX_TRANSACTION_RESPONSE_ITEMS {
-        return Err(TransactionParseError::new(
-            RelayerError::reconciliation_required(format!(
-                "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
-            )),
-            None,
-        ));
-    }
-    let mut matching_responses = responses
-        .into_iter()
-        .filter(|response| response.response.transaction_id == expected_transaction_id);
-    let Some(response) = matching_responses.next() else {
-        return Err(TransactionParseError::new(
-            RelayerError::reconciliation_required(format!(
-                "transaction response did not include requested transaction id {}",
-                sanitized_external_token(expected_transaction_id)
-            )),
-            None,
-        ));
-    };
-    if matching_responses.next().is_some() {
-        return Err(TransactionParseError::new(
-            RelayerError::reconciliation_required(format!(
-                "transaction response included duplicate requested transaction id {}; manual reconciliation required",
-                sanitized_external_token(expected_transaction_id)
-            )),
-            None,
-        ));
-    }
+    let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
     let owner = response.owner;
     let receipt = receipt_from_submit_response(response.response, owner)
         .map_err(|error| TransactionParseError::new(error, owner))?;
@@ -1795,13 +1780,16 @@ fn parse_transaction_response(
         .map_err(|error| TransactionParseError::new(error, owner))
 }
 
-fn ensure_transaction_response_array_item_limit(
+fn select_transaction_response_from_array(
+    expected_transaction_id: &str,
     bytes: &[u8],
-) -> std::result::Result<(), TransactionParseError> {
-    struct ItemLimitVisitor;
+) -> std::result::Result<RelayerTransactionResponseWithOwner, TransactionParseError> {
+    struct SelectTransactionVisitor<'a> {
+        expected_transaction_id: &'a str,
+    }
 
-    impl<'de> Visitor<'de> for ItemLimitVisitor {
-        type Value = ();
+    impl<'de> Visitor<'de> for SelectTransactionVisitor<'_> {
+        type Value = RelayerTransactionResponseWithOwner;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("a transaction response array")
@@ -1812,32 +1800,61 @@ fn ensure_transaction_response_array_item_limit(
             A: SeqAccess<'de>,
         {
             let mut count = 0usize;
-            while seq.next_element::<IgnoredAny>()?.is_some() {
+            let mut matching_response = None;
+            while let Some(response) = seq.next_element::<RelayerTransactionResponseWithOwner>()? {
                 count += 1;
                 if count > MAX_TRANSACTION_RESPONSE_ITEMS {
                     return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
                 }
+                if response.response.transaction_id == self.expected_transaction_id {
+                    if matching_response.is_some() {
+                        return Err(de::Error::custom(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR));
+                    }
+                    matching_response = Some(response);
+                }
             }
-            Ok(())
+            matching_response
+                .ok_or_else(|| de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
         }
     }
 
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    deserializer.deserialize_seq(ItemLimitVisitor).map_err(|error| {
-        if error.to_string().contains(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR) {
-            TransactionParseError::new(
-                RelayerError::reconciliation_required(format!(
-                    "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
-                )),
-                None,
-            )
-        } else {
-            TransactionParseError::new(
-                RelayerError::Other(format!("could not parse transaction response: {error}")),
-                None,
-            )
-        }
-    })
+    deserializer
+        .deserialize_seq(SelectTransactionVisitor {
+            expected_transaction_id,
+        })
+        .map_err(|error| {
+            let message = error.to_string();
+            if message.contains(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR) {
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(format!(
+                        "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
+                    )),
+                    None,
+                )
+            } else if message.contains(TRANSACTION_RESPONSE_MISSING_ID_ERROR) {
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(format!(
+                        "transaction response did not include requested transaction id {}",
+                        sanitized_external_token(expected_transaction_id)
+                    )),
+                    None,
+                )
+            } else if message.contains(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR) {
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(format!(
+                        "transaction response included duplicate requested transaction id {}; manual reconciliation required",
+                        sanitized_external_token(expected_transaction_id)
+                    )),
+                    None,
+                )
+            } else {
+                TransactionParseError::new(
+                    RelayerError::Other(format!("could not parse transaction response: {error}")),
+                    None,
+                )
+            }
+        })
 }
 
 fn receipt_from_submit_response(
@@ -4873,6 +4890,31 @@ mod tests {
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
+    }
+
+    #[tokio::test]
+    async fn owner_aware_recovery_permit_fetch_failure_blocks_owner() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_reset_server().await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction_with_reconciliation_permit(
+                owner,
+                "tx-recovery-fetch-failed",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Http(_)));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
     }
 
     #[tokio::test]
