@@ -1,0 +1,335 @@
+use super::*;
+use super::redaction::{sanitized_external_token, unknown_state_error_summary};
+use super::response::validate_transaction_id;
+use super::state::OwnerTransactionSource;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DepositWalletPollPolicy {
+    pub max_attempts: usize,
+    pub interval: Duration,
+}
+
+impl DepositWalletPollPolicy {
+    pub fn new(max_attempts: usize, interval: Duration) -> Result<Self> {
+        let policy = Self {
+            max_attempts,
+            interval,
+        };
+        policy.validate()?;
+        Ok(policy)
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        if self.max_attempts == 0 {
+            return Err(RelayerError::Other(
+                "deposit wallet poll policy max attempts must be greater than zero".to_string(),
+            ));
+        }
+        if self.max_attempts > MAX_POLL_ATTEMPTS {
+            return Err(RelayerError::Other(format!(
+                "deposit wallet poll policy max attempts must not exceed {MAX_POLL_ATTEMPTS}"
+            )));
+        }
+        if self.interval < MIN_POLL_INTERVAL {
+            return Err(RelayerError::Other(format!(
+                "deposit wallet poll policy interval must be at least {}ms",
+                MIN_POLL_INTERVAL.as_millis()
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn interval_for_attempt(&self, attempt: usize) -> Duration {
+        let multiplier = 1u32 << attempt.min(4);
+        self.interval
+            .saturating_mul(multiplier)
+            .min(MAX_POLL_INTERVAL)
+    }
+
+    pub(super) fn interval_for_transaction_attempt(&self, transaction_id: &str, attempt: usize) -> Duration {
+        let base = self.interval_for_attempt(attempt);
+        base.saturating_add(transaction_poll_jitter(transaction_id, attempt, base))
+            .min(MAX_POLL_INTERVAL)
+    }
+}
+
+impl Default for DepositWalletPollPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 60,
+            interval: Duration::from_secs(2),
+        }
+    }
+}
+
+pub(super) trait DepositWalletClock: Send + Sync {
+    fn now_unix_seconds(&self) -> u64;
+}
+
+pub(super) struct SystemClock;
+
+impl DepositWalletClock for SystemClock {
+    fn now_unix_seconds(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+}
+
+pub(super) trait DepositWalletSleeper: Send + Sync {
+    fn sleep<'a>(&'a self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
+pub(super) struct TokioSleeper;
+
+impl DepositWalletSleeper for TokioSleeper {
+    fn sleep<'a>(&'a self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(tokio::time::sleep(duration))
+    }
+}
+
+
+impl DepositWalletRelayerClient {
+    pub async fn poll_transaction(
+        &self,
+        transaction_id: &str,
+        policy: DepositWalletPollPolicy,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        policy.validate()?;
+        let transaction_id = validate_transaction_id(transaction_id)?;
+        self.poll_validated_transaction(transaction_id, policy, None, false)
+            .await
+    }
+
+    pub async fn poll_owner_transaction(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+        policy: DepositWalletPollPolicy,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        policy.validate()?;
+        let transaction_id = validate_transaction_id(transaction_id)?;
+        if !self.has_recovery_owner_evidence(owner, &transaction_id)? {
+            return Err(RelayerError::mutation_blocked(
+                "owner-scoped recovery polling requires local transaction evidence or explicit mutation permit"
+                    .to_string(),
+            ));
+        }
+        self.poll_validated_transaction(transaction_id, policy, Some(owner), false)
+            .await
+    }
+
+    pub async fn poll_owner_transaction_with_reconciliation_permit(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+        policy: DepositWalletPollPolicy,
+        gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        policy.validate()?;
+        self.ensure_permitted(&gate, owner)?;
+        let transaction_id = validate_transaction_id(transaction_id)?;
+        self.poll_validated_transaction(transaction_id, policy, Some(owner), true)
+            .await
+    }
+
+    pub(super) async fn poll_validated_transaction(
+        &self,
+        transaction_id: String,
+        policy: DepositWalletPollPolicy,
+        expected_owner: Option<Address>,
+        trusted_owner_recovery: bool,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        let transaction_id_for_error = sanitized_external_token(&transaction_id);
+        if let Some(owner) = expected_owner {
+            if trusted_owner_recovery {
+                self.record_recovered_inflight_transaction(owner, &transaction_id)?;
+            } else {
+                let _ = self.has_recovery_owner_evidence(owner, &transaction_id)?;
+            }
+        }
+
+        for attempt in 0..policy.max_attempts {
+            let parsed = match self.fetch_transaction_for_poll(&transaction_id).await {
+                Ok(parsed) => parsed,
+                Err(poll_error) => {
+                    if is_transient_poll_error(&poll_error.error) && attempt + 1 < policy.max_attempts {
+                        let policy_interval =
+                            policy.interval_for_transaction_attempt(&transaction_id, attempt);
+                        let sleep_for = poll_error
+                            .retry_after
+                            .map(|retry_after| {
+                                retry_after.min(MAX_POLL_INTERVAL).max(policy_interval)
+                            })
+                            .unwrap_or(policy_interval);
+                        self.sleeper
+                            .sleep(sleep_for)
+                            .await;
+                        continue;
+                    }
+                    let response_owner = poll_error.owner;
+                    let trusted_recovery_owner_block =
+                        trusted_owner_recovery && poll_error.trusted_recovery_owner_block;
+                    let error = poll_error.error;
+                    if let Some(owner) = expected_owner {
+                        if response_owner == Some(owner)
+                            || trusted_recovery_owner_block
+                            || self.has_recovery_owner_evidence(owner, &transaction_id)?
+                        {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        }
+                    } else {
+                        self.mark_transaction_reconciliation_required(&transaction_id)?;
+                    }
+                    return Err(error);
+                }
+            };
+            let owner_to_verify = match expected_owner {
+                Some(owner) => Some(owner),
+                None => self.transaction_owner(&transaction_id)?,
+            };
+            if let Some(owner) = owner_to_verify {
+                if let Err(error) = self.require_transaction_owner(&transaction_id, &parsed, owner)
+                {
+                    self.mark_transaction_reconciliation_required(&transaction_id)?;
+                    return Err(error);
+                }
+            }
+            let receipt = parsed.receipt;
+            let terminal_evidence = owner_to_verify
+                .map(|owner| {
+                    self.current_recovery_payload_record(&transaction_id, owner)
+                        .map(|record| record.map(|record| (owner, record)))
+                })
+                .transpose()?
+                .flatten();
+            match &receipt.state {
+                RelayerTransactionState::Confirmed => {
+                    if receipt.transaction_hash.is_none() {
+                        if let Some(owner) = owner_to_verify {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else {
+                            self.mark_transaction_reconciliation_required(&transaction_id)?;
+                        }
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
+                            transaction_id_for_error
+                        )));
+                    }
+                    if let Some((owner, record)) = terminal_evidence {
+                        if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            return Err(RelayerError::reconciliation_required(format!(
+                                "confirmed owner-scoped recovery transaction {} did not prove the ambiguous submit payload; manual reconciliation required",
+                                transaction_id_for_error
+                            )));
+                        }
+                        self.clear_transaction_block_if_current(
+                            &transaction_id,
+                            owner,
+                            &record.payload_hash,
+                        )?;
+                    }
+                    return Ok(receipt);
+                }
+                RelayerTransactionState::Invalid => {
+                    if let Some((owner, record)) = terminal_evidence {
+                        if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else {
+                            self.clear_transaction_block_if_current(
+                                &transaction_id,
+                                owner,
+                                &record.payload_hash,
+                            )?;
+                        }
+                    }
+                    return Err(RelayerError::TransactionInvalid(format!(
+                        "deposit wallet transaction {} invalid",
+                        transaction_id_for_error
+                    )));
+                }
+                RelayerTransactionState::Failed => {
+                    if let Some((owner, record)) = terminal_evidence {
+                        if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else {
+                            self.clear_transaction_block_if_current(
+                                &transaction_id,
+                                owner,
+                                &record.payload_hash,
+                            )?;
+                        }
+                    }
+                    return Err(RelayerError::TransactionFailed(format!(
+                        "deposit wallet transaction {} failed",
+                        transaction_id_for_error
+                    )));
+                }
+                RelayerTransactionState::Unknown(raw) => {
+                    match owner_to_verify {
+                        Some(owner) => {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?
+                        }
+                        _ => self.mark_transaction_reconciliation_required(&transaction_id)?,
+                    }
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "deposit wallet transaction {} reached unknown state {}",
+                        transaction_id_for_error,
+                        unknown_state_error_summary(raw)
+                    )));
+                }
+                RelayerTransactionState::New
+                | RelayerTransactionState::Executed
+                | RelayerTransactionState::Mined => {
+                    if let Some(owner) = expected_owner {
+                        self.record_recovered_inflight_transaction(owner, &transaction_id)?;
+                    }
+                }
+            }
+
+            if attempt + 1 < policy.max_attempts {
+                self.sleeper
+                    .sleep(policy.interval_for_transaction_attempt(&transaction_id, attempt))
+                    .await;
+            }
+        }
+
+        self.mark_transaction_reconciliation_required(&transaction_id)?;
+        Err(RelayerError::Timeout)
+    }
+
+}
+
+pub(super) fn is_transient_poll_error(error: &RelayerError) -> bool {
+    match error {
+        RelayerError::QuotaExhausted | RelayerError::Timeout | RelayerError::Http(_) => true,
+        RelayerError::Api { status, .. } => {
+            matches!(*status, 408 | 425 | 429) || (500..=599).contains(status)
+        }
+        RelayerError::Other(message) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => false,
+        _ => false,
+    }
+}
+
+pub(super) fn is_trusted_recovery_fetch_failure(error: &RelayerError) -> bool {
+    match error {
+        RelayerError::Http(_) | RelayerError::QuotaExhausted | RelayerError::Api { .. } => true,
+        RelayerError::Other(message) => message == RESPONSE_BODY_TOO_LARGE_MESSAGE,
+        _ => false,
+    }
+}
+
+pub(super) fn transaction_poll_jitter(transaction_id: &str, attempt: usize, base: Duration) -> Duration {
+    let max_jitter_ms = (base.as_millis() / 4).min(250) as u64;
+    if max_jitter_ms == 0 {
+        return Duration::ZERO;
+    }
+
+    let mut input = transaction_id.as_bytes().to_vec();
+    input.extend_from_slice(&attempt.to_be_bytes());
+    let digest = keccak256(input);
+    Duration::from_millis((u64::from(digest[0]) % max_jitter_ms) + 1)
+}

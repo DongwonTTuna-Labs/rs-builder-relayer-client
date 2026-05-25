@@ -16,6 +16,12 @@
     };
 
     use super::*;
+    use super::redaction::{recovered_payload_hash, signed_digest_payload_hash};
+    use super::response::{parse_transaction_response, validate_transaction_id};
+    use super::state::{
+        OwnerMutationBlock, OwnerMutationState, OwnerTransactionRecord, OwnerTransactionSource,
+    };
+    use super::transport::retry_after_duration_at;
 
     const API_KEY: &str = "unit-test-relayer-api-key";
     const WALLET_CREATE_OWNER: &str = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5";
