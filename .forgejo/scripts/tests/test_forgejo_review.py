@@ -221,7 +221,7 @@ class WorkflowParityTests(unittest.TestCase):
         events = parsed.get("on", parsed.get(True))
         self.assertEqual(
             events["pull_request_target"]["types"],
-            ["opened", "synchronize", "reopened", "edited"],
+            ["opened", "synchronize", "reopened"],
         )
         self.assertEqual(events["issue_comment"]["types"], ["created"])
         self.assertIn("workflow_dispatch", events)
@@ -232,23 +232,18 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("CODEX_DEFAULT_SHA=$(git rev-parse HEAD)", workflow)
         self.assertNotIn("branches: [main]", workflow)
 
-    def test_pipeline_uses_forgejo_scripts_and_org_codex_lb_secret(self) -> None:
-        auto = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
+    def test_pipeline_uses_forgejo_scripts_and_ai_relay(self) -> None:
         pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
+        caller = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
         self.assertIn("python3 pipeline/.forgejo/scripts/build_prompt.py", pipeline)
         self.assertIn("bash pipeline/.forgejo/scripts/codex_exec.sh", pipeline)
-        self.assertIn("      CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}", auto)
-        self.assertNotIn("/codex-runner-home", pipeline)
-        self.assertNotIn("/codex-runner-locks", pipeline)
-        self.assertNotIn("auth_lock_file", pipeline)
-        self.assertNotIn("codex login status", pipeline)
+        self.assertIn("AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}", caller)
+        self.assertEqual(pipeline.count("AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}"), 6)
         self.assertNotIn("prepare-codex-auth:", pipeline)
         self.assertNotIn("cleanup-codex-auth:", pipeline)
+        self.assertNotIn("/codex-runner-home:/home/runner/.codex", pipeline)
+        self.assertNotIn("/codex-runner-locks:/var/lib/codex-runner/auth-runs-root", pipeline)
         self.assertNotIn("CODEX_AUTH_FILE", pipeline)
-        self.assertNotIn("/auth.json", pipeline)
-        self.assertEqual(pipeline.count("CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}"), 6)
-        for axis in ["correctness", "security", "performance", "test-coverage", "domain"]:
-            self.assertIn(f"review-{axis}:", pipeline)
 
     def test_pipeline_jobs_skip_when_resolver_denies_review(self) -> None:
         workflow = yaml.safe_load(

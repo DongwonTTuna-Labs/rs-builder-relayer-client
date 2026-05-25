@@ -2,7 +2,7 @@ name: Codex PR Review
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -90,4 +90,4 @@ jobs:
       trigger: ${{ needs.resolve.outputs.trigger }}
     secrets:
       CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
-      CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}

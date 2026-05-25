@@ -2,8 +2,8 @@ name: Codex PR Review Pipeline
 
 on:
   workflow_call:
-    # Forgejo Actions currently rejects workflow_call.secrets declarations on
-    # this instance; callers still pass required secrets through the uses job.
+    # Forgejo Actions currently rejects workflow_call.secrets
+    # declaration on this instance; callers still pass only the scoped bot token.
     inputs:
       pr_number:
         required: true
@@ -137,7 +137,7 @@ jobs:
 
       - name: Run Codex review (correctness)
         env:
-          CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-correctness.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-correctness.json
@@ -218,7 +218,7 @@ jobs:
 
       - name: Run Codex review (security)
         env:
-          CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-security.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-security.json
@@ -299,7 +299,7 @@ jobs:
 
       - name: Run Codex review (performance)
         env:
-          CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-performance.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-performance.json
@@ -380,7 +380,7 @@ jobs:
 
       - name: Run Codex review (test-coverage)
         env:
-          CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-test-coverage.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-test-coverage.json
@@ -461,7 +461,7 @@ jobs:
 
       - name: Run Codex review (domain)
         env:
-          CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-domain.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-domain.json
@@ -558,7 +558,7 @@ jobs:
       - name: Run Codex tech-lead gate
         if: steps.combine.outputs.count != '0'
         env:
-          CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-tech-lead.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/decisions.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-tech-lead.json
@@ -688,3 +688,4 @@ jobs:
           FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
           FORGEJO_BOT_LOGIN: codex-reviewer-for-dongwonttuna
         run: python3 pipeline/.forgejo/scripts/post_review_comments.py
+
