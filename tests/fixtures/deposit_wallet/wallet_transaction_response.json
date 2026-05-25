@@ -1,0 +1,19 @@
+[
+  {
+    "transactionID": "0190b317-a1d3-7bec-9b91-eeb6dcd3a620",
+    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+    "from": "0x6e0c80c90ea6c15917308f820eac91ce2724b5b5",
+    "to": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+    "proxyAddress": "0x6d8c4e9adf5748af82dabe2c6225207770d6b4fa",
+    "data": "0x",
+    "nonce": "60",
+    "value": "",
+    "signature": "0x01a060c734d7bdf4adde50c4a7e574036b1f8b12890911bdd1c1cfdcd77502381b89fa8a47c36f62a0b9f1cdfee7b260fd8108536db9f6b2089c02637e7de9fc20",
+    "state": "STATE_CONFIRMED",
+    "type": "SAFE",
+    "owner": "0x6e0c80c90ea6c15917308f820eac91ce2724b5b5",
+    "metadata": "",
+    "createdAt": "2024-07-14T21:13:08.819782Z",
+    "updatedAt": "2024-07-14T21:13:46.576639Z"
+  }
+]

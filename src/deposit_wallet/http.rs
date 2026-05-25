@@ -310,6 +310,9 @@ impl PollFetchError {
 struct RelayerTransactionResponseWithOwner {
     #[serde(flatten)]
     response: RelayerSubmitResponse,
+    // Official GET /transaction responses include owner as the owner address.
+    // Keep it internal because the public receipt intentionally exposes only
+    // non-sensitive polling identifiers.
     #[serde(default, deserialize_with = "deserialize_optional_address")]
     owner: Option<Address>,
 }
@@ -1661,11 +1664,19 @@ async fn drain_error_response_body(response: reqwest::Response) {
 }
 
 fn retry_after_duration(headers: &HeaderMap) -> Option<Duration> {
-    headers
+    let value = headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
+        .map(str::trim)?;
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let retry_at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        retry_at
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 fn retry_after_summary_from_duration(retry_after: Option<Duration>) -> String {
@@ -3550,10 +3561,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_after_summary_is_included_only_for_numeric_values() {
+    async fn retry_after_summary_accepts_numeric_and_http_date_values() {
         let owner = address(WALLET_CREATE_OWNER);
+        let retry_at = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
         let (url, handle) = spawn_server(vec![
             TestResponse::json("503 Service Unavailable", "{}").with_header("retry-after", "7"),
+            TestResponse::json("503 Service Unavailable", "{}")
+                .with_header("retry-after", &retry_at),
             TestResponse::json("503 Service Unavailable", "{}")
                 .with_header("retry-after", "soon"),
         ])
@@ -3566,10 +3580,14 @@ mod tests {
 
         let error = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(matches!(error, RelayerError::Api { status: 503, .. }));
+        assert!(error.to_string().contains("retry after "));
+
+        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(matches!(error, RelayerError::Api { status: 503, .. }));
         assert!(!error.to_string().contains("retry after"));
 
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
     }
 
     #[tokio::test]
@@ -3969,6 +3987,25 @@ mod tests {
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn transaction_response_fixture_matches_official_owner_field() {
+        let transaction_id = "0190b317-a1d3-7bec-9b91-eeb6dcd3a620";
+        let fixture = fixture_text("wallet_transaction_response.json");
+
+        let parsed = parse_transaction_response(transaction_id, fixture.as_bytes()).unwrap();
+
+        assert_eq!(parsed.receipt.transaction_id, transaction_id);
+        assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(
+            parsed.receipt.transaction_hash.as_deref(),
+            Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8")
+        );
+        assert_eq!(
+            parsed.owner,
+            Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
+        );
     }
 
     #[tokio::test]

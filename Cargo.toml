@@ -27,6 +27,7 @@ thiserror = "1"
 tracing = "0.1"
 base64 = "0.22"
 url = "2"
+httpdate = "1"
 
 [dev-dependencies]
 anyhow = "1"
