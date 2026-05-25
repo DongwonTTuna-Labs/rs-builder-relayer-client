@@ -121,8 +121,11 @@ Ambiguous deposit-wallet submit:
 Deposit-wallet reconciliation required:
 ```
 
-Relayer quota exhaustion continues to use the existing
-`RelayerError::QuotaExhausted` unit variant.
+Read-only relayer quota exhaustion continues to use the existing
+`RelayerError::QuotaExhausted` unit variant. Deposit-wallet `POST /submit`
+mutations are stricter: a 429 after the POST boundary is treated as an
+ambiguous submit, keeps the owner blocked, and requires manual reconciliation
+before retrying owner nonce/sign/submit work.
 
 Rollback path: if a consumer adapter is not ready to handle these
 deposit-wallet-prefixed errors, it must stay pinned to the previous commit SHA

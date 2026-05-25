@@ -588,12 +588,10 @@ impl DepositWalletRelayerClient {
             match &receipt.state {
                 RelayerTransactionState::Confirmed => {
                     if receipt.transaction_hash.is_none() {
-                        if let Some((owner, payload_hash)) = &terminal_evidence {
-                            self.mark_transaction_reconciliation_required_if_current(
-                                &transaction_id,
-                                *owner,
-                                payload_hash,
-                            )?;
+                        if let Some(owner) = owner_to_verify {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else {
+                            self.mark_transaction_reconciliation_required(&transaction_id)?;
                         }
                         return Err(RelayerError::reconciliation_required(format!(
                             "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
@@ -1223,26 +1221,6 @@ impl DepositWalletRelayerClient {
         Ok(())
     }
 
-    fn mark_transaction_reconciliation_required_if_current(
-        &self,
-        transaction_id: &str,
-        owner: Address,
-        payload_hash: &str,
-    ) -> Result<()> {
-        let mut state = self.mutation_state()?;
-        if state.transaction_owners.get(transaction_id).is_some_and(|record| {
-            record.owner == owner && record.payload_hash == payload_hash
-        }) {
-            state.owner_blocks.insert(
-                owner,
-                OwnerMutationBlock::Ambiguous {
-                    payload_hash: payload_hash.to_string(),
-                },
-            );
-        }
-        Ok(())
-    }
-
     fn mark_transaction_reconciliation_required(&self, transaction_id: &str) -> Result<()> {
         let mut state = self.mutation_state()?;
         if let Some(record) = state.transaction_owners.get(transaction_id).cloned() {
@@ -1664,6 +1642,10 @@ async fn drain_error_response_body(response: reqwest::Response) {
 }
 
 fn retry_after_duration(headers: &HeaderMap) -> Option<Duration> {
+    retry_after_duration_at(headers, SystemTime::now())
+}
+
+fn retry_after_duration_at(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
     let value = headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
@@ -1672,11 +1654,7 @@ fn retry_after_duration(headers: &HeaderMap) -> Option<Duration> {
         return Some(Duration::from_secs(seconds));
     }
     let retry_at = httpdate::parse_http_date(value).ok()?;
-    Some(
-        retry_at
-            .duration_since(SystemTime::now())
-            .unwrap_or(Duration::ZERO),
-    )
+    Some(retry_at.duration_since(now).unwrap_or(Duration::ZERO))
 }
 
 fn retry_after_summary_from_duration(retry_after: Option<Duration>) -> String {
@@ -3590,6 +3568,34 @@ mod tests {
         assert_eq!(requests.len(), 3);
     }
 
+    #[test]
+    fn retry_after_duration_at_parses_http_dates_deterministically() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("11"));
+        assert_eq!(
+            retry_after_duration_at(&headers, now),
+            Some(Duration::from_secs(11))
+        );
+
+        let future = httpdate::fmt_http_date(now + Duration::from_secs(42));
+        headers.insert(RETRY_AFTER, HeaderValue::from_str(&future).unwrap());
+        assert_eq!(
+            retry_after_duration_at(&headers, now),
+            Some(Duration::from_secs(42))
+        );
+
+        let past = httpdate::fmt_http_date(now - Duration::from_secs(42));
+        headers.insert(RETRY_AFTER, HeaderValue::from_str(&past).unwrap());
+        assert_eq!(
+            retry_after_duration_at(&headers, now),
+            Some(Duration::ZERO)
+        );
+
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("soon"));
+        assert_eq!(retry_after_duration_at(&headers, now), None);
+    }
+
     #[tokio::test]
     async fn server_timeout_status_records_ambiguous_submit() {
         let owner = address(WALLET_CREATE_OWNER);
@@ -4254,8 +4260,10 @@ mod tests {
     #[tokio::test]
     async fn transient_poll_fetch_error_retries_without_ambiguous_owner_block() {
         let owner = address(WALLET_CREATE_OWNER);
+        let retry_at = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(3600));
         let (url, handle) = spawn_server(vec![
-            TestResponse::json("503 Service Unavailable", "{}").with_header("retry-after", "90"),
+            TestResponse::json("503 Service Unavailable", "{}")
+                .with_header("retry-after", &retry_at),
             TestResponse::json(
                 "200 OK",
                 transaction_response("tx-transient", "STATE_CONFIRMED"),
@@ -4531,6 +4539,115 @@ mod tests {
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
 
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "tx-bad-owner",
+                "state": "STATE_NEW",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                "owner": "not-an-address"
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                "tx-bad-owner",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RelayerError::Other(_)));
+        client.ensure_owner_unblocked(owner).unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(!state.transaction_owners.contains_key("tx-bad-owner"));
+        }
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "tx-known-bad-owner",
+                "state": "STATE_NEW",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                "owner": "not-an-address"
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+        client
+            .record_inflight_transaction(
+                owner,
+                "payload:known-bad-owner".to_string(),
+                "tx-known-bad-owner".to_string(),
+            )
+            .unwrap();
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                "tx-known-bad-owner",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RelayerError::Other(_)));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_confirmed_without_hash_blocks_without_local_evidence() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-confirmed-no-local-hash";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": transaction_id,
+                "state": "STATE_CONFIRMED",
+                "owner": WALLET_CREATE_OWNER
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state
+                .transaction_owners
+                .get(transaction_id)
+                .is_some_and(|record| record.owner == owner));
+        }
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_poll_requires_matching_response_owner() {
+        let owner = address(WALLET_CREATE_OWNER);
         let other_owner = address("0x0000000000000000000000000000000000000001");
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
