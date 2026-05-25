@@ -161,8 +161,7 @@ impl DepositWalletMutationPermit {
     /// `owner_serialization_evidence` must identify the caller-side guard that
     /// prevents concurrent or restarted-process WALLET submits for the same
     /// owner. The client's in-memory block is only a local backstop.
-    #[cfg(test)]
-    pub(crate) fn new(
+    pub fn new(
         owner: Address,
         reason: impl Into<String>,
         owner_serialization_evidence: impl Into<String>,
@@ -710,6 +709,15 @@ impl DepositWalletRelayerClient {
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit returned HTTP status {} after POST for owner {} payload {}; manual reconciliation required",
                     status,
+                    redacted_address(owner),
+                    display_payload_hash(&payload_hash)
+                )))
+            }
+            Err(RelayerError::QuotaExhausted) => {
+                reservation.disarm();
+                self.record_ambiguous(owner, payload_hash.clone())?;
+                Err(RelayerError::ambiguous_submit(format!(
+                    "submit returned HTTP status 429 after POST for owner {} payload {}; manual reconciliation required",
                     redacted_address(owner),
                     display_payload_hash(&payload_hash)
                 )))
@@ -2854,6 +2862,12 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Signing(message) if message.contains("expired")));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut retry_reservation = client
+            .reserve_owner_submit(owner, "payload:retry-after-deadline-error".to_string())
+            .unwrap();
+        retry_reservation.clear().unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, "GET");
@@ -3171,7 +3185,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_api_failures_record_ambiguous_submit_but_quota_does_not() {
+    async fn post_api_failures_record_ambiguous_submit_including_quota() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "400 Bad Request",
@@ -3198,12 +3212,15 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(
-            error,
-            RelayerError::QuotaExhausted
-        ));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        let _ = handle.await.unwrap();
+        assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let duplicate = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+        assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
     }
 
     #[tokio::test]
@@ -3560,6 +3577,22 @@ mod tests {
         let client = test_client(url);
         let error = client.get_transaction("bad\nid").await.unwrap_err();
         assert!(!error.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn transaction_id_validation_covers_length_and_allowed_characters() {
+        let max_len = "a".repeat(MAX_TRANSACTION_ID_LEN);
+        assert_eq!(validate_transaction_id(&max_len).unwrap(), max_len);
+        assert_eq!(
+            validate_transaction_id("tx-abc_123.period").unwrap(),
+            "tx-abc_123.period"
+        );
+
+        let too_long = "a".repeat(MAX_TRANSACTION_ID_LEN + 1);
+        assert!(validate_transaction_id(&too_long).is_err());
+        assert!(validate_transaction_id("").is_err());
+        assert!(validate_transaction_id("tx/abc").is_err());
+        assert!(validate_transaction_id("tx\nabc").is_err());
     }
 
     #[tokio::test]

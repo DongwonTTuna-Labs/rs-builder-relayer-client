@@ -13,7 +13,12 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let client = DepositWalletRelayerClient::new(url, auth, config).unwrap();
 
     let gate = DepositWalletMutationGate::Deny;
-    let permit_type: Option<DepositWalletMutationPermit> = None;
+    let permit = DepositWalletMutationPermit::new(
+        Address::zero(),
+        "compile-test explicit mutation approval",
+        "compile-test owner serialization evidence",
+    );
+    let permit_gate = DepositWalletMutationGate::Permit(permit);
     let policy = DepositWalletPollPolicy::default();
     let receipt = DepositWalletTransactionReceipt {
         transaction_id: "tx-public-api".to_string(),
@@ -25,5 +30,5 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     assert!(rendered.contains("DepositWalletRelayerClient"));
     assert!(!rendered.contains("compile-test-api-key"));
 
-    let _ = (gate, permit_type, policy, receipt);
+    let _ = (gate, permit_gate, policy, receipt);
 }
