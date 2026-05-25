@@ -684,11 +684,15 @@ impl DepositWalletRelayerClient {
                 }
                 RelayerTransactionState::Invalid => {
                     if let Some((owner, record)) = terminal_evidence {
-                        self.clear_transaction_block_if_current(
-                            &transaction_id,
-                            owner,
-                            &record.payload_hash,
-                        )?;
+                        if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else {
+                            self.clear_transaction_block_if_current(
+                                &transaction_id,
+                                owner,
+                                &record.payload_hash,
+                            )?;
+                        }
                     }
                     return Err(RelayerError::TransactionInvalid(format!(
                         "deposit wallet transaction {} invalid",
@@ -697,11 +701,15 @@ impl DepositWalletRelayerClient {
                 }
                 RelayerTransactionState::Failed => {
                     if let Some((owner, record)) = terminal_evidence {
-                        self.clear_transaction_block_if_current(
-                            &transaction_id,
-                            owner,
-                            &record.payload_hash,
-                        )?;
+                        if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else {
+                            self.clear_transaction_block_if_current(
+                                &transaction_id,
+                                owner,
+                                &record.payload_hash,
+                            )?;
+                        }
                     }
                     return Err(RelayerError::TransactionFailed(format!(
                         "deposit wallet transaction {} failed",
@@ -5184,6 +5192,48 @@ mod tests {
             requests[0].path,
             "/transaction?id=tx-recovered-from-ambiguous"
         );
+    }
+
+    #[tokio::test]
+    async fn owner_aware_recovery_permit_keeps_ambiguous_block_for_terminal_failures() {
+        let owner = address(WALLET_CREATE_OWNER);
+        for (transaction_id, state) in [
+            ("tx-recovered-invalid", "STATE_INVALID"),
+            ("tx-recovered-failed", "STATE_FAILED"),
+        ] {
+            let (url, handle) = spawn_server(vec![TestResponse::json(
+                "200 OK",
+                transaction_response(transaction_id, state),
+            )])
+            .await;
+            let client = test_client(url);
+            client
+                .record_ambiguous(owner, "payload:ambiguous-before-recovery".to_string())
+                .unwrap();
+
+            let error = client
+                .poll_owner_transaction_with_reconciliation_permit(
+                    owner,
+                    transaction_id,
+                    DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                    mutation_permit_for(owner),
+                )
+                .await
+                .unwrap_err();
+
+            match state {
+                "STATE_INVALID" => assert!(matches!(error, RelayerError::TransactionInvalid(_))),
+                "STATE_FAILED" => assert!(matches!(error, RelayerError::TransactionFailed(_))),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                client.ambiguous_submit_block(owner),
+                Some("payload:ambiguous-before-recovery".to_string())
+            );
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));
+        }
     }
 
     #[tokio::test]
