@@ -665,8 +665,17 @@ impl DepositWalletRelayerClient {
         match self.send(Method::POST, url, Some(body)).await {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => {
+                    let terminal_failure =
+                        matches!(&receipt.state, RelayerTransactionState::Invalid | RelayerTransactionState::Failed);
                     let result = self.handle_submit_receipt(owner, payload_hash, receipt);
-                    if result.is_ok() {
+                    if result.is_ok()
+                        || (terminal_failure
+                            && matches!(
+                                &result,
+                                Err(RelayerError::TransactionInvalid(_))
+                                    | Err(RelayerError::TransactionFailed(_))
+                            ))
+                    {
                         reservation.disarm();
                     }
                     result
@@ -3697,6 +3706,10 @@ mod tests {
 
             let nonce = client.get_wallet_nonce(owner).await.unwrap();
             assert_eq!(nonce, U256::from(34u64));
+            let mut retry_reservation = client
+                .reserve_owner_submit(owner, format!("payload:retry-after-{transaction_id}"))
+                .unwrap();
+            retry_reservation.clear().unwrap();
             let requests = handle.await.unwrap();
             assert_eq!(requests.len(), 2);
             assert_eq!(requests[0].path, SUBMIT_PATH);
