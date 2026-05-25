@@ -695,11 +695,11 @@ impl DepositWalletRelayerClient {
             Err(RelayerError::Api {
                 status,
                 message: _,
-            }) if is_ambiguous_submit_status(status) => {
+            }) => {
                 reservation.disarm();
                 self.record_ambiguous(owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
-                    "submit returned ambiguous HTTP status {} for owner {} payload {}",
+                    "submit returned HTTP status {} after POST for owner {} payload {}; manual reconciliation required",
                     status,
                     redacted_address(owner),
                     display_payload_hash(&payload_hash)
@@ -1404,6 +1404,11 @@ fn validate_rel_url(url: &Url) -> Result<()> {
             "relayer URL must not include query or fragment".to_string(),
         ));
     }
+    if url.path() != "/" {
+        return Err(RelayerError::invalid_relayer_url(
+            "relayer URL must not include a path".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -1496,11 +1501,6 @@ fn retry_after_summary(headers: &HeaderMap) -> String {
         .unwrap_or_default()
 }
 
-fn is_ambiguous_submit_status(status: u16) -> bool {
-    status == StatusCode::REQUEST_TIMEOUT.as_u16()
-        || StatusCode::from_u16(status).is_ok_and(|status| status.is_server_error())
-}
-
 fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt> {
     let response = serde_json::from_slice::<RelayerSubmitResponse>(bytes)
         .map_err(|e| RelayerError::Other(format!("could not parse submit response: {e}")))?;
@@ -1525,15 +1525,23 @@ fn parse_transaction_response(
             "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
         )));
     }
-    let response = responses
+    let matching_responses = responses
         .into_iter()
-        .find(|response| response.response.transaction_id == expected_transaction_id)
-        .ok_or_else(|| {
-            RelayerError::reconciliation_required(format!(
-                "transaction response did not include requested transaction id {}",
-                sanitized_external_token(expected_transaction_id)
-            ))
-        })?;
+        .filter(|response| response.response.transaction_id == expected_transaction_id)
+        .collect::<Vec<_>>();
+    if matching_responses.is_empty() {
+        return Err(RelayerError::reconciliation_required(format!(
+            "transaction response did not include requested transaction id {}",
+            sanitized_external_token(expected_transaction_id)
+        )));
+    }
+    if matching_responses.len() > 1 {
+        return Err(RelayerError::reconciliation_required(format!(
+            "transaction response included duplicate requested transaction id {}; manual reconciliation required",
+            sanitized_external_token(expected_transaction_id)
+        )));
+    }
+    let response = matching_responses.into_iter().next().unwrap();
     let receipt = receipt_from_submit_response(response.response, response.owner)?;
     require_transaction_id_match(expected_transaction_id, receipt)
 }
@@ -2338,6 +2346,7 @@ mod tests {
             "https://user@relayer-v2.polymarket.com",
             "https://relayer-v2.polymarket.com?api_key=leak",
             "https://relayer-v2.polymarket.com#fragment",
+            "https://relayer-v2.polymarket.com/token-like-path",
             "https://example.com",
             "https://relayer-v2.polymarket.com.evil.example",
         ];
@@ -3127,7 +3136,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_failures_and_quota_do_not_record_ambiguous_submit() {
+    async fn post_api_failures_record_ambiguous_submit_but_quota_does_not() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "400 Bad Request",
@@ -3141,8 +3150,8 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::Api { status: 400, .. }));
-        assert!(client.ambiguous_submit_block(owner).is_none());
+        assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
         let _ = handle.await.unwrap();
 
         let (url, handle) = spawn_server(vec![TestResponse::json("429 Too Many Requests", "{}")
@@ -3160,6 +3169,34 @@ mod tests {
         ));
         assert!(client.ambiguous_submit_block(owner).is_none());
         let _ = handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unexpected_post_statuses_record_ambiguous_submit() {
+        let owner = address(WALLET_CREATE_OWNER);
+
+        for status in ["307 Temporary Redirect", "409 Conflict", "425 Too Early"] {
+            let (url, handle) = spawn_server(vec![TestResponse::json(status, "{}")]).await;
+            let client = test_client(url);
+
+            let error = client
+                .submit_wallet_create(owner, mutation_permit())
+                .await
+                .unwrap_err();
+
+            assert!(
+                error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX),
+                "expected ambiguous submit for {status}, got {error:?}"
+            );
+            assert!(client.ambiguous_submit_block(owner).is_some());
+            let duplicate = client
+                .submit_wallet_create(owner, mutation_permit())
+                .await
+                .unwrap_err();
+            assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 1);
+        }
     }
 
     #[tokio::test]
@@ -3409,6 +3446,37 @@ mod tests {
         );
         let requests = handle.await.unwrap();
         assert_eq!(requests[0].path, "/transaction?id=tx-array");
+    }
+
+    #[tokio::test]
+    async fn get_transaction_rejects_duplicate_matching_response_ids() {
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!([
+                {
+                    "transactionID": "tx-duplicate",
+                    "state": "STATE_CONFIRMED",
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                    "owner": WALLET_CREATE_OWNER
+                },
+                {
+                    "transactionID": "tx-duplicate",
+                    "state": "STATE_FAILED",
+                    "transactionHash": "0x48cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                    "owner": "0x0000000000000000000000000000000000000001"
+                }
+            ])
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client.get_transaction("tx-duplicate").await.unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(error.to_string().contains("duplicate"));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests[0].path, "/transaction?id=tx-duplicate");
     }
 
     #[tokio::test]
