@@ -215,13 +215,16 @@ class WorkflowParityTests(unittest.TestCase):
             self.assertNotIn(value, text)
 
     def test_codex_review_uses_default_branch_trusted_scripts(self) -> None:
-        workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
-        self.assertIn("pull_request_target:", workflow)
-        self.assertIn("types: [opened, synchronize, reopened]", workflow)
-        self.assertNotIn("types: [opened, synchronize, reopened, edited]", workflow)
-        self.assertNotIn("ready_for_review", workflow)
-        self.assertIn("issue_comment:", workflow)
-        self.assertIn("workflow_dispatch:", workflow)
+        workflow_path = REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(workflow)
+        events = parsed.get("on", parsed.get(True))
+        self.assertEqual(
+            events["pull_request_target"]["types"],
+            ["opened", "synchronize", "reopened"],
+        )
+        self.assertEqual(events["issue_comment"]["types"], ["created"])
+        self.assertIn("workflow_dispatch", events)
         self.assertIn("github.event_name != 'issue_comment' || github.event.action == 'created'", workflow)
         self.assertIn("git_fetch ls-remote --symref origin HEAD", workflow)
         self.assertIn('git_fetch fetch --depth=1 origin "refs/heads/$default_branch"', workflow)

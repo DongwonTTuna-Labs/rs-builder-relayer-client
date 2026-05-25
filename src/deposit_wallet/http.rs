@@ -15,6 +15,7 @@ use ethers::utils::{keccak256, to_checksum};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
+use serde::de::{self, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use url::Url;
 
@@ -39,6 +40,7 @@ const MAX_BACKGROUND_ERROR_BODY_DRAINS: usize = 64;
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
 const MAX_TRANSACTION_RESPONSE_ITEMS: usize = 32;
+const TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR: &str = "transaction response item limit exceeded";
 const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -1749,6 +1751,7 @@ fn parse_transaction_response(
         }
     }
 
+    ensure_transaction_response_array_item_limit(bytes)?;
     let responses = serde_json::from_slice::<Vec<RelayerTransactionResponseWithOwner>>(bytes)
         .map_err(|e| {
             TransactionParseError::new(
@@ -1790,6 +1793,51 @@ fn parse_transaction_response(
         .map_err(|error| TransactionParseError::new(error, owner))?;
     require_transaction_id_match(expected_transaction_id, receipt)
         .map_err(|error| TransactionParseError::new(error, owner))
+}
+
+fn ensure_transaction_response_array_item_limit(
+    bytes: &[u8],
+) -> std::result::Result<(), TransactionParseError> {
+    struct ItemLimitVisitor;
+
+    impl<'de> Visitor<'de> for ItemLimitVisitor {
+        type Value = ();
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a transaction response array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut count = 0usize;
+            while seq.next_element::<IgnoredAny>()?.is_some() {
+                count += 1;
+                if count > MAX_TRANSACTION_RESPONSE_ITEMS {
+                    return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
+                }
+            }
+            Ok(())
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    deserializer.deserialize_seq(ItemLimitVisitor).map_err(|error| {
+        if error.to_string().contains(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR) {
+            TransactionParseError::new(
+                RelayerError::reconciliation_required(format!(
+                    "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
+                )),
+                None,
+            )
+        } else {
+            TransactionParseError::new(
+                RelayerError::Other(format!("could not parse transaction response: {error}")),
+                None,
+            )
+        }
+    })
 }
 
 fn receipt_from_submit_response(
