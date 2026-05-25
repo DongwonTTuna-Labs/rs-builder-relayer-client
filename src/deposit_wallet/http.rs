@@ -285,6 +285,7 @@ pub struct DepositWalletTransactionReceipt {
     pub transaction_id: String,
     pub state: RelayerTransactionState,
     pub transaction_hash: Option<String>,
+    pub owner: Option<Address>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1933,6 +1934,7 @@ fn receipt_from_submit_response(
             transaction_id,
             state: response.state,
             transaction_hash,
+            owner,
         },
         owner,
     })
@@ -4392,6 +4394,10 @@ mod tests {
         );
         assert_eq!(
             parsed.owner,
+            Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
+        );
+        assert_eq!(
+            parsed.receipt.owner,
             Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
         );
     }

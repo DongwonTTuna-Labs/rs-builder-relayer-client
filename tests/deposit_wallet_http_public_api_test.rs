@@ -24,6 +24,7 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
         transaction_id: "tx-public-api".to_string(),
         state: RelayerTransactionState::New,
         transaction_hash: None,
+        owner: None,
     };
 
     let rendered = format!("{client:?}");
