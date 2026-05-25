@@ -217,6 +217,9 @@ class WorkflowParityTests(unittest.TestCase):
     def test_codex_review_uses_default_branch_trusted_scripts(self) -> None:
         workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
         self.assertIn("pull_request_target:", workflow)
+        self.assertIn("types: [opened, synchronize, reopened]", workflow)
+        self.assertNotIn("types: [opened, synchronize, reopened, edited]", workflow)
+        self.assertNotIn("ready_for_review", workflow)
         self.assertIn("issue_comment:", workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("github.event_name != 'issue_comment' || github.event.action == 'created'", workflow)
