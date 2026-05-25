@@ -1525,23 +1525,21 @@ fn parse_transaction_response(
             "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
         )));
     }
-    let matching_responses = responses
+    let mut matching_responses = responses
         .into_iter()
-        .filter(|response| response.response.transaction_id == expected_transaction_id)
-        .collect::<Vec<_>>();
-    if matching_responses.is_empty() {
+        .filter(|response| response.response.transaction_id == expected_transaction_id);
+    let Some(response) = matching_responses.next() else {
         return Err(RelayerError::reconciliation_required(format!(
             "transaction response did not include requested transaction id {}",
             sanitized_external_token(expected_transaction_id)
         )));
-    }
-    if matching_responses.len() > 1 {
+    };
+    if matching_responses.next().is_some() {
         return Err(RelayerError::reconciliation_required(format!(
             "transaction response included duplicate requested transaction id {}; manual reconciliation required",
             sanitized_external_token(expected_transaction_id)
         )));
     }
-    let response = matching_responses.into_iter().next().unwrap();
     let receipt = receipt_from_submit_response(response.response, response.owner)?;
     require_transaction_id_match(expected_transaction_id, receipt)
 }
@@ -2612,6 +2610,28 @@ mod tests {
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
+    #[tokio::test]
+    async fn submit_auth_failure_clears_owner_reservation_after_preflight() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
+        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let client =
+            test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
+
+        let error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::AuthError(_)));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut retry_reservation = client
+            .reserve_owner_submit(owner, "payload:retry-after-auth-error".to_string())
+            .unwrap();
+        retry_reservation.clear().unwrap();
+    }
+
     #[test]
     fn mutation_permit_debug_redacts_approval_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
@@ -2751,6 +2771,12 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Signing(message) if message.contains("nonce")));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut retry_reservation = client
+            .reserve_owner_submit(owner, "payload:retry-after-stale-nonce".to_string())
+            .unwrap();
+        retry_reservation.clear().unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, "GET");
@@ -3681,10 +3707,18 @@ mod tests {
     #[tokio::test]
     async fn immediate_confirmed_submit_requires_transaction_poll_reconciliation() {
         let owner = address(WALLET_CREATE_OWNER);
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            transaction_response("tx-submit-confirmed", "STATE_CONFIRMED"),
-        )])
+        let transaction_id = "tx-submit-confirmed";
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json(
+                "200 OK",
+                transaction_response(transaction_id, "STATE_CONFIRMED"),
+            ),
+            TestResponse::json(
+                "200 OK",
+                transaction_response(transaction_id, "STATE_CONFIRMED"),
+            ),
+            TestResponse::json("200 OK", json!({"nonce": "41"}).to_string()),
+        ])
         .await;
         let client = test_client(url);
 
@@ -3698,8 +3732,28 @@ mod tests {
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
+        let receipt = client
+            .poll_transaction(
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, transaction_id);
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        client.ensure_owner_unblocked(owner).unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(!state.transaction_owners.contains_key(transaction_id));
+        }
+        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        assert_eq!(nonce, U256::from(41u64));
+
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].path, SUBMIT_PATH);
+        assert_eq!(requests[1].path, format!("/transaction?id={transaction_id}"));
+        assert!(requests[2].path.contains("/nonce?address="));
     }
 
     #[tokio::test]
