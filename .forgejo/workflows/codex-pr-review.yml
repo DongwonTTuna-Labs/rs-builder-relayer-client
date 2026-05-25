@@ -19,6 +19,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve PR metadata
+    if: github.event_name != 'issue_comment' || github.event.action == 'created'
     runs-on: dongwontuna-labs-runner
     outputs:
       allowed: ${{ steps.lookup.outputs.allowed }}

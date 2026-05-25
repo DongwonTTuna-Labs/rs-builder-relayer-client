@@ -82,6 +82,8 @@ def requested_pr_number(payload: dict[str, Any]) -> tuple[str | None, str]:
     if event_name == "pull_request_target":
         pr = payload.get("pull_request") or {}
         return str(pr.get("number") or ""), f"pull_request_target:{payload.get('action') or 'unknown'}"
+    if event_name == "issue_comment" and payload.get("action") != "created":
+        return None, f"issue_comment:{payload.get('action') or 'unknown'}"
     if event_name in {"issue_comment", "issues"}:
         body = command_body(payload)
         issue = payload.get("issue") or {}
