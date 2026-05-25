@@ -29,6 +29,7 @@ const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const SUBMIT_PATH: &str = "/submit";
 const TRANSACTION_PATH: &str = "/transaction";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
+const MAX_TRANSACTION_SUCCESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
 #[cfg(not(test))]
 const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
@@ -67,16 +68,6 @@ impl DepositWalletRelayerUrl {
         })
     }
 
-    pub fn mocked_loopback(raw: &str) -> Result<Self> {
-        let url = Url::parse(raw)
-            .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
-        validate_mock_loopback_url(&url)?;
-        Ok(Self {
-            base: url,
-            kind: DepositWalletRelayerUrlKind::MockLoopback,
-        })
-    }
-
     fn endpoint(&self, path: &str) -> Url {
         let mut url = self.base.clone();
         url.set_path(path);
@@ -90,7 +81,13 @@ impl DepositWalletRelayerUrl {
 
     #[cfg(test)]
     fn loopback(raw: &str) -> Result<Self> {
-        Self::mocked_loopback(raw)
+        let url = Url::parse(raw)
+            .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
+        validate_mock_loopback_url(&url)?;
+        Ok(Self {
+            base: url,
+            kind: DepositWalletRelayerUrlKind::MockLoopback,
+        })
     }
 
 }
@@ -448,7 +445,9 @@ impl DepositWalletRelayerClient {
         let transaction_id = validate_transaction_id(transaction_id)?;
         let mut url = self.base_url.endpoint(TRANSACTION_PATH);
         url.query_pairs_mut().append_pair("id", &transaction_id);
-        let response = self.send(Method::GET, url, None).await?;
+        let response = self
+            .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
+            .await?;
         parse_transaction_response(&transaction_id, &response)
     }
 
@@ -488,6 +487,12 @@ impl DepositWalletRelayerClient {
             let parsed = match self.fetch_transaction(&transaction_id).await {
                 Ok(parsed) => parsed,
                 Err(error) => {
+                    if is_transient_poll_error(&error) && attempt + 1 < policy.max_attempts {
+                        self.sleeper
+                            .sleep(policy.interval_for_transaction_attempt(&transaction_id, attempt))
+                            .await;
+                        continue;
+                    }
                     if let Some(owner) = expected_owner {
                         if self.has_recovery_owner_evidence(owner, &transaction_id)? {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
@@ -760,6 +765,17 @@ impl DepositWalletRelayerClient {
     }
 
     async fn send(&self, method: Method, url: Url, body: Option<String>) -> Result<Vec<u8>> {
+        self.send_with_success_limit(method, url, body, MAX_SUCCESS_BODY_BYTES)
+            .await
+    }
+
+    async fn send_with_success_limit(
+        &self,
+        method: Method,
+        url: Url,
+        body: Option<String>,
+        success_body_limit: usize,
+    ) -> Result<Vec<u8>> {
         let mut headers = self.auth.headers()?;
         if body.is_some() {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -793,7 +809,7 @@ impl DepositWalletRelayerClient {
             });
         }
 
-        read_limited_response_body(response, MAX_SUCCESS_BODY_BYTES).await
+        read_limited_response_body(response, success_body_limit).await
     }
 
     fn ensure_deadline_fresh(&self, signed: &SignedDepositWalletBatch) -> Result<()> {
@@ -1461,6 +1477,7 @@ fn validate_rel_url(url: &Url) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_mock_loopback_url(url: &Url) -> Result<()> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(RelayerError::invalid_relayer_url(
@@ -1577,6 +1594,17 @@ fn retry_after_summary(headers: &HeaderMap) -> String {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(|seconds| format!("; retry after {seconds}s"))
         .unwrap_or_default()
+}
+
+fn is_transient_poll_error(error: &RelayerError) -> bool {
+    match error {
+        RelayerError::QuotaExhausted | RelayerError::Timeout | RelayerError::Http(_) => true,
+        RelayerError::Api { status, .. } => {
+            matches!(*status, 408 | 425 | 429) || (500..=599).contains(status)
+        }
+        RelayerError::Other(message) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => false,
+        _ => false,
+    }
 }
 
 fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt> {
@@ -2439,7 +2467,7 @@ mod tests {
     #[test]
     fn mocked_loopback_url_allows_only_local_mock_servers() {
         for raw in ["http://127.0.0.1:8080", "http://localhost:8080", "https://[::1]:8443"] {
-            DepositWalletRelayerUrl::mocked_loopback(raw).unwrap();
+            DepositWalletRelayerUrl::loopback(raw).unwrap();
         }
 
         for raw in [
@@ -2450,7 +2478,7 @@ mod tests {
             "https://relayer-v2.polymarket.com",
             "http://192.168.0.1:8080",
         ] {
-            let error = DepositWalletRelayerUrl::mocked_loopback(raw)
+            let error = DepositWalletRelayerUrl::loopback(raw)
                 .expect_err("unsafe mock relayer URL should be rejected");
             assert!(error_has_prefix(&error, INVALID_RELAYER_URL_PREFIX));
         }
@@ -3796,6 +3824,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_transaction_accepts_large_metadata_under_transaction_limit() {
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "tx-large-metadata",
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                "owner": WALLET_CREATE_OWNER,
+                "metadata": "x".repeat(MAX_SUCCESS_BODY_BYTES + 1)
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client.get_transaction("tx-large-metadata").await.unwrap();
+
+        assert_eq!(receipt.transaction_id, "tx-large-metadata");
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
     async fn get_wallet_nonce_rejects_malformed_success_payloads() {
         for body in ["not-json".to_string(), "{}".to_string(), json!({"nonce": "nan"}).to_string()]
         {
@@ -4013,6 +4065,44 @@ mod tests {
         let sleeps = sleeper.sleeps();
         assert_eq!(sleeps.len(), 1);
         assert!((Duration::from_millis(100)..=Duration::from_millis(125)).contains(&sleeps[0]));
+    }
+
+    #[tokio::test]
+    async fn transient_poll_fetch_error_retries_without_ambiguous_owner_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("503 Service Unavailable", "{}").with_header("retry-after", "1"),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-transient", "STATE_CONFIRMED"),
+            ),
+        ])
+        .await;
+        let sleeper = Arc::new(RecordingSleeper::default());
+        let client = test_client_with_sleeper(url, sleeper.clone());
+        client
+            .record_inflight_transaction(
+                owner,
+                "payload:transient-poll".to_string(),
+                "tx-transient".to_string(),
+            )
+            .unwrap();
+
+        let receipt = client
+            .poll_owner_transaction(
+                owner,
+                "tx-transient",
+                DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        assert_eq!(sleeper.sleeps().len(), 1);
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
     #[tokio::test]
