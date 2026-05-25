@@ -643,7 +643,7 @@ impl DepositWalletRelayerClient {
                     return Err(RelayerError::reconciliation_required(format!(
                         "deposit wallet transaction {} reached unknown state {}",
                         transaction_id_for_error,
-                        sanitized_external_token(raw)
+                        unknown_state_error_summary(raw)
                     )));
                 }
                 RelayerTransactionState::New
@@ -958,7 +958,7 @@ impl DepositWalletRelayerClient {
                 Err(RelayerError::reconciliation_required(format!(
                     "submit response for owner {} reached unknown state {}; manual reconciliation required",
                     redacted_address(owner),
-                    sanitized_external_token(raw)
+                    unknown_state_error_summary(raw)
                 )))
             }
             RelayerTransactionState::Invalid => {
@@ -1827,6 +1827,10 @@ fn sanitized_external_token(value: &str) -> String {
         sanitized.push_str("...");
     }
     sanitized
+}
+
+fn unknown_state_error_summary(_value: &str) -> &'static str {
+    "<unrecognized relayer state>"
 }
 
 fn payload_hash_summary(bytes: &[u8]) -> String {
@@ -3715,6 +3719,8 @@ mod tests {
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains("STATE_WEIRD"));
+        assert!(rendered.contains("<unrecognized relayer state>"));
         assert!(client.ambiguous_submit_block(owner).is_some());
         let _ = handle.await.unwrap();
     }
@@ -4246,7 +4252,10 @@ mod tests {
 
         let (result, _, _, _) = poll_sequence(&["STATE_STRANGE"], 1).await;
         let error = result.unwrap_err();
+        let rendered = error.to_string();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(!rendered.contains("STATE_STRANGE"));
+        assert!(rendered.contains("<unrecognized relayer state>"));
 
         let (result, requests, sleeper, _policy) =
             poll_sequence(&["STATE_NEW", "STATE_NEW"], 2).await;
