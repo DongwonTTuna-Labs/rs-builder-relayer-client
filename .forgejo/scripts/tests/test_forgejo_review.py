@@ -232,18 +232,18 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("CODEX_DEFAULT_SHA=$(git rev-parse HEAD)", workflow)
         self.assertNotIn("branches: [main]", workflow)
 
-    def test_pipeline_uses_forgejo_scripts_and_shared_codex_auth(self) -> None:
+    def test_pipeline_uses_forgejo_scripts_and_ai_relay(self) -> None:
         pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
+        caller = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
         self.assertIn("python3 pipeline/.forgejo/scripts/build_prompt.py", pipeline)
         self.assertIn("bash pipeline/.forgejo/scripts/codex_exec.sh", pipeline)
-        self.assertIn("/codex-runner-home:/home/runner/.codex", pipeline)
-        self.assertIn("/codex-runner-locks:/var/lib/codex-runner/auth-runs-root", pipeline)
-        self.assertIn('auth_lock_file="$auth_lock_dir/forgejo-shared.lock"', pipeline)
-        self.assertIn("codex login status", pipeline)
-        self.assertIn("cleanup-codex-auth:", pipeline)
-        for axis in ["correctness", "security", "performance", "test-coverage", "domain"]:
-            self.assertIn(f"review-{axis}:", pipeline)
-            self.assertIn(f"review-{axis}/auth.json", pipeline)
+        self.assertIn("AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}", caller)
+        self.assertEqual(pipeline.count("AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}"), 6)
+        self.assertNotIn("prepare-codex-auth:", pipeline)
+        self.assertNotIn("cleanup-codex-auth:", pipeline)
+        self.assertNotIn("/codex-runner-home:/home/runner/.codex", pipeline)
+        self.assertNotIn("/codex-runner-locks:/var/lib/codex-runner/auth-runs-root", pipeline)
+        self.assertNotIn("CODEX_AUTH_FILE", pipeline)
 
     def test_pipeline_jobs_skip_when_resolver_denies_review(self) -> None:
         workflow = yaml.safe_load(
@@ -252,7 +252,6 @@ class WorkflowParityTests(unittest.TestCase):
         required_guard = "inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''"
         expected_if = {
             "prepare-context": required_guard,
-            "prepare-codex-auth": required_guard,
             "review-correctness": required_guard,
             "review-security": required_guard,
             "review-performance": required_guard,
@@ -260,7 +259,6 @@ class WorkflowParityTests(unittest.TestCase):
             "review-domain": required_guard,
             "tech-lead": f"{required_guard} && always() && !cancelled()",
             "post": required_guard,
-            "cleanup-codex-auth": f"{required_guard} && always()",
         }
         for job_name, expected in expected_if.items():
             with self.subTest(job=job_name):

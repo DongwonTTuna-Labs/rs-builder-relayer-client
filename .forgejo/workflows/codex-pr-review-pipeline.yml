@@ -81,80 +81,12 @@ jobs:
           path: artifacts/pr-context.json
           retention-days: 7
 
-  prepare-codex-auth:
-    name: prepare-codex-auth
-    needs: prepare-context
-    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
-    runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-home:/home/runner/.codex
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
-    timeout-minutes: 5
-    env:
-      CODEX_AUTH_COPY_DIR: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}
-    steps:
-      - name: Prepare short-lived per-job Codex auth files
-        run: |
-          set -euo pipefail
-          source_auth=/home/runner/.codex/auth.json
-          auth_lock_dir=/var/lib/codex-runner/auth-runs-root/auth
-          auth_lock_file="$auth_lock_dir/forgejo-shared.lock"
-          install -d -m 700 "$auth_lock_dir"
-          exec 9>"$auth_lock_file"
-          flock 9
-          test -s "$source_auth"
-          source_mode="$(stat -c '%a' "$source_auth" 2>/dev/null || printf '600')"
-          if [ "$source_mode" = "0" ] || [ "$source_mode" = "000" ]; then
-            source_mode=600
-          fi
-          restore_source_mode() {
-            chmod "$source_mode" "$source_auth" 2>/dev/null || true
-          }
-          trap restore_source_mode EXIT
-          chmod u+rw "$source_auth"
-          python3 - "$source_auth" <<'PY'
-          import json
-          import pathlib
-          import sys
-
-          path = pathlib.Path(sys.argv[1])
-          data = json.loads(path.read_text(encoding="utf-8"))
-          tokens = data.get("tokens") or {}
-          if data.get("auth_mode") != "chatgpt" or not tokens.get("refresh_token"):
-              raise SystemExit(f"Codex auth at {path} is not valid ChatGPT-managed auth.")
-          print(f"Codex auth source validated: auth_mode={data.get('auth_mode')}")
-          PY
-          env -u GITHUB_TOKEN -u GIT_AUTH_TOKEN -u FORGEJO_BOT_TOKEN \
-            CODEX_HOME=/home/runner/.codex \
-            codex login status
-          install -d -m 700 "$CODEX_AUTH_COPY_DIR"
-          for name in \
-            review-correctness \
-            review-security \
-            review-performance \
-            review-test-coverage \
-            review-domain \
-            tech-lead
-          do
-            install -d -m 700 "$CODEX_AUTH_COPY_DIR/$name"
-            find "$CODEX_AUTH_COPY_DIR/$name" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-            cp "$source_auth" "$CODEX_AUTH_COPY_DIR/$name/auth.json"
-            chmod 400 "$CODEX_AUTH_COPY_DIR/$name/auth.json"
-          done
-          restore_source_mode
-          trap - EXIT
-
   review-correctness:
     name: review (correctness)
     needs:
       - prepare-context
-      - prepare-codex-auth
     if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
     timeout-minutes: 30
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -164,7 +96,6 @@ jobs:
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
-      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-correctness/auth.json
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
@@ -206,13 +137,13 @@ jobs:
 
       - name: Run Codex review (correctness)
         env:
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-correctness.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-correctness.json
           LOG_FILE: ${{ runner.temp }}/codex-correctness.log
           CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
           CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
-          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
         run: bash pipeline/.forgejo/scripts/codex_exec.sh
 
       - name: Normalize findings
@@ -235,12 +166,8 @@ jobs:
     name: review (security)
     needs:
       - prepare-context
-      - prepare-codex-auth
     if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
     timeout-minutes: 30
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -250,7 +177,6 @@ jobs:
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
-      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-security/auth.json
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
@@ -292,13 +218,13 @@ jobs:
 
       - name: Run Codex review (security)
         env:
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-security.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-security.json
           LOG_FILE: ${{ runner.temp }}/codex-security.log
           CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
           CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
-          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
         run: bash pipeline/.forgejo/scripts/codex_exec.sh
 
       - name: Normalize findings
@@ -321,12 +247,8 @@ jobs:
     name: review (performance)
     needs:
       - prepare-context
-      - prepare-codex-auth
     if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
     timeout-minutes: 30
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -336,7 +258,6 @@ jobs:
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
-      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-performance/auth.json
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
@@ -378,13 +299,13 @@ jobs:
 
       - name: Run Codex review (performance)
         env:
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-performance.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-performance.json
           LOG_FILE: ${{ runner.temp }}/codex-performance.log
           CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
           CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
-          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
         run: bash pipeline/.forgejo/scripts/codex_exec.sh
 
       - name: Normalize findings
@@ -407,12 +328,8 @@ jobs:
     name: review (test-coverage)
     needs:
       - prepare-context
-      - prepare-codex-auth
     if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
     timeout-minutes: 30
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -422,7 +339,6 @@ jobs:
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
-      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-test-coverage/auth.json
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
@@ -464,13 +380,13 @@ jobs:
 
       - name: Run Codex review (test-coverage)
         env:
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-test-coverage.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-test-coverage.json
           LOG_FILE: ${{ runner.temp }}/codex-test-coverage.log
           CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
           CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
-          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
         run: bash pipeline/.forgejo/scripts/codex_exec.sh
 
       - name: Normalize findings
@@ -493,12 +409,8 @@ jobs:
     name: review (domain)
     needs:
       - prepare-context
-      - prepare-codex-auth
     if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''
     runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
     timeout-minutes: 30
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -508,7 +420,6 @@ jobs:
       FORGEJO_SERVER_URL: https://git.dongwontuna.net
       FORGEJO_REPOSITORY: ${{ github.repository }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
-      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/review-domain/auth.json
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
@@ -550,13 +461,13 @@ jobs:
 
       - name: Run Codex review (domain)
         env:
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-domain.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/findings.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-domain.json
           LOG_FILE: ${{ runner.temp }}/codex-domain.log
           CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
           CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
-          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
         run: bash pipeline/.forgejo/scripts/codex_exec.sh
 
       - name: Normalize findings
@@ -583,12 +494,8 @@ jobs:
       - review-performance
       - review-test-coverage
       - review-domain
-      - prepare-codex-auth
     if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != '' && always() && !cancelled()
     runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
     timeout-minutes: 20
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
@@ -598,7 +505,6 @@ jobs:
       FORGEJO_REPOSITORY: ${{ github.repository }}
       PYTHONPATH: ${{ github.workspace }}/pipeline/.forgejo/scripts
       ART_DIR: ${{ github.workspace }}/artifacts
-      CODEX_AUTH_FILE: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}/tech-lead/auth.json
     steps:
       - name: Checkout base ref (trusted scripts)
         env:
@@ -652,13 +558,13 @@ jobs:
       - name: Run Codex tech-lead gate
         if: steps.combine.outputs.count != '0'
         env:
+          AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
           PROMPT_FILE: ${{ runner.temp }}/prompt-tech-lead.md
           SCHEMA_FILE: ${{ github.workspace }}/pipeline/.forgejo/scripts/schemas/decisions.schema.json
           OUT_FILE: ${{ runner.temp }}/codex-output-tech-lead.json
           LOG_FILE: ${{ runner.temp }}/codex-tech-lead.log
           CODEX_WORKSPACE: ${{ runner.temp }}/codex-workspace
           CODEX_REQUIRE_CLEAN_WORKSPACE: "1"
-          CODEX_AUTH_DELETE_SOURCE_AFTER_RUNTIME_COPY: "1"
         run: bash pipeline/.forgejo/scripts/codex_exec.sh
 
       - name: Normalize decisions
@@ -783,30 +689,3 @@ jobs:
           FORGEJO_BOT_LOGIN: codex-reviewer-for-dongwonttuna
         run: python3 pipeline/.forgejo/scripts/post_review_comments.py
 
-  cleanup-codex-auth:
-    name: cleanup-codex-auth
-    needs:
-      - prepare-codex-auth
-      - review-correctness
-      - review-security
-      - review-performance
-      - review-test-coverage
-      - review-domain
-      - tech-lead
-      - post
-    if: inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != '' && always()
-    runs-on: dongwontuna-labs-runner
-    container:
-      volumes:
-        - /codex-runner-locks:/var/lib/codex-runner/auth-runs-root
-    timeout-minutes: 5
-    env:
-      CODEX_AUTH_COPY_DIR: /var/lib/codex-runner/auth-runs-root/auth-runs/${{ github.repository }}/${{ github.run_id }}
-    steps:
-      - name: Remove remaining per-job Codex auth files
-        run: |
-          case "$CODEX_AUTH_COPY_DIR" in
-            /var/lib/codex-runner/auth-runs-root/auth-runs/*/*/[0-9]*) ;;
-            *) echo "Refusing unexpected auth cleanup path" >&2; exit 1 ;;
-          esac
-          rm -rf -- "$CODEX_AUTH_COPY_DIR"
