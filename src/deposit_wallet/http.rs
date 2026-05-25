@@ -294,6 +294,7 @@ impl ResponseError {
 struct PollFetchError {
     error: RelayerError,
     retry_after: Option<Duration>,
+    owner: Option<Address>,
 }
 
 impl PollFetchError {
@@ -301,7 +302,28 @@ impl PollFetchError {
         Self {
             error: error.error,
             retry_after: error.retry_after,
+            owner: None,
         }
+    }
+
+    fn from_transaction_parse_error(error: TransactionParseError) -> Self {
+        Self {
+            error: error.error,
+            retry_after: None,
+            owner: error.owner,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TransactionParseError {
+    error: RelayerError,
+    owner: Option<Address>,
+}
+
+impl TransactionParseError {
+    fn new(error: RelayerError, owner: Option<Address>) -> Self {
+        Self { error, owner }
     }
 }
 
@@ -315,13 +337,6 @@ struct RelayerTransactionResponseWithOwner {
     // non-sensitive polling identifiers.
     #[serde(default, deserialize_with = "deserialize_optional_address")]
     owner: Option<Address>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RelayerTransactionResponseEnvelope {
-    Single(RelayerTransactionResponseWithOwner),
-    Many(Vec<RelayerTransactionResponseWithOwner>),
 }
 
 #[derive(Clone)]
@@ -484,6 +499,7 @@ impl DepositWalletRelayerClient {
             .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
             .await?;
         parse_transaction_response(&transaction_id, &response)
+            .map_err(|parse_error| parse_error.error)
     }
 
     async fn fetch_transaction_for_poll(
@@ -502,7 +518,7 @@ impl DepositWalletRelayerClient {
             .await
             .map_err(PollFetchError::from_response_error)?;
         parse_transaction_response(transaction_id, &response)
-            .map_err(|error| PollFetchError { error, retry_after: None })
+            .map_err(PollFetchError::from_transaction_parse_error)
     }
 
     pub async fn poll_transaction(
@@ -522,6 +538,25 @@ impl DepositWalletRelayerClient {
         policy: DepositWalletPollPolicy,
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
+        let transaction_id = validate_transaction_id(transaction_id)?;
+        if !self.has_recovery_owner_evidence(owner, &transaction_id)? {
+            return Err(RelayerError::mutation_blocked(
+                "owner-scoped recovery polling requires local transaction evidence or explicit mutation permit"
+                    .to_string(),
+            ));
+        }
+        self.poll_validated_transaction(transaction_id, policy, Some(owner)).await
+    }
+
+    pub async fn poll_owner_transaction_with_reconciliation_permit(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+        policy: DepositWalletPollPolicy,
+        gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        policy.validate()?;
+        ensure_permitted(&gate, owner)?;
         let transaction_id = validate_transaction_id(transaction_id)?;
         self.poll_validated_transaction(transaction_id, policy, Some(owner)).await
     }
@@ -555,9 +590,12 @@ impl DepositWalletRelayerClient {
                             .await;
                         continue;
                     }
+                    let response_owner = poll_error.owner;
                     let error = poll_error.error;
                     if let Some(owner) = expected_owner {
-                        if self.has_recovery_owner_evidence(owner, &transaction_id)? {
+                        if response_owner == Some(owner)
+                            || self.has_recovery_owner_evidence(owner, &transaction_id)?
+                        {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                         }
                     } else {
@@ -1683,38 +1721,75 @@ fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt
 fn parse_transaction_response(
     expected_transaction_id: &str,
     bytes: &[u8],
-) -> Result<ParsedTransactionReceipt> {
-    let envelope = serde_json::from_slice::<RelayerTransactionResponseEnvelope>(bytes)
-        .map_err(|e| RelayerError::Other(format!("could not parse transaction response: {e}")))?;
-    let responses = match envelope {
-        RelayerTransactionResponseEnvelope::Single(response) => {
-            let receipt = receipt_from_submit_response(response.response, response.owner)?;
-            return require_transaction_id_match(expected_transaction_id, receipt);
+) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
+    match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
+        Some(b'{') => {
+            let response = serde_json::from_slice::<RelayerTransactionResponseWithOwner>(bytes)
+                .map_err(|e| {
+                    TransactionParseError::new(
+                        RelayerError::Other(format!("could not parse transaction response: {e}")),
+                        None,
+                    )
+                })?;
+            let owner = response.owner;
+            let receipt = receipt_from_submit_response(response.response, owner)
+                .map_err(|error| TransactionParseError::new(error, owner))?;
+            return require_transaction_id_match(expected_transaction_id, receipt)
+                .map_err(|error| TransactionParseError::new(error, owner));
         }
-        RelayerTransactionResponseEnvelope::Many(responses) => responses,
-    };
+        Some(b'[') => {}
+        _ => {
+            return Err(TransactionParseError::new(
+                RelayerError::Other(
+                    "could not parse transaction response: expected JSON object or array"
+                        .to_string(),
+                ),
+                None,
+            ))
+        }
+    }
+
+    let responses = serde_json::from_slice::<Vec<RelayerTransactionResponseWithOwner>>(bytes)
+        .map_err(|e| {
+            TransactionParseError::new(
+                RelayerError::Other(format!("could not parse transaction response: {e}")),
+                None,
+            )
+        })?;
     if responses.len() > MAX_TRANSACTION_RESPONSE_ITEMS {
-        return Err(RelayerError::reconciliation_required(format!(
-            "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
-        )));
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
+            )),
+            None,
+        ));
     }
     let mut matching_responses = responses
         .into_iter()
         .filter(|response| response.response.transaction_id == expected_transaction_id);
     let Some(response) = matching_responses.next() else {
-        return Err(RelayerError::reconciliation_required(format!(
-            "transaction response did not include requested transaction id {}",
-            sanitized_external_token(expected_transaction_id)
-        )));
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response did not include requested transaction id {}",
+                sanitized_external_token(expected_transaction_id)
+            )),
+            None,
+        ));
     };
     if matching_responses.next().is_some() {
-        return Err(RelayerError::reconciliation_required(format!(
-            "transaction response included duplicate requested transaction id {}; manual reconciliation required",
-            sanitized_external_token(expected_transaction_id)
-        )));
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response included duplicate requested transaction id {}; manual reconciliation required",
+                sanitized_external_token(expected_transaction_id)
+            )),
+            None,
+        ));
     }
-    let receipt = receipt_from_submit_response(response.response, response.owner)?;
+    let owner = response.owner;
+    let receipt = receipt_from_submit_response(response.response, owner)
+        .map_err(|error| TransactionParseError::new(error, owner))?;
     require_transaction_id_match(expected_transaction_id, receipt)
+        .map_err(|error| TransactionParseError::new(error, owner))
 }
 
 fn receipt_from_submit_response(
@@ -4465,10 +4540,11 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 "tx-recovered",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4536,10 +4612,11 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 "tx-no-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4562,10 +4639,11 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 "tx-bad-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4631,10 +4709,53 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state
+                .transaction_owners
+                .get(transaction_id)
+                .is_some_and(|record| record.owner == owner));
+        }
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_confirmed_invalid_hash_blocks_with_response_owner_evidence() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-confirmed-bad-hash";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": transaction_id,
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "0xnot-a-transaction-hash",
+                "owner": WALLET_CREATE_OWNER
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction_with_reconciliation_permit(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4672,10 +4793,11 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 "tx-wrong-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4686,9 +4808,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_aware_poll_fetch_failure_without_evidence_does_not_block_owner() {
+    async fn owner_aware_poll_without_evidence_requires_reconciliation_permit_before_http() {
         let owner = address(WALLET_CREATE_OWNER);
-        let (url, handle) = spawn_reset_server().await;
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
         let client = test_client(url);
 
         let error = client
@@ -4700,12 +4822,9 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::Http(_)));
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].path, "/transaction?id=tx-recovery-fetch-failed");
     }
 
     #[tokio::test]
@@ -4734,10 +4853,11 @@ mod tests {
         }
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4832,10 +4952,11 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4874,10 +4995,11 @@ mod tests {
         let client = test_client(url);
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -4934,10 +5056,11 @@ mod tests {
         }
 
         let error = client
-            .poll_owner_transaction(
+            .poll_owner_transaction_with_reconciliation_permit(
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                mutation_permit_for(owner),
             )
             .await
             .unwrap_err();
