@@ -427,6 +427,7 @@ use super::*;
     fn manual_clear_removes_only_matching_owner_transaction_records() {
         let owner = address(WALLET_CREATE_OWNER);
         let other_owner = address("0x0000000000000000000000000000000000000001");
+        let other_payload_owner = address("0x0000000000000000000000000000000000000002");
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
         {
@@ -444,6 +445,14 @@ use super::*;
                     owner,
                     payload_hash: "payload-owner".to_string(),
                     source: OwnerTransactionSource::LocalSubmit,
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-owner-other-payload".to_string(),
+                OwnerTransactionRecord {
+                    owner: other_payload_owner,
+                    payload_hash: "payload-owner-other".to_string(),
+                    source: OwnerTransactionSource::OwnerRecovery,
                 },
             );
             state.transaction_owners.insert(
@@ -466,6 +475,82 @@ use super::*;
         client.ensure_owner_unblocked(owner).unwrap();
         let state = client.mutation_state().unwrap();
         assert!(!state.transaction_owners.contains_key("tx-owner-stale"));
+        assert_eq!(
+            state
+                .transaction_owners
+                .get("tx-owner-other-payload")
+                .map(|record| (record.owner, record.payload_hash.as_str())),
+            Some((other_payload_owner, "payload-owner-other"))
+        );
+        assert_eq!(
+            state
+                .transaction_owners
+                .get("tx-other-live")
+                .map(|record| record.owner),
+            Some(other_owner)
+        );
+    }
+
+#[test]
+    fn manual_clear_rejects_additional_same_payload_transaction_records() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let other_owner = address("0x0000000000000000000000000000000000000001");
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::Ambiguous {
+                    payload_hash: "payload-owner".to_string(),
+                    created_at_unix_seconds: 1_700_000_000,
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-owner-stale".to_string(),
+                OwnerTransactionRecord {
+                    owner,
+                    payload_hash: "payload-owner".to_string(),
+                    source: OwnerTransactionSource::LocalSubmit,
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-owner-other".to_string(),
+                OwnerTransactionRecord {
+                    owner,
+                    payload_hash: "payload-owner".to_string(),
+                    source: OwnerTransactionSource::OwnerRecovery,
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-other-live".to_string(),
+                OwnerTransactionRecord {
+                    owner: other_owner,
+                    payload_hash: "payload-other".to_string(),
+                    source: OwnerTransactionSource::LocalSubmit,
+                },
+            );
+        }
+
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload_and_transaction(
+                    owner,
+                    "payload-owner",
+                    "tx-owner-stale",
+                ),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(
+            client.ambiguous_submit_block(owner),
+            Some("payload-owner".to_string())
+        );
+        let state = client.mutation_state().unwrap();
+        assert!(state.transaction_owners.contains_key("tx-owner-stale"));
+        assert!(state.transaction_owners.contains_key("tx-owner-other"));
         assert_eq!(
             state
                 .transaction_owners

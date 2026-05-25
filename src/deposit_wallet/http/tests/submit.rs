@@ -89,7 +89,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn production_submit_uses_gate_before_auth_or_http() {
+    async fn production_submit_requires_trusted_permit_before_auth_or_http() {
         let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
         let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
         let client =
@@ -107,13 +107,29 @@ use super::*;
                 address(WALLET_CREATE_OWNER),
                 mutation_permit_for_scope(
                     address(WALLET_CREATE_OWNER),
-                    client.mutation_scope(DepositWalletMutationAction::WalletCreate),
+                    mutation_scope(DepositWalletMutationAction::WalletCreate),
                 ),
             )
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::AuthError(_)));
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+
+        let production_evidence = DepositWalletOwnerSerializationEvidence::new(
+            address(WALLET_CREATE_OWNER),
+            client.mutation_scope(DepositWalletMutationAction::WalletCreate),
+            "unit-test owner serialization guard",
+            "production-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        let error = DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "production submit",
+            production_evidence,
+        )
+        .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
 
         let signed = signed_wallet_batch();
         let owner = signed.owner();
@@ -122,13 +138,13 @@ use super::*;
                 signed,
                 mutation_permit_for_scope(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    mutation_scope(DepositWalletMutationAction::WalletBatch),
                 ),
             )
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::AuthError(_)));
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
 #[tokio::test]

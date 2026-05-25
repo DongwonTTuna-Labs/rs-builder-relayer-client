@@ -73,17 +73,29 @@ pub struct DepositWalletMutationPermit {
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit owner-scoped live mutation permit.
+    /// Creates an explicit owner-scoped mutation permit for test-loopback clients.
     ///
     /// The evidence must come from a caller-side owner lock, nonce lease, or
-    /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for
-    /// the same owner. The crate validates the evidence shape and expiry before
-    /// request construction; the caller remains responsible for enforcing the
-    /// referenced guard in its runtime.
+    /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for the
+    /// same owner. The crate validates the evidence shape and expiry before
+    /// request construction.
+    ///
+    /// Production mutation permits are intentionally not publicly constructible
+    /// in this PR because the in-memory owner state cannot survive process
+    /// restart. A later live-submit PR must add durable owner state and a
+    /// crate-owned trusted capability before production POST /submit can be
+    /// enabled.
     pub fn from_owner_serialization_evidence(
         reason: impl Into<String>,
         owner_serialization_evidence: DepositWalletOwnerSerializationEvidence,
     ) -> Result<Self> {
+        if owner_serialization_evidence.scope.environment
+            == DepositWalletMutationEnvironment::Production
+        {
+            return Err(RelayerError::mutation_blocked(
+                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public permit construction is limited to test loopback clients in this PR".to_string(),
+            ));
+        }
         let reason = reason.into();
         if reason.trim().is_empty() {
             return Err(RelayerError::mutation_blocked(

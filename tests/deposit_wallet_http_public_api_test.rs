@@ -25,12 +25,11 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
         2,
     )
     .unwrap();
-    let permit = DepositWalletMutationPermit::from_owner_serialization_evidence(
+    assert!(DepositWalletMutationPermit::from_owner_serialization_evidence(
         "compile-test explicit mutation approval",
         evidence,
     )
-    .unwrap();
-    let permit_gate = DepositWalletMutationGate::Permit(permit);
+    .is_err());
     let policy = DepositWalletPollPolicy::default();
     let reconciliation = DepositWalletSubmitReconciliationEvidence::new(
         Address::zero(),
@@ -58,5 +57,5 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     assert!(rendered.contains("DepositWalletRelayerClient"));
     assert!(!rendered.contains("compile-test-api-key"));
 
-    let _ = (gate, permit_gate, policy, reconciliation, receipt);
+    let _ = (gate, policy, reconciliation, receipt);
 }

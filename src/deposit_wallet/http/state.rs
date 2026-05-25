@@ -217,10 +217,23 @@ impl DepositWalletRelayerClient {
                         sanitized_external_token(evidence.transaction_id())
                     )));
                 }
+                if state
+                    .transaction_owners
+                    .iter()
+                    .any(|(transaction_id, record)| {
+                        transaction_id.as_str() != evidence.transaction_id()
+                            && record.owner == owner
+                            && record.payload_hash == evidence.payload_hash()
+                    })
+                {
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
+                        redacted_address(owner),
+                        display_payload_hash(evidence.payload_hash())
+                    )));
+                }
                 state.owner_blocks.remove(&owner);
-                state.transaction_owners.retain(|_, record| {
-                    record.owner != owner || record.payload_hash != evidence.payload_hash()
-                });
+                state.transaction_owners.remove(evidence.transaction_id());
             }
             Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) => {
                 return Err(RelayerError::reconciliation_required(format!(
