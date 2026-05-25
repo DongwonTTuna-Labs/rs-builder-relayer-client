@@ -8,6 +8,7 @@ use polymarket_relayer::{
 #[test]
 fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+    let mock_url = DepositWalletRelayerUrl::mocked_loopback("http://127.0.0.1:8080").unwrap();
     let auth = RelayerKeyAuth::new("compile-test-api-key", Address::zero());
     let config = deposit_wallet_contract_config(137).unwrap();
     let client = DepositWalletRelayerClient::new(url, auth, config).unwrap();
@@ -30,5 +31,5 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     assert!(rendered.contains("DepositWalletRelayerClient"));
     assert!(!rendered.contains("compile-test-api-key"));
 
-    let _ = (gate, permit_gate, policy, receipt);
+    let _ = (mock_url, gate, permit_gate, policy, receipt);
 }

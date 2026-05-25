@@ -47,6 +47,13 @@ const MAX_OWNER_MUTATION_RECORDS: usize = 1024;
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletRelayerUrl {
     base: Url,
+    kind: DepositWalletRelayerUrlKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DepositWalletRelayerUrlKind {
+    Production,
+    MockLoopback,
 }
 
 impl DepositWalletRelayerUrl {
@@ -54,7 +61,20 @@ impl DepositWalletRelayerUrl {
         let url = Url::parse(raw)
             .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
         validate_rel_url(&url)?;
-        Ok(Self { base: url })
+        Ok(Self {
+            base: url,
+            kind: DepositWalletRelayerUrlKind::Production,
+        })
+    }
+
+    pub fn mocked_loopback(raw: &str) -> Result<Self> {
+        let url = Url::parse(raw)
+            .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
+        validate_mock_loopback_url(&url)?;
+        Ok(Self {
+            base: url,
+            kind: DepositWalletRelayerUrlKind::MockLoopback,
+        })
     }
 
     fn endpoint(&self, path: &str) -> Url {
@@ -65,14 +85,12 @@ impl DepositWalletRelayerUrl {
     }
 
     fn is_production_host(&self) -> bool {
-        self.base.host_str() == Some(RELAYER_HOST)
+        self.kind == DepositWalletRelayerUrlKind::Production
     }
 
     #[cfg(test)]
     fn loopback(raw: &str) -> Result<Self> {
-        let url = Url::parse(raw)
-            .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
-        Ok(Self { base: url })
+        Self::mocked_loopback(raw)
     }
 
 }
@@ -156,11 +174,12 @@ pub struct DepositWalletMutationPermit {
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit live-mutation permit.
+    /// Creates an explicit mocked mutation permit.
     ///
     /// `owner_serialization_evidence` must identify the caller-side guard that
     /// prevents concurrent or restarted-process WALLET submits for the same
-    /// owner. The client's in-memory block is only a local backstop.
+    /// owner. This PR keeps production relayer submits disabled; the client's
+    /// in-memory block is only a local backstop for mocked submits.
     pub fn new(
         owner: Address,
         reason: impl Into<String>,
@@ -351,6 +370,7 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
         ensure_permitted(&gate, owner)?;
+        self.ensure_submit_endpoint_enabled()?;
         self.ensure_owner_unblocked(owner)?;
         let request = build_wallet_create_request(owner, self.config);
         let body = serde_json::to_string(&request)
@@ -365,6 +385,7 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
         ensure_permitted(&gate, owner)?;
+        self.ensure_submit_endpoint_enabled()?;
         self.ensure_owner_unblocked(owner)?;
         self.ensure_deadline_fresh(&signed)?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
@@ -791,6 +812,17 @@ impl DepositWalletRelayerClient {
             return Err(owner_block_error(owner, block));
         }
         Ok(())
+    }
+
+    fn ensure_submit_endpoint_enabled(&self) -> Result<()> {
+        if self.base_url.kind == DepositWalletRelayerUrlKind::MockLoopback {
+            return Ok(());
+        }
+
+        Err(RelayerError::mutation_blocked(
+            "production deposit-wallet submit is disabled in this mocked-only HTTP client PR"
+                .to_string(),
+        ))
     }
 
     fn reserve_owner_submit(
@@ -1424,6 +1456,35 @@ fn validate_rel_url(url: &Url) -> Result<()> {
     if url.path() != "/" {
         return Err(RelayerError::invalid_relayer_url(
             "relayer URL must not include a path".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mock_loopback_url(url: &Url) -> Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(RelayerError::invalid_relayer_url(
+            "mock relayer URL must use http or https".to_string(),
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(RelayerError::invalid_relayer_url(
+            "mock relayer URL must not include userinfo".to_string(),
+        ));
+    }
+    if !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1" | "[::1]")) {
+        return Err(RelayerError::invalid_relayer_url(
+            "mock relayer URL must be loopback-only".to_string(),
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(RelayerError::invalid_relayer_url(
+            "mock relayer URL must not include query or fragment".to_string(),
+        ));
+    }
+    if url.path() != "/" {
+        return Err(RelayerError::invalid_relayer_url(
+            "mock relayer URL must not include a path".to_string(),
         ));
     }
     Ok(())
@@ -2376,6 +2437,26 @@ mod tests {
     }
 
     #[test]
+    fn mocked_loopback_url_allows_only_local_mock_servers() {
+        for raw in ["http://127.0.0.1:8080", "http://localhost:8080", "https://[::1]:8443"] {
+            DepositWalletRelayerUrl::mocked_loopback(raw).unwrap();
+        }
+
+        for raw in [
+            "ftp://127.0.0.1:8080",
+            "http://user@127.0.0.1:8080",
+            "http://127.0.0.1:8080/path",
+            "http://127.0.0.1:8080?token=leak",
+            "https://relayer-v2.polymarket.com",
+            "http://192.168.0.1:8080",
+        ] {
+            let error = DepositWalletRelayerUrl::mocked_loopback(raw)
+                .expect_err("unsafe mock relayer URL should be rejected");
+            assert!(error_has_prefix(&error, INVALID_RELAYER_URL_PREFIX));
+        }
+    }
+
+    #[test]
     fn production_relayer_client_rejects_non_polygon_contract_config() {
         let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
         let amoy_config = deposit_wallet_contract_config(80002).unwrap();
@@ -2625,6 +2706,24 @@ mod tests {
             .unwrap_err();
 
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+    }
+
+    #[tokio::test]
+    async fn production_submit_is_disabled_before_auth_or_http() {
+        let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let client =
+            test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
+
+        let error = client
+            .submit_wallet_create(address(WALLET_CREATE_OWNER), mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(error
+            .to_string()
+            .contains("production deposit-wallet submit is disabled"));
     }
 
     #[tokio::test]
@@ -2932,6 +3031,19 @@ mod tests {
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
                 DepositWalletMutationPermit::new(owner, "checked mocked relayer state", ""),
+            )
+            .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                owner,
+                DepositWalletMutationPermit::new(
+                    Address::from_low_u64_be(99),
+                    "checked mocked relayer state",
+                    "single-process mocked owner serialization guard",
+                ),
             )
             .unwrap_err();
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
@@ -3283,6 +3395,29 @@ mod tests {
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].path.contains("/nonce?address="));
+    }
+
+    #[tokio::test]
+    async fn retry_after_summary_is_included_only_for_numeric_values() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("503 Service Unavailable", "{}").with_header("retry-after", "7"),
+            TestResponse::json("503 Service Unavailable", "{}")
+                .with_header("retry-after", "soon"),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(matches!(error, RelayerError::Api { status: 503, .. }));
+        assert!(error.to_string().contains("retry after 7s"));
+
+        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(matches!(error, RelayerError::Api { status: 503, .. }));
+        assert!(!error.to_string().contains("retry after"));
+
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
     #[tokio::test]
