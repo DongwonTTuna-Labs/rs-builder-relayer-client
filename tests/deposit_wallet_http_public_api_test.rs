@@ -1,8 +1,9 @@
 use ethers::types::Address;
 use polymarket_relayer::{
     deposit_wallet_contract_config, DepositWalletMutationGate, DepositWalletMutationPermit,
-    DepositWalletPollPolicy, DepositWalletRelayerClient, DepositWalletRelayerUrl,
-    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerTransactionState,
+    DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
+    DepositWalletRelayerUrl, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    RelayerTransactionState,
 };
 
 #[test]
@@ -13,11 +14,19 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let client = DepositWalletRelayerClient::new(url, auth, config).unwrap();
 
     let gate = DepositWalletMutationGate::Deny;
-    let permit = DepositWalletMutationPermit::new(
+    let evidence = DepositWalletOwnerSerializationEvidence::new(
         Address::zero(),
-        "compile-test explicit mutation approval",
+        "compile-test owner lock",
         "compile-test owner serialization evidence",
-    );
+        1,
+        2,
+    )
+    .unwrap();
+    let permit = DepositWalletMutationPermit::from_owner_serialization_evidence(
+        "compile-test explicit mutation approval",
+        evidence,
+    )
+    .unwrap();
     let permit_gate = DepositWalletMutationGate::Permit(permit);
     let policy = DepositWalletPollPolicy::default();
     let receipt = DepositWalletTransactionReceipt {

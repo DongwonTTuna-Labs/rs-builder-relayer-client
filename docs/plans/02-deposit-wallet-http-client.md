@@ -2,17 +2,21 @@
 
 ## Summary
 
-Add a mocked HTTP client for relayer nonce, submit, and transaction polling.
-This PR connects existing request builders and signing outputs to HTTP behavior
-without touching live relayer endpoints.
+Add a production-endpoint-capable HTTP client for relayer nonce, submit, and
+transaction polling. This PR connects existing request builders and signing
+outputs to real relayer HTTP behavior while keeping the default test suite on
+local mock responders.
 
 ## In Scope
 
 - Add `src/deposit_wallet/http.rs` for relayer HTTP transport.
 - Add a small `DepositWalletRelayerClient` wrapper that uses deposit-wallet
   request builders, signing outputs, and transaction state parsing.
-- Implement mocked tests for `GET /nonce`, `POST /submit` with `WALLET-CREATE`,
-  `POST /submit` with `WALLET`, and `GET /transaction`.
+- Implement production URL validation for the allowlisted Polymarket relayer
+  and HTTP methods for `GET /nonce`, gated `POST /submit` with
+  `WALLET-CREATE`, gated `POST /submit` with `WALLET`, and
+  `GET /transaction`.
+- Implement mocked tests for those endpoints using local loopback responders.
 - Use local test HTTP responders built with `tokio::net::TcpListener`; do not
   add a mock-server dependency unless the PR documents the dependency risk.
 
@@ -44,11 +48,13 @@ without touching live relayer endpoints.
 - `poll_transaction(transaction_id, poll_policy)`: polls under a bounded policy
   until terminal success or terminal failure, preserving unknown states.
 
-The mutation gate must default to deny live relayer mutation. A live URL, API
+The mutation gate must default to deny relayer mutation. A production URL, API
 key, or signer alone must not be enough to submit `WALLET-CREATE` or `WALLET`.
-The implementation PR must document the enable flag or permit type, dry-run
-evidence requirement, rollback path, and the error returned when mutation is
-blocked.
+`POST /submit` may reach the allowlisted production endpoint only with an
+explicit owner-scoped live mutation permit that records caller-side owner
+serialization evidence. The implementation PR must document the permit type,
+dry-run evidence requirement, rollback path, and the error returned when
+mutation is blocked.
 
 Relayer authentication headers must only be attached after endpoint validation.
 Tests must reject `http://` URLs, non-allowlisted hosts, userinfo-bearing URLs,
@@ -63,6 +69,8 @@ APIs must not be removed or silently changed.
 
 ## Fixture And Mock Requirements
 
+- Mock transport is test-only. Default CI must never submit live relayer
+  mutations or require live Polymarket credentials.
 - Mocked `GET /nonce` must assert `address=<owner>` and `type=WALLET`.
 - Endpoint validation tests must prove relayer auth is never sent to
   non-HTTPS, non-allowlisted, userinfo-bearing, or redirect targets.
@@ -73,7 +81,7 @@ APIs must not be removed or silently changed.
 - Mutation gate tests must prove both `submit_wallet_create` and
   `submit_signed_wallet_batch` are denied by default before any HTTP request or
   auth header construction, return a stable blocked-mutation error, and proceed
-  only when an explicit permit is supplied.
+  only when an explicit owner-scoped permit is supplied.
 - Mocked `POST /submit` must assert exact JSON body for both `WALLET-CREATE`
   and `WALLET`.
 - Mocked polling must cover `STATE_NEW`, `STATE_EXECUTED`, `STATE_MINED`,
@@ -110,6 +118,7 @@ APIs must not be removed or silently changed.
 
 ## Residual Risk
 
-- Mocked HTTP proves client behavior, not production relayer acceptance.
-- Live execution remains gated until calldata builders, dry-run evidence, and
-  operator approval are complete.
+- Mocked default tests prove client behavior, not production relayer acceptance.
+- Production submit is endpoint-capable but still gated; end-to-end live trading
+  remains blocked until calldata builders, dry-run evidence, and operator
+  approval are complete.

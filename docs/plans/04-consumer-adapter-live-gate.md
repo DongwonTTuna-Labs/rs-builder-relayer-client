@@ -12,7 +12,8 @@ the required dry-run and manual live gates are satisfied.
 - Define how the consumer maps this crate's DTOs into its own port/domain types.
 - Add dry-run evidence requirements for nonce, signed batch, submit body, and
   transaction polling.
-- Add manual live gate instructions with stop conditions and rollback steps.
+- Add manual live gate instructions with stop conditions and rollback steps for
+  operator-run production submit.
 - Require commit-SHA pinning or local path dependency only.
 
 ## Out Of Scope
@@ -40,6 +41,9 @@ the required dry-run and manual live gates are satisfied.
 - `WALLET` signing/submission is serialized per owner through an in-flight owner
   lock, nonce lease, or actor queue. A second batch for the same owner must not
   fetch/sign/submit with a nonce while another owner-scoped batch is unresolved.
+  The production submit permit passed to this crate must be derived from that
+  consumer-owned lock, lease, or queue evidence rather than from a free-form
+  string.
 - Signed batch digest and a field-level submit summary are captured in redacted
   dry-run evidence. Raw signatures, auth material, raw signed payloads, and full
   replayable submit bodies must never be stored in logs, fixtures, PR comments,
@@ -80,7 +84,8 @@ the required dry-run and manual live gates are satisfied.
 - Dry-run evidence tests prove signatures, authorization headers, raw signed
   typed data, and replayable submit bodies are redacted while non-secret hashes
   and field-level summaries remain available for review.
-- Manual live gate evidence is stored outside fixtures and without secrets.
+- Manual live gate evidence is stored outside fixtures and without secrets. It
+  is an operator-run procedure, not a CI/default-test requirement.
 
 ## Residual Risk
 

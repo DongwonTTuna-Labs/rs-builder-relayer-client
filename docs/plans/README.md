@@ -24,15 +24,18 @@ decompose that policy into implementation slices.
 
 ```text
 01 EIP-712 signing and nonce request fixture
-  -> 02 mocked HTTP nonce/submit/poll client
+  -> 02 production-capable HTTP client with mocked tests
     -> 03 pUSD/CTF calldata builders
       -> 04 consumer adapter and live gate
 ```
 
-No plan in this directory makes the fork ready for live deposit-wallet
-execution by itself. The live gate remains closed until signing, nonce,
-submit/poll, calldata, identity separation, dry-run evidence, rollback policy,
-and operator approval are all complete.
+No single plan in this directory makes the fork ready for end-to-end live
+deposit-wallet trading by itself. PR 02 may add a client that can reach the
+allowlisted production relayer endpoint, but default tests still use only local
+mock responders and live mutation requires an explicit owner-scoped gate. The
+full trading gate remains closed until signing, nonce, submit/poll, calldata,
+identity separation, dry-run evidence, rollback policy, and operator approval
+are all complete.
 
 ## PR Boundaries
 

@@ -58,6 +58,7 @@ pub struct DepositWalletRelayerUrl {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DepositWalletRelayerUrlKind {
     Production,
+    #[cfg(test)]
     MockLoopback,
 }
 
@@ -187,26 +188,32 @@ impl fmt::Debug for DepositWalletMutationGate {
 pub struct DepositWalletMutationPermit {
     owner: Address,
     reason: String,
-    owner_serialization_evidence: String,
+    owner_serialization_evidence: DepositWalletOwnerSerializationEvidence,
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit mocked mutation permit.
+    /// Creates an explicit owner-scoped live mutation permit.
     ///
-    /// `owner_serialization_evidence` must identify the caller-side guard that
-    /// prevents concurrent or restarted-process WALLET submits for the same
-    /// owner. This PR keeps production relayer submits disabled; the client's
-    /// in-memory block is only a local backstop for mocked submits.
-    pub fn new(
-        owner: Address,
+    /// The evidence must come from a caller-side owner lock, nonce lease, or
+    /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for
+    /// the same owner. The crate validates the evidence shape and expiry before
+    /// request construction; the caller remains responsible for enforcing the
+    /// referenced guard in its runtime.
+    pub fn from_owner_serialization_evidence(
         reason: impl Into<String>,
-        owner_serialization_evidence: impl Into<String>,
-    ) -> Self {
-        Self {
-            owner,
-            reason: reason.into(),
-            owner_serialization_evidence: owner_serialization_evidence.into(),
+        owner_serialization_evidence: DepositWalletOwnerSerializationEvidence,
+    ) -> Result<Self> {
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(RelayerError::mutation_blocked(
+                "explicit deposit-wallet mutation permit reason required".to_string(),
+            ));
         }
+        Ok(Self {
+            owner: owner_serialization_evidence.owner,
+            reason,
+            owner_serialization_evidence,
+        })
     }
 }
 
@@ -216,6 +223,74 @@ impl fmt::Debug for DepositWalletMutationPermit {
             .field("owner", &redacted_address(self.owner))
             .field("reason", &"<redacted>")
             .field("owner_serialization_evidence", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct DepositWalletOwnerSerializationEvidence {
+    owner: Address,
+    issuer: String,
+    lease_id_hash: String,
+    acquired_at_unix_seconds: u64,
+    expires_at_unix_seconds: u64,
+}
+
+impl DepositWalletOwnerSerializationEvidence {
+    /// Records caller-side proof that same-owner submit work is serialized.
+    ///
+    /// `lease_id` is hashed before storage so debug output and errors never
+    /// expose raw lock keys, queue ids, or database lease identifiers.
+    pub fn new(
+        owner: Address,
+        issuer: impl Into<String>,
+        lease_id: impl AsRef<[u8]>,
+        acquired_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+    ) -> Result<Self> {
+        let issuer = issuer.into();
+        if issuer.trim().is_empty() {
+            return Err(RelayerError::mutation_blocked(
+                "owner serialization evidence issuer required".to_string(),
+            ));
+        }
+        let lease_id = lease_id.as_ref();
+        if lease_id.is_empty() {
+            return Err(RelayerError::mutation_blocked(
+                "owner serialization evidence lease id required".to_string(),
+            ));
+        }
+        if expires_at_unix_seconds <= acquired_at_unix_seconds {
+            return Err(RelayerError::mutation_blocked(
+                "owner serialization evidence must expire after acquisition".to_string(),
+            ));
+        }
+        Ok(Self {
+            owner,
+            issuer,
+            lease_id_hash: payload_hash_summary(lease_id),
+            acquired_at_unix_seconds,
+            expires_at_unix_seconds,
+        })
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn expires_at_unix_seconds(&self) -> u64 {
+        self.expires_at_unix_seconds
+    }
+}
+
+impl fmt::Debug for DepositWalletOwnerSerializationEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletOwnerSerializationEvidence")
+            .field("owner", &redacted_address(self.owner))
+            .field("issuer", &"<redacted>")
+            .field("lease_id_hash", &display_payload_hash(&self.lease_id_hash))
+            .field("acquired_at_unix_seconds", &self.acquired_at_unix_seconds)
+            .field("expires_at_unix_seconds", &self.expires_at_unix_seconds)
             .finish()
     }
 }
@@ -436,8 +511,7 @@ impl DepositWalletRelayerClient {
         owner: Address,
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
-        ensure_permitted(&gate, owner)?;
-        self.ensure_submit_endpoint_enabled()?;
+        self.ensure_permitted(&gate, owner)?;
         self.ensure_owner_unblocked(owner)?;
         let request = build_wallet_create_request(owner, self.config);
         let body = serde_json::to_string(&request)
@@ -451,8 +525,7 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
-        ensure_permitted(&gate, owner)?;
-        self.ensure_submit_endpoint_enabled()?;
+        self.ensure_permitted(&gate, owner)?;
         self.ensure_owner_unblocked(owner)?;
         self.ensure_deadline_fresh(&signed)?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
@@ -578,7 +651,7 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
-        ensure_permitted(&gate, owner)?;
+        self.ensure_permitted(&gate, owner)?;
         let transaction_id = validate_transaction_id(transaction_id)?;
         self.poll_validated_transaction(transaction_id, policy, Some(owner), true)
             .await
@@ -755,19 +828,7 @@ impl DepositWalletRelayerClient {
         owner: Address,
         permit: DepositWalletMutationPermit,
     ) -> Result<()> {
-        validate_permit_owner(&permit, owner)?;
-        if permit.reason.trim().is_empty() {
-            return Err(RelayerError::mutation_blocked(
-                "manual reconciliation reason required before clearing ambiguous submit"
-                    .to_string(),
-            ));
-        }
-        if permit.owner_serialization_evidence.trim().is_empty() {
-            return Err(RelayerError::mutation_blocked(
-                "manual reconciliation evidence required before clearing ambiguous submit"
-                    .to_string(),
-            ));
-        }
+        self.ensure_permitted(&DepositWalletMutationGate::Permit(permit), owner)?;
 
         let mut state = self.mutation_state()?;
         match state.owner_blocks.get(&owner).cloned() {
@@ -986,17 +1047,6 @@ impl DepositWalletRelayerClient {
             return Err(owner_block_error(owner, block));
         }
         Ok(())
-    }
-
-    fn ensure_submit_endpoint_enabled(&self) -> Result<()> {
-        if self.base_url.kind == DepositWalletRelayerUrlKind::MockLoopback {
-            return Ok(());
-        }
-
-        Err(RelayerError::mutation_blocked(
-            "production deposit-wallet submit is disabled in this mocked-only HTTP client PR"
-                .to_string(),
-        ))
     }
 
     fn reserve_owner_submit(
@@ -1340,6 +1390,18 @@ impl DepositWalletRelayerClient {
         })
     }
 
+    fn ensure_permitted(&self, gate: &DepositWalletMutationGate, owner: Address) -> Result<()> {
+        match gate {
+            DepositWalletMutationGate::Permit(permit) => {
+                validate_permit_owner(permit, owner)?;
+                validate_permit_fresh(permit, self.clock.now_unix_seconds())
+            }
+            DepositWalletMutationGate::Deny => Err(RelayerError::mutation_blocked(
+                "explicit deposit-wallet mutation permit required".to_string(),
+            )),
+        }
+    }
+
     #[cfg(test)]
     fn hold_error_body_drain_permits_for_test(&self) -> Vec<OwnedSemaphorePermit> {
         self.error_body_drain_limiter.hold_all_permits_for_test()
@@ -1675,36 +1737,33 @@ fn validate_relayer_contract_config(
     Ok(())
 }
 
-fn ensure_permitted(gate: &DepositWalletMutationGate, owner: Address) -> Result<()> {
-    match gate {
-        DepositWalletMutationGate::Permit(permit)
-            if !permit.reason.trim().is_empty()
-                && !permit.owner_serialization_evidence.trim().is_empty() =>
-        {
-            validate_permit_owner(permit, owner)
-        }
-        DepositWalletMutationGate::Permit(permit) if permit.reason.trim().is_empty() => {
-            Err(RelayerError::mutation_blocked(
-                "explicit deposit-wallet mutation permit reason required".to_string(),
-            ))
-        }
-        DepositWalletMutationGate::Permit(_) => Err(RelayerError::mutation_blocked(
-            "owner-scoped mutation serialization evidence required before live deposit-wallet mutation"
-                .to_string(),
-        )),
-        DepositWalletMutationGate::Deny => Err(RelayerError::mutation_blocked(
-            "explicit deposit-wallet mutation permit required".to_string(),
-        )),
-    }
-}
-
 fn validate_permit_owner(permit: &DepositWalletMutationPermit, owner: Address) -> Result<()> {
+    if permit.owner != permit.owner_serialization_evidence.owner {
+        return Err(RelayerError::mutation_blocked(
+            "deposit-wallet mutation permit owner does not match owner serialization evidence"
+                .to_string(),
+        ));
+    }
     if permit.owner != owner {
         return Err(RelayerError::mutation_blocked(format!(
             "deposit-wallet mutation permit owner {} does not match request owner {}",
             redacted_address(permit.owner),
             redacted_address(owner)
         )));
+    }
+    Ok(())
+}
+
+fn validate_permit_fresh(permit: &DepositWalletMutationPermit, now_unix_seconds: u64) -> Result<()> {
+    if permit.reason.trim().is_empty() {
+        return Err(RelayerError::mutation_blocked(
+            "explicit deposit-wallet mutation permit reason required".to_string(),
+        ));
+    }
+    if permit.owner_serialization_evidence.expires_at_unix_seconds <= now_unix_seconds {
+        return Err(RelayerError::mutation_blocked(
+            "deposit-wallet mutation permit owner serialization evidence is expired".to_string(),
+        ));
     }
     Ok(())
 }
@@ -2370,11 +2429,40 @@ mod tests {
     }
 
     fn mutation_permit_for(owner: Address) -> DepositWalletMutationGate {
-        DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+        DepositWalletMutationGate::Permit(mutation_permit_token_for(
             owner,
-            "mocked unit-test relayer call",
-            "single-process mocked owner serialization guard",
         ))
+    }
+
+    fn mutation_permit_token_for(owner: Address) -> DepositWalletMutationPermit {
+        DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "mocked unit-test relayer call",
+            owner_serialization_evidence_for(owner),
+        )
+        .unwrap()
+    }
+
+    fn owner_serialization_evidence_for(owner: Address) -> DepositWalletOwnerSerializationEvidence {
+        DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            "unit-test owner serialization guard",
+            format!("unit-test-owner-lease-{owner:?}"),
+            1_600_000_000,
+            4_000_000_000,
+        )
+        .unwrap()
+    }
+
+    fn unchecked_mutation_permit(
+        owner: Address,
+        reason: impl Into<String>,
+        evidence: DepositWalletOwnerSerializationEvidence,
+    ) -> DepositWalletMutationPermit {
+        DepositWalletMutationPermit {
+            owner,
+            reason: reason.into(),
+            owner_serialization_evidence: evidence,
+        }
     }
 
     fn reqwest_client(timeout: Duration) -> Client {
@@ -2943,10 +3031,10 @@ mod tests {
         let error = client
             .submit_wallet_create(
                 address(WALLET_CREATE_OWNER),
-                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                DepositWalletMutationGate::Permit(unchecked_mutation_permit(
                     address(WALLET_CREATE_OWNER),
                     " ",
-                    "single-process mocked owner serialization guard",
+                    owner_serialization_evidence_for(address(WALLET_CREATE_OWNER)),
                 )),
             )
             .await
@@ -2957,10 +3045,17 @@ mod tests {
         let error = client
             .submit_wallet_create(
                 address(WALLET_CREATE_OWNER),
-                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                DepositWalletMutationGate::Permit(unchecked_mutation_permit(
                     address(WALLET_CREATE_OWNER),
                     "mocked unit-test relayer call",
-                    "",
+                    DepositWalletOwnerSerializationEvidence::new(
+                        address(WALLET_CREATE_OWNER),
+                        "unit-test expired owner serialization guard",
+                        "expired-owner-lease",
+                        1,
+                        2,
+                    )
+                    .unwrap(),
                 )),
             )
             .await
@@ -2978,10 +3073,10 @@ mod tests {
         let error = client
             .submit_wallet_create(
                 address(WALLET_CREATE_OWNER),
-                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                DepositWalletMutationGate::Permit(unchecked_mutation_permit(
                     Address::zero(),
                     "mocked unit-test relayer call",
-                    "single-process mocked owner serialization guard",
+                    owner_serialization_evidence_for(Address::zero()),
                 )),
             )
             .await
@@ -2994,10 +3089,10 @@ mod tests {
         let error = client
             .submit_signed_wallet_batch(
                 signed,
-                DepositWalletMutationGate::Permit(DepositWalletMutationPermit::new(
+                DepositWalletMutationGate::Permit(unchecked_mutation_permit(
                     owner,
                     "",
-                    "single-process mocked owner serialization guard",
+                    owner_serialization_evidence_for(owner),
                 )),
             )
             .await
@@ -3007,21 +3102,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_submit_is_disabled_before_auth_or_http() {
+    async fn production_submit_uses_gate_before_auth_or_http() {
         let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
         let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
         let client =
             test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
 
         let error = client
-            .submit_wallet_create(address(WALLET_CREATE_OWNER), mutation_permit())
+            .submit_wallet_create(address(WALLET_CREATE_OWNER), DepositWalletMutationGate::Deny)
             .await
             .unwrap_err();
 
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
-        assert!(error
-            .to_string()
-            .contains("production deposit-wallet submit is disabled"));
+
+        let error = client
+            .submit_wallet_create(address(WALLET_CREATE_OWNER), mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::AuthError(_)));
 
         let signed = signed_wallet_batch();
         let owner = signed.owner();
@@ -3030,10 +3129,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
-        assert!(error
-            .to_string()
-            .contains("production deposit-wallet submit is disabled"));
+        assert!(matches!(error, RelayerError::AuthError(_)));
     }
 
     #[tokio::test]
@@ -3061,11 +3157,18 @@ mod tests {
     #[test]
     fn mutation_permit_debug_redacts_approval_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
-        let permit = DepositWalletMutationPermit::new(
-            owner,
+        let permit = DepositWalletMutationPermit::from_owner_serialization_evidence(
             "ticket-123 caller lock",
-            "owner-lock-key-456",
-        );
+            DepositWalletOwnerSerializationEvidence::new(
+                owner,
+                "unit-test caller lock",
+                "owner-lock-key-456",
+                1_600_000_000,
+                1_800_000_000,
+            )
+            .unwrap(),
+        )
+        .unwrap();
         let rendered_permit = format!("{permit:?}");
         let rendered_gate = format!("{:?}", DepositWalletMutationGate::Permit(permit));
 
@@ -3073,8 +3176,10 @@ mod tests {
         assert!(rendered_permit.contains("<redacted>"));
         assert!(!rendered_permit.contains("ticket-123"));
         assert!(!rendered_permit.contains("owner-lock-key-456"));
+        assert!(!rendered_permit.contains("unit-test caller lock"));
         assert!(!rendered_gate.contains("ticket-123"));
         assert!(!rendered_gate.contains("owner-lock-key-456"));
+        assert!(!rendered_gate.contains("unit-test caller lock"));
     }
 
     #[tokio::test]
@@ -3406,6 +3511,7 @@ mod tests {
         .await;
         let clock: Arc<dyn DepositWalletClock> = Arc::new(SequenceClock::new([
             1_700_000_000,
+            1_700_000_000,
             deadline,
         ]));
         let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
@@ -3479,10 +3585,10 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
+                unchecked_mutation_permit(
                     owner,
                     " ",
-                    "single-process mocked owner serialization guard",
+                    owner_serialization_evidence_for(owner),
                 ),
             )
             .unwrap_err();
@@ -3494,7 +3600,18 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(owner, "checked mocked relayer state", ""),
+                unchecked_mutation_permit(
+                    owner,
+                    "checked mocked relayer state",
+                    DepositWalletOwnerSerializationEvidence::new(
+                        owner,
+                        "unit-test expired owner serialization guard",
+                        "expired-owner-lease-for-clear",
+                        1,
+                        2,
+                    )
+                    .unwrap(),
+                ),
             )
             .unwrap_err();
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
@@ -3503,10 +3620,10 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
+                unchecked_mutation_permit(
                     Address::from_low_u64_be(99),
                     "checked mocked relayer state",
-                    "single-process mocked owner serialization guard",
+                    owner_serialization_evidence_for(Address::from_low_u64_be(99)),
                 ),
             )
             .unwrap_err();
@@ -3516,11 +3633,7 @@ mod tests {
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked mocked relayer state",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap();
         let nonce = client.get_wallet_nonce(owner).await.unwrap();
@@ -3542,11 +3655,7 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked active mocked relayer state",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap_err();
 
@@ -5342,11 +5451,7 @@ mod tests {
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked recovery fetch failure",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap();
         client.ensure_owner_unblocked(owner).unwrap();
@@ -5621,11 +5726,7 @@ mod tests {
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked mocked owner mismatch",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap();
         client.ensure_owner_unblocked(owner).unwrap();
@@ -5664,11 +5765,7 @@ mod tests {
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked malformed transaction response",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap();
         client.ensure_owner_unblocked(owner).unwrap();
@@ -5846,11 +5943,7 @@ mod tests {
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked mocked owner transaction map cleanup",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap();
 
@@ -5885,11 +5978,7 @@ mod tests {
         let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 owner,
-                DepositWalletMutationPermit::new(
-                    owner,
-                    "checked mocked relayer state",
-                    "single-process mocked owner serialization guard",
-                ),
+                mutation_permit_token_for(owner),
             )
             .unwrap_err();
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));

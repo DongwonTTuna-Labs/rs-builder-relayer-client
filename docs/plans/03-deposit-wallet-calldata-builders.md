@@ -4,7 +4,8 @@
 
 Add deposit-wallet-specific calldata builders for pUSD approvals, conditional
 token approvals, and enabled CTF adapter operations. This PR only builds calldata
-that will later be submitted inside `WALLET` batches.
+that can be submitted inside `WALLET` batches by the HTTP client introduced in
+PR 02 after the caller supplies the required mutation gate.
 
 ## In Scope
 
@@ -17,7 +18,7 @@ that will later be submitted inside `WALLET` batches.
 
 ## Out Of Scope
 
-- No live submission of generated calldata.
+- No live submission of generated calldata from this PR.
 - No CLOB order posting or balance sync.
 - No reuse of legacy USDC.e or direct CTF helpers without explicit fixture proof.
 - No broad operation abstraction that hides target contract, value, and calldata.
@@ -81,5 +82,7 @@ chain inference, and fallback targets are not allowed.
 ## Residual Risk
 
 - Correct calldata does not prove relayer execution or CLOB balance visibility.
+- Without these calldata builders, the production-capable HTTP client from PR 02
+  is not a complete live trading flow.
 - Current adapter routes may change. Each fixture must record the source used at
   implementation time.
