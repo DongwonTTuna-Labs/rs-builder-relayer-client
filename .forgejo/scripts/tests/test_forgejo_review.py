@@ -114,6 +114,7 @@ class ReviewContextTests(unittest.TestCase):
         )
         self.assertIn("Status: **LGTM**", body)
         self.assertIn("Missing axes: none", body)
+        self.assertIn("재리뷰는 `/codex-review` 코멘트로 요청하세요.", body)
 
 
 class ResolveMetadataTests(unittest.TestCase):
@@ -127,10 +128,20 @@ class ResolveMetadataTests(unittest.TestCase):
     def test_issue_comment_command_resolves_pr_number(self) -> None:
         os.environ["GITHUB_EVENT_NAME"] = "issue_comment"
         payload = {
+            "action": "created",
             "comment": {"body": "/codex-review"},
             "issue": {"number": 7, "pull_request": {"url": "x"}},
         }
         self.assertEqual(requested_pr_number(payload), ("7", "issue_comment:/codex-review"))
+
+    def test_issue_comment_edits_do_not_trigger_review(self) -> None:
+        os.environ["GITHUB_EVENT_NAME"] = "issue_comment"
+        payload = {
+            "action": "edited",
+            "comment": {"body": "/codex-review"},
+            "issue": {"number": 7, "pull_request": {"url": "x"}},
+        }
+        self.assertEqual(requested_pr_number(payload), (None, "issue_comment:edited"))
 
     def test_authorize_allows_non_default_base_when_surface_check_is_deferred(self) -> None:
         os.environ["GITHUB_ACTOR"] = "DongwonTTuna"
@@ -208,6 +219,7 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("pull_request_target:", workflow)
         self.assertIn("issue_comment:", workflow)
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("github.event_name != 'issue_comment' || github.event.action == 'created'", workflow)
         self.assertIn("git_fetch ls-remote --symref origin HEAD", workflow)
         self.assertIn('git_fetch fetch --depth=1 origin "refs/heads/$default_branch"', workflow)
         self.assertIn("CODEX_DEFAULT_BRANCH=$default_branch", workflow)
