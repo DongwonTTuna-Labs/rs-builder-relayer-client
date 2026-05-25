@@ -58,6 +58,11 @@ enum DepositWalletRelayerUrlKind {
 }
 
 impl DepositWalletRelayerUrl {
+    /// Builds a production relayer URL.
+    ///
+    /// This PR keeps live submit mutations disabled for production URLs. The
+    /// loopback submit transport is intentionally limited to crate-local tests
+    /// until a later live-gate PR adds approved external integration hooks.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)
             .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
@@ -649,9 +654,7 @@ impl DepositWalletRelayerClient {
                 | RelayerTransactionState::Executed
                 | RelayerTransactionState::Mined => {
                     if let Some(owner) = expected_owner {
-                        if self.has_recovery_owner_evidence(owner, &transaction_id)? {
-                            self.record_recovered_inflight_transaction(owner, &transaction_id)?;
-                        }
+                        self.record_recovered_inflight_transaction(owner, &transaction_id)?;
                     }
                 }
             }
@@ -1056,11 +1059,8 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
     ) -> Result<()> {
         let mut state = self.mutation_state()?;
-        let Some(recovered_payload_hash) =
-            current_recovery_payload_hash(&state, transaction_id, owner)?
-        else {
-            return Ok(());
-        };
+        let recovered_payload_hash = current_recovery_payload_hash(&state, transaction_id, owner)?
+            .unwrap_or_else(|| recovered_payload_hash(transaction_id));
         ensure_transaction_owner_mapping_available(
             &state,
             transaction_id,
@@ -1857,7 +1857,6 @@ fn signed_digest_payload_hash(digest: H256) -> String {
     format!("signed-digest:0x{hex}")
 }
 
-#[cfg(test)]
 fn recovered_payload_hash(transaction_id: &str) -> String {
     let hex = hex::encode(keccak256(transaction_id.as_bytes()));
     format!("recovered:0x{hex}")
@@ -3935,6 +3934,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_transaction_rejects_body_over_transaction_limit() {
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "tx-too-large",
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                "owner": WALLET_CREATE_OWNER,
+                "metadata": "x".repeat(MAX_TRANSACTION_SUCCESS_BODY_BYTES + 1)
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client.get_transaction("tx-too-large").await.unwrap_err();
+
+        assert!(matches!(error, RelayerError::Other(message) if message.contains("maximum size")));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
     async fn get_wallet_nonce_rejects_malformed_success_payloads() {
         for body in ["not-json".to_string(), "{}".to_string(), json!({"nonce": "nan"}).to_string()]
         {
@@ -4296,13 +4318,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_aware_poll_rechecks_owner_evidence_before_each_state_mutation() {
+    async fn owner_aware_poll_restores_recovered_block_after_local_clear() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![
             TestResponse::json("200 OK", transaction_response("tx-cleared", "STATE_NEW")),
             TestResponse::json("200 OK", transaction_response("tx-cleared", "STATE_NEW")),
             TestResponse::json("200 OK", transaction_response("tx-cleared", "STATE_NEW")),
-            TestResponse::json("200 OK", json!({"nonce": "39"}).to_string()),
         ])
         .await;
         let sleeper = Arc::new(ClearingSleeper::default());
@@ -4333,17 +4354,16 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Timeout));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
-        assert_eq!(nonce, U256::from(39u64));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 3);
     }
 
     #[tokio::test]
-    async fn owner_aware_poll_without_local_evidence_does_not_block_owner() {
+    async fn owner_aware_poll_pending_without_local_evidence_blocks_owner_after_timeout() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
@@ -4362,8 +4382,9 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, RelayerError::Timeout));
 
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -4620,6 +4641,48 @@ mod tests {
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owner_aware_poll_pending_without_local_evidence_blocks_owner() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-recovered-pending";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response(transaction_id, "STATE_MINED"),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Timeout));
+        {
+            let state = client.mutation_state().unwrap();
+            match state.owner_blocks.get(&owner) {
+                Some(OwnerMutationBlock::Ambiguous {
+                    payload_hash,
+                }) => {
+                    assert_eq!(payload_hash, &recovered_payload_hash(transaction_id));
+                }
+                block => panic!("expected recovered ambiguous owner block, got {block:?}"),
+            }
+            assert!(state
+                .transaction_owners
+                .get(transaction_id)
+                .is_some_and(|record| record.owner == owner));
+        }
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
