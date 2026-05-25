@@ -538,7 +538,9 @@ impl DepositWalletRelayerClient {
                             policy.interval_for_transaction_attempt(&transaction_id, attempt);
                         let sleep_for = poll_error
                             .retry_after
-                            .map(|retry_after| retry_after.max(policy_interval))
+                            .map(|retry_after| {
+                                retry_after.min(MAX_POLL_INTERVAL).max(policy_interval)
+                            })
                             .unwrap_or(policy_interval);
                         self.sleeper
                             .sleep(sleep_for)
@@ -4156,7 +4158,7 @@ mod tests {
     async fn transient_poll_fetch_error_retries_without_ambiguous_owner_block() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![
-            TestResponse::json("503 Service Unavailable", "{}").with_header("retry-after", "1"),
+            TestResponse::json("503 Service Unavailable", "{}").with_header("retry-after", "90"),
             TestResponse::json(
                 "200 OK",
                 transaction_response("tx-transient", "STATE_CONFIRMED"),
@@ -4186,7 +4188,7 @@ mod tests {
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps, vec![Duration::from_secs(1)]);
+        assert_eq!(sleeps, vec![MAX_POLL_INTERVAL]);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }
