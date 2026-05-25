@@ -215,10 +215,16 @@ class WorkflowParityTests(unittest.TestCase):
             self.assertNotIn(value, text)
 
     def test_codex_review_uses_default_branch_trusted_scripts(self) -> None:
-        workflow = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
-        self.assertIn("pull_request_target:", workflow)
-        self.assertIn("issue_comment:", workflow)
-        self.assertIn("workflow_dispatch:", workflow)
+        workflow_path = REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(workflow)
+        events = parsed.get("on", parsed.get(True))
+        self.assertEqual(
+            events["pull_request_target"]["types"],
+            ["opened", "synchronize", "reopened", "edited"],
+        )
+        self.assertEqual(events["issue_comment"]["types"], ["created"])
+        self.assertIn("workflow_dispatch", events)
         self.assertIn("github.event_name != 'issue_comment' || github.event.action == 'created'", workflow)
         self.assertIn("git_fetch ls-remote --symref origin HEAD", workflow)
         self.assertIn('git_fetch fetch --depth=1 origin "refs/heads/$default_branch"', workflow)
@@ -226,18 +232,21 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn("CODEX_DEFAULT_SHA=$(git rev-parse HEAD)", workflow)
         self.assertNotIn("branches: [main]", workflow)
 
-    def test_pipeline_uses_forgejo_scripts_and_shared_codex_auth(self) -> None:
+    def test_pipeline_uses_forgejo_scripts_and_org_codex_lb_secret(self) -> None:
         pipeline = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
         self.assertIn("python3 pipeline/.forgejo/scripts/build_prompt.py", pipeline)
         self.assertIn("bash pipeline/.forgejo/scripts/codex_exec.sh", pipeline)
-        self.assertIn("/codex-runner-home:/home/runner/.codex", pipeline)
-        self.assertIn("/codex-runner-locks:/var/lib/codex-runner/auth-runs-root", pipeline)
-        self.assertIn('auth_lock_file="$auth_lock_dir/forgejo-shared.lock"', pipeline)
-        self.assertIn("codex login status", pipeline)
-        self.assertIn("cleanup-codex-auth:", pipeline)
+        self.assertNotIn("/codex-runner-home", pipeline)
+        self.assertNotIn("/codex-runner-locks", pipeline)
+        self.assertNotIn("auth_lock_file", pipeline)
+        self.assertNotIn("codex login status", pipeline)
+        self.assertNotIn("prepare-codex-auth:", pipeline)
+        self.assertNotIn("cleanup-codex-auth:", pipeline)
+        self.assertNotIn("CODEX_AUTH_FILE", pipeline)
+        self.assertNotIn("/auth.json", pipeline)
+        self.assertEqual(pipeline.count("CODEX_LB_API_KEY: ${{ secrets.CODEX_LB_API_KEY }}"), 6)
         for axis in ["correctness", "security", "performance", "test-coverage", "domain"]:
             self.assertIn(f"review-{axis}:", pipeline)
-            self.assertIn(f"review-{axis}/auth.json", pipeline)
 
     def test_pipeline_jobs_skip_when_resolver_denies_review(self) -> None:
         workflow = yaml.safe_load(
@@ -246,7 +255,6 @@ class WorkflowParityTests(unittest.TestCase):
         required_guard = "inputs.head_sha != '' && inputs.base_sha != '' && inputs.scripts_ref != ''"
         expected_if = {
             "prepare-context": required_guard,
-            "prepare-codex-auth": required_guard,
             "review-correctness": required_guard,
             "review-security": required_guard,
             "review-performance": required_guard,
@@ -254,7 +262,6 @@ class WorkflowParityTests(unittest.TestCase):
             "review-domain": required_guard,
             "tech-lead": f"{required_guard} && always() && !cancelled()",
             "post": required_guard,
-            "cleanup-codex-auth": f"{required_guard} && always()",
         }
         for job_name, expected in expected_if.items():
             with self.subTest(job=job_name):
