@@ -2,7 +2,7 @@
   "states": [
     ["STATE_NEW", "New", false, false],
     ["STATE_EXECUTED", "Executed", false, false],
-    ["STATE_MINED", "Mined", true, true],
+    ["STATE_MINED", "Mined", false, false],
     ["STATE_CONFIRMED", "Confirmed", true, true],
     ["STATE_INVALID", "Invalid", true, false],
     ["STATE_FAILED", "Failed", true, false],

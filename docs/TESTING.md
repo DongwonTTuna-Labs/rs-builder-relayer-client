@@ -79,6 +79,6 @@ merge/redeem calldata follows current pUSD adapter path
 ambiguous submit timeout does not duplicate transaction
 ```
 
-`STATE_MINED` satisfies relayer polling completion per the Deposit Wallets
-guide. Operators that require stronger finality can keep polling or require
-`STATE_CONFIRMED` in their own live gate before dependent wallet effects.
+`STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
+manual live gate. Wallet deployment or wallet-action effects become usable only
+after `STATE_CONFIRMED`.

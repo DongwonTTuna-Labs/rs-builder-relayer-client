@@ -29,7 +29,7 @@ const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const SUBMIT_PATH: &str = "/submit";
 const TRANSACTION_PATH: &str = "/transaction";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
-const MAX_TRANSACTION_SUCCESS_BODY_BYTES: usize = 1024 * 1024;
+const MAX_TRANSACTION_SUCCESS_BODY_BYTES: usize = 256 * 1024;
 const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
 #[cfg(not(test))]
 const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
@@ -273,6 +273,33 @@ struct ParsedTransactionReceipt {
     owner: Option<Address>,
 }
 
+#[derive(Debug)]
+struct ResponseError {
+    error: RelayerError,
+    retry_after: Option<Duration>,
+}
+
+impl ResponseError {
+    fn new(error: RelayerError, retry_after: Option<Duration>) -> Self {
+        Self { error, retry_after }
+    }
+}
+
+#[derive(Debug)]
+struct PollFetchError {
+    error: RelayerError,
+    retry_after: Option<Duration>,
+}
+
+impl PollFetchError {
+    fn from_response_error(error: ResponseError) -> Self {
+        Self {
+            error: error.error,
+            retry_after: error.retry_after,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RelayerTransactionResponseWithOwner {
@@ -451,6 +478,25 @@ impl DepositWalletRelayerClient {
         parse_transaction_response(&transaction_id, &response)
     }
 
+    async fn fetch_transaction_for_poll(
+        &self,
+        transaction_id: &str,
+    ) -> std::result::Result<ParsedTransactionReceipt, PollFetchError> {
+        let mut url = self.base_url.endpoint(TRANSACTION_PATH);
+        url.query_pairs_mut().append_pair("id", transaction_id);
+        let response = self
+            .send_with_success_limit_and_retry_after(
+                Method::GET,
+                url,
+                None,
+                MAX_TRANSACTION_SUCCESS_BODY_BYTES,
+            )
+            .await
+            .map_err(PollFetchError::from_response_error)?;
+        parse_transaction_response(transaction_id, &response)
+            .map_err(|error| PollFetchError { error, retry_after: None })
+    }
+
     pub async fn poll_transaction(
         &self,
         transaction_id: &str,
@@ -484,15 +530,22 @@ impl DepositWalletRelayerClient {
         }
 
         for attempt in 0..policy.max_attempts {
-            let parsed = match self.fetch_transaction(&transaction_id).await {
+            let parsed = match self.fetch_transaction_for_poll(&transaction_id).await {
                 Ok(parsed) => parsed,
-                Err(error) => {
-                    if is_transient_poll_error(&error) && attempt + 1 < policy.max_attempts {
+                Err(poll_error) => {
+                    if is_transient_poll_error(&poll_error.error) && attempt + 1 < policy.max_attempts {
+                        let policy_interval =
+                            policy.interval_for_transaction_attempt(&transaction_id, attempt);
+                        let sleep_for = poll_error
+                            .retry_after
+                            .map(|retry_after| retry_after.max(policy_interval))
+                            .unwrap_or(policy_interval);
                         self.sleeper
-                            .sleep(policy.interval_for_transaction_attempt(&transaction_id, attempt))
+                            .sleep(sleep_for)
                             .await;
                         continue;
                     }
+                    let error = poll_error.error;
                     if let Some(owner) = expected_owner {
                         if self.has_recovery_owner_evidence(owner, &transaction_id)? {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
@@ -523,7 +576,7 @@ impl DepositWalletRelayerClient {
                 .transpose()?
                 .flatten();
             match &receipt.state {
-                RelayerTransactionState::Mined | RelayerTransactionState::Confirmed => {
+                RelayerTransactionState::Confirmed => {
                     if receipt.transaction_hash.is_none() {
                         if let Some((owner, payload_hash)) = &terminal_evidence {
                             self.mark_transaction_reconciliation_required_if_current(
@@ -590,7 +643,9 @@ impl DepositWalletRelayerClient {
                         sanitized_external_token(raw)
                     )));
                 }
-                RelayerTransactionState::New | RelayerTransactionState::Executed => {
+                RelayerTransactionState::New
+                | RelayerTransactionState::Executed
+                | RelayerTransactionState::Mined => {
                     if let Some(owner) = expected_owner {
                         if self.has_recovery_owner_evidence(owner, &transaction_id)? {
                             self.record_recovered_inflight_transaction(owner, &transaction_id)?;
@@ -774,7 +829,22 @@ impl DepositWalletRelayerClient {
         body: Option<String>,
         success_body_limit: usize,
     ) -> Result<Vec<u8>> {
-        let mut headers = self.auth.headers()?;
+        self.send_with_success_limit_and_retry_after(method, url, body, success_body_limit)
+            .await
+            .map_err(|error| error.error)
+    }
+
+    async fn send_with_success_limit_and_retry_after(
+        &self,
+        method: Method,
+        url: Url,
+        body: Option<String>,
+        success_body_limit: usize,
+    ) -> std::result::Result<Vec<u8>, ResponseError> {
+        let mut headers = self
+            .auth
+            .headers()
+            .map_err(|error| ResponseError::new(error, None))?;
         if body.is_some() {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         }
@@ -790,24 +860,29 @@ impl DepositWalletRelayerClient {
         let response = request
             .send()
             .await
-            .map_err(|error| RelayerError::Http(error.without_url()))?;
+            .map_err(|error| ResponseError::new(RelayerError::Http(error.without_url()), None))?;
         if !response.status().is_success() {
             let status = response.status();
-            let retry_after = retry_after_summary(response.headers());
+            let retry_after = retry_after_duration(response.headers());
+            let retry_after_message = retry_after_summary_from_duration(retry_after);
             self.error_body_drain_limiter
                 .try_spawn_error_response_body_drain(response);
             if status == StatusCode::TOO_MANY_REQUESTS {
-                return Err(RelayerError::QuotaExhausted);
+                return Err(ResponseError::new(RelayerError::QuotaExhausted, retry_after));
             }
-            return Err(RelayerError::Api {
-                status: status.as_u16(),
-                message: format!(
-                    "deposit-wallet relayer request failed with HTTP {status}{retry_after}"
-                ),
-            });
+            return Err(ResponseError::new(
+                RelayerError::Api {
+                    status: status.as_u16(),
+                    message: format!(
+                        "deposit-wallet relayer request failed with HTTP {status}{retry_after_message}"
+                    ),
+                },
+                retry_after,
+            ));
         }
 
         read_limited_response_body(response, success_body_limit).await
+            .map_err(|error| ResponseError::new(error, None))
     }
 
     fn ensure_deadline_fresh(&self, signed: &SignedDepositWalletBatch) -> Result<()> {
@@ -1590,12 +1665,17 @@ async fn drain_error_response_body(response: reqwest::Response) {
     let _ = tokio::time::timeout(ERROR_BODY_DRAIN_TIMEOUT, drain).await;
 }
 
-fn retry_after_summary(headers: &HeaderMap) -> String {
+fn retry_after_duration(headers: &HeaderMap) -> Option<Duration> {
     headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(|seconds| format!("; retry after {seconds}s"))
+        .map(Duration::from_secs)
+}
+
+fn retry_after_summary_from_duration(retry_after: Option<Duration>) -> String {
+    retry_after
+        .map(|duration| format!("; retry after {}s", duration.as_secs()))
         .unwrap_or_default()
 }
 
@@ -4028,27 +4108,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn polling_treats_mined_or_confirmed_as_success_and_uses_injected_sleeper() {
+    async fn polling_keeps_mined_pending_until_confirmed_and_uses_injected_sleeper() {
         let (result, requests, sleeper, _policy) = poll_sequence(
             &[
                 "STATE_NEW",
                 "STATE_EXECUTED",
                 "STATE_MINED",
+                "STATE_CONFIRMED",
             ],
             4,
         )
         .await;
 
         let receipt = result.unwrap();
-        assert_eq!(receipt.state, RelayerTransactionState::Mined);
-        assert_eq!(requests.len(), 3);
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(requests.len(), 4);
         assert!(requests
             .iter()
             .all(|request| request.path == "/transaction?id=tx-123"));
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps.len(), 2);
+        assert_eq!(sleeps.len(), 3);
         assert!((Duration::from_millis(100)..=Duration::from_millis(125)).contains(&sleeps[0]));
         assert!((Duration::from_millis(200)..=Duration::from_millis(250)).contains(&sleeps[1]));
+        assert!((Duration::from_millis(400)..=Duration::from_millis(500)).contains(&sleeps[2]));
         assert_ne!(sleeps[0], Duration::from_millis(100));
 
         let (result, _, _, _) = poll_sequence(&["STATE_INVALID"], 1).await;
@@ -4103,7 +4185,8 @@ mod tests {
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
-        assert_eq!(sleeper.sleeps().len(), 1);
+        let sleeps = sleeper.sleeps();
+        assert_eq!(sleeps, vec![Duration::from_secs(1)]);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }
