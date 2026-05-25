@@ -203,28 +203,122 @@
     }
 
     fn mutation_permit_for(owner: Address) -> DepositWalletMutationGate {
-        DepositWalletMutationGate::Permit(mutation_permit_token_for(
-            owner,
-        ))
+        DepositWalletMutationGate::Permit(mutation_permit_token_for(owner))
     }
 
     fn mutation_permit_token_for(owner: Address) -> DepositWalletMutationPermit {
+        mutation_permit_token_for_action(owner, DepositWalletMutationAction::WalletCreate)
+    }
+
+    fn wallet_batch_mutation_permit_for(owner: Address) -> DepositWalletMutationGate {
+        DepositWalletMutationGate::Permit(mutation_permit_token_for_action(
+            owner,
+            DepositWalletMutationAction::WalletBatch,
+        ))
+    }
+
+    fn owner_recovery_poll_permit_for(owner: Address) -> DepositWalletMutationGate {
+        DepositWalletMutationGate::Permit(mutation_permit_token_for_action(
+            owner,
+            DepositWalletMutationAction::OwnerRecoveryPoll,
+        ))
+    }
+
+    fn manual_reconciliation_permit_token_for(owner: Address) -> DepositWalletMutationPermit {
+        mutation_permit_token_for_action(owner, DepositWalletMutationAction::ManualReconciliation)
+    }
+
+    fn mutation_permit_token_for_action(
+        owner: Address,
+        action: DepositWalletMutationAction,
+    ) -> DepositWalletMutationPermit {
+        mutation_permit_token_for_scope(owner, mutation_scope(action))
+    }
+
+    fn mutation_permit_for_scope(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+    ) -> DepositWalletMutationGate {
+        DepositWalletMutationGate::Permit(mutation_permit_token_for_scope(owner, scope))
+    }
+
+    fn mutation_permit_token_for_scope(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+    ) -> DepositWalletMutationPermit {
+        mutation_permit_token_for_scope_times(owner, scope, 1_699_999_900, 1_700_000_200)
+    }
+
+    fn mutation_permit_token_for_scope_times(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+        acquired_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+    ) -> DepositWalletMutationPermit {
         DepositWalletMutationPermit::from_owner_serialization_evidence(
             "mocked unit-test relayer call",
-            owner_serialization_evidence_for(owner),
+            owner_serialization_evidence_for_scope_times(
+                owner,
+                scope,
+                acquired_at_unix_seconds,
+                expires_at_unix_seconds,
+            ),
         )
         .unwrap()
     }
 
     fn owner_serialization_evidence_for(owner: Address) -> DepositWalletOwnerSerializationEvidence {
+        owner_serialization_evidence_for_action(owner, DepositWalletMutationAction::WalletCreate)
+    }
+
+    fn owner_serialization_evidence_for_action(
+        owner: Address,
+        action: DepositWalletMutationAction,
+    ) -> DepositWalletOwnerSerializationEvidence {
+        owner_serialization_evidence_for_scope(owner, mutation_scope(action))
+    }
+
+    fn owner_serialization_evidence_for_scope(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+    ) -> DepositWalletOwnerSerializationEvidence {
         DepositWalletOwnerSerializationEvidence::new(
             owner,
+            scope,
             "unit-test owner serialization guard",
             format!("unit-test-owner-lease-{owner:?}"),
-            1_600_000_000,
-            4_000_000_000,
+            1_699_999_900,
+            1_700_000_200,
         )
         .unwrap()
+    }
+
+    fn owner_serialization_evidence_for_scope_times(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+        acquired_at_unix_seconds: u64,
+        expires_at_unix_seconds: u64,
+    ) -> DepositWalletOwnerSerializationEvidence {
+        DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            scope,
+            "unit-test owner serialization guard",
+            format!("unit-test-owner-lease-{owner:?}"),
+            acquired_at_unix_seconds,
+            expires_at_unix_seconds,
+        )
+        .unwrap()
+    }
+
+    fn mutation_scope(action: DepositWalletMutationAction) -> DepositWalletMutationScope {
+        let config = deposit_wallet_contract_config(137).unwrap();
+        DepositWalletMutationScope::new(
+            137,
+            config.factory,
+            config.implementation,
+            DepositWalletMutationEnvironment::TestLoopback,
+            action,
+        )
     }
 
     fn unchecked_mutation_permit(
@@ -243,11 +337,31 @@
         owner: Address,
         payload_hash: impl Into<String>,
     ) -> DepositWalletSubmitReconciliationEvidence {
-        DepositWalletSubmitReconciliationEvidence::new(
+        submit_reconciliation_evidence_for_payload_and_transaction(
             owner,
             payload_hash,
-            "unit-test manual submit reconciliation",
-            1_700_000_001,
+            "tx-manual-reconciliation",
+        )
+    }
+
+    fn submit_reconciliation_evidence_for_payload_and_transaction(
+        owner: Address,
+        payload_hash: impl Into<String>,
+        transaction_id: impl AsRef<str>,
+    ) -> DepositWalletSubmitReconciliationEvidence {
+        DepositWalletSubmitReconciliationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+            "unit-test owner serialization guard",
+            payload_hash,
+            DepositWalletSubmitReconciliationObservation::new(
+                transaction_id,
+                RelayerTransactionState::Failed,
+                None::<&str>,
+                "unit-test manual submit reconciliation",
+                1_700_000_001,
+            )
+            .unwrap(),
         )
         .unwrap()
     }
@@ -259,7 +373,16 @@
         let payload_hash = client
             .ambiguous_submit_block(owner)
             .expect("test owner should have an ambiguous submit block");
-        submit_reconciliation_evidence_for_payload(owner, payload_hash)
+        let transaction_id = {
+            let state = client.mutation_state().expect("test state should be readable");
+            state
+                .transaction_owners
+                .iter()
+                .find(|(_, record)| record.owner == owner && record.payload_hash == payload_hash)
+                .map(|(transaction_id, _)| transaction_id.clone())
+                .unwrap_or_else(|| "tx-manual-reconciliation".to_string())
+        };
+        submit_reconciliation_evidence_for_payload_and_transaction(owner, payload_hash, transaction_id)
     }
 
     fn reqwest_client(timeout: Duration) -> Client {

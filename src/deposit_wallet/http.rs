@@ -19,6 +19,7 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use ::url::Url;
 
+use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
 use crate::deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, build_wallet_create_request,
     build_wallet_nonce_request, deposit_wallet_contract_config, DepositWalletContractConfig,
@@ -48,6 +49,8 @@ const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_POLL_ATTEMPTS: usize = 120;
 const MAX_OWNER_MUTATION_RECORDS: usize = 1024;
+const MAX_OWNER_SERIALIZATION_LEASE_SECONDS: u64 = 300;
+const MAX_EVIDENCE_CLOCK_SKEW_SECONDS: u64 = 30;
 
 mod auth;
 mod permit;
@@ -62,8 +65,10 @@ mod url;
 
 pub use auth::RelayerKeyAuth;
 pub use permit::{
-    DepositWalletMutationGate, DepositWalletMutationPermit, DepositWalletOwnerSerializationEvidence,
-    DepositWalletSubmitReconciliationEvidence,
+    DepositWalletMutationAction, DepositWalletMutationEnvironment, DepositWalletMutationGate,
+    DepositWalletMutationPermit, DepositWalletMutationScope,
+    DepositWalletOwnerSerializationEvidence, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletSubmitReconciliationObservation,
 };
 pub use poll::DepositWalletPollPolicy;
 pub use response::DepositWalletTransactionReceipt;
@@ -128,6 +133,15 @@ impl DepositWalletRelayerClient {
         }
     }
 
+    pub fn mutation_scope(&self, action: DepositWalletMutationAction) -> DepositWalletMutationScope {
+        DepositWalletMutationScope::new(
+            deposit_wallet_contract_chain_id(self.config).unwrap_or(0),
+            self.config.factory,
+            self.config.implementation,
+            self.base_url.mutation_environment(),
+            action,
+        )
+    }
 }
 
 impl fmt::Debug for DepositWalletRelayerClient {

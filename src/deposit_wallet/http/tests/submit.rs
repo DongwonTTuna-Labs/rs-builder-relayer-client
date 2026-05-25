@@ -36,6 +36,7 @@ use super::*;
                     "mocked unit-test relayer call",
                     DepositWalletOwnerSerializationEvidence::new(
                         address(WALLET_CREATE_OWNER),
+                        mutation_scope(DepositWalletMutationAction::WalletCreate),
                         "unit-test expired owner serialization guard",
                         "expired-owner-lease",
                         1,
@@ -102,7 +103,13 @@ use super::*;
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
 
         let error = client
-            .submit_wallet_create(address(WALLET_CREATE_OWNER), mutation_permit())
+            .submit_wallet_create(
+                address(WALLET_CREATE_OWNER),
+                mutation_permit_for_scope(
+                    address(WALLET_CREATE_OWNER),
+                    client.mutation_scope(DepositWalletMutationAction::WalletCreate),
+                ),
+            )
             .await
             .unwrap_err();
 
@@ -111,7 +118,13 @@ use super::*;
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                mutation_permit_for_scope(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                ),
+            )
             .await
             .unwrap_err();
 
@@ -147,10 +160,11 @@ use super::*;
             "ticket-123 caller lock",
             DepositWalletOwnerSerializationEvidence::new(
                 owner,
+                mutation_scope(DepositWalletMutationAction::WalletCreate),
                 "unit-test caller lock",
                 "owner-lock-key-456",
-                1_600_000_000,
-                1_800_000_000,
+                1_699_999_900,
+                1_700_000_200,
             )
             .unwrap(),
         )
@@ -166,6 +180,115 @@ use super::*;
         assert!(!rendered_gate.contains("ticket-123"));
         assert!(!rendered_gate.contains("owner-lock-key-456"));
         assert!(!rendered_gate.contains("unit-test caller lock"));
+    }
+
+#[test]
+    fn owner_serialization_evidence_rejects_invalid_inputs() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let scope = mutation_scope(DepositWalletMutationAction::WalletCreate);
+
+        assert!(DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            scope,
+            " ",
+            "lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .is_err());
+        assert!(DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            scope,
+            "unit-test guard",
+            "",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .is_err());
+        assert!(DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            scope,
+            "unit-test guard",
+            "lease",
+            0,
+            1,
+        )
+        .is_err());
+        assert!(DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            scope,
+            "unit-test guard",
+            "lease",
+            1_700_000_000,
+            1_700_000_000,
+        )
+        .is_err());
+        assert!(DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            scope,
+            "unit-test guard",
+            "lease",
+            1_699_999_000,
+            1_700_000_000,
+        )
+        .is_err());
+    }
+
+#[tokio::test]
+    async fn mutation_permit_rejects_wrong_scope_or_future_lease_before_http() {
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
+        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let client =
+            test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
+        let owner = address(WALLET_CREATE_OWNER);
+
+        let wrong_scope = DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::WalletBatch),
+            "unit-test owner serialization guard",
+            "wrong-scope-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        let error = client
+            .submit_wallet_create(
+                owner,
+                DepositWalletMutationGate::Permit(
+                    DepositWalletMutationPermit::from_owner_serialization_evidence(
+                        "wrong action scope",
+                        wrong_scope,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .await
+            .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+
+        let future_lease = DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::WalletCreate),
+            "unit-test owner serialization guard",
+            "future-lease",
+            1_700_000_100,
+            1_700_000_200,
+        )
+        .unwrap();
+        let error = client
+            .submit_wallet_create(
+                owner,
+                DepositWalletMutationGate::Permit(
+                    DepositWalletMutationPermit::from_owner_serialization_evidence(
+                        "future lease",
+                        future_lease,
+                    )
+                    .unwrap(),
+                ),
+            )
+            .await
+            .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
 #[tokio::test]
@@ -254,7 +377,7 @@ use super::*;
         let client = test_client(url);
 
         let receipt = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(signed, wallet_batch_mutation_permit_for(owner))
             .await
             .unwrap();
 
@@ -304,7 +427,7 @@ use super::*;
             let client = test_client(url);
 
             let error = client
-                .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+                .submit_signed_wallet_batch(signed, wallet_batch_mutation_permit_for(owner))
                 .await
                 .unwrap_err();
 
@@ -316,7 +439,7 @@ use super::*;
             }
             assert!(client.ambiguous_submit_block(owner).is_some());
             let blocked = client
-                .submit_signed_wallet_batch(signed_wallet_batch(), mutation_permit_for(owner))
+                .submit_signed_wallet_batch(signed_wallet_batch(), wallet_batch_mutation_permit_for(owner))
                 .await
                 .unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
@@ -361,7 +484,13 @@ use super::*;
         let client = test_client(url);
 
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                mutation_permit_for_scope(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                ),
+            )
             .await
             .unwrap_err();
 
@@ -389,7 +518,13 @@ use super::*;
         let client = test_client(url);
 
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                mutation_permit_for_scope(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                ),
+            )
             .await
             .unwrap_err();
 
@@ -414,7 +549,13 @@ use super::*;
         let owner = signed.owner();
 
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                mutation_permit_for_scope(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                ),
+            )
             .await
             .unwrap_err();
 
@@ -451,11 +592,17 @@ use super::*;
         );
 
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                mutation_permit_for_scope(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                ),
+            )
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::Signing(_)));
+        assert!(matches!(error, RelayerError::Signing(_)), "{error:?}");
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
@@ -472,9 +619,11 @@ use super::*;
             json!({"nonce": signed.nonce().to_string()}).to_string(),
         )])
         .await;
+        let before_deadline = deadline - 100;
         let clock: Arc<dyn DepositWalletClock> = Arc::new(SequenceClock::new([
-            1_700_000_000,
-            1_700_000_000,
+            before_deadline,
+            before_deadline,
+            before_deadline,
             deadline,
         ]));
         let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
@@ -489,11 +638,22 @@ use super::*;
         let owner = signed.owner();
 
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                DepositWalletMutationGate::Permit(mutation_permit_token_for_scope_times(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    deadline - 200,
+                    deadline + 100,
+                )),
+            )
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::Signing(message) if message.contains("expired")));
+        assert!(
+            matches!(error, RelayerError::Signing(ref message) if message.contains("expired")),
+            "{error:?}"
+        );
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
         let mut retry_reservation = client
@@ -530,9 +690,10 @@ use super::*;
         let owner = signed.owner();
         let evidence = DepositWalletOwnerSerializationEvidence::new(
             owner,
+            mutation_scope(DepositWalletMutationAction::WalletBatch),
             "unit-test short owner serialization guard",
             "unit-test-short-owner-lease",
-            1_600_000_000,
+            1_699_999_900,
             1_700_000_001,
         )
         .unwrap();
@@ -567,7 +728,15 @@ use super::*;
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(
+                signed,
+                DepositWalletMutationGate::Permit(mutation_permit_token_for_scope_times(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    1_999_999_900,
+                    2_000_000_100,
+                )),
+            )
             .await
             .unwrap_err();
 
@@ -620,6 +789,7 @@ use super::*;
                     "checked mocked relayer state",
                     DepositWalletOwnerSerializationEvidence::new(
                         owner,
+                        mutation_scope(DepositWalletMutationAction::ManualReconciliation),
                         "unit-test expired owner serialization guard",
                         "expired-owner-lease-for-clear",
                         1,
@@ -648,7 +818,7 @@ use super::*;
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for(&client, owner),
-                mutation_permit_token_for(owner),
+                manual_reconciliation_permit_token_for(owner),
             )
             .unwrap();
         let nonce = client.get_wallet_nonce(owner).await.unwrap();
@@ -697,7 +867,7 @@ use super::*;
         let client = test_client(url);
 
         let error = client
-            .submit_signed_wallet_batch(signed, mutation_permit_for(owner))
+            .submit_signed_wallet_batch(signed, wallet_batch_mutation_permit_for(owner))
             .await
             .unwrap_err();
 

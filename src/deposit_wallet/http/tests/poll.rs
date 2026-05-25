@@ -251,7 +251,7 @@ use super::*;
                 owner,
                 "tx-recovered",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -323,7 +323,7 @@ use super::*;
                 owner,
                 "tx-no-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
         )
         .await
         .unwrap_err();
@@ -351,7 +351,7 @@ use super::*;
                 owner,
                 "tx-bad-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -418,7 +418,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -460,7 +460,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -502,10 +502,43 @@ use super::*;
                 owner,
                 "tx-wrong-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
+    async fn owner_aware_poll_does_not_use_owner_from_mismatched_transaction_response() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "other-tx",
+                "state": "STATE_FAILED",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                "owner": WALLET_CREATE_OWNER
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction_with_reconciliation_permit(
+                owner,
+                "tx-requested",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                owner_recovery_poll_permit_for(owner),
+            )
+            .await
+            .unwrap_err();
+
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
@@ -544,7 +577,7 @@ use super::*;
                 owner,
                 "tx-recovery-fetch-failed",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -576,7 +609,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -617,7 +650,7 @@ use super::*;
                     owner,
                     transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                    mutation_permit_for(owner),
+                    owner_recovery_poll_permit_for(owner),
                 )
                 .await
                 .unwrap_err();
@@ -667,7 +700,7 @@ use super::*;
                     owner,
                     transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                    mutation_permit_for(owner),
+                    owner_recovery_poll_permit_for(owner),
                 )
                 .await
         });
@@ -700,6 +733,7 @@ use super::*;
                 OwnerMutationBlock::InFlight {
                     payload_hash: payload_hash.clone(),
                     transaction_id: Some(transaction_id.to_string()),
+                    created_at_unix_seconds: 1_700_000_000,
                 },
             );
             state.transaction_owners.insert(
@@ -717,7 +751,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -729,7 +763,7 @@ use super::*;
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for(&client, owner),
-                mutation_permit_token_for(owner),
+                manual_reconciliation_permit_token_for(owner),
             )
             .unwrap();
         client.ensure_owner_unblocked(owner).unwrap();
@@ -760,6 +794,7 @@ use super::*;
                 Some(OwnerMutationBlock::InFlight {
                     payload_hash,
                     transaction_id: Some(transaction_id),
+                    ..
                 }) => {
                     assert_eq!(transaction_id, "tx-original");
                     payload_hash.clone()
@@ -784,6 +819,7 @@ use super::*;
                 Some(OwnerMutationBlock::InFlight {
                     payload_hash,
                     transaction_id: Some(transaction_id),
+                    ..
                 }) => {
                     assert_eq!(transaction_id, "tx-original");
                     assert_eq!(payload_hash, &original_hash);
@@ -812,7 +848,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -823,6 +859,7 @@ use super::*;
             match state.owner_blocks.get(&owner) {
                 Some(OwnerMutationBlock::Ambiguous {
                     payload_hash,
+                    ..
                 }) => {
                     assert_eq!(payload_hash, &recovered_payload_hash(transaction_id));
                 }
@@ -855,7 +892,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -866,6 +903,7 @@ use super::*;
             match state.owner_blocks.get(&owner) {
                 Some(OwnerMutationBlock::Ambiguous {
                     payload_hash,
+                    ..
                 }) => {
                     assert_eq!(payload_hash, &recovered_payload_hash(transaction_id));
                 }
@@ -900,6 +938,7 @@ use super::*;
                 OwnerMutationBlock::InFlight {
                     payload_hash: payload_hash.clone(),
                     transaction_id: Some(transaction_id.to_string()),
+                    created_at_unix_seconds: 1_700_000_000,
                 },
             );
             state.transaction_owners.insert(
@@ -917,7 +956,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                mutation_permit_for(owner),
+                owner_recovery_poll_permit_for(owner),
             )
             .await
             .unwrap_err();
@@ -1004,7 +1043,7 @@ use super::*;
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for(&client, owner),
-                mutation_permit_token_for(owner),
+                manual_reconciliation_permit_token_for(owner),
             )
             .unwrap();
         client.ensure_owner_unblocked(owner).unwrap();
@@ -1043,7 +1082,7 @@ use super::*;
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for(&client, owner),
-                mutation_permit_token_for(owner),
+                manual_reconciliation_permit_token_for(owner),
             )
             .unwrap();
         client.ensure_owner_unblocked(owner).unwrap();

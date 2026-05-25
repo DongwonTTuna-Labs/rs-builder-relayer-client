@@ -16,12 +16,10 @@ pub(super) enum DepositWalletRelayerUrlKind {
 impl DepositWalletRelayerUrl {
     /// Builds a production relayer URL.
     ///
-    /// Production URLs are endpoint-capable for nonce, transaction polling, and
-    /// gated submit requests. Mutating submit methods still require an explicit
-    /// owner-scoped permit before auth headers, request bodies, or HTTP requests
-    /// are built. This client is not an end-to-end live trading adapter by
-    /// itself; calldata construction, consumer-side owner serialization, manual
-    /// operator approval, and rollback handling remain outside this URL type.
+    /// Production URLs are allowlisted for nonce and transaction polling.
+    /// Submit calls are still inert unless the caller supplies a fresh
+    /// owner-scoped permit whose scope matches this client, and this URL type
+    /// alone is not production live-trading approval evidence.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)
             .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
@@ -41,6 +39,16 @@ impl DepositWalletRelayerUrl {
 
     pub(super) fn is_production_host(&self) -> bool {
         self.kind == DepositWalletRelayerUrlKind::Production
+    }
+
+    pub(super) fn mutation_environment(&self) -> DepositWalletMutationEnvironment {
+        match self.kind {
+            DepositWalletRelayerUrlKind::Production => DepositWalletMutationEnvironment::Production,
+            #[cfg(test)]
+            DepositWalletRelayerUrlKind::MockLoopback => {
+                DepositWalletMutationEnvironment::TestLoopback
+            }
+        }
     }
 
     #[cfg(test)]

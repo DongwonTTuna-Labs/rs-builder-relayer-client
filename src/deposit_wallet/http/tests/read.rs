@@ -57,6 +57,40 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn get_transaction_is_read_only_and_does_not_clear_owner_blocks() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json(
+                "200 OK",
+                json!({"transactionID": "", "state": "STATE_NEW"}).to_string(),
+            ),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-read-only", "STATE_CONFIRMED"),
+            ),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let submit_error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+        assert!(error_has_prefix(&submit_error, AMBIGUOUS_SUBMIT_PREFIX));
+        let payload_hash = client.ambiguous_submit_block(owner).unwrap();
+
+        let receipt = client.get_transaction("tx-read-only").await.unwrap();
+
+        assert_eq!(receipt.transaction_id, "tx-read-only");
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].path, "/transaction?id=tx-read-only");
+    }
+
+#[tokio::test]
     async fn get_transaction_rejects_array_response_with_trailing_bytes() {
         let mut body = json!([
             {

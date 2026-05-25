@@ -95,11 +95,7 @@ pub(super) fn parse_transaction_response(
                         None,
                     )
                 })?;
-            let owner = response.owner;
-            let receipt = receipt_from_submit_response(response.response, owner)
-                .map_err(|error| TransactionParseError::new(error, owner))?;
-            return require_transaction_id_match(expected_transaction_id, receipt)
-                .map_err(|error| TransactionParseError::new(error, owner));
+            return parse_verified_transaction_response(expected_transaction_id, response);
         }
         Some(b'[') => {}
         _ => {
@@ -114,11 +110,34 @@ pub(super) fn parse_transaction_response(
     }
 
     let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
+    parse_verified_transaction_response(expected_transaction_id, response)
+}
+
+fn parse_verified_transaction_response(
+    expected_transaction_id: &str,
+    response: RelayerTransactionResponseWithOwner,
+) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     let owner = response.owner;
-    let receipt = receipt_from_submit_response(response.response, owner)
+    let response_transaction_id = validate_transaction_id(&response.response.transaction_id)
+        .map_err(|_| {
+            TransactionParseError::new(
+                RelayerError::Other("relayer response transactionID was invalid".to_string()),
+                None,
+            )
+        })?;
+    if response_transaction_id != expected_transaction_id {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response id {} did not match requested id {}",
+                sanitized_external_token(&response_transaction_id),
+                sanitized_external_token(expected_transaction_id)
+            )),
+            None,
+        ));
+    }
+    let parsed = receipt_from_submit_response(response.response, owner)
         .map_err(|error| TransactionParseError::new(error, owner))?;
-    require_transaction_id_match(expected_transaction_id, receipt)
-        .map_err(|error| TransactionParseError::new(error, owner))
+    Ok(parsed)
 }
 
 pub(super) fn select_transaction_response_from_array(
@@ -234,20 +253,6 @@ pub(super) fn receipt_from_submit_response(
         },
         owner,
     })
-}
-
-pub(super) fn require_transaction_id_match(
-    expected_transaction_id: &str,
-    parsed: ParsedTransactionReceipt,
-) -> Result<ParsedTransactionReceipt> {
-    if parsed.receipt.transaction_id != expected_transaction_id {
-        return Err(RelayerError::reconciliation_required(format!(
-            "transaction response id {} did not match requested id {}",
-            sanitized_external_token(&parsed.receipt.transaction_id),
-            sanitized_external_token(expected_transaction_id)
-        )));
-    }
-    Ok(parsed)
 }
 
 pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {

@@ -32,6 +32,9 @@ impl DepositWalletRelayerClient {
         &self,
         transaction_id: &str,
     ) -> Result<DepositWalletTransactionReceipt> {
+        // Raw transaction lookup is intentionally read-only: it never records,
+        // clears, or bypasses owner-scoped mutation blocks. Callers that need
+        // owner recovery semantics must use poll_owner_transaction.
         self.fetch_transaction(transaction_id)
             .await
             .map(|parsed| parsed.receipt)

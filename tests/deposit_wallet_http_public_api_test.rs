@@ -1,8 +1,9 @@
 use ethers::types::Address;
 use polymarket_relayer::{
-    deposit_wallet_contract_config, DepositWalletMutationGate, DepositWalletMutationPermit,
-    DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
-    DepositWalletRelayerUrl, DepositWalletSubmitReconciliationEvidence,
+    deposit_wallet_contract_config, DepositWalletMutationAction, DepositWalletMutationGate,
+    DepositWalletMutationPermit, DepositWalletOwnerSerializationEvidence,
+    DepositWalletPollPolicy, DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
     DepositWalletTransactionReceipt, RelayerKeyAuth,
     RelayerTransactionState,
 };
@@ -17,6 +18,7 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let gate = DepositWalletMutationGate::Deny;
     let evidence = DepositWalletOwnerSerializationEvidence::new(
         Address::zero(),
+        client.mutation_scope(DepositWalletMutationAction::WalletCreate),
         "compile-test owner lock",
         "compile-test owner serialization evidence",
         1,
@@ -32,9 +34,17 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let policy = DepositWalletPollPolicy::default();
     let reconciliation = DepositWalletSubmitReconciliationEvidence::new(
         Address::zero(),
+        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+        "compile-test owner lock",
         "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "compile-test manual reconciliation",
-        1,
+        DepositWalletSubmitReconciliationObservation::new(
+            "tx-public-api",
+            RelayerTransactionState::Failed,
+            None::<&str>,
+            "compile-test manual reconciliation",
+            1,
+        )
+        .unwrap(),
     )
     .unwrap();
     let receipt = DepositWalletTransactionReceipt {

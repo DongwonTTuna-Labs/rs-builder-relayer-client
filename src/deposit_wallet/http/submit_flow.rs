@@ -12,7 +12,7 @@ impl DepositWalletRelayerClient {
         owner: Address,
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
-        self.ensure_permitted(&gate, owner)?;
+        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletCreate)?;
         self.ensure_owner_unblocked(owner)?;
         let request = build_wallet_create_request(owner, self.config);
         let body = serde_json::to_string(&request)
@@ -26,7 +26,7 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
-        self.ensure_permitted(&gate, owner)?;
+        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
         self.ensure_owner_unblocked(owner)?;
         self.ensure_deadline_fresh(&signed)?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
@@ -39,7 +39,9 @@ impl DepositWalletRelayerClient {
                 return Err(error);
             }
         };
-        if let Err(error) = self.ensure_permitted(&gate, owner) {
+        if let Err(error) =
+            self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)
+        {
             reservation.clear()?;
             return Err(error);
         }

@@ -129,7 +129,11 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
-        self.ensure_permitted(&gate, owner)?;
+        self.ensure_permitted_for_action(
+            &gate,
+            owner,
+            DepositWalletMutationAction::OwnerRecoveryPoll,
+        )?;
         let transaction_id = validate_transaction_id(transaction_id)?;
         self.poll_validated_transaction(transaction_id, policy, Some(owner), true)
             .await
