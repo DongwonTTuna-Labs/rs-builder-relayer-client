@@ -114,8 +114,7 @@ impl DepositWalletRelayerClient {
                     result
                 }
                 Err(error) => {
-                    reservation.disarm();
-                    self.record_ambiguous(owner, payload_hash.clone())?;
+                    self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                     Err(RelayerError::ambiguous_submit(format!(
                     "submit response did not include a usable transactionID for owner {} payload {}: {}",
                     redacted_address(owner),
@@ -125,8 +124,7 @@ impl DepositWalletRelayerClient {
                 }
             },
             Err(RelayerError::Http(error)) => {
-                reservation.disarm();
-                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit transport failed for owner {} payload {}; retry status is ambiguous: {}",
                     redacted_address(owner),
@@ -138,8 +136,7 @@ impl DepositWalletRelayerClient {
                 status,
                 message: _,
             }) => {
-                reservation.disarm();
-                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit returned HTTP status {} after POST for owner {} payload {}; manual reconciliation required",
                     status,
@@ -148,8 +145,7 @@ impl DepositWalletRelayerClient {
                 )))
             }
             Err(RelayerError::QuotaExhausted) => {
-                reservation.disarm();
-                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit returned HTTP status 429 after POST for owner {} payload {}; manual reconciliation required",
                     redacted_address(owner),
@@ -157,8 +153,7 @@ impl DepositWalletRelayerClient {
                 )))
             }
             Err(RelayerError::Other(message)) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => {
-                reservation.disarm();
-                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit success response exceeded maximum size for owner {} payload {}; manual reconciliation required",
                     redacted_address(owner),
@@ -170,6 +165,17 @@ impl DepositWalletRelayerClient {
                 Err(error)
             }
         }
+    }
+
+    fn record_ambiguous_post_boundary(
+        &self,
+        reservation: &mut OwnerSubmitReservation,
+        owner: Address,
+        payload_hash: String,
+    ) -> Result<()> {
+        self.record_ambiguous(owner, payload_hash)?;
+        reservation.disarm();
+        Ok(())
     }
 
     pub(super) fn ensure_deadline_fresh(&self, signed: &SignedDepositWalletBatch) -> Result<()> {

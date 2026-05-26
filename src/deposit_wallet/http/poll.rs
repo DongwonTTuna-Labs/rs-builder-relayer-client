@@ -99,6 +99,9 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
         let transaction_id = validate_transaction_id(transaction_id)?;
+        // Public transaction polling is read-only. Owner mutation recovery must
+        // use the owner-scoped polling APIs below, which require local owner
+        // evidence or an explicit reconciliation permit.
         self.poll_validated_transaction(transaction_id, policy, None, false)
             .await
     }
@@ -179,16 +182,11 @@ impl DepositWalletRelayerClient {
                         {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                         }
-                    } else {
-                        self.mark_transaction_reconciliation_required(&transaction_id)?;
                     }
                     return Err(error);
                 }
             };
-            let owner_to_verify = match expected_owner {
-                Some(owner) => Some(owner),
-                None => self.transaction_owner(&transaction_id)?,
-            };
+            let owner_to_verify = expected_owner;
             if let Some(owner) = owner_to_verify {
                 if let Err(error) = self.require_transaction_owner(&transaction_id, &parsed, owner)
                 {
@@ -209,8 +207,6 @@ impl DepositWalletRelayerClient {
                     if receipt.transaction_hash.is_none() {
                         if let Some(owner) = owner_to_verify {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
-                        } else {
-                            self.mark_transaction_reconciliation_required(&transaction_id)?;
                         }
                         return Err(RelayerError::reconciliation_required(format!(
                             "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
@@ -268,11 +264,8 @@ impl DepositWalletRelayerClient {
                     )));
                 }
                 RelayerTransactionState::Unknown(raw) => {
-                    match owner_to_verify {
-                        Some(owner) => {
-                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?
-                        }
-                        _ => self.mark_transaction_reconciliation_required(&transaction_id)?,
+                    if let Some(owner) = owner_to_verify {
+                        self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                     }
                     return Err(RelayerError::reconciliation_required(format!(
                         "deposit wallet transaction {} reached unknown state {}",
@@ -296,7 +289,9 @@ impl DepositWalletRelayerClient {
             }
         }
 
-        self.mark_transaction_reconciliation_required(&transaction_id)?;
+        if expected_owner.is_some() {
+            self.mark_transaction_reconciliation_required(&transaction_id)?;
+        }
         Err(RelayerError::Timeout)
     }
 

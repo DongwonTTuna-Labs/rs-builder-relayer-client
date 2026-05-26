@@ -1193,7 +1193,8 @@ use super::*;
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let receipt = client
-            .poll_transaction(
+            .poll_owner_transaction(
+                owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )

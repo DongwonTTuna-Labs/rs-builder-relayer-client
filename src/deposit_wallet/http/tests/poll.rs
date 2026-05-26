@@ -132,7 +132,7 @@ use super::*;
 
         let policy = DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap();
         let error = client
-            .poll_transaction("tx-pending", policy)
+            .poll_owner_transaction(owner, "tx-pending", policy)
             .await
             .unwrap_err();
         assert!(matches!(error, RelayerError::Timeout));
@@ -968,7 +968,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn local_transaction_poll_unknown_state_keeps_owner_blocked_for_reconciliation() {
+    async fn owner_transaction_poll_unknown_state_keeps_owner_blocked_for_reconciliation() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![
             TestResponse::json("200 OK", transaction_response("tx-local-unknown", "STATE_NEW")),
@@ -987,7 +987,8 @@ use super::*;
         assert_eq!(receipt.transaction_id, "tx-local-unknown");
 
         let error = client
-            .poll_transaction(
+            .poll_owner_transaction(
+                owner,
                 "tx-local-unknown",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
@@ -1003,7 +1004,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn local_transaction_poll_requires_response_owner_before_clearing_block() {
+    async fn owner_transaction_poll_requires_response_owner_before_clearing_block() {
         let owner = address(WALLET_CREATE_OWNER);
         let other_owner = address("0x0000000000000000000000000000000000000001");
         let (url, handle) = spawn_server(vec![
@@ -1029,7 +1030,8 @@ use super::*;
         assert_eq!(receipt.transaction_id, "tx-owner-mismatch");
 
         let error = client
-            .poll_transaction(
+            .poll_owner_transaction(
+                owner,
                 "tx-owner-mismatch",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
@@ -1052,7 +1054,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn local_transaction_poll_parse_error_marks_inflight_block_reconciliation_required() {
+    async fn owner_transaction_poll_parse_error_marks_inflight_block_reconciliation_required() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![
             TestResponse::json("200 OK", transaction_response("tx-malformed", "STATE_NEW")),
@@ -1068,7 +1070,8 @@ use super::*;
         assert_eq!(receipt.transaction_id, "tx-malformed");
 
         let error = client
-            .poll_transaction(
+            .poll_owner_transaction(
+                owner,
                 "tx-malformed",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
@@ -1113,7 +1116,8 @@ use super::*;
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let receipt = client
-            .poll_transaction(
+            .poll_owner_transaction(
+                owner,
                 "tx-confirmed",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
@@ -1126,6 +1130,66 @@ use super::*;
 
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 3);
+    }
+
+#[tokio::test]
+    async fn public_poll_transaction_does_not_clear_local_owner_state() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-read-only-poll";
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_NEW")),
+            TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_CONFIRMED")),
+            TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_CONFIRMED")),
+            TestResponse::json("200 OK", json!({"nonce": "34"}).to_string()),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, transaction_id);
+
+        let receipt = client
+            .poll_transaction(
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state.transaction_owners.contains_key(transaction_id));
+            match state.owner_blocks.get(&owner) {
+                Some(OwnerMutationBlock::InFlight {
+                    transaction_id: Some(blocked_transaction_id),
+                    ..
+                }) => assert_eq!(blocked_transaction_id, transaction_id),
+                block => panic!("expected in-flight owner block, got {block:?}"),
+            }
+        }
+
+        let receipt = client
+            .poll_owner_transaction(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        client.ensure_owner_unblocked(owner).unwrap();
+        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        assert_eq!(nonce, U256::from(34u64));
+
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 4);
     }
 
 #[tokio::test]
@@ -1153,7 +1217,8 @@ use super::*;
         assert_eq!(receipt.transaction_id, "tx-no-hash");
 
         let error = client
-            .poll_transaction(
+            .poll_owner_transaction(
+                owner,
                 "tx-no-hash",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
             )
@@ -1197,7 +1262,8 @@ use super::*;
             assert!(client.get_wallet_nonce(owner).await.is_err());
 
             let error = client
-                .poll_transaction(
+                .poll_owner_transaction(
+                    owner,
                     transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
                 )

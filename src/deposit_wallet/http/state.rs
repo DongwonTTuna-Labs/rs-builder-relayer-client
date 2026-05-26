@@ -547,14 +547,6 @@ impl DepositWalletRelayerClient {
         }
     }
 
-    pub(super) fn transaction_owner(&self, transaction_id: &str) -> Result<Option<Address>> {
-        let state = self.mutation_state()?;
-        Ok(state
-            .transaction_owners
-            .get(transaction_id)
-            .map(|record| record.owner))
-    }
-
     pub(super) fn current_recovery_payload_record(
         &self,
         transaction_id: &str,
