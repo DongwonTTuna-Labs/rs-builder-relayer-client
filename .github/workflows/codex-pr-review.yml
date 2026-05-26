@@ -11,6 +11,12 @@ on:
       - ready_for_review
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -46,6 +52,7 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_PR_NUMBER: ${{ inputs.pr_number || '' }}
         run: |
           python3 - <<'PY'
           import json
@@ -96,11 +103,13 @@ jobs:
           if event_name == "pull_request":
               pr = event.get("pull_request") or {}
               sender = (event.get("sender") or {}).get("login")
+              base_ref = ((pr.get("base") or {}).get("ref")) or ""
               head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
               author = (pr.get("user") or {}).get("login")
               if (
                   not pr
                   or pr.get("draft")
+                  or base_ref != "main"
                   or head_repo != repo
                   or author != TRUSTED_USER
                   or actor != TRUSTED_USER
@@ -113,7 +122,7 @@ jobs:
                           "should_run": "true",
                           "pr_number": str(pr["number"]),
                           "head_sha": str(pr["head"]["sha"]),
-                          "base_ref": str(pr["base"]["ref"]),
+                          "base_ref": "main",
                           "base_sha": str(pr["base"]["sha"]),
                           "trigger": f"pull_request:{event.get('action', '')}",
                       }
@@ -135,9 +144,10 @@ jobs:
                   raise SystemExit(0)
               pr_number = str(issue["number"])
               pr = github_api(f"/repos/{repo}/pulls/{pr_number}")
+              base_ref = ((pr.get("base") or {}).get("ref")) or ""
               head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
               author = (pr.get("user") or {}).get("login")
-              if head_repo != repo or author != TRUSTED_USER:
+              if base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
                   write_outputs(skipped())
               else:
                   write_outputs(
@@ -145,9 +155,33 @@ jobs:
                           "should_run": "true",
                           "pr_number": pr_number,
                           "head_sha": str(pr["head"]["sha"]),
-                          "base_ref": str(pr["base"]["ref"]),
+                          "base_ref": "main",
                           "base_sha": str(pr["base"]["sha"]),
                           "trigger": "issue_comment:/codex-review",
+                      }
+                  )
+              raise SystemExit(0)
+
+          if event_name == "workflow_dispatch":
+              pr_number = str(os.environ.get("DISPATCH_PR_NUMBER", "")).strip()
+              if not pr_number.isdigit() or actor != TRUSTED_USER:
+                  write_outputs(skipped())
+                  raise SystemExit(0)
+              pr = github_api(f"/repos/{repo}/pulls/{pr_number}")
+              base_ref = ((pr.get("base") or {}).get("ref")) or ""
+              head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+              author = (pr.get("user") or {}).get("login")
+              if pr.get("draft") or base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
+                  write_outputs(skipped())
+              else:
+                  write_outputs(
+                      {
+                          "should_run": "true",
+                          "pr_number": pr_number,
+                          "head_sha": str(pr["head"]["sha"]),
+                          "base_ref": "main",
+                          "base_sha": str(pr["base"]["sha"]),
+                          "trigger": "workflow_dispatch",
                       }
                   )
               raise SystemExit(0)
@@ -165,8 +199,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    env:
-      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
+      id-token: write
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -243,7 +276,78 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Check relay secret
+      - name: Mint relay token
+        id: relay-token
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          audience = "https://relay-ai.dongwontuna.net/github-actions"
+          broker_url = "https://relay-ai.dongwontuna.net/oidc/exchange"
+
+          def require_env(name):
+              value = os.environ.get(name)
+              if not value:
+                  raise SystemExit(f"missing required environment variable: {name}")
+              return value
+
+          def request_json(request):
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", "replace")[:800]
+                  raise SystemExit(f"{request.full_url} failed with HTTP {exc.code}: {body}") from exc
+
+          parts = urllib.parse.urlsplit(require_env("ACTIONS_ID_TOKEN_REQUEST_URL"))
+          query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+          query.append(("audience", audience))
+          request_url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+          oidc_payload = request_json(
+              urllib.request.Request(
+                  request_url,
+                  headers={
+                      "Accept": "application/json",
+                      "Authorization": f"Bearer {require_env('ACTIONS_ID_TOKEN_REQUEST_TOKEN')}",
+                  },
+              )
+          )
+          oidc_token = oidc_payload.get("value")
+          if not isinstance(oidc_token, str) or not oidc_token:
+              raise SystemExit("GitHub OIDC response did not include a token value")
+          print(f"::add-mask::{oidc_token}")
+
+          exchanged = request_json(
+              urllib.request.Request(
+                  broker_url,
+                  data=json.dumps({"token": oidc_token}).encode("utf-8"),
+                  method="POST",
+                  headers={"Accept": "application/json", "Content-Type": "application/json"},
+              )
+          )
+          relay_token = exchanged.get("relay_token")
+          if exchanged.get("token_type") != "Bearer" or not isinstance(relay_token, str) or not relay_token.startswith("sk-clb-"):
+              raise SystemExit("broker response did not include a valid relay token")
+          print(f"::add-mask::{relay_token}")
+
+          with open(require_env("GITHUB_OUTPUT"), "a", encoding="utf-8") as output:
+              for key in ("relay_token", "expires_at", "api_key_id"):
+                  value = exchanged.get(key)
+                  if not isinstance(value, str) or not value:
+                      raise SystemExit(f"broker response did not include {key}")
+                  output.write(f"{key}={value}\n")
+          PY
+
+      - name: Check relay token
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         run: test -n "$AI_RELAY_API_KEY"
 
       - name: Prepare Codex action home
@@ -255,6 +359,8 @@ jobs:
 
       - name: Run Codex reviewer
         uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ runner.temp }}/prompt-${{ matrix.axis }}.md
           output-schema: |
@@ -390,8 +496,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    env:
-      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
+      id-token: write
     timeout-minutes: 30
     steps:
       - name: Checkout PR head
@@ -481,7 +586,78 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Check relay secret
+      - name: Mint relay token
+        id: relay-token
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          audience = "https://relay-ai.dongwontuna.net/github-actions"
+          broker_url = "https://relay-ai.dongwontuna.net/oidc/exchange"
+
+          def require_env(name):
+              value = os.environ.get(name)
+              if not value:
+                  raise SystemExit(f"missing required environment variable: {name}")
+              return value
+
+          def request_json(request):
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", "replace")[:800]
+                  raise SystemExit(f"{request.full_url} failed with HTTP {exc.code}: {body}") from exc
+
+          parts = urllib.parse.urlsplit(require_env("ACTIONS_ID_TOKEN_REQUEST_URL"))
+          query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+          query.append(("audience", audience))
+          request_url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+          oidc_payload = request_json(
+              urllib.request.Request(
+                  request_url,
+                  headers={
+                      "Accept": "application/json",
+                      "Authorization": f"Bearer {require_env('ACTIONS_ID_TOKEN_REQUEST_TOKEN')}",
+                  },
+              )
+          )
+          oidc_token = oidc_payload.get("value")
+          if not isinstance(oidc_token, str) or not oidc_token:
+              raise SystemExit("GitHub OIDC response did not include a token value")
+          print(f"::add-mask::{oidc_token}")
+
+          exchanged = request_json(
+              urllib.request.Request(
+                  broker_url,
+                  data=json.dumps({"token": oidc_token}).encode("utf-8"),
+                  method="POST",
+                  headers={"Accept": "application/json", "Content-Type": "application/json"},
+              )
+          )
+          relay_token = exchanged.get("relay_token")
+          if exchanged.get("token_type") != "Bearer" or not isinstance(relay_token, str) or not relay_token.startswith("sk-clb-"):
+              raise SystemExit("broker response did not include a valid relay token")
+          print(f"::add-mask::{relay_token}")
+
+          with open(require_env("GITHUB_OUTPUT"), "a", encoding="utf-8") as output:
+              for key in ("relay_token", "expires_at", "api_key_id"):
+                  value = exchanged.get(key)
+                  if not isinstance(value, str) or not value:
+                      raise SystemExit(f"broker response did not include {key}")
+                  output.write(f"{key}={value}\n")
+          PY
+
+      - name: Check relay token
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         run: test -n "$AI_RELAY_API_KEY"
 
       - name: Prepare Codex action home
@@ -493,6 +669,8 @@ jobs:
 
       - name: Run tech-lead gate
         uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ runner.temp }}/prompt-tech-lead.md
           output-schema: |
@@ -617,11 +795,11 @@ jobs:
       pull-requests: write
     timeout-minutes: 10
     steps:
-      - name: Checkout PR scripts
+      - name: Checkout trusted PR scripts
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve.outputs.head_sha }}
-          path: workspace
+          ref: ${{ needs.resolve.outputs.base_ref }}
+          path: trusted
           fetch-depth: 1
           persist-credentials: false
 
@@ -652,6 +830,6 @@ jobs:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
         run: >-
-          python3 workspace/.github/scripts/post_review.py post-current
+          python3 trusted/.github/scripts/post_review.py post-current
           --artifacts artifacts
           --decisions artifacts/decisions-tech-lead.json
