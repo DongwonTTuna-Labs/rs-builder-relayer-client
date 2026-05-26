@@ -248,7 +248,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: ./workspace/.github/actions/setup-codex-relay
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
         with:
           codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
 
@@ -483,7 +483,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: ./workspace/.github/actions/setup-codex-relay
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
         with:
           codex-home: ${{ runner.temp }}/codex-home-tech-lead
 
