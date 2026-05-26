@@ -276,86 +276,11 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Mint relay token
+      - name: Setup Codex relay
         id: relay-token
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-          import urllib.error
-          import urllib.parse
-          import urllib.request
-
-          audience = "https://relay-ai.dongwontuna.net/github-actions"
-          broker_url = "https://relay-ai.dongwontuna.net/oidc/exchange"
-
-          def require_env(name):
-              value = os.environ.get(name)
-              if not value:
-                  raise SystemExit(f"missing required environment variable: {name}")
-              return value
-
-          def request_json(request):
-              try:
-                  with urllib.request.urlopen(request, timeout=60) as response:
-                      return json.loads(response.read().decode("utf-8"))
-              except urllib.error.HTTPError as exc:
-                  body = exc.read().decode("utf-8", "replace")[:800]
-                  raise SystemExit(f"{request.full_url} failed with HTTP {exc.code}: {body}") from exc
-
-          parts = urllib.parse.urlsplit(require_env("ACTIONS_ID_TOKEN_REQUEST_URL"))
-          query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
-          query.append(("audience", audience))
-          request_url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
-          oidc_payload = request_json(
-              urllib.request.Request(
-                  request_url,
-                  headers={
-                      "Accept": "application/json",
-                      "Authorization": f"Bearer {require_env('ACTIONS_ID_TOKEN_REQUEST_TOKEN')}",
-                  },
-              )
-          )
-          oidc_token = oidc_payload.get("value")
-          if not isinstance(oidc_token, str) or not oidc_token:
-              raise SystemExit("GitHub OIDC response did not include a token value")
-          print(f"::add-mask::{oidc_token}")
-
-          exchanged = request_json(
-              urllib.request.Request(
-                  broker_url,
-                  data=json.dumps({"token": oidc_token}).encode("utf-8"),
-                  method="POST",
-                  headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "github-actions-codex-oidc"},
-              )
-          )
-          relay_token = exchanged.get("relay_token")
-          if exchanged.get("token_type") != "Bearer" or not isinstance(relay_token, str) or not relay_token.startswith("sk-clb-"):
-              raise SystemExit("broker response did not include a valid relay token")
-          print(f"::add-mask::{relay_token}")
-
-          with open(require_env("GITHUB_OUTPUT"), "a", encoding="utf-8") as output:
-              for key in ("relay_token", "expires_at", "api_key_id"):
-                  value = exchanged.get(key)
-                  if not isinstance(value, str) or not value:
-                      raise SystemExit(f"broker response did not include {key}")
-                  output.write(f"{key}={value}\n")
-          PY
-
-      - name: Check relay token
-        env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-        run: test -n "$AI_RELAY_API_KEY"
-
-      - name: Prepare Codex action home
-        env:
-          CODEX_ACTION_HOME: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
-        run: |
-          mkdir -p "$CODEX_ACTION_HOME"
-          printf '{"port":0}\n' > "$CODEX_ACTION_HOME/${GITHUB_RUN_ID}.json"
+        uses: ./workspace/.github/actions/setup-codex-relay
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
 
       - name: Run Codex reviewer
         uses: openai/codex-action@v1
@@ -586,86 +511,11 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Mint relay token
+      - name: Setup Codex relay
         id: relay-token
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
-          import urllib.error
-          import urllib.parse
-          import urllib.request
-
-          audience = "https://relay-ai.dongwontuna.net/github-actions"
-          broker_url = "https://relay-ai.dongwontuna.net/oidc/exchange"
-
-          def require_env(name):
-              value = os.environ.get(name)
-              if not value:
-                  raise SystemExit(f"missing required environment variable: {name}")
-              return value
-
-          def request_json(request):
-              try:
-                  with urllib.request.urlopen(request, timeout=60) as response:
-                      return json.loads(response.read().decode("utf-8"))
-              except urllib.error.HTTPError as exc:
-                  body = exc.read().decode("utf-8", "replace")[:800]
-                  raise SystemExit(f"{request.full_url} failed with HTTP {exc.code}: {body}") from exc
-
-          parts = urllib.parse.urlsplit(require_env("ACTIONS_ID_TOKEN_REQUEST_URL"))
-          query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
-          query.append(("audience", audience))
-          request_url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
-          oidc_payload = request_json(
-              urllib.request.Request(
-                  request_url,
-                  headers={
-                      "Accept": "application/json",
-                      "Authorization": f"Bearer {require_env('ACTIONS_ID_TOKEN_REQUEST_TOKEN')}",
-                  },
-              )
-          )
-          oidc_token = oidc_payload.get("value")
-          if not isinstance(oidc_token, str) or not oidc_token:
-              raise SystemExit("GitHub OIDC response did not include a token value")
-          print(f"::add-mask::{oidc_token}")
-
-          exchanged = request_json(
-              urllib.request.Request(
-                  broker_url,
-                  data=json.dumps({"token": oidc_token}).encode("utf-8"),
-                  method="POST",
-                  headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "github-actions-codex-oidc"},
-              )
-          )
-          relay_token = exchanged.get("relay_token")
-          if exchanged.get("token_type") != "Bearer" or not isinstance(relay_token, str) or not relay_token.startswith("sk-clb-"):
-              raise SystemExit("broker response did not include a valid relay token")
-          print(f"::add-mask::{relay_token}")
-
-          with open(require_env("GITHUB_OUTPUT"), "a", encoding="utf-8") as output:
-              for key in ("relay_token", "expires_at", "api_key_id"):
-                  value = exchanged.get(key)
-                  if not isinstance(value, str) or not value:
-                      raise SystemExit(f"broker response did not include {key}")
-                  output.write(f"{key}={value}\n")
-          PY
-
-      - name: Check relay token
-        env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-        run: test -n "$AI_RELAY_API_KEY"
-
-      - name: Prepare Codex action home
-        env:
-          CODEX_ACTION_HOME: ${{ runner.temp }}/codex-home-tech-lead
-        run: |
-          mkdir -p "$CODEX_ACTION_HOME"
-          printf '{"port":0}\n' > "$CODEX_ACTION_HOME/${GITHUB_RUN_ID}.json"
+        uses: ./workspace/.github/actions/setup-codex-relay
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-tech-lead
 
       - name: Run tech-lead gate
         uses: openai/codex-action@v1
