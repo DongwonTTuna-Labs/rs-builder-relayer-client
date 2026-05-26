@@ -7,12 +7,6 @@ on:
     types:
       - synchronize
       - ready_for_review
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: Pull request number to check
-        required: true
-        type: number
 
 permissions:
   contents: read
@@ -21,14 +15,10 @@ concurrency:
   group: codex-resolve-checker-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
-env:
-  CODEX_REVIEW_ARGS: >-
-    ["--enable","use_legacy_landlock","--disable","shell_tool","--ignore-user-config","--ignore-rules","--color","never","-c","model_provider=\"ai-relay\"","-c","model_providers.ai-relay.name=\"AI Relay\"","-c","model_providers.ai-relay.base_url=\"https://relay-ai.dongwontuna.net/v1\"","-c","model_providers.ai-relay.wire_api=\"responses\"","-c","model_providers.ai-relay.env_key=\"AI_RELAY_API_KEY\"","-c","model_providers.ai-relay.supports_websockets=true","-c","model_providers.ai-relay.requires_openai_auth=false","-c","shell_environment_policy.exclude=[\"AI_RELAY_API_KEY\"]","-c","sandbox_workspace_write.network_access=false"]
-
 jobs:
   collect:
     name: collect
-    if: github.actor == 'DongwonTTuna'
+    if: github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -42,12 +32,13 @@ jobs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       head_sha: ${{ steps.resolve.outputs.head_sha }}
       base_ref: ${{ steps.resolve.outputs.base_ref }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
     steps:
       - name: Resolve PR metadata
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          DISPATCH_PR_NUMBER: ${{ inputs.pr_number || '' }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           python3 - <<'PY'
           import json
@@ -64,7 +55,7 @@ jobs:
                       output.write(f"{key}={value}\n")
 
           def skipped():
-              return {"should_collect": "false", "pr_number": "", "head_sha": "", "base_ref": ""}
+              return {"should_collect": "false", "pr_number": "", "head_sha": "", "base_ref": "", "base_sha": ""}
 
           def github_api(path):
               request = urllib.request.Request(
@@ -87,8 +78,9 @@ jobs:
           event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
           repo = os.environ["GITHUB_REPOSITORY"]
           actor = os.environ.get("GITHUB_ACTOR", "")
+          triggering_actor = os.environ.get("GITHUB_TRIGGERING_ACTOR", "")
 
-          if actor != TRUSTED_USER:
+          if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
               write_outputs(skipped())
               raise SystemExit(0)
 
@@ -106,28 +98,7 @@ jobs:
                           "pr_number": str(pr["number"]),
                           "head_sha": str(pr["head"]["sha"]),
                           "base_ref": "main",
-                      }
-                  )
-              raise SystemExit(0)
-
-          if event_name == "workflow_dispatch":
-              pr_number = str(os.environ.get("DISPATCH_PR_NUMBER", "")).strip()
-              if not pr_number.isdigit():
-                  write_outputs(skipped())
-                  raise SystemExit(0)
-              pr = github_api(f"/repos/{repo}/pulls/{pr_number}")
-              base_ref = ((pr.get("base") or {}).get("ref")) or ""
-              head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
-              author = (pr.get("user") or {}).get("login")
-              if pr.get("draft") or base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
-                  write_outputs(skipped())
-              else:
-                  write_outputs(
-                      {
-                          "should_collect": "true",
-                          "pr_number": pr_number,
-                          "head_sha": str(pr["head"]["sha"]),
-                          "base_ref": "main",
+                          "base_sha": str(pr["base"]["sha"]),
                       }
                   )
               raise SystemExit(0)
@@ -148,7 +119,7 @@ jobs:
         if: steps.resolve.outputs.should_collect == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.resolve.outputs.base_ref }}
+          ref: ${{ steps.resolve.outputs.base_sha }}
           path: trusted
           fetch-depth: 1
           persist-credentials: false
@@ -177,7 +148,7 @@ jobs:
   resolve-check:
     name: resolve-check-${{ matrix.batch }}
     needs: collect
-    if: needs.collect.outputs.has_comments == 'true'
+    if: needs.collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -288,7 +259,7 @@ jobs:
           codex-version: latest
           model: gpt-5.5
           effort: xhigh
-          codex-args: ${{ env.CODEX_REVIEW_ARGS }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
 
       - name: Validate resolve-check output
         env:
@@ -325,7 +296,7 @@ jobs:
   apply:
     name: apply
     needs: [collect, resolve-check]
-    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true'
+    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -337,7 +308,7 @@ jobs:
       - name: Checkout trusted PR scripts
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.collect.outputs.base_ref }}
+          ref: ${{ needs.collect.outputs.base_sha }}
           path: trusted
           fetch-depth: 1
           persist-credentials: false

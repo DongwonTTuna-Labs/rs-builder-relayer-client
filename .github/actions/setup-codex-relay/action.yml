@@ -13,6 +13,10 @@ inputs:
   codex-home:
     description: Directory to use as the isolated Codex action home.
     required: true
+  trusted-actor:
+    description: GitHub actor allowed to mint relay tokens.
+    required: false
+    default: DongwonTTuna
 
 outputs:
   relay_token:
@@ -24,18 +28,32 @@ outputs:
   api_key_id:
     description: Relay api_keys row id.
     value: ${{ steps.mint.outputs.api_key_id }}
+  codex_args:
+    description: Codex CLI arguments for relay-backed read-only review runs.
+    value: ${{ steps.codex-args.outputs.codex_args }}
 
 runs:
   using: composite
   steps:
+    - name: Configure Codex args
+      id: codex-args
+      shell: bash
+      run: |
+        printf '%s\n' 'codex_args=["--enable","use_legacy_landlock","--disable","shell_tool","--ignore-user-config","--ignore-rules","--color","never","-c","model_provider=\"ai-relay\"","-c","model_providers.ai-relay.name=\"AI Relay\"","-c","model_providers.ai-relay.base_url=\"https://relay-ai.dongwontuna.net/v1\"","-c","model_providers.ai-relay.wire_api=\"responses\"","-c","model_providers.ai-relay.env_key=\"AI_RELAY_API_KEY\"","-c","model_providers.ai-relay.supports_websockets=true","-c","model_providers.ai-relay.requires_openai_auth=false","-c","shell_environment_policy.exclude=[\"AI_RELAY_API_KEY\"]","-c","sandbox_workspace_write.network_access=false"]' >> "$GITHUB_OUTPUT"
+
     - name: Mint relay token
       id: mint
       shell: bash
       env:
         BROKER_AUDIENCE: ${{ inputs.audience }}
         BROKER_URL: ${{ inputs.broker-url }}
+        TRUSTED_ACTOR: ${{ inputs.trusted-actor }}
       run: |
         set -euo pipefail
+        if [ "${GITHUB_ACTOR:-}" != "$TRUSTED_ACTOR" ] || [ "${GITHUB_TRIGGERING_ACTOR:-}" != "$TRUSTED_ACTOR" ]; then
+          echo "refusing to mint relay token for actor=${GITHUB_ACTOR:-} triggering_actor=${GITHUB_TRIGGERING_ACTOR:-}" >&2
+          exit 1
+        fi
         python3 - <<'PY'
         import json
         import os
