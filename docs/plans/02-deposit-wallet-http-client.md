@@ -2,10 +2,12 @@
 
 ## Summary
 
-Add a production-endpoint-capable HTTP client for relayer nonce, submit, and
-transaction polling. This PR connects existing request builders and signing
-outputs to real relayer HTTP behavior while keeping the default test suite on
-local mock responders.
+Add a production-endpoint-capable HTTP client for relayer nonce and transaction
+polling, plus test-loopback submit transport for `WALLET-CREATE` and `WALLET`
+request construction. This PR connects existing request builders and signing
+outputs to relayer HTTP behavior while keeping production submit publicly
+blocked until a later live-submit PR adds durable owner state and a trusted
+mutation capability.
 
 ## In Scope
 
@@ -13,9 +15,10 @@ local mock responders.
 - Add a small `DepositWalletRelayerClient` wrapper that uses deposit-wallet
   request builders, signing outputs, and transaction state parsing.
 - Implement production URL validation for the allowlisted Polymarket relayer
-  and HTTP methods for `GET /nonce`, gated `POST /submit` with
-  `WALLET-CREATE`, gated `POST /submit` with `WALLET`, and
-  `GET /transaction`.
+  and HTTP methods for `GET /nonce` and `GET /transaction`.
+- Implement test-loopback `POST /submit` transport for `WALLET-CREATE` and
+  `WALLET` fixtures. Production `POST /submit` remains blocked by public permit
+  construction in this PR.
 - Implement mocked tests for those endpoints using local loopback responders.
 - Use local test HTTP responders built with `tokio::net::TcpListener`; do not
   add a mock-server dependency unless the PR documents the dependency risk.
@@ -50,11 +53,12 @@ local mock responders.
 
 The mutation gate must default to deny relayer mutation. A production URL, API
 key, or signer alone must not be enough to submit `WALLET-CREATE` or `WALLET`.
-`POST /submit` may reach the allowlisted production endpoint only with an
-explicit owner-scoped live mutation permit that records caller-side owner
-serialization evidence. The implementation PR must document the permit type,
-dry-run evidence requirement, rollback path, and the error returned when
-mutation is blocked.
+In this PR, public owner-scoped permits are limited to test-loopback clients so
+production `POST /submit` cannot be reached through the public API. A later
+live-submit PR may add a crate-owned trusted capability for the allowlisted
+production endpoint only after durable owner state, dry-run evidence, rollback
+path, and operator approval are documented and tested. This implementation must
+document the permit type and the stable error returned when mutation is blocked.
 
 Relayer authentication headers must only be attached after endpoint validation.
 Tests must reject `http://` URLs, non-allowlisted hosts, userinfo-bearing URLs,
@@ -119,6 +123,7 @@ APIs must not be removed or silently changed.
 ## Residual Risk
 
 - Mocked default tests prove client behavior, not production relayer acceptance.
-- Production submit is endpoint-capable but still gated; end-to-end live trading
-  remains blocked until calldata builders, dry-run evidence, and operator
-  approval are complete.
+- Production submit request construction is covered by test-loopback fixtures,
+  but production `POST /submit` is not publicly reachable in this PR. End-to-end
+  live trading remains blocked until durable owner state, calldata builders,
+  dry-run evidence, rollback path, and operator approval are complete.

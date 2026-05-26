@@ -1,6 +1,8 @@
 import json
 import os
+import subprocess
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -265,6 +267,112 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertIn('-c \'model_provider="ai-relay"\'', script)
         self.assertIn('-c \'model_providers.ai-relay.env_key="AI_RELAY_API_KEY"\'', script)
         self.assertIn('-c \'shell_environment_policy.exclude=["AI_RELAY_API_KEY"]\'', script)
+
+    def test_codex_exec_runtime_contract_uses_ai_relay_and_scrubs_runner_tokens(self) -> None:
+        token_names = [
+            "GIT_AUTH_TOKEN",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "FORGEJO_BOT_TOKEN",
+            "ACTIONS_RUNTIME_TOKEN",
+            "ACTIONS_CACHE_URL",
+            "ACTIONS_RESULTS_URL",
+            "ACTIONS_RUNTIME_URL",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_dir = Path(tmp)
+            prompt = temp_dir / "prompt.md"
+            schema = temp_dir / "schema.json"
+            output = temp_dir / "output.txt"
+            log = temp_dir / "codex.log"
+            capture = temp_dir / "capture.json"
+            prompt.write_text("review this", encoding="utf-8")
+            schema.write_text("{}", encoding="utf-8")
+
+            codex = temp_dir / "codex"
+            codex.write_text(
+                """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+try:
+    out_path = args[args.index("--output-last-message") + 1]
+except (ValueError, IndexError):
+    sys.exit(2)
+
+Path = __import__("pathlib").Path
+Path(out_path).write_text("ok\\n", encoding="utf-8")
+payload = {
+    "args": args,
+    "env_present": {
+        name: name in os.environ
+        for name in [
+            "AI_RELAY_API_KEY",
+            "GIT_AUTH_TOKEN",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "FORGEJO_BOT_TOKEN",
+            "ACTIONS_RUNTIME_TOKEN",
+            "ACTIONS_CACHE_URL",
+            "ACTIONS_RESULTS_URL",
+            "ACTIONS_RUNTIME_URL",
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+            "ACTIONS_ID_TOKEN_REQUEST_URL",
+        ]
+    },
+}
+Path(os.environ["CODEX_EXEC_CAPTURE"]).write_text(json.dumps(payload), encoding="utf-8")
+""",
+                encoding="utf-8",
+            )
+            codex.chmod(0o700)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{temp_dir}{os.pathsep}{env['PATH']}",
+                    "PROMPT_FILE": str(prompt),
+                    "SCHEMA_FILE": str(schema),
+                    "OUT_FILE": str(output),
+                    "RUNNER_TEMP": str(temp_dir),
+                    "GITHUB_WORKSPACE": str(REPO_ROOT),
+                    "LOG_FILE": str(log),
+                    "AI_RELAY_API_KEY": "relay-secret-not-captured",
+                    "CODEX_EXEC_CAPTURE": str(capture),
+                    "CODEX_REQUIRE_CLEAN_WORKSPACE": "1",
+                }
+            )
+            for name in token_names:
+                env[name] = f"{name.lower()}-secret"
+
+            result = subprocess.run(
+                ["bash", str(REPO_ROOT / ".forgejo" / "scripts" / "codex_exec.sh")],
+                cwd=REPO_ROOT,
+                env=env,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            captured = json.loads(capture.read_text(encoding="utf-8"))
+            self.assertTrue(captured["env_present"]["AI_RELAY_API_KEY"])
+            for name in token_names:
+                self.assertFalse(captured["env_present"][name], name)
+
+            args = captured["args"]
+            self.assertIn("--disable", args)
+            self.assertEqual(args[args.index("--disable") + 1], "shell_tool")
+            self.assertIn('model_provider="ai-relay"', args)
+            self.assertIn('model_providers.ai-relay.env_key="AI_RELAY_API_KEY"', args)
+            self.assertIn('shell_environment_policy.exclude=["AI_RELAY_API_KEY"]', args)
+            self.assertIn("sandbox_workspace_write.network_access=false", args)
+            self.assertEqual(output.read_text(encoding="utf-8"), "ok\n")
 
     def test_pipeline_jobs_skip_when_resolver_denies_review(self) -> None:
         workflow = yaml.safe_load(

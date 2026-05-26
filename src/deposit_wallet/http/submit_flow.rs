@@ -7,6 +7,12 @@ use super::response::parse_submit_response;
 use super::state::OwnerSubmitReservation;
 
 impl DepositWalletRelayerClient {
+    /// Submits a `WALLET-CREATE` request when the mutation gate permits it.
+    ///
+    /// Production clients created with [`DepositWalletRelayerUrl::parse`] cannot
+    /// construct a public permit in this PR; live production submit requires a
+    /// later durable owner-state capability. Test-loopback clients exercise the
+    /// request body and post-boundary reconciliation behavior.
     pub async fn submit_wallet_create(
         &self,
         owner: Address,
@@ -20,6 +26,11 @@ impl DepositWalletRelayerClient {
         self.submit_owner_body(owner, body).await
     }
 
+    /// Submits a signed `WALLET` batch when the mutation gate permits it.
+    ///
+    /// As with [`Self::submit_wallet_create`], the public production API remains
+    /// default-deny in this PR. Production submit enablement is intentionally
+    /// reserved for a later live-submit change with durable owner state.
     pub async fn submit_signed_wallet_batch(
         &self,
         signed: SignedDepositWalletBatch,
