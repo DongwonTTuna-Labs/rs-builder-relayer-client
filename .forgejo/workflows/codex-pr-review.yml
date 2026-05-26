@@ -90,4 +90,4 @@ jobs:
       trigger: ${{ needs.resolve.outputs.trigger }}
     secrets:
       CODEX_REVIEW_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
-      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
+      CODEX_LB_FORGEJO_RUNNER_API_KEY: ${{ secrets.CODEX_LB_FORGEJO_RUNNER_API_KEY }}

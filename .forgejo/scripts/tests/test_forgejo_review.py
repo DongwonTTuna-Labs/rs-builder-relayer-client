@@ -239,8 +239,8 @@ class WorkflowParityTests(unittest.TestCase):
         caller = (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review.yml").read_text(encoding="utf-8")
         self.assertIn("python3 pipeline/.forgejo/scripts/build_prompt.py", pipeline)
         self.assertIn("bash pipeline/.forgejo/scripts/codex_exec.sh", pipeline)
-        self.assertIn("AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}", caller)
-        self.assertEqual(pipeline.count("AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}"), 6)
+        self.assertIn("CODEX_LB_FORGEJO_RUNNER_API_KEY: ${{ secrets.CODEX_LB_FORGEJO_RUNNER_API_KEY }}", caller)
+        self.assertEqual(pipeline.count("CODEX_LB_FORGEJO_RUNNER_API_KEY: ${{ secrets.CODEX_LB_FORGEJO_RUNNER_API_KEY }}"), 6)
         self.assertNotIn("prepare-codex-auth:", pipeline)
         self.assertNotIn("cleanup-codex-auth:", pipeline)
         self.assertNotIn("/codex-runner-home:/home/runner/.codex", pipeline)
@@ -256,17 +256,17 @@ class WorkflowParityTests(unittest.TestCase):
             events["workflow_call"]["secrets"],
             {
                 "CODEX_REVIEW_BOT_TOKEN": {"required": True},
-                "AI_RELAY_API_KEY": {"required": True},
+                "CODEX_LB_FORGEJO_RUNNER_API_KEY": {"required": True},
             },
         )
 
     def test_codex_exec_requires_and_hides_ai_relay_key_from_model_tools(self) -> None:
         script = (REPO_ROOT / ".forgejo" / "scripts" / "codex_exec.sh").read_text(encoding="utf-8")
-        self.assertIn(': "${AI_RELAY_API_KEY:?AI_RELAY_API_KEY is required}"', script)
+        self.assertIn(': "${CODEX_LB_FORGEJO_RUNNER_API_KEY:?CODEX_LB_FORGEJO_RUNNER_API_KEY is required}"', script)
         self.assertIn("--disable shell_tool", script)
-        self.assertIn('-c \'model_provider="ai-relay"\'', script)
-        self.assertIn('-c \'model_providers.ai-relay.env_key="AI_RELAY_API_KEY"\'', script)
-        self.assertIn('-c \'shell_environment_policy.exclude=["AI_RELAY_API_KEY"]\'', script)
+        self.assertIn('-c \'model_provider="codex-lb"\'', script)
+        self.assertIn('-c \'model_providers.codex-lb.env_key="CODEX_LB_FORGEJO_RUNNER_API_KEY"\'', script)
+        self.assertIn('-c \'shell_environment_policy.exclude=["CODEX_LB_FORGEJO_RUNNER_API_KEY"]\'', script)
 
     def test_codex_exec_runtime_contract_uses_ai_relay_and_scrubs_runner_tokens(self) -> None:
         token_names = [
@@ -311,7 +311,7 @@ payload = {
     "env_present": {
         name: name in os.environ
         for name in [
-            "AI_RELAY_API_KEY",
+            "CODEX_LB_FORGEJO_RUNNER_API_KEY",
             "GIT_AUTH_TOKEN",
             "GH_TOKEN",
             "GITHUB_TOKEN",
@@ -341,7 +341,7 @@ Path(os.environ["CODEX_EXEC_CAPTURE"]).write_text(json.dumps(payload), encoding=
                     "RUNNER_TEMP": str(temp_dir),
                     "GITHUB_WORKSPACE": str(REPO_ROOT),
                     "LOG_FILE": str(log),
-                    "AI_RELAY_API_KEY": "relay-secret-not-captured",
+                    "CODEX_LB_FORGEJO_RUNNER_API_KEY": "relay-secret-not-captured",
                     "CODEX_EXEC_CAPTURE": str(capture),
                     "CODEX_REQUIRE_CLEAN_WORKSPACE": "1",
                 }
@@ -361,16 +361,16 @@ Path(os.environ["CODEX_EXEC_CAPTURE"]).write_text(json.dumps(payload), encoding=
 
             self.assertEqual(result.returncode, 0, result.stderr)
             captured = json.loads(capture.read_text(encoding="utf-8"))
-            self.assertTrue(captured["env_present"]["AI_RELAY_API_KEY"])
+            self.assertTrue(captured["env_present"]["CODEX_LB_FORGEJO_RUNNER_API_KEY"])
             for name in token_names:
                 self.assertFalse(captured["env_present"][name], name)
 
             args = captured["args"]
             self.assertIn("--disable", args)
             self.assertEqual(args[args.index("--disable") + 1], "shell_tool")
-            self.assertIn('model_provider="ai-relay"', args)
-            self.assertIn('model_providers.ai-relay.env_key="AI_RELAY_API_KEY"', args)
-            self.assertIn('shell_environment_policy.exclude=["AI_RELAY_API_KEY"]', args)
+            self.assertIn('model_provider="codex-lb"', args)
+            self.assertIn('model_providers.codex-lb.env_key="CODEX_LB_FORGEJO_RUNNER_API_KEY"', args)
+            self.assertIn('shell_environment_policy.exclude=["CODEX_LB_FORGEJO_RUNNER_API_KEY"]', args)
             self.assertIn("sandbox_workspace_write.network_access=false", args)
             self.assertEqual(output.read_text(encoding="utf-8"), "ok\n")
 

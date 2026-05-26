@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Codex CLI 공통 실행 래퍼.
-# CliRelay API key 로 `codex exec` 를 `--output-schema` 모드로 실행하고,
+# codex-lb API key 로 `codex exec` 를 `--output-schema` 모드로 실행하고,
 # 모델의 마지막 응답을 `$OUT_FILE` 로 저장한다.
 #
 # 필수 환경 변수:
@@ -55,7 +55,7 @@ fi
 : "${OUT_FILE:?OUT_FILE is required}"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
-: "${AI_RELAY_API_KEY:?AI_RELAY_API_KEY is required}"
+: "${CODEX_LB_FORGEJO_RUNNER_API_KEY:?CODEX_LB_FORGEJO_RUNNER_API_KEY is required}"
 
 # CODEX_WORKSPACE 는 Codex 실행 경로를 명시해야 하는 caller 용 override.
 # Forgejo review job 은 raw PR checkout 대신 redacted context artifact 만 전달하므로
@@ -90,15 +90,15 @@ codex --enable use_legacy_landlock --disable shell_tool --ask-for-approval never
   --ignore-rules \
   --skip-git-repo-check \
   --model gpt-5.5 \
-  -c 'model_provider="ai-relay"' \
-  -c 'model_providers.ai-relay.name="openai"' \
-  -c 'model_providers.ai-relay.base_url="https://relay-ai.dongwontuna.net/v1"' \
-  -c 'model_providers.ai-relay.wire_api="responses"' \
-  -c 'model_providers.ai-relay.env_key="AI_RELAY_API_KEY"' \
-  -c 'model_providers.ai-relay.supports_websockets=true' \
-  -c 'model_providers.ai-relay.requires_openai_auth=false' \
+  -c 'model_provider="codex-lb"' \
+  -c 'model_providers.codex-lb.name="OpenAI"' \
+  -c 'model_providers.codex-lb.base_url="https://relay-ai.dongwontuna.net/backend-api/codex"' \
+  -c 'model_providers.codex-lb.wire_api="responses"' \
+  -c 'model_providers.codex-lb.env_key="CODEX_LB_FORGEJO_RUNNER_API_KEY"' \
+  -c 'model_providers.codex-lb.supports_websockets=true' \
+  -c 'model_providers.codex-lb.requires_openai_auth=true' \
   -c 'model_reasoning_effort="xhigh"' \
-  -c 'shell_environment_policy.exclude=["AI_RELAY_API_KEY"]' \
+  -c 'shell_environment_policy.exclude=["CODEX_LB_FORGEJO_RUNNER_API_KEY"]' \
   -c 'sandbox_workspace_write.network_access=false' \
   ${EXTRA_CODEX_FLAGS:-} \
   --cd "$CODEX_CD_DIR" \
