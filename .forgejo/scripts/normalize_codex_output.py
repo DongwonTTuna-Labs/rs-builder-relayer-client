@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Validate and normalize a Codex output JSON for the v2 pipeline.
+
+The pipeline distinguishes two output shapes:
+  - ``findings`` — emitted by the 5 axes in Stage 1. Validated against
+    ``schemas/findings.schema.json``. On schema violation, an empty findings
+    object for the given axis is written so downstream stages can continue.
+  - ``decisions`` — emitted by the tech-lead in Stage 2. Validated against
+    ``schemas/decisions.schema.json``. On violation, an empty decisions
+    object is written.
+
+Required env:
+  RUNNER_TEMP — directory containing the raw Codex output.
+
+Args:
+  --schema {findings,decisions} — required.
+  --axis <name>                 — required for findings; ignored for decisions.
+
+Reads ``$RUNNER_TEMP/codex-output-<axis|tech-lead>.json`` and writes the
+normalized version to ``$RUNNER_TEMP/findings-<axis>.json`` (findings) or
+``$RUNNER_TEMP/decisions.json`` (decisions).
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from codex_redaction import PLACEHOLDER, find_unredacted_secret_risks, redact
+
+VALID_TYPES = {"MUST", "SUGGEST", "IMO", "NITS", "ASK"}
+VALID_AGENTS = {"correctness", "security", "performance", "test-coverage", "domain"}
+VALID_STATUSES = {"LGTM", "NEEDS_CLARIFICATION", "NEEDS_WORK"}
+
+
+def warn(msg: str) -> None:
+    sys.stderr.write(f"::warning::{msg}\n")
+
+
+def safe_artifact_text(value: object, max_len: int | None = None) -> str:
+    raw = str(value or "").strip()
+    text = redact(raw)
+    redacted_sensitive_literal = text != raw
+    if find_unredacted_secret_risks(text):
+        text = PLACEHOLDER
+    elif redacted_sensitive_literal:
+        text = PLACEHOLDER
+    if max_len is not None:
+        text = text[:max_len]
+    return text
+
+
+def safe_artifact_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {safe_artifact_text(key): safe_artifact_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [safe_artifact_value(item) for item in value]
+    if isinstance(value, str):
+        return safe_artifact_text(value)
+    return value
+
+
+def normalize_findings(raw: dict, axis: str) -> dict:
+    """Coerce findings JSON into the canonical shape; drop invalid rows."""
+    if not isinstance(raw, dict) or raw.get("agent") != axis:
+        warn(f"findings JSON missing/agent mismatch for axis={axis}; emitting empty")
+        return {"agent": axis, "findings": [], "positive": [], "impact_summary": None}
+
+    findings_raw = raw.get("findings")
+    if not isinstance(findings_raw, list):
+        warn(f"findings is not an array for axis={axis}; emitting empty")
+        findings_raw = []
+
+    normalized_findings: list[dict] = []
+    for entry in findings_raw[:13]:
+        if not isinstance(entry, dict):
+            continue
+        finding_type = str(entry.get("type") or "").upper()
+        if finding_type not in VALID_TYPES:
+            continue
+        title = safe_artifact_text(entry.get("title"), 200)
+        reason = safe_artifact_text(entry.get("reason"), 1000)
+        finding_id = safe_artifact_text(entry.get("id"), 200)
+        if not title or not reason or not finding_id:
+            continue
+        # 스키마는 file / line / rule_ref 를 required 로 선언하고 null 을 허용한다.
+        # 값이 없으면 키를 생략하지 말고 명시적으로 null 로 둬서 downstream 의
+        # KeyError / silent skip 을 방지한다.
+        file_value: str | None = None
+        if entry.get("file"):
+            file_value = safe_artifact_text(entry.get("file"), 500) or None
+        line_value: int | None = None
+        if entry.get("line"):
+            try:
+                parsed_line = int(entry["line"])
+                if parsed_line >= 1:
+                    line_value = parsed_line
+            except (TypeError, ValueError):
+                line_value = None
+        rule_ref_value: str | None = None
+        if entry.get("rule_ref"):
+            rule_ref_value = safe_artifact_text(entry.get("rule_ref"), 200) or None
+        row: dict = {
+            "id": finding_id,
+            "type": finding_type,
+            "file": file_value,
+            "line": line_value,
+            "title": title,
+            "reason": reason,
+            "rule_ref": rule_ref_value,
+            "cross_cutting": bool(entry.get("cross_cutting") or False),
+        }
+        normalized_findings.append(row)
+
+    positive_raw = raw.get("positive") or []
+    if not isinstance(positive_raw, list):
+        positive_raw = []
+    positive = [safe_artifact_text(p, 200) for p in positive_raw if str(p).strip()][:2]
+
+    impact_summary = raw.get("impact_summary")
+    if axis != "domain":
+        impact_summary = None
+    elif not isinstance(impact_summary, dict):
+        impact_summary = None
+    else:
+        impact_summary = safe_artifact_value(impact_summary)
+
+    return {
+        "agent": axis,
+        "findings": normalized_findings,
+        "positive": positive,
+        "impact_summary": impact_summary,
+    }
+
+
+def normalize_decisions(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        warn("decisions JSON is not an object; emitting empty")
+        return {"decisions": [], "merge_notes": [], "judgment": None}
+
+    decisions_raw = raw.get("decisions")
+    if not isinstance(decisions_raw, list):
+        warn("decisions is not an array; emitting empty")
+        decisions_raw = []
+
+    decisions: list[dict] = []
+    for entry in decisions_raw:
+        if not isinstance(entry, dict):
+            continue
+        decision_id = safe_artifact_text(entry.get("id"), 200)
+        reason = safe_artifact_text(entry.get("reason"), 300)
+        allow = entry.get("allow") is True
+        if not decision_id or not reason:
+            continue
+        decisions.append({"id": decision_id, "allow": allow, "reason": reason})
+
+    judgment = raw.get("judgment")
+    if isinstance(judgment, dict):
+        status = str(judgment.get("status") or "").upper()
+        headline = safe_artifact_text(judgment.get("headline"), 200)
+        if status in VALID_STATUSES and headline:
+            judgment = {"status": status, "headline": headline}
+        else:
+            judgment = None
+    else:
+        judgment = None
+
+    merge_notes_raw = raw.get("merge_notes") or []
+    if not isinstance(merge_notes_raw, list):
+        merge_notes_raw = []
+    merge_notes: list[dict] = []
+    for note in merge_notes_raw:
+        if not isinstance(note, dict):
+            continue
+        primary = safe_artifact_text(note.get("primary_id"), 200)
+        merged = note.get("merged_ids") or []
+        merge_reason = safe_artifact_text(note.get("reason"), 300)
+        if not primary or not isinstance(merged, list) or not merge_reason:
+            continue
+        merged_ids = [safe_artifact_text(m, 200) for m in merged if safe_artifact_text(m, 200)]
+        if not merged_ids:
+            continue
+        merge_notes.append(
+            {
+                "primary_id": primary,
+                "merged_ids": merged_ids,
+                "reason": merge_reason,
+            }
+        )
+
+    # judgment 는 스키마상 항상 required. invalid 면 키 자체를 생략하지 않고
+    # null 로 명시해 downstream 이 KeyError 를 만나지 않도록 한다.
+    return {
+        "decisions": decisions,
+        "merge_notes": merge_notes,
+        "judgment": judgment,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--schema", required=True, choices=["findings", "decisions"])
+    parser.add_argument("--axis")
+    args = parser.parse_args()
+
+    runner_temp = Path(os.environ["RUNNER_TEMP"])
+
+    if args.schema == "findings":
+        if not args.axis:
+            raise SystemExit("--axis is required when --schema=findings")
+        if args.axis not in VALID_AGENTS:
+            raise SystemExit(f"unknown axis: {args.axis}")
+        raw_path = runner_temp / f"codex-output-{args.axis}.json"
+        out_path = runner_temp / f"findings-{args.axis}.json"
+        try:
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            warn(f"failed to parse {raw_path.name}: {exc}; emitting empty findings")
+            raw = {}
+        normalized = normalize_findings(raw, args.axis)
+    else:
+        raw_path = runner_temp / "codex-output-tech-lead.json"
+        out_path = runner_temp / "decisions.json"
+        try:
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError) as exc:
+            warn(f"failed to parse {raw_path.name}: {exc}; emitting empty decisions")
+            raw = {}
+        normalized = normalize_decisions(raw)
+
+    out_path.write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

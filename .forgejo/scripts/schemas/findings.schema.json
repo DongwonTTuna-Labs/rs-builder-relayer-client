@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexReviewFindings",
+  "description": "Output schema for each axis agent in Stage 1 of Codex PR review v2. OpenAI structured outputs strict mode requires every property to appear in `required` and uses type unions with 'null' to express optionality.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent", "findings", "positive", "impact_summary"],
+  "properties": {
+    "agent": {
+      "type": "string",
+      "enum": ["correctness", "security", "performance", "test-coverage", "domain"]
+    },
+    "findings": {
+      "type": "array",
+      "maxItems": 13,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "file", "line", "title", "reason", "rule_ref", "cross_cutting"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["MUST", "SUGGEST", "IMO", "NITS", "ASK"]
+          },
+          "file": {
+            "type": ["string", "null"],
+            "description": "Path from repository root. Null when cross_cutting is true."
+          },
+          "line": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "description": "Line number on the PR head commit. Null when cross_cutting is true."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "rule_ref": {
+            "type": ["string", "null"],
+            "maxLength": 200,
+            "description": "Optional reference. Include a `*-critical` keyword to force hard-rule allow."
+          },
+          "cross_cutting": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "positive": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "impact_summary": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "backward_compat",
+            "external_integration",
+            "env_settings",
+            "other_notes"
+          ],
+          "properties": {
+            "scope": { "type": "string" },
+            "backward_compat": { "type": "string" },
+            "external_integration": { "type": "string" },
+            "env_settings": { "type": "string" },
+            "other_notes": { "type": "string" }
+          }
+        },
+        { "type": "null" }
+      ],
+      "description": "Filled only by the domain axis; all other axes must set null."
+    }
+  }
+}
