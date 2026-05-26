@@ -1,1 +1,0 @@
-Codex review smoke marker.
