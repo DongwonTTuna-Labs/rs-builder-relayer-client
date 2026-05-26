@@ -16,6 +16,7 @@ AXES = ("correctness", "security", "performance", "test-coverage", "domain")
 INLINE_MARKER = "<!-- codex-review-inline -->"
 MAX_INLINE_COMMENTS = 50
 RESOLVE_BATCH_SIZE = 3
+TRUSTED_USER = "DongwonTTuna"
 
 
 def require_env(name: str) -> str:
@@ -149,6 +150,138 @@ def write_github_output(values: dict[str, str]) -> None:
     with open(output_path, "a", encoding="utf-8") as output:
         for key, value in values.items():
             output.write(f"{key}={value}\n")
+
+
+def skipped_current_review() -> dict[str, str]:
+    return {
+        "should_run": "false",
+        "pr_number": "",
+        "head_sha": "",
+        "base_ref": "",
+        "base_sha": "",
+        "trigger": "",
+    }
+
+
+def skipped_resolve_checker() -> dict[str, str]:
+    return {"should_collect": "false", "pr_number": "", "head_sha": "", "base_ref": "", "base_sha": ""}
+
+
+def resolve_current_review_event(
+    *,
+    event_name: str,
+    event: dict[str, Any],
+    repo: str,
+    actor: str,
+    triggering_actor: str,
+    fetch_pr: Any = github_api,
+) -> dict[str, str]:
+    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+        return skipped_current_review()
+
+    if event_name == "pull_request":
+        pr = event.get("pull_request") or {}
+        sender = (event.get("sender") or {}).get("login")
+        base_ref = ((pr.get("base") or {}).get("ref")) or ""
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        author = (pr.get("user") or {}).get("login")
+        if (
+            not pr
+            or pr.get("draft")
+            or base_ref != "main"
+            or head_repo != repo
+            or author != TRUSTED_USER
+            or sender != TRUSTED_USER
+        ):
+            return skipped_current_review()
+        return {
+            "should_run": "true",
+            "pr_number": str(pr["number"]),
+            "head_sha": str(pr["head"]["sha"]),
+            "base_ref": "main",
+            "base_sha": str(pr["base"]["sha"]),
+            "trigger": f"pull_request:{event.get('action', '')}",
+        }
+
+    if event_name == "issue_comment":
+        issue = event.get("issue") or {}
+        comment = event.get("comment") or {}
+        body = str(comment.get("body") or "")
+        comment_user = ((comment.get("user") or {}).get("login")) or ""
+        if "pull_request" not in issue or "/codex-review" not in body or comment_user != TRUSTED_USER or actor.endswith("[bot]"):
+            return skipped_current_review()
+        pr_number = str(issue["number"])
+        pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
+        base_ref = ((pr.get("base") or {}).get("ref")) or ""
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        author = (pr.get("user") or {}).get("login")
+        if base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
+            return skipped_current_review()
+        return {
+            "should_run": "true",
+            "pr_number": pr_number,
+            "head_sha": str(pr["head"]["sha"]),
+            "base_ref": "main",
+            "base_sha": str(pr["base"]["sha"]),
+            "trigger": "issue_comment:/codex-review",
+        }
+
+    return skipped_current_review()
+
+
+def resolve_previous_review_event(
+    *,
+    event_name: str,
+    event: dict[str, Any],
+    repo: str,
+    actor: str,
+    triggering_actor: str,
+) -> dict[str, str]:
+    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER or event_name != "pull_request":
+        return skipped_resolve_checker()
+    pr = event.get("pull_request") or {}
+    base_ref = ((pr.get("base") or {}).get("ref")) or ""
+    head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+    author = (pr.get("user") or {}).get("login")
+    if not pr or pr.get("draft") or base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
+        return skipped_resolve_checker()
+    return {
+        "should_collect": "true",
+        "pr_number": str(pr["number"]),
+        "head_sha": str(pr["head"]["sha"]),
+        "base_ref": "main",
+        "base_sha": str(pr["base"]["sha"]),
+    }
+
+
+def load_event_payload() -> dict[str, Any]:
+    return json.loads(Path(require_env("GITHUB_EVENT_PATH")).read_text(encoding="utf-8"))
+
+
+def command_resolve_current(args: argparse.Namespace) -> None:
+    del args
+    write_github_output(
+        resolve_current_review_event(
+            event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
+            event=load_event_payload(),
+            repo=require_env("GITHUB_REPOSITORY"),
+            actor=os.environ.get("GITHUB_ACTOR", ""),
+            triggering_actor=os.environ.get("GITHUB_TRIGGERING_ACTOR", ""),
+        )
+    )
+
+
+def command_resolve_previous(args: argparse.Namespace) -> None:
+    del args
+    write_github_output(
+        resolve_previous_review_event(
+            event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
+            event=load_event_payload(),
+            repo=require_env("GITHUB_REPOSITORY"),
+            actor=os.environ.get("GITHUB_ACTOR", ""),
+            triggering_actor=os.environ.get("GITHUB_TRIGGERING_ACTOR", ""),
+        )
+    )
 
 
 def load_current_findings(artifacts: Path) -> list[dict[str, Any]]:
@@ -611,6 +744,12 @@ def build_parser() -> argparse.ArgumentParser:
     post_current.add_argument("--artifacts", required=True)
     post_current.add_argument("--decisions", required=True)
     post_current.set_defaults(func=command_post_current)
+
+    resolve_current = subparsers.add_parser("resolve-current")
+    resolve_current.set_defaults(func=command_resolve_current)
+
+    resolve_previous = subparsers.add_parser("resolve-previous")
+    resolve_previous.set_defaults(func=command_resolve_previous)
 
     collect = subparsers.add_parser("collect-resolutions")
     collect.add_argument("--workspace", required=True)
