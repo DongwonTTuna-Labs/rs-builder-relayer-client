@@ -252,6 +252,16 @@ jobs:
         with:
           codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
 
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
       - name: Run Codex reviewer
         uses: openai/codex-action@v1
         env:
@@ -486,6 +496,16 @@ jobs:
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
         with:
           codex-home: ${{ runner.temp }}/codex-home-tech-lead
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
 
       - name: Run tech-lead gate
         uses: openai/codex-action@v1
