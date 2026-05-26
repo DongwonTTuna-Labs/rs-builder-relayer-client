@@ -2,8 +2,11 @@ name: Codex PR Review Pipeline
 
 on:
   workflow_call:
-    # Forgejo Actions currently rejects workflow_call.secrets
-    # declaration on this instance; callers still pass only the scoped bot token.
+    secrets:
+      CODEX_REVIEW_BOT_TOKEN:
+        required: true
+      AI_RELAY_API_KEY:
+        required: true
     inputs:
       pr_number:
         required: true
@@ -688,4 +691,3 @@ jobs:
           FORGEJO_BOT_TOKEN: ${{ secrets.CODEX_REVIEW_BOT_TOKEN }}
           FORGEJO_BOT_LOGIN: codex-reviewer-for-dongwonttuna
         run: python3 pipeline/.forgejo/scripts/post_review_comments.py
-

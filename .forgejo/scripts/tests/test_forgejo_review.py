@@ -245,6 +245,27 @@ class WorkflowParityTests(unittest.TestCase):
         self.assertNotIn("/codex-runner-locks:/var/lib/codex-runner/auth-runs-root", pipeline)
         self.assertNotIn("CODEX_AUTH_FILE", pipeline)
 
+    def test_reusable_pipeline_declares_required_secrets(self) -> None:
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
+        )
+        events = workflow.get("on", workflow.get(True))
+        self.assertEqual(
+            events["workflow_call"]["secrets"],
+            {
+                "CODEX_REVIEW_BOT_TOKEN": {"required": True},
+                "AI_RELAY_API_KEY": {"required": True},
+            },
+        )
+
+    def test_codex_exec_requires_and_hides_ai_relay_key_from_model_tools(self) -> None:
+        script = (REPO_ROOT / ".forgejo" / "scripts" / "codex_exec.sh").read_text(encoding="utf-8")
+        self.assertIn(': "${AI_RELAY_API_KEY:?AI_RELAY_API_KEY is required}"', script)
+        self.assertIn("--disable shell_tool", script)
+        self.assertIn('-c \'model_provider="ai-relay"\'', script)
+        self.assertIn('-c \'model_providers.ai-relay.env_key="AI_RELAY_API_KEY"\'', script)
+        self.assertIn('-c \'shell_environment_policy.exclude=["AI_RELAY_API_KEY"]\'', script)
+
     def test_pipeline_jobs_skip_when_resolver_denies_review(self) -> None:
         workflow = yaml.safe_load(
             (REPO_ROOT / ".forgejo" / "workflows" / "codex-pr-review-pipeline.yml").read_text(encoding="utf-8")
