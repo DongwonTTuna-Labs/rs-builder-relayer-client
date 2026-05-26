@@ -667,6 +667,72 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn terminal_poll_keeps_owner_block_when_same_payload_transactions_remain() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let payload_hash = "payload:shared-terminal-poll";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response("tx-local-terminal", "STATE_CONFIRMED"),
+        )])
+        .await;
+        let client = test_client(url);
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::InFlight {
+                    payload_hash: payload_hash.to_string(),
+                    transaction_id: Some("tx-local-terminal".to_string()),
+                    created_at_unix_seconds: 1_700_000_000,
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-local-terminal".to_string(),
+                OwnerTransactionRecord {
+                    owner,
+                    payload_hash: payload_hash.to_string(),
+                    source: OwnerTransactionSource::LocalSubmit,
+                },
+            );
+            state.transaction_owners.insert(
+                "tx-recovered-same-payload".to_string(),
+                OwnerTransactionRecord {
+                    owner,
+                    payload_hash: payload_hash.to_string(),
+                    source: OwnerTransactionSource::OwnerRecovery,
+                },
+            );
+        }
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                "tx-local-terminal",
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(
+            client.ambiguous_submit_block(owner),
+            Some(payload_hash.to_string())
+        );
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(!state.transaction_owners.contains_key("tx-local-terminal"));
+            assert!(state
+                .transaction_owners
+                .contains_key("tx-recovered-same-payload"));
+        }
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/transaction?id=tx-local-terminal");
+    }
+
+#[tokio::test]
     async fn owner_aware_recovery_permit_waits_for_response_owner_before_blocking_owner() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-recovery-race";

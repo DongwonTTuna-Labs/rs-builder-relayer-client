@@ -330,16 +330,18 @@ impl DepositWalletRelayerClient {
                 )))
             }
             RelayerTransactionState::Invalid => {
-                self.clear_owner_block_if_payload(owner, &payload_hash)?;
-                Err(RelayerError::TransactionInvalid(format!(
-                    "deposit wallet submit transaction {} invalid",
+                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                Err(RelayerError::reconciliation_required(format!(
+                    "deposit wallet submit transaction {} returned invalid before transaction polling; owner-scoped poll or manual reconciliation required",
                     sanitized_external_token(&receipt.transaction_id)
                 )))
             }
             RelayerTransactionState::Failed => {
-                self.clear_owner_block_if_payload(owner, &payload_hash)?;
-                Err(RelayerError::TransactionFailed(format!(
-                    "deposit wallet submit transaction {} failed",
+                self.record_ambiguous(owner, payload_hash.clone())?;
+                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                Err(RelayerError::reconciliation_required(format!(
+                    "deposit wallet submit transaction {} returned failed before transaction polling; owner-scoped poll or manual reconciliation required",
                     sanitized_external_token(&receipt.transaction_id)
                 )))
             }
@@ -588,6 +590,24 @@ impl DepositWalletRelayerClient {
             record.owner == owner && record.payload_hash == payload_hash
         }) {
             state.transaction_owners.remove(transaction_id);
+            if state
+                .transaction_owners
+                .iter()
+                .any(|(_, record)| record.owner == owner && record.payload_hash == payload_hash)
+            {
+                state.owner_blocks.insert(
+                    owner,
+                    OwnerMutationBlock::Ambiguous {
+                        payload_hash: payload_hash.to_string(),
+                        created_at_unix_seconds: self.clock.now_unix_seconds(),
+                    },
+                );
+                return Err(RelayerError::reconciliation_required(format!(
+                    "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
+                    redacted_address(owner),
+                    display_payload_hash(payload_hash)
+                )));
+            }
             clear_owner_block_if_payload(&mut state, owner, payload_hash);
         }
         Ok(())
@@ -604,12 +624,6 @@ impl DepositWalletRelayerClient {
                 },
             );
         }
-        Ok(())
-    }
-
-    pub(super) fn clear_owner_block_if_payload(&self, owner: Address, payload_hash: &str) -> Result<()> {
-        let mut state = self.mutation_state()?;
-        clear_owner_block_if_payload(&mut state, owner, payload_hash);
         Ok(())
     }
 

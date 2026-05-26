@@ -109,17 +109,8 @@ impl DepositWalletRelayerClient {
         match self.send(Method::POST, url, Some(body)).await {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => {
-                    let terminal_failure =
-                        matches!(&receipt.state, RelayerTransactionState::Invalid | RelayerTransactionState::Failed);
                     let result = self.handle_submit_receipt(owner, payload_hash, receipt);
-                    if result.is_ok()
-                        || (terminal_failure
-                            && matches!(
-                                &result,
-                                Err(RelayerError::TransactionInvalid(_))
-                                    | Err(RelayerError::TransactionFailed(_))
-                            ))
-                    {
+                    if result.is_ok() {
                         reservation.disarm();
                     }
                     result

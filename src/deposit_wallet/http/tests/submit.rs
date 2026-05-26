@@ -1121,34 +1121,50 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn submit_terminal_states_clear_owner_block_or_return_terminal_error() {
+    async fn immediate_terminal_failure_submit_requires_owner_poll_reconciliation() {
         let owner = address(WALLET_CREATE_OWNER);
 
         for (transaction_id, state, expected_error) in [
-            ("tx-invalid-now", "STATE_INVALID", Some("invalid")),
-            ("tx-failed-now", "STATE_FAILED", Some("failed")),
+            ("tx-invalid-now", "STATE_INVALID", "invalid"),
+            ("tx-failed-now", "STATE_FAILED", "failed"),
         ] {
             let (url, handle) = spawn_server(vec![
+                TestResponse::json("200 OK", transaction_response(transaction_id, state)),
                 TestResponse::json("200 OK", transaction_response(transaction_id, state)),
                 TestResponse::json("200 OK", json!({"nonce": "34"}).to_string()),
             ])
             .await;
             let client = test_client(url);
 
-            let result = client.submit_wallet_create(owner, mutation_permit()).await;
+            let error = client
+                .submit_wallet_create(owner, mutation_permit())
+                .await
+                .unwrap_err();
+            assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+            assert!(client.ambiguous_submit_block(owner).is_some());
+            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+
+            let result = client
+                .poll_owner_transaction(
+                    owner,
+                    transaction_id,
+                    DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                )
+                .await;
             match expected_error {
-                None => {
-                    let receipt = result.unwrap();
-                    assert_eq!(receipt.transaction_id, transaction_id);
-                    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
-                }
-                Some("invalid") => {
+                "invalid" => {
                     assert!(matches!(result.unwrap_err(), RelayerError::TransactionInvalid(_)));
                 }
-                Some("failed") => {
+                "failed" => {
                     assert!(matches!(result.unwrap_err(), RelayerError::TransactionFailed(_)));
                 }
                 _ => unreachable!(),
+            }
+            client.ensure_owner_unblocked(owner).unwrap();
+            {
+                let state = client.mutation_state().unwrap();
+                assert!(!state.transaction_owners.contains_key(transaction_id));
             }
 
             let nonce = client.get_wallet_nonce(owner).await.unwrap();
@@ -1158,9 +1174,10 @@ use super::*;
                 .unwrap();
             retry_reservation.clear().unwrap();
             let requests = handle.await.unwrap();
-            assert_eq!(requests.len(), 2);
+            assert_eq!(requests.len(), 3);
             assert_eq!(requests[0].path, SUBMIT_PATH);
-            assert!(requests[1].path.contains("/nonce?address="));
+            assert_eq!(requests[1].path, format!("/transaction?id={transaction_id}"));
+            assert!(requests[2].path.contains("/nonce?address="));
         }
     }
 
