@@ -289,7 +289,7 @@ jobs:
                   broker_url,
                   data=json.dumps({"token": oidc_token}).encode("utf-8"),
                   method="POST",
-                  headers={"Accept": "application/json", "Content-Type": "application/json"},
+                  headers={"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "github-actions-codex-oidc"},
               )
           )
           relay_token = exchanged.get("relay_token")
