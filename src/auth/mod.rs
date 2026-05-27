@@ -13,6 +13,10 @@ pub enum AuthMethod {
     /// Builder Program HMAC-SHA256 authentication.
     Builder(BuilderConfig),
     /// Simple Relayer API key authentication.
+    ///
+    /// The raw `String` fields are retained for legacy public API
+    /// compatibility. Prefer [`AuthMethod::relayer_key`] so callers do not
+    /// construct or log the secret-bearing variant by hand.
     RelayerKey { api_key: String, address: String },
 }
 
@@ -58,6 +62,13 @@ impl AuthMethod {
 }
 
 /// Builder Program API key credentials.
+///
+/// These public `String` fields are a legacy compatibility surface for
+/// existing consumers that use struct literals. They are redacted in `Debug`
+/// and parsing errors are generic, but callers must still treat the fields as
+/// secret-bearing and avoid logging, snapshotting, or unnecessary cloning. A
+/// future breaking API revision should move these fields behind a private
+/// secret wrapper with an explicit migration path.
 #[derive(Clone)]
 pub struct BuilderConfig {
     pub key: String,

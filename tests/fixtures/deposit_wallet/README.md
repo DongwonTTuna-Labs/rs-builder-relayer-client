@@ -27,6 +27,9 @@ path/query, and request body for `GET /nonce?type=WALLET`, `POST /submit`
 `transaction_array_response_cases.json` pins transaction-array selection and
 error-boundary ids for matching, missing, duplicate, invalid, and oversized
 relayer response arrays.
+`wallet_nonce_response_cases.json` pins invalid WALLET nonce response boundary
+cases. `poll_jitter_vectors.json` pins deterministic retry/backoff jitter
+durations and caps.
 
 The `wallet_batch_eip712_multicall.json` and
 `wallet_signed_submit_body_multicall.json` fixtures were generated from a

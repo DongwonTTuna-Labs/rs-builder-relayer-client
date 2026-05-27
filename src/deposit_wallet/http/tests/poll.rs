@@ -331,6 +331,7 @@ use super::*;
 #[test]
     fn transaction_poll_jitter_is_deterministic_bounded_and_capped() {
         let base = Duration::from_millis(200);
+        let vectors = fixture_value("poll_jitter_vectors.json");
         let first = super::super::poll::transaction_poll_jitter("tx-jitter-a", 0, base);
 
         assert_eq!(
@@ -352,6 +353,18 @@ use super::*;
         assert_eq!(variants[1], Duration::from_millis(50));
         assert!(variants.iter().any(|candidate| *candidate != first));
 
+        for vector in vectors["transactionPollJitter"].as_array().unwrap() {
+            let transaction_id = vector["transactionID"].as_str().unwrap();
+            let attempt = vector["attempt"].as_u64().unwrap() as usize;
+            let base = Duration::from_millis(vector["baseMs"].as_u64().unwrap());
+            let expected = Duration::from_millis(vector["expectedMs"].as_u64().unwrap());
+            assert_eq!(
+                super::super::poll::transaction_poll_jitter(transaction_id, attempt, base),
+                expected,
+                "{transaction_id} attempt {attempt}"
+            );
+        }
+
         let capped = DepositWalletPollPolicy::new(5, MAX_POLL_INTERVAL).unwrap();
         assert_eq!(
             capped.interval_for_transaction_attempt("tx-jitter-capped", 1),
@@ -361,6 +374,7 @@ use super::*;
 
 #[test]
     fn retry_after_poll_interval_adds_deterministic_bounded_jitter_when_server_delay_wins() {
+        let vectors = fixture_value("poll_jitter_vectors.json");
         let policy_interval = Duration::from_millis(100);
         let retry_after = Duration::from_secs(1);
         let first = super::super::poll::retry_after_poll_interval(
@@ -427,6 +441,24 @@ use super::*;
                 .contains(&max_boundary)
         );
         assert_eq!(max_boundary, Duration::from_millis(30_201));
+
+        for vector in vectors["retryAfterPollInterval"].as_array().unwrap() {
+            let transaction_id = vector["transactionID"].as_str().unwrap();
+            let attempt = vector["attempt"].as_u64().unwrap() as usize;
+            let policy_interval = Duration::from_millis(vector["policyIntervalMs"].as_u64().unwrap());
+            let retry_after = Duration::from_millis(vector["retryAfterMs"].as_u64().unwrap());
+            let expected = Duration::from_millis(vector["expectedMs"].as_u64().unwrap());
+            assert_eq!(
+                super::super::poll::retry_after_poll_interval(
+                    transaction_id,
+                    attempt,
+                    policy_interval,
+                    retry_after,
+                ),
+                expected,
+                "{transaction_id} attempt {attempt}"
+            );
+        }
     }
 
 #[test]
@@ -1112,9 +1144,8 @@ use super::*;
         )])
         .await;
         let client = test_client(url);
-        client
-            .record_ambiguous(owner, "payload:ambiguous-before-recovery".to_string())
-            .unwrap();
+        let payload_hash = canonical_payload_hash("payload:ambiguous-before-recovery");
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
 
         let error = client
             .poll_owner_transaction_with_reconciliation_permit(
@@ -1130,13 +1161,13 @@ use super::*;
         assert!(error.to_string().contains("ambiguous submit payload"));
         assert_eq!(
             client.ambiguous_submit_block(owner),
-            Some("payload:ambiguous-before-recovery".to_string())
+            Some(payload_hash.clone())
         );
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for_payload_transaction_observation(
                     owner,
-                    "payload:ambiguous-before-recovery",
+                    payload_hash,
                     transaction_id,
                     RelayerTransactionState::Confirmed,
                     Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),

@@ -146,29 +146,17 @@ use super::*;
     }
 
 #[test]
-    fn wallet_nonce_parser_rejects_invalid_boundaries() {
-        let too_large = format!("{}0", U256::MAX);
-        let too_many_digits = "0".repeat(79);
-        for raw_nonce in [
-            serde_json::to_string("").unwrap(),
-            serde_json::to_string("not-decimal").unwrap(),
-            serde_json::to_string("0x1").unwrap(),
-            serde_json::to_string(" 1").unwrap(),
-            serde_json::to_string("1 ").unwrap(),
-            serde_json::to_string("\u{ff11}").unwrap(),
-            serde_json::to_string("-1").unwrap(),
-            "-1".to_string(),
-            "1.5".to_string(),
-            "1e3".to_string(),
-            serde_json::to_string(&too_many_digits).unwrap(),
-            serde_json::to_string(&too_large).unwrap(),
-            too_large.clone(),
-        ] {
+    fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
+        let fixture = fixture_value("wallet_nonce_response_cases.json");
+        for case in fixture["rejected"].as_array().unwrap() {
+            let raw_nonce = case["raw"].as_str().unwrap();
             assert!(
                 super::super::read::parse_wallet_nonce_response(
                     format!(r#"{{"nonce":{raw_nonce}}}"#).as_bytes()
                 )
-                .is_err()
+                .is_err(),
+                "expected nonce case {} to be rejected",
+                case["label"].as_str().unwrap()
             );
         }
     }
@@ -554,16 +542,15 @@ use super::*;
             validate_transaction_id("tx-abc_123.period").unwrap(),
             "tx-abc_123.period"
         );
-        assert_eq!(
-            validate_transaction_id("tx:abc/123+query=value").unwrap(),
-            "tx:abc/123+query=value"
-        );
 
         let too_long = "a".repeat(MAX_TRANSACTION_ID_LEN + 1);
         assert!(validate_transaction_id(&too_long).is_err());
         assert!(validate_transaction_id("").is_err());
         assert!(validate_transaction_id("tx abc").is_err());
         assert!(validate_transaction_id("tx\nabc").is_err());
+        for invalid in ["tx:abc", "tx/abc", "tx?abc", "tx#abc", "tx%abc", "tx+abc"] {
+            assert!(validate_transaction_id(invalid).is_err(), "{invalid}");
+        }
     }
 
 #[tokio::test]

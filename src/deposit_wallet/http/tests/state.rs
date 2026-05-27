@@ -13,7 +13,7 @@ use super::*;
     async fn manual_clear_rejects_active_submit_before_response() {
         let owner = address(WALLET_CREATE_OWNER);
         let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "test-active-submit-payload".to_string();
+        let payload_hash = canonical_payload_hash("test-active-submit-payload");
         let _reservation = client.reserve_owner_submit(owner, payload_hash.clone()).unwrap();
 
         let error = client
@@ -241,7 +241,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:idless-submit".to_string();
+        let payload_hash = canonical_payload_hash("payload:idless-submit");
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
 
         let error = client
@@ -264,7 +264,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:idless-already-cleared".to_string();
+        let payload_hash = canonical_payload_hash("payload:idless-already-cleared");
 
         client
             .clear_idless_ambiguous_submit_after_manual_reconciliation(
@@ -281,7 +281,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:idless-not-accepted".to_string();
+        let payload_hash = canonical_payload_hash("payload:idless-not-accepted");
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
 
         client
@@ -299,7 +299,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:idless-known-transaction".to_string();
+        let payload_hash = canonical_payload_hash("payload:idless-known-transaction");
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
         client
             .record_transaction_owner("tx-known", owner, payload_hash.clone())
@@ -321,8 +321,8 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:idless-current".to_string();
-        let evidence_payload_hash = "payload:idless-other".to_string();
+        let payload_hash = canonical_payload_hash("payload:idless-current");
+        let evidence_payload_hash = canonical_payload_hash("payload:idless-other");
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
 
         let error = client
@@ -355,6 +355,77 @@ use super::*;
             )
             .unwrap()
         };
+        let invalid_payload_hashes = [
+            "payload:arbitrary".to_string(),
+            "signed-digest:payload".to_string(),
+            "signed-digest:0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz".to_string(),
+            "recovered:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        ];
+
+        assert_eq!(
+            DepositWalletSubmitReconciliationEvidence::new(
+                owner,
+                scope,
+                "unit-test owner serialization guard",
+                "SIGNED-DIGEST:0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                valid_observation(),
+            )
+            .unwrap_err()
+            .to_string(),
+            "Deposit-wallet mutation blocked: submit reconciliation evidence payload hash is invalid"
+        );
+        assert!(
+            DepositWalletSubmitReconciliationEvidence::new(
+                owner,
+                scope,
+                "unit-test owner serialization guard",
+                "signed-digest:0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                valid_observation(),
+            )
+            .unwrap()
+            .payload_hash()
+            .ends_with("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert!(
+            DepositWalletIdlessSubmitReconciliationEvidence::new(
+                owner,
+                scope,
+                "unit-test owner serialization guard",
+                "recovered:0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "checked",
+                1_700_000_001,
+            )
+            .unwrap()
+            .payload_hash()
+            .ends_with("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+
+        for invalid_payload_hash in invalid_payload_hashes {
+            assert!(
+                DepositWalletSubmitReconciliationEvidence::new(
+                    owner,
+                    scope,
+                    "unit-test owner serialization guard",
+                    invalid_payload_hash.clone(),
+                    valid_observation(),
+                )
+                .is_err(),
+                "{invalid_payload_hash}"
+            );
+            assert!(
+                DepositWalletIdlessSubmitReconciliationEvidence::new(
+                    owner,
+                    scope,
+                    "unit-test owner serialization guard",
+                    invalid_payload_hash.clone(),
+                    "checked",
+                    1_700_000_001,
+                )
+                .is_err(),
+                "{invalid_payload_hash}"
+            );
+        }
 
         assert!(DepositWalletSubmitReconciliationObservation::new(
             "tx-manual-confirmed",
@@ -492,7 +563,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:known-transaction".to_string();
+        let payload_hash = canonical_payload_hash("payload:known-transaction");
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
         client
             .record_transaction_owner("tx-known-payload", owner, payload_hash.clone())
@@ -518,7 +589,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:known-terminal-observation".to_string();
+        let payload_hash = canonical_payload_hash("payload:known-terminal-observation");
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
         client
             .record_transaction_owner("tx-known-terminal", owner, payload_hash.clone())
@@ -598,7 +669,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
-        let payload_hash = "payload:terminal-hash-mismatch".to_string();
+        let payload_hash = canonical_payload_hash("payload:terminal-hash-mismatch");
         let transaction_id = "tx-terminal-hash-mismatch";
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
         client
@@ -641,7 +712,7 @@ use super::*;
 #[test]
     fn manual_clear_rejects_stale_future_or_wrong_issuer_reconciliation_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
-        let payload_hash = "payload:timed-reconciliation".to_string();
+        let payload_hash = canonical_payload_hash("payload:timed-reconciliation");
         for (issuer, checked_at) in [
             ("unit-test owner serialization guard", 1_699_999_999),
             ("unit-test owner serialization guard", 1_700_000_100),
@@ -931,12 +1002,15 @@ use super::*;
         let other_payload_owner = address("0x0000000000000000000000000000000000000002");
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_owner = canonical_payload_hash("payload-owner");
+        let payload_owner_other = canonical_payload_hash("payload-owner-other");
+        let payload_other = canonical_payload_hash("payload-other");
         {
             let mut state = client.mutation_state().unwrap();
             state.owner_blocks.insert(
                 owner,
                 OwnerMutationBlock::Ambiguous {
-                    payload_hash: "payload-owner".to_string(),
+                    payload_hash: payload_owner.clone(),
                     created_at_unix_seconds: 1_700_000_000,
                 },
             );
@@ -944,7 +1018,7 @@ use super::*;
                 "tx-owner-stale".to_string(),
                 OwnerTransactionRecord {
                     owner,
-                    payload_hash: "payload-owner".to_string(),
+                    payload_hash: payload_owner,
                     source: OwnerTransactionSource::LocalSubmit,
                 },
             );
@@ -952,7 +1026,7 @@ use super::*;
                 "tx-owner-other-payload".to_string(),
                 OwnerTransactionRecord {
                     owner: other_payload_owner,
-                    payload_hash: "payload-owner-other".to_string(),
+                    payload_hash: payload_owner_other.clone(),
                     source: OwnerTransactionSource::OwnerRecovery,
                 },
             );
@@ -960,7 +1034,7 @@ use super::*;
                 "tx-other-live".to_string(),
                 OwnerTransactionRecord {
                     owner: other_owner,
-                    payload_hash: "payload-other".to_string(),
+                    payload_hash: payload_other,
                     source: OwnerTransactionSource::LocalSubmit,
                 },
             );
@@ -981,7 +1055,7 @@ use super::*;
                 .transaction_owners
                 .get("tx-owner-other-payload")
                 .map(|record| (record.owner, record.payload_hash.as_str())),
-            Some((other_payload_owner, "payload-owner-other"))
+            Some((other_payload_owner, payload_owner_other.as_str()))
         );
         assert_eq!(
             state
@@ -998,12 +1072,14 @@ use super::*;
         let other_owner = address("0x0000000000000000000000000000000000000001");
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_owner = canonical_payload_hash("payload-owner");
+        let payload_other = canonical_payload_hash("payload-other");
         {
             let mut state = client.mutation_state().unwrap();
             state.owner_blocks.insert(
                 owner,
                 OwnerMutationBlock::Ambiguous {
-                    payload_hash: "payload-owner".to_string(),
+                    payload_hash: payload_owner.clone(),
                     created_at_unix_seconds: 1_700_000_000,
                 },
             );
@@ -1011,7 +1087,7 @@ use super::*;
                 "tx-owner-stale".to_string(),
                 OwnerTransactionRecord {
                     owner,
-                    payload_hash: "payload-owner".to_string(),
+                    payload_hash: payload_owner.clone(),
                     source: OwnerTransactionSource::LocalSubmit,
                 },
             );
@@ -1019,7 +1095,7 @@ use super::*;
                 "tx-owner-other".to_string(),
                 OwnerTransactionRecord {
                     owner,
-                    payload_hash: "payload-owner".to_string(),
+                    payload_hash: payload_owner.clone(),
                     source: OwnerTransactionSource::OwnerRecovery,
                 },
             );
@@ -1027,7 +1103,7 @@ use super::*;
                 "tx-other-live".to_string(),
                 OwnerTransactionRecord {
                     owner: other_owner,
-                    payload_hash: "payload-other".to_string(),
+                    payload_hash: payload_other,
                     source: OwnerTransactionSource::LocalSubmit,
                 },
             );
@@ -1051,7 +1127,7 @@ use super::*;
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for_payload_and_transaction(
                     owner,
-                    "payload-owner",
+                    payload_owner.clone(),
                     "tx-owner-stale",
                 ),
                 manual_reconciliation_permit_token_for(owner),
@@ -1061,7 +1137,7 @@ use super::*;
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert_eq!(
             client.ambiguous_submit_block(owner),
-            Some("payload-owner".to_string())
+            Some(payload_owner.clone())
         );
         let state = client.mutation_state().unwrap();
         assert!(!state.transaction_owners.contains_key("tx-owner-stale"));
@@ -1080,7 +1156,7 @@ use super::*;
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for_payload_and_transaction(
                     owner,
-                    "payload-owner",
+                    payload_owner,
                     "tx-owner-other",
                 ),
                 manual_reconciliation_permit_token_for(owner),

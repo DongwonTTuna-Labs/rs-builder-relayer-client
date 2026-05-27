@@ -40,7 +40,7 @@ impl RelayerKeyAuth {
 
 const MAX_RELAYER_API_KEY_LEN: usize = 4096;
 
-fn validate_relayer_api_key(api_key: &str) -> Result<()> {
+pub(super) fn validate_relayer_api_key(api_key: &str) -> Result<()> {
     if api_key.trim().is_empty() {
         return Err(RelayerError::AuthError(
             "relayer API key must not be empty".to_string(),

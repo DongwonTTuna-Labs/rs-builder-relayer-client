@@ -21,6 +21,19 @@ raw production signatures
 
 Secret-bearing structs must not derive `Debug` unless every secret field is redacted.
 
+### Legacy Auth Compatibility
+
+`AuthMethod::RelayerKey` and `BuilderConfig` still expose public `String`
+fields for backwards compatibility with existing consumers that construct these
+types directly. Treat those fields as secret-bearing legacy API: do not log,
+snapshot, or broadly clone them. The crate redacts `Debug`, marks relayer auth
+headers sensitive, and returns generic secret-parse errors, but the public field
+surface remains an accepted compatibility risk for this non-breaking PR.
+
+Migration path: a future breaking auth cleanup should replace the public raw
+fields with private secret wrappers or add new secret-wrapper constructors, then
+document consumer changes before removing the legacy fields.
+
 ## Signing Safety
 
 Order signing is not this crate's responsibility. This crate is responsible for relayer auth and deposit-wallet batch signing only.

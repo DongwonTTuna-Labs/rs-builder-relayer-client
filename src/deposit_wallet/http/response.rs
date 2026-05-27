@@ -169,7 +169,7 @@ fn parse_submit_response_body(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
 
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
-    expected_to: Address,
+    expected_factory: Address,
     bytes: &[u8],
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
@@ -181,7 +181,7 @@ pub(super) fn parse_transaction_response(
                         None,
                     )
                 })?;
-            return parse_verified_transaction_response(expected_transaction_id, expected_to, response);
+            return parse_verified_transaction_response(expected_transaction_id, expected_factory, response);
         }
         Some(b'[') => {}
         _ => {
@@ -196,12 +196,12 @@ pub(super) fn parse_transaction_response(
     }
 
     let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
-    parse_verified_transaction_response(expected_transaction_id, expected_to, response)
+    parse_verified_transaction_response(expected_transaction_id, expected_factory, response)
 }
 
 fn parse_verified_transaction_response(
     expected_transaction_id: &str,
-    expected_to: Address,
+    expected_factory: Address,
     response: RelayerTransactionResponseWithOwner,
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     let owner = response.owner;
@@ -222,7 +222,7 @@ fn parse_verified_transaction_response(
             None,
         ));
     }
-    validate_transaction_wire_evidence(&response, expected_to, owner)?;
+    validate_transaction_wire_evidence(&response, expected_factory, owner)?;
     let parsed = receipt_from_submit_response(response.response, owner)
         .map_err(|error| TransactionParseError::new(error, owner))?;
     Ok(parsed)
@@ -230,7 +230,7 @@ fn parse_verified_transaction_response(
 
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
-    expected_to: Address,
+    expected_factory: Address,
     owner: Option<Address>,
 ) -> std::result::Result<(), TransactionParseError> {
     let tx_type = response.tx_type.as_deref().ok_or_else(|| {
@@ -251,6 +251,10 @@ fn validate_transaction_wire_evidence(
             owner,
         ));
     }
+    // Polymarket's deposit-wallet raw API uses the factory as top-level `to`
+    // for both WALLET-CREATE and WALLET. The concrete wallet target for WALLET
+    // lives inside `depositWalletParams.depositWallet`, not this response field.
+    let expected_to = expected_factory;
 
     let owner = owner.ok_or_else(|| {
         TransactionParseError::new(
@@ -434,11 +438,12 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
         || transaction_id.len() > MAX_TRANSACTION_ID_LEN
         || transaction_id.trim() != transaction_id
         || !transaction_id
-            .chars()
-            .all(|character| !character.is_control() && !character.is_whitespace())
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(RelayerError::Other(
-            "transaction id must be 1-128 non-whitespace, non-control characters".to_string(),
+            "transaction id must be 1-128 ASCII letters, digits, dash, underscore, or dot"
+                .to_string(),
         ));
     }
 

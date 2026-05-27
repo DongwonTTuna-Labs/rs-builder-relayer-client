@@ -87,6 +87,28 @@ use super::*;
         assert!(!rendered.contains(&to_checksum(&address(API_KEY_ADDRESS), None)));
     }
 
+#[test]
+    fn relayer_api_key_validation_rejects_header_unsafe_boundaries() {
+        super::super::auth::validate_relayer_api_key("valid-relayer-key_123").unwrap();
+
+        let oversized = "a".repeat(4097);
+        for invalid in [
+            "",
+            "   ",
+            "key with space",
+            "key\nnewline",
+            "key\rreturn",
+            "key\t tab",
+            "\u{7f}",
+            oversized.as_str(),
+        ] {
+            assert!(
+                super::super::auth::validate_relayer_api_key(invalid).is_err(),
+                "{invalid:?}"
+            );
+        }
+    }
+
 #[tokio::test]
     async fn api_error_messages_do_not_echo_secret_material() {
         let signed = signed_wallet_batch();

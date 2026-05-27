@@ -287,15 +287,10 @@ impl DepositWalletSubmitReconciliationEvidence {
                 "submit reconciliation evidence issuer required".to_string(),
             ));
         }
-        let payload_hash = payload_hash.into();
-        if payload_hash.trim().is_empty()
-            || payload_hash.chars().any(char::is_whitespace)
-            || payload_hash.len() > MAX_ERROR_TOKEN_LEN
-        {
-            return Err(RelayerError::mutation_blocked(
-                "submit reconciliation evidence payload hash is invalid".to_string(),
-            ));
-        }
+        let payload_hash = validate_reconciliation_payload_hash(
+            payload_hash.into(),
+            "submit reconciliation evidence payload hash is invalid",
+        )?;
         Ok(Self {
             owner,
             scope,
@@ -362,15 +357,10 @@ impl DepositWalletIdlessSubmitReconciliationEvidence {
                 "id-less submit reconciliation evidence issuer required".to_string(),
             ));
         }
-        let payload_hash = payload_hash.into();
-        if payload_hash.trim().is_empty()
-            || payload_hash.chars().any(char::is_whitespace)
-            || payload_hash.len() > MAX_ERROR_TOKEN_LEN
-        {
-            return Err(RelayerError::mutation_blocked(
-                "id-less submit reconciliation evidence payload hash is invalid".to_string(),
-            ));
-        }
+        let payload_hash = validate_reconciliation_payload_hash(
+            payload_hash.into(),
+            "id-less submit reconciliation evidence payload hash is invalid",
+        )?;
         let reason = reason.into();
         if reason.trim().is_empty() {
             return Err(RelayerError::mutation_blocked(
@@ -398,6 +388,30 @@ impl DepositWalletIdlessSubmitReconciliationEvidence {
 
     pub fn payload_hash(&self) -> &str {
         &self.payload_hash
+    }
+}
+
+fn validate_reconciliation_payload_hash(payload_hash: String, error_message: &str) -> Result<String> {
+    let Some(canonical) = canonical_reconciliation_payload_hash(&payload_hash) else {
+        return Err(RelayerError::mutation_blocked(error_message.to_string()));
+    };
+    if canonical.len() > MAX_ERROR_TOKEN_LEN {
+        return Err(RelayerError::mutation_blocked(error_message.to_string()));
+    }
+    Ok(canonical)
+}
+
+fn canonical_reconciliation_payload_hash(payload_hash: &str) -> Option<String> {
+    let (prefix, raw_hex) = payload_hash
+        .strip_prefix("signed-digest:0x")
+        .map(|hex| ("signed-digest:", hex))
+        .or_else(|| payload_hash.strip_prefix("recovered:0x").map(|hex| ("recovered:", hex)))
+        .or_else(|| payload_hash.strip_prefix("0x").map(|hex| ("", hex)))?;
+
+    if raw_hex.len() == 64 && raw_hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(format!("{prefix}0x{}", raw_hex.to_ascii_lowercase()))
+    } else {
+        None
     }
 }
 

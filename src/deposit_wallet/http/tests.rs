@@ -15,7 +15,7 @@
     };
 
     use super::*;
-    use super::redaction::{recovered_payload_hash, signed_digest_payload_hash};
+    use super::redaction::{payload_hash_summary, recovered_payload_hash, signed_digest_payload_hash};
     use super::response::{parse_transaction_response, validate_transaction_id};
     use super::state::{
         OwnerMutationBlock, OwnerMutationState, OwnerTransactionRecord,
@@ -192,6 +192,10 @@
 
     fn fixture_value(name: &str) -> Value {
         serde_json::from_str(&fixture_text(name)).expect("fixture should be valid JSON")
+    }
+
+    fn canonical_payload_hash(label: &str) -> String {
+        payload_hash_summary(label.as_bytes())
     }
 
     fn relayer_auth() -> RelayerKeyAuth {
