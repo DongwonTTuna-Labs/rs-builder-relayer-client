@@ -25,12 +25,12 @@ pub fn build_hmac_signature(
         .decode(secret)
         .or_else(|_| general_purpose::URL_SAFE.decode(secret))
         .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(secret))
-        .map_err(|e| RelayerError::AuthError(format!("Failed to decode base64 secret: {e}")))?;
+        .map_err(|_| RelayerError::AuthError("Invalid builder API secret".to_string()))?;
 
     let message = format!("{}{}{}{}", timestamp, method, path, body);
 
     let mut mac = HmacSha256::new_from_slice(&decoded_secret)
-        .map_err(|e| RelayerError::AuthError(format!("HMAC key error: {e}")))?;
+        .map_err(|_| RelayerError::AuthError("Invalid builder API secret".to_string()))?;
     mac.update(message.as_bytes());
     let result = mac.finalize().into_bytes();
 

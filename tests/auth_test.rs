@@ -31,6 +31,19 @@ fn test_hmac_url_safe_base64() {
 }
 
 #[test]
+fn test_builder_auth_secret_parse_errors_are_generic() {
+    let secret = "not-base64-secret-material";
+
+    let error = build_hmac_signature(secret, "1000000", "GET", "/nonce", "").unwrap_err();
+    let rendered = error.to_string();
+
+    assert!(rendered.contains("Invalid builder API secret"));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains("Invalid byte"));
+    assert!(!rendered.contains("offset"));
+}
+
+#[test]
 fn test_builder_auth_generates_all_required_headers() {
     // Use a valid base64 secret
     let config = BuilderConfig::new(
