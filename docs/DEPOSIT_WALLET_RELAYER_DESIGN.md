@@ -282,12 +282,12 @@ where
 }
 ```
 
-Production WALLET signing must use the leased nonce path:
+Future production WALLET signing must use a crate-trusted leased nonce path:
 `get_wallet_nonce_with_lease` -> sign with `lease.nonce()` ->
-`submit_signed_wallet_batch_with_nonce_lease`. The bare `get_wallet_nonce`
-method is retained for compatibility and diagnostics, but it is not a
-production live-signing API because its owner reservation ends when the `U256`
-is returned.
+`submit_signed_wallet_batch_with_nonce_lease`. This PR does not expose public
+production nonce-read permits. The bare `get_wallet_nonce` method is retained
+for compatibility and diagnostics, but it is not a production live-signing API
+because its owner reservation ends when the `U256` is returned.
 
 ## CTF/pUSD adapter policy
 

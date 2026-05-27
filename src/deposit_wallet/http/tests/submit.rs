@@ -142,11 +142,12 @@ use super::*;
             1_700_000_200,
         )
         .unwrap();
-        DepositWalletMutationPermit::from_owner_serialization_evidence(
+        let error = DepositWalletMutationPermit::from_owner_serialization_evidence(
             "production WALLET nonce read",
             production_nonce_evidence,
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
 
         let production_recovery_evidence = DepositWalletOwnerSerializationEvidence::new(
             address(WALLET_CREATE_OWNER),
@@ -783,6 +784,14 @@ use super::*;
                     "state": {"raw": "STATE_UNUSABLE"}
                 }]),
                 Some("tx-array-salvaged"),
+            ),
+            (
+                "invalid-transaction-id",
+                json!([{
+                    "transactionID": "bad\ntransaction",
+                    "state": "STATE_NEW"
+                }]),
+                None,
             ),
         ];
 

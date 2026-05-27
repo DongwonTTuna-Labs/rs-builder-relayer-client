@@ -204,10 +204,12 @@ where
 }
 ```
 
-Production signing flows must preserve the owner-scoped nonce lease from nonce
-read through submit. The bare `get_wallet_nonce` API is a compatibility and
-diagnostic boundary; it must not be used to fetch a production nonce for live
-WALLET signing because the reservation cannot outlive the returned `U256`.
+Future production signing flows must preserve a crate-trusted owner-scoped
+nonce lease from nonce read through submit. This PR does not expose public
+production nonce-read permits. The bare `get_wallet_nonce` API is a
+compatibility and diagnostic boundary; it must not be used to fetch a
+production nonce for live WALLET signing because the reservation cannot outlive
+the returned `U256`.
 
 ## Address separation rule
 

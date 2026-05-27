@@ -80,19 +80,18 @@ pub struct DepositWalletMutationPermit {
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit owner-scoped permit for test-loopback mutations or
-    /// production WALLET nonce reads.
+    /// Creates an explicit owner-scoped permit for test-loopback mutations.
     ///
     /// The evidence must come from a caller-side owner lock, nonce lease, or
     /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for the
     /// same owner. The crate validates the evidence shape and expiry before
     /// request construction.
     ///
-    /// Production POST mutation, owner-recovery, and manual-clear permits are
-    /// intentionally not publicly constructible in this PR because the
-    /// in-memory owner state cannot survive process restart. Production WALLET
-    /// nonce reads are allowed only through the leased nonce path; production
-    /// signing must preserve the nonce with [`DepositWalletNonceLease`].
+    /// Production nonce-read, POST mutation, owner-recovery, and manual-clear
+    /// permits are intentionally not publicly constructible in this PR because
+    /// caller-attested evidence cannot prove a durable owner lease across
+    /// processes. Future production signing must preserve a crate-trusted nonce
+    /// lease with [`DepositWalletNonceLease`].
     /// A later live-submit PR must add durable owner state and a crate-owned
     /// trusted capability before production POST /submit or manual clear can be
     /// enabled.
@@ -102,7 +101,7 @@ impl DepositWalletMutationPermit {
     ) -> Result<Self> {
         if production_scope_requires_trusted_capability(owner_serialization_evidence.scope) {
             return Err(RelayerError::mutation_blocked(
-                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public production permit construction is limited to WALLET nonce reads in this PR".to_string(),
+                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; no public production permit construction is enabled in this PR".to_string(),
             ));
         }
         let reason = reason.into();
@@ -126,7 +125,6 @@ impl DepositWalletMutationPermit {
 
 fn production_scope_requires_trusted_capability(scope: DepositWalletMutationScope) -> bool {
     scope.environment == DepositWalletMutationEnvironment::Production
-        && scope.action != DepositWalletMutationAction::WalletNonceRead
 }
 
 impl fmt::Debug for DepositWalletMutationPermit {

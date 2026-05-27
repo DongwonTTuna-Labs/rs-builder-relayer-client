@@ -68,18 +68,19 @@ use super::*;
             1_700_000_200,
         )
         .unwrap();
-        let gate = DepositWalletMutationGate::Permit(
-            DepositWalletMutationPermit::from_owner_serialization_evidence(
-                "production bare nonce read",
-                evidence,
-            )
-            .unwrap(),
-        );
+        let error = DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "production bare nonce read",
+            evidence,
+        )
+        .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
 
-        let error = client.get_wallet_nonce(owner, gate).await.unwrap_err();
+        let error = client
+            .get_wallet_nonce(owner, DepositWalletMutationGate::Deny)
+            .await
+            .unwrap_err();
 
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
-        assert!(error.to_string().contains("get_wallet_nonce_with_lease"));
     }
 
 #[test]

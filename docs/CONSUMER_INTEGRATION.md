@@ -108,16 +108,17 @@ Consumer adapter migration status for PR #8:
 
 Nonce API migration status for PR #12:
 
-- production signing flows must use `get_wallet_nonce_with_lease`, sign the
-  batch with `DepositWalletNonceLease::nonce()`, and consume the same lease via
+- future production signing flows must use a crate-trusted
+  `get_wallet_nonce_with_lease`, sign the batch with
+  `DepositWalletNonceLease::nonce()`, and consume the same lease via
   `submit_signed_wallet_batch_with_nonce_lease`;
 - `get_wallet_nonce` remains a compatibility/read-only diagnostic API for
   loopback tests and non-production inspection, but production bare nonce reads
   are rejected before HTTP so a consumer cannot fetch a nonce, drop the owner
   reservation, and sign concurrently for the same owner;
-- production owner-recovery and manual-clear permits remain non-public in this
-  PR. A later live-submit change must add durable owner state and trusted
-  reconciliation evidence before enabling those flows;
+- production nonce-read, owner-recovery, submit, and manual-clear permits remain
+  non-public in this PR. A later live-submit change must add durable owner state
+  and trusted reconciliation evidence before enabling those flows;
 - consumer adapters that previously called `get_wallet_nonce` directly must
   migrate the nonce-read/sign/submit sequence in one adapter change. Until that
   adapter change lands, keep deposit-wallet live submit disabled and pin the

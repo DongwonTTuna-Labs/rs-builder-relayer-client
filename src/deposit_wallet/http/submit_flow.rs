@@ -35,7 +35,7 @@ impl DepositWalletRelayerClient {
     ///
     /// This compatibility boundary does not add a second nonce GET because that
     /// would serialize every WALLET submit behind an extra relayer roundtrip.
-    /// Production live-submit flows should use
+    /// Future production live-submit flows should use
     /// [`Self::get_wallet_nonce_with_lease`] and
     /// [`Self::submit_signed_wallet_batch_with_nonce_lease`] so nonce fetch,
     /// signing, and submit share one owner-scoped lease.
