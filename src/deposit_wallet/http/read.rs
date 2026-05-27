@@ -13,6 +13,7 @@ pub(super) struct WalletNonceResponse {
 pub struct DepositWalletNonceLease {
     owner: Address,
     nonce: U256,
+    expires_at_unix_seconds: u64,
     reservation: Option<OwnerNonceReadReservation>,
 }
 
@@ -23,6 +24,10 @@ impl DepositWalletNonceLease {
 
     pub fn nonce(&self) -> U256 {
         self.nonce
+    }
+
+    pub(super) fn expires_at_unix_seconds(&self) -> u64 {
+        self.expires_at_unix_seconds
     }
 
     pub(super) fn into_reservation(mut self) -> Result<OwnerNonceReadReservation> {
@@ -75,6 +80,14 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletNonceLease> {
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
+        let expires_at_unix_seconds = match &gate {
+            DepositWalletMutationGate::Permit(permit) => permit.expires_at_unix_seconds(),
+            DepositWalletMutationGate::Deny => {
+                return Err(RelayerError::mutation_blocked(
+                    "explicit deposit-wallet mutation permit required".to_string(),
+                ))
+            }
+        };
         let reservation = self.reserve_owner_nonce_read(owner)?;
         let nonce = match self.fetch_wallet_nonce(owner).await {
             Ok(nonce) => nonce,
@@ -86,6 +99,7 @@ impl DepositWalletRelayerClient {
         Ok(DepositWalletNonceLease {
             owner,
             nonce,
+            expires_at_unix_seconds,
             reservation: Some(reservation),
         })
     }

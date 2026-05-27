@@ -232,22 +232,22 @@ use super::*;
     }
 
 #[test]
-    fn idless_manual_clear_requires_not_accepted_reconciliation_evidence() {
+    fn idless_manual_clear_keeps_owner_blocked_without_authoritative_absence_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
         let payload_hash = "payload:idless-not-accepted".to_string();
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
 
-        client
+        let error = client
             .clear_idless_ambiguous_submit_after_manual_reconciliation(
-                idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
+                idless_submit_reconciliation_evidence_for_payload(owner, payload_hash.clone()),
                 manual_reconciliation_permit_token_for(owner),
             )
-            .unwrap();
+            .unwrap_err();
 
-        client.ensure_owner_unblocked(owner).unwrap();
-        assert!(client.ambiguous_submit_block(owner).is_none());
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
     }
 
 #[test]

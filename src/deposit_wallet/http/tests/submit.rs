@@ -159,11 +159,12 @@ use super::*;
             1_700_000_200,
         )
         .unwrap();
-        DepositWalletMutationPermit::from_owner_serialization_evidence(
+        let error = DepositWalletMutationPermit::from_owner_serialization_evidence(
             "production owner recovery poll",
             production_recovery_evidence,
         )
-        .unwrap();
+        .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
 
         let production_manual_evidence = DepositWalletOwnerSerializationEvidence::new(
             address(WALLET_CREATE_OWNER),
@@ -758,6 +759,71 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn submit_array_response_failures_keep_owner_blocked() {
+        let cases = [
+            ("empty", json!([]), None),
+            (
+                "multi",
+                json!([
+                    {
+                        "transactionID": "tx-array-multi-a",
+                        "state": "STATE_NEW"
+                    },
+                    {
+                        "transactionID": "tx-array-multi-b",
+                        "state": "STATE_NEW"
+                    }
+                ]),
+                None,
+            ),
+            (
+                "single-unusable",
+                json!([{
+                    "transactionID": "tx-array-salvaged",
+                    "state": {"raw": "STATE_UNUSABLE"}
+                }]),
+                Some("tx-array-salvaged"),
+            ),
+        ];
+
+        for (label, body, expected_transaction_id) in cases {
+            let owner = address(WALLET_CREATE_OWNER);
+            let (url, handle) =
+                spawn_server(vec![TestResponse::json("200 OK", body.to_string())]).await;
+            let client = test_client(url);
+
+            let error = client
+                .submit_wallet_create(owner, mutation_permit())
+                .await
+                .unwrap_err();
+
+            assert!(
+                error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX),
+                "{label}: {error}"
+            );
+            assert!(
+                client.ambiguous_submit_block(owner).is_some(),
+                "{label} array response should keep owner blocked"
+            );
+            if let Some(transaction_id) = expected_transaction_id {
+                assert_eq!(
+                    client.ambiguous_submit_transaction_ids(owner),
+                    vec![transaction_id.to_string()],
+                    "{label} array response should salvage the transaction id"
+                );
+            }
+            let duplicate = client
+                .submit_wallet_create(owner, mutation_permit())
+                .await
+                .unwrap_err();
+            assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].path, SUBMIT_PATH);
+        }
+    }
+
+#[tokio::test]
     async fn submit_parse_failure_ambiguity_redacts_response_details() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
@@ -787,7 +853,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn idless_unusable_submit_success_responses_block_until_reconciliation() {
+    async fn idless_unusable_submit_success_responses_keep_owner_blocked() {
         for response in [
             TestResponse::json("200 OK", ""),
             TestResponse::json("200 OK", "{"),
@@ -822,13 +888,17 @@ use super::*;
                 .unwrap_err();
             assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
 
-            client
+            let clear_error = client
                 .clear_idless_ambiguous_submit_after_manual_reconciliation(
                     idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
                     manual_reconciliation_permit_token_for(owner),
                 )
-                .unwrap();
-            client.ensure_owner_unblocked(owner).unwrap();
+                .unwrap_err();
+            assert!(error_has_prefix(
+                &clear_error,
+                RECONCILIATION_REQUIRED_PREFIX
+            ));
+            assert!(client.ambiguous_submit_block(owner).is_some());
             let requests = handle.await.unwrap();
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].path, SUBMIT_PATH);
@@ -946,6 +1016,54 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn submit_signed_wallet_batch_rejects_expired_nonce_lease_before_post() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({"nonce": signed.nonce().to_string()}).to_string(),
+        )])
+        .await;
+        let clock = Arc::new(MutableClock::new(1_700_000_000));
+        let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
+        let client = DepositWalletRelayerClient::from_parts(
+            reqwest_client(Duration::from_secs(2)),
+            url,
+            relayer_auth(),
+            deposit_wallet_contract_config(137).unwrap(),
+            clock.clone(),
+            sleeper,
+        );
+        let nonce_gate = DepositWalletMutationGate::Permit(mutation_permit_token_for_scope_times(
+            owner,
+            mutation_scope(DepositWalletMutationAction::WalletNonceRead),
+            1_699_999_990,
+            1_700_000_001,
+        ));
+
+        let nonce_lease = client
+            .get_wallet_nonce_with_lease(owner, nonce_gate)
+            .await
+            .unwrap();
+        clock.set(1_700_000_001);
+        let error = client
+            .submit_signed_wallet_batch_with_nonce_lease(
+                signed,
+                wallet_batch_mutation_permit_for(owner),
+                nonce_lease,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(error.to_string().contains("nonce lease expired"));
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
+#[tokio::test]
     async fn signed_wallet_local_request_build_failure_clears_owner_reservation() {
         let signed = signed_wallet_batch();
         let owner = signed.owner();
@@ -1033,7 +1151,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn partial_submit_response_records_owner_scoped_ambiguous_block_until_cleared() {
+    async fn partial_submit_response_records_owner_scoped_ambiguous_block() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
@@ -1104,14 +1222,17 @@ use super::*;
         let payload_hash = client
             .ambiguous_submit_block(owner)
             .expect("test owner should have an ambiguous submit block");
-        client
+        let clear_error = client
             .clear_idless_ambiguous_submit_after_manual_reconciliation(
                 idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
                 manual_reconciliation_permit_token_for(owner),
             )
-            .unwrap();
-        client.ensure_owner_unblocked(owner).unwrap();
-        assert!(client.ambiguous_submit_block(owner).is_none());
+            .unwrap_err();
+        assert!(error_has_prefix(
+            &clear_error,
+            RECONCILIATION_REQUIRED_PREFIX
+        ));
+        assert!(client.ambiguous_submit_block(owner).is_some());
         assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
 
         let requests = handle.await.unwrap();

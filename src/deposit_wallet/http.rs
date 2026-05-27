@@ -47,6 +47,7 @@ const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missin
 const TRANSACTION_RESPONSE_INVALID_ID_ERROR: &str = "transaction response invalid id";
 const SUBMIT_RESPONSE_EMPTY_ARRAY_ERROR: &str = "submit response array was empty";
 const SUBMIT_RESPONSE_MULTIPLE_ITEMS_ERROR: &str = "submit response array had multiple items";
+#[cfg(test)]
 const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);

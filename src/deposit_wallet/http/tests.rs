@@ -43,6 +43,28 @@
         }
     }
 
+    struct MutableClock {
+        now: Mutex<u64>,
+    }
+
+    impl MutableClock {
+        fn new(now: u64) -> Self {
+            Self {
+                now: Mutex::new(now),
+            }
+        }
+
+        fn set(&self, now: u64) {
+            *self.now.lock().unwrap() = now;
+        }
+    }
+
+    impl DepositWalletClock for MutableClock {
+        fn now_unix_seconds(&self) -> u64 {
+            *self.now.lock().unwrap()
+        }
+    }
+
     #[derive(Default)]
     struct RecordingSleeper {
         sleeps: Mutex<Vec<Duration>>,

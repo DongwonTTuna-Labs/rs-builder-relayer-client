@@ -33,30 +33,6 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     )
     .is_err());
     let policy = DepositWalletPollPolicy::default();
-    let reconciliation = DepositWalletSubmitReconciliationEvidence::new(
-        Address::zero(),
-        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation).unwrap(),
-        "compile-test owner lock",
-        "0x1111111111111111111111111111111111111111111111111111111111111111",
-        DepositWalletSubmitReconciliationObservation::new(
-            "tx-public-api",
-            RelayerTransactionState::Failed,
-            None::<&str>,
-            "compile-test manual reconciliation",
-            1,
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let idless_reconciliation = DepositWalletIdlessSubmitReconciliationEvidence::new(
-        Address::zero(),
-        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation).unwrap(),
-        "compile-test owner lock",
-        "0x1111111111111111111111111111111111111111111111111111111111111111",
-        "compile-test id-less reconciliation",
-        1,
-    )
-    .unwrap();
     let receipt = DepositWalletTransactionReceipt {
         transaction_id: "tx-public-api".to_string(),
         state: RelayerTransactionState::New,
@@ -68,12 +44,9 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     assert!(rendered.contains("DepositWalletRelayerClient"));
     assert!(!rendered.contains("compile-test-api-key"));
     assert_debug::<DepositWalletNonceLease>();
+    assert_debug::<DepositWalletSubmitReconciliationEvidence>();
+    assert_debug::<DepositWalletSubmitReconciliationObservation>();
+    assert_debug::<DepositWalletIdlessSubmitReconciliationEvidence>();
 
-    let _ = (
-        gate,
-        policy,
-        reconciliation,
-        idless_reconciliation,
-        receipt,
-    );
+    let _ = (gate, policy, receipt);
 }

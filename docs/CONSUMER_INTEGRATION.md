@@ -115,6 +115,9 @@ Nonce API migration status for PR #12:
   loopback tests and non-production inspection, but production bare nonce reads
   are rejected before HTTP so a consumer cannot fetch a nonce, drop the owner
   reservation, and sign concurrently for the same owner;
+- production owner-recovery and manual-clear permits remain non-public in this
+  PR. A later live-submit change must add durable owner state and trusted
+  reconciliation evidence before enabling those flows;
 - consumer adapters that previously called `get_wallet_nonce` directly must
   migrate the nonce-read/sign/submit sequence in one adapter change. Until that
   adapter change lands, keep deposit-wallet live submit disabled and pin the

@@ -2,6 +2,7 @@ use super::*;
 use super::redaction::{
     display_payload_hash, payload_hash_summary, redacted_address, sanitized_external_token,
 };
+#[cfg(test)]
 use super::response::{validate_transaction_hash, validate_transaction_id};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,7 +35,7 @@ pub struct DepositWalletMutationScope {
 }
 
 impl DepositWalletMutationScope {
-    pub fn new(
+    pub(crate) fn new(
         chain_id: u64,
         factory: Address,
         implementation: Address,
@@ -79,20 +80,19 @@ pub struct DepositWalletMutationPermit {
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit owner-scoped permit for test-loopback mutations,
-    /// production WALLET nonce reads, or production owner-scoped transaction
-    /// recovery polling.
+    /// Creates an explicit owner-scoped permit for test-loopback mutations or
+    /// production WALLET nonce reads.
     ///
     /// The evidence must come from a caller-side owner lock, nonce lease, or
     /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for the
     /// same owner. The crate validates the evidence shape and expiry before
     /// request construction.
     ///
-    /// Production POST mutation and manual-clear permits are intentionally not
-    /// publicly constructible in this PR because the in-memory owner state
-    /// cannot survive process restart. Production WALLET nonce reads and
-    /// owner-scoped transaction recovery polling are read-only relayer calls;
-    /// production signing must preserve the nonce with [`DepositWalletNonceLease`].
+    /// Production POST mutation, owner-recovery, and manual-clear permits are
+    /// intentionally not publicly constructible in this PR because the
+    /// in-memory owner state cannot survive process restart. Production WALLET
+    /// nonce reads are allowed only through the leased nonce path; production
+    /// signing must preserve the nonce with [`DepositWalletNonceLease`].
     /// A later live-submit PR must add durable owner state and a crate-owned
     /// trusted capability before production POST /submit or manual clear can be
     /// enabled.
@@ -102,7 +102,7 @@ impl DepositWalletMutationPermit {
     ) -> Result<Self> {
         if production_scope_requires_trusted_capability(owner_serialization_evidence.scope) {
             return Err(RelayerError::mutation_blocked(
-                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public production permit construction is limited to WALLET nonce reads and owner recovery polling in this PR".to_string(),
+                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public production permit construction is limited to WALLET nonce reads in this PR".to_string(),
             ));
         }
         let reason = reason.into();
@@ -117,15 +117,16 @@ impl DepositWalletMutationPermit {
             owner_serialization_evidence,
         })
     }
+
+    pub(super) fn expires_at_unix_seconds(&self) -> u64 {
+        self.owner_serialization_evidence
+            .expires_at_unix_seconds()
+    }
 }
 
 fn production_scope_requires_trusted_capability(scope: DepositWalletMutationScope) -> bool {
     scope.environment == DepositWalletMutationEnvironment::Production
-        && !matches!(
-            scope.action,
-            DepositWalletMutationAction::WalletNonceRead
-                | DepositWalletMutationAction::OwnerRecoveryPoll
-        )
+        && scope.action != DepositWalletMutationAction::WalletNonceRead
 }
 
 impl fmt::Debug for DepositWalletMutationPermit {
@@ -177,7 +178,8 @@ pub struct DepositWalletSubmitReconciliationObservation {
 }
 
 impl DepositWalletSubmitReconciliationObservation {
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         transaction_id: impl AsRef<str>,
         observed_state: RelayerTransactionState,
         transaction_hash: Option<impl AsRef<str>>,
@@ -254,7 +256,8 @@ impl fmt::Debug for DepositWalletSubmitReconciliationObservation {
 impl DepositWalletSubmitReconciliationEvidence {
     /// Records audited evidence that an ambiguous submit payload was manually
     /// reconciled outside this client before clearing the owner block.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         owner: Address,
         scope: DepositWalletMutationScope,
         issuer: impl Into<String>,
@@ -327,7 +330,8 @@ impl DepositWalletIdlessSubmitReconciliationEvidence {
     /// Records audited evidence that an ambiguous submit without a local
     /// transaction id was not accepted by the relayer before clearing the
     /// owner block.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         owner: Address,
         scope: DepositWalletMutationScope,
         issuer: impl Into<String>,
