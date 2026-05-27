@@ -277,22 +277,21 @@ use super::*;
     }
 
 #[test]
-    fn idless_manual_clear_keeps_owner_blocked_without_authoritative_absence_evidence() {
+    fn idless_manual_clear_removes_matching_ambiguous_block_after_absence_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
         let payload_hash = "payload:idless-not-accepted".to_string();
         client.record_ambiguous(owner, payload_hash.clone()).unwrap();
 
-        let error = client
+        client
             .clear_idless_ambiguous_submit_after_manual_reconciliation(
-                idless_submit_reconciliation_evidence_for_payload(owner, payload_hash.clone()),
+                idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
                 manual_reconciliation_permit_token_for(owner),
             )
-            .unwrap_err();
+            .unwrap();
 
-        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+        client.ensure_owner_unblocked(owner).unwrap();
     }
 
 #[test]
@@ -314,6 +313,27 @@ use super::*;
             .unwrap_err();
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+    }
+
+#[test]
+    fn idless_manual_clear_rejects_payload_mismatch() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "payload:idless-current".to_string();
+        let evidence_payload_hash = "payload:idless-other".to_string();
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+
+        let error = client
+            .clear_idless_ambiguous_submit_after_manual_reconciliation(
+                idless_submit_reconciliation_evidence_for_payload(owner, evidence_payload_hash),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(error.to_string().contains("did not match current ambiguous payload"));
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
     }
 

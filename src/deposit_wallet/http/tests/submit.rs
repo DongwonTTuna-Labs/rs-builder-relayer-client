@@ -914,17 +914,13 @@ use super::*;
                 .unwrap_err();
             assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
 
-            let clear_error = client
+            client
                 .clear_idless_ambiguous_submit_after_manual_reconciliation(
                     idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
                     manual_reconciliation_permit_token_for(owner),
                 )
-                .unwrap_err();
-            assert!(error_has_prefix(
-                &clear_error,
-                RECONCILIATION_REQUIRED_PREFIX
-            ));
-            assert!(client.ambiguous_submit_block(owner).is_some());
+                .unwrap();
+            client.ensure_owner_unblocked(owner).unwrap();
             let requests = handle.await.unwrap();
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].path, SUBMIT_PATH);
@@ -1249,17 +1245,13 @@ use super::*;
         let payload_hash = client
             .ambiguous_submit_block(owner)
             .expect("test owner should have an ambiguous submit block");
-        let clear_error = client
+        client
             .clear_idless_ambiguous_submit_after_manual_reconciliation(
                 idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
                 manual_reconciliation_permit_token_for(owner),
             )
-            .unwrap_err();
-        assert!(error_has_prefix(
-            &clear_error,
-            RECONCILIATION_REQUIRED_PREFIX
-        ));
-        assert!(client.ambiguous_submit_block(owner).is_some());
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
         assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
 
         let requests = handle.await.unwrap();

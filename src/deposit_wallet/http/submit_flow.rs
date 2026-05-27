@@ -66,7 +66,7 @@ impl DepositWalletRelayerClient {
                 "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
             ));
         }
-        let now_unix_seconds = self.clock.now_unix_seconds();
+        let now_unix_seconds = self.clock.now_unix_seconds()?;
         self.submit_signed_wallet_batch_inner(
             signed,
             gate,
@@ -252,7 +252,7 @@ impl DepositWalletRelayerClient {
     }
 
     pub(super) fn ensure_deadline_fresh(&self, signed: &SignedDepositWalletBatch) -> Result<()> {
-        let now = U256::from(self.clock.now_unix_seconds());
+        let now = U256::from(self.clock.now_unix_seconds()?);
         if signed.deadline() <= now {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch deadline is expired".to_string(),

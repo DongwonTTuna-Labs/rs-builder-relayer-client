@@ -89,7 +89,8 @@ use super::*;
         let sleeps = sleeper.sleeps();
         assert_eq!(sleeps.len(), 1);
         assert!(
-            (Duration::from_secs(120)..=Duration::from_secs(120).saturating_add(MAX_RETRY_AFTER_JITTER))
+            (MAX_RETRY_AFTER_INTERVAL
+                ..=MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
                 .contains(&sleeps[0])
         );
         let requests = handle.await.unwrap();
@@ -199,10 +200,17 @@ use super::*;
             ),
             (
                 "tx-retry-after-long",
-                "120".to_string(),
+                "7".to_string(),
                 Duration::from_millis(100),
-                Duration::from_secs(120),
-                Duration::from_secs(120).saturating_add(MAX_RETRY_AFTER_JITTER),
+                Duration::from_secs(7),
+                Duration::from_secs(7).saturating_add(MAX_RETRY_AFTER_JITTER),
+            ),
+            (
+                "tx-retry-after-max",
+                "30".to_string(),
+                Duration::from_millis(100),
+                MAX_RETRY_AFTER_INTERVAL,
+                MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER),
             ),
             (
                 "tx-retry-after-capped",
@@ -369,6 +377,27 @@ use super::*;
                 ..=MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
                 .contains(&capped)
         );
+
+        let max_boundary = super::super::poll::retry_after_poll_interval(
+            "tx-retry-after-max-boundary",
+            0,
+            policy_interval,
+            MAX_RETRY_AFTER_INTERVAL,
+        );
+        assert!(
+            (MAX_RETRY_AFTER_INTERVAL
+                ..=MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
+                .contains(&max_boundary)
+        );
+    }
+
+#[test]
+    fn transaction_poll_jitter_accepts_oversized_transaction_id_without_panic() {
+        let base = Duration::from_millis(100);
+        let transaction_id = "x".repeat(MAX_TRANSACTION_ID_LEN + 1);
+        let jitter = super::super::poll::transaction_poll_jitter(&transaction_id, 0, base);
+
+        assert!((Duration::from_millis(1)..=Duration::from_millis(25)).contains(&jitter));
     }
 
 #[tokio::test]

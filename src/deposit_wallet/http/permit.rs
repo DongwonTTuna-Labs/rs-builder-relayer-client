@@ -2,8 +2,8 @@ use super::*;
 use super::redaction::{
     display_payload_hash, payload_hash_summary, redacted_address, sanitized_external_token,
 };
-#[cfg(test)]
 use super::response::{validate_transaction_hash, validate_transaction_id};
+use super::MAX_ERROR_TOKEN_LEN;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepositWalletMutationEnvironment {
@@ -192,8 +192,7 @@ pub struct DepositWalletSubmitReconciliationObservation {
 }
 
 impl DepositWalletSubmitReconciliationObservation {
-    #[cfg(test)]
-    pub(crate) fn new(
+    pub fn new(
         transaction_id: impl AsRef<str>,
         observed_state: RelayerTransactionState,
         transaction_hash: Option<impl AsRef<str>>,
@@ -270,8 +269,7 @@ impl fmt::Debug for DepositWalletSubmitReconciliationObservation {
 impl DepositWalletSubmitReconciliationEvidence {
     /// Records audited evidence that an ambiguous submit payload was manually
     /// reconciled outside this client before clearing the owner block.
-    #[cfg(test)]
-    pub(crate) fn new(
+    pub fn new(
         owner: Address,
         scope: DepositWalletMutationScope,
         issuer: impl Into<String>,
@@ -344,8 +342,7 @@ impl DepositWalletIdlessSubmitReconciliationEvidence {
     /// Records audited evidence that an ambiguous submit without a local
     /// transaction id was not accepted by the relayer before clearing the
     /// owner block.
-    #[cfg(test)]
-    pub(crate) fn new(
+    pub fn new(
         owner: Address,
         scope: DepositWalletMutationScope,
         issuer: impl Into<String>,

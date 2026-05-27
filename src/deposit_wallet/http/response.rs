@@ -446,13 +446,15 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
 }
 
 pub(super) fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
-    if transaction_hash.len() == 66
-        && transaction_hash.starts_with("0x")
-        && transaction_hash[2..]
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Ok(transaction_hash.to_string());
+    if transaction_hash.len() == 66 {
+        if let Some(hex) = transaction_hash
+            .strip_prefix("0x")
+            .or_else(|| transaction_hash.strip_prefix("0X"))
+        {
+            if hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Ok(format!("0x{}", hex.to_ascii_lowercase()));
+            }
+        }
     }
 
     Err(RelayerError::reconciliation_required(

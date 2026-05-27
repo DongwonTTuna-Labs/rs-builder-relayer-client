@@ -64,17 +64,19 @@ impl Default for DepositWalletPollPolicy {
 }
 
 pub(super) trait DepositWalletClock: Send + Sync {
-    fn now_unix_seconds(&self) -> u64;
+    fn now_unix_seconds(&self) -> Result<u64>;
 }
 
 pub(super) struct SystemClock;
 
 impl DepositWalletClock for SystemClock {
-    fn now_unix_seconds(&self) -> u64 {
+    fn now_unix_seconds(&self) -> Result<u64> {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock must not be before UNIX_EPOCH")
-            .as_secs()
+            .map(|duration| duration.as_secs())
+            .map_err(|_| {
+                RelayerError::Other("system clock must not be before UNIX_EPOCH".to_string())
+            })
     }
 }
 
@@ -364,12 +366,11 @@ pub(super) fn transaction_poll_jitter(transaction_id: &str, attempt: usize, base
         return Duration::ZERO;
     }
 
-    let transaction_id = transaction_id.as_bytes();
     let attempt = attempt.to_be_bytes();
-    let mut input = [0u8; MAX_TRANSACTION_ID_LEN + std::mem::size_of::<usize>()];
-    input[..transaction_id.len()].copy_from_slice(transaction_id);
-    input[transaction_id.len()..transaction_id.len() + attempt.len()].copy_from_slice(&attempt);
-    let digest = keccak256(&input[..transaction_id.len() + attempt.len()]);
+    let mut input = Vec::with_capacity(transaction_id.len() + attempt.len());
+    input.extend_from_slice(transaction_id.as_bytes());
+    input.extend_from_slice(&attempt);
+    let digest = keccak256(&input);
     Duration::from_millis((u64::from(digest[0]) % max_jitter_ms) + 1)
 }
 

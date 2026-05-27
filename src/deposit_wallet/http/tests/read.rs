@@ -121,6 +121,7 @@ use super::*;
 #[test]
     fn wallet_nonce_parser_accepts_decimal_string_and_small_json_number() {
         let raw = "31";
+        let above_u64 = "18446744073709551616";
         let expected = U256::from(31u64);
         let max = U256::MAX.to_string();
 
@@ -134,6 +135,13 @@ use super::*;
         assert_eq!(string_nonce, expected);
         assert_eq!(numeric_nonce, expected);
         assert_eq!(
+            super::super::read::parse_wallet_nonce_value(
+                serde_json::from_str::<serde_json::Value>(above_u64).unwrap(),
+            )
+            .unwrap(),
+            U256::from_dec_str(above_u64).unwrap()
+        );
+        assert_eq!(
             super::super::read::parse_wallet_nonce_value(json!(max)).unwrap(),
             U256::MAX
         );
@@ -146,6 +154,9 @@ use super::*;
         for value in [
             json!(""),
             json!("not-decimal"),
+            json!(" 1"),
+            json!("1 "),
+            json!("\u{ff11}"),
             json!("-1"),
             serde_json::from_str::<serde_json::Value>("-1").unwrap(),
             serde_json::from_str::<serde_json::Value>("1.5").unwrap(),
@@ -817,6 +828,29 @@ use super::*;
 
         let error = client.get_transaction("tx-array").await.unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        let _ = handle.await.unwrap();
+    }
+
+#[tokio::test]
+    async fn get_transaction_normalizes_uppercase_transaction_hash_prefix_and_hex() {
+        let transaction_hash =
+            "0X38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8";
+        let expected_hash =
+            "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            {
+                let mut response = transaction_response_value("tx-upper-hash", "STATE_CONFIRMED");
+                response["transactionHash"] = json!(transaction_hash);
+                response.to_string()
+            },
+        )])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client.get_transaction("tx-upper-hash").await.unwrap();
+
+        assert_eq!(receipt.transaction_hash.as_deref(), Some(expected_hash));
         let _ = handle.await.unwrap();
     }
 

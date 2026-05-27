@@ -45,11 +45,10 @@ const TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR: &str = "transaction response item l
 const TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR: &str = "transaction response duplicate id";
 const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missing requested id";
 const TRANSACTION_RESPONSE_INVALID_ID_ERROR: &str = "transaction response invalid id";
-#[cfg(test)]
 const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
-const MAX_RETRY_AFTER_INTERVAL: Duration = Duration::from_secs(120);
+const MAX_RETRY_AFTER_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_RETRY_AFTER_JITTER: Duration = Duration::from_millis(250);
 const MAX_POLL_ATTEMPTS: usize = 120;
 const MAX_OWNER_MUTATION_RECORDS: usize = 1024;

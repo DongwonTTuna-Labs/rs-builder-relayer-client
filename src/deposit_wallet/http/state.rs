@@ -281,7 +281,7 @@ impl DepositWalletRelayerClient {
                     &permit,
                     self.try_mutation_scope(DepositWalletMutationAction::ManualReconciliation)?,
                     created_at_unix_seconds,
-                    self.clock.now_unix_seconds(),
+                    self.clock.now_unix_seconds()?,
                 )?;
                 let has_payload_records = state
                     .transaction_owners
@@ -386,30 +386,44 @@ impl DepositWalletRelayerClient {
             DepositWalletMutationAction::ManualReconciliation,
         )?;
 
-        let state = self.mutation_state()?;
-        let current_block = state.owner_blocks.get(&owner);
-        let created_at_unix_seconds = current_block
-            .filter(|block| block.payload_hash() == evidence.payload_hash())
-            .map(OwnerMutationBlock::created_at_unix_seconds);
-        let owner_is_unblocked = current_block.is_none();
-        drop(state);
-        if owner_is_unblocked {
-            return Ok(());
-        }
-        if let Some(created_at_unix_seconds) = created_at_unix_seconds {
-            validate_idless_reconciliation_evidence(
-                &evidence,
-                &permit,
-                self.try_mutation_scope(DepositWalletMutationAction::ManualReconciliation)?,
+        let mut state = self.mutation_state()?;
+        match state.owner_blocks.get(&owner).cloned() {
+            None => Ok(()),
+            Some(OwnerMutationBlock::Ambiguous {
+                payload_hash,
                 created_at_unix_seconds,
-                self.clock.now_unix_seconds(),
-            )?;
+            }) if payload_hash == evidence.payload_hash() => {
+                let has_payload_records = state
+                    .transaction_owners
+                    .values()
+                    .any(|record| record.owner == owner && record.payload_hash == evidence.payload_hash());
+                if has_payload_records {
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "id-less manual reconciliation payload {} for owner {} still has local transaction records; reconcile those transactions before clearing",
+                        display_payload_hash(evidence.payload_hash()),
+                        redacted_address(owner)
+                    )));
+                }
+                validate_idless_reconciliation_evidence(
+                    &evidence,
+                    &permit,
+                    self.try_mutation_scope(DepositWalletMutationAction::ManualReconciliation)?,
+                    created_at_unix_seconds,
+                    self.clock.now_unix_seconds()?,
+                )?;
+                state.owner_blocks.remove(&owner);
+                Ok(())
+            }
+            Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) => Err(
+                RelayerError::reconciliation_required(format!(
+                    "id-less manual reconciliation evidence payload {} did not match current ambiguous payload {} for owner {}",
+                    display_payload_hash(evidence.payload_hash()),
+                    display_payload_hash(&payload_hash),
+                    redacted_address(owner)
+                )),
+            ),
+            Some(block) => Err(owner_block_error(owner, &block)),
         }
-        Err(RelayerError::reconciliation_required(format!(
-            "id-less ambiguous submit for owner {} payload {} cannot be cleared from self-attested evidence in this PR; keep the owner blocked until authoritative relayer absence evidence is available",
-            redacted_address(owner),
-            display_payload_hash(evidence.payload_hash())
-        )))
     }
 
     pub fn ambiguous_submit_block(&self, owner: Address) -> Option<String> {
@@ -473,7 +487,7 @@ impl DepositWalletRelayerClient {
             )));
         }
 
-        let created_at_unix_seconds = self.clock.now_unix_seconds();
+        let created_at_unix_seconds = self.clock.now_unix_seconds()?;
         state.nonce_reads.insert(owner, created_at_unix_seconds);
         Ok(OwnerNonceReadReservation {
             state: self.mutation_state.clone(),
@@ -501,7 +515,7 @@ impl DepositWalletRelayerClient {
         }
         ensure_owner_mutation_capacity(&state, owner, None)?;
 
-        let created_at_unix_seconds = self.clock.now_unix_seconds();
+        let created_at_unix_seconds = self.clock.now_unix_seconds()?;
         state.owner_blocks.insert(
             owner,
             OwnerMutationBlock::InFlight {
@@ -544,7 +558,7 @@ impl DepositWalletRelayerClient {
         ensure_owner_mutation_capacity(&state, owner, None)?;
 
         state.nonce_reads.remove(&owner);
-        let created_at_unix_seconds = self.clock.now_unix_seconds();
+        let created_at_unix_seconds = self.clock.now_unix_seconds()?;
         state.owner_blocks.insert(
             owner,
             OwnerMutationBlock::InFlight {
@@ -620,12 +634,16 @@ impl DepositWalletRelayerClient {
 
     pub(super) fn record_ambiguous(&self, owner: Address, payload_hash: String) -> Result<()> {
         let mut state = self.mutation_state()?;
-        let created_at_unix_seconds = state
+        let created_at_unix_seconds = if let Some(created_at_unix_seconds) = state
             .owner_blocks
             .get(&owner)
             .filter(|block| block.payload_hash() == payload_hash)
             .map(OwnerMutationBlock::created_at_unix_seconds)
-            .unwrap_or_else(|| self.clock.now_unix_seconds());
+        {
+            created_at_unix_seconds
+        } else {
+            self.clock.now_unix_seconds()?
+        };
         state.owner_blocks.insert(
             owner,
             OwnerMutationBlock::Ambiguous {
@@ -650,7 +668,7 @@ impl DepositWalletRelayerClient {
             OwnerMutationBlock::InFlight {
                 payload_hash: payload_hash.clone(),
                 transaction_id: Some(transaction_id.clone()),
-                created_at_unix_seconds: self.clock.now_unix_seconds(),
+                created_at_unix_seconds: self.clock.now_unix_seconds()?,
             },
         );
         state.transaction_owners.insert(
@@ -724,7 +742,7 @@ impl DepositWalletRelayerClient {
             OwnerMutationBlock::InFlight {
                 payload_hash: payload_hash.clone(),
                 transaction_id: Some(transaction_id.to_string()),
-                created_at_unix_seconds: self.clock.now_unix_seconds(),
+                created_at_unix_seconds: self.clock.now_unix_seconds()?,
             },
         );
         state.transaction_owners.insert(
@@ -779,7 +797,7 @@ impl DepositWalletRelayerClient {
             owner,
             OwnerMutationBlock::Ambiguous {
                 payload_hash: payload_hash.clone(),
-                created_at_unix_seconds: self.clock.now_unix_seconds(),
+                created_at_unix_seconds: self.clock.now_unix_seconds()?,
             },
         );
         state.transaction_owners.insert(
@@ -874,7 +892,7 @@ impl DepositWalletRelayerClient {
                     owner,
                     OwnerMutationBlock::Ambiguous {
                         payload_hash: payload_hash.to_string(),
-                        created_at_unix_seconds: self.clock.now_unix_seconds(),
+                        created_at_unix_seconds: self.clock.now_unix_seconds()?,
                     },
                 );
                 return Err(RelayerError::reconciliation_required(format!(
@@ -912,7 +930,7 @@ impl DepositWalletRelayerClient {
                 record.owner,
                 OwnerMutationBlock::Ambiguous {
                     payload_hash: record.payload_hash,
-                    created_at_unix_seconds: self.clock.now_unix_seconds(),
+                    created_at_unix_seconds: self.clock.now_unix_seconds()?,
                 },
             );
         }
@@ -952,7 +970,7 @@ impl DepositWalletRelayerClient {
     ) -> Result<()> {
         validate_permit_owner(permit, owner)?;
         validate_permit_scope(permit, self.try_mutation_scope(action)?)?;
-        validate_permit_fresh(permit, self.clock.now_unix_seconds())
+        validate_permit_fresh(permit, self.clock.now_unix_seconds()?)
     }
 
 }

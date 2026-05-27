@@ -222,13 +222,7 @@ pub(super) fn parse_wallet_nonce_value(value: serde_json::Value) -> Result<U256>
     match value {
         serde_json::Value::String(raw) => parse_wallet_nonce_decimal(&raw),
         serde_json::Value::Number(number) => {
-            let nonce = number.as_u64().ok_or_else(|| {
-                RelayerError::Other(
-                    "invalid WALLET nonce: JSON number must be an unsigned integer within u64 range; use a decimal string for larger values"
-                        .to_string(),
-                )
-            })?;
-            Ok(U256::from(nonce))
+            parse_wallet_nonce_decimal(&number.to_string())
         }
         _ => Err(RelayerError::Other(
             "invalid WALLET nonce: expected decimal string or JSON number".to_string(),

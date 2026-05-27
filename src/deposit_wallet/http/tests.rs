@@ -38,8 +38,8 @@
     }
 
     impl DepositWalletClock for FixedClock {
-        fn now_unix_seconds(&self) -> u64 {
-            self.now
+        fn now_unix_seconds(&self) -> Result<u64> {
+            Ok(self.now)
         }
     }
 
@@ -60,8 +60,8 @@
     }
 
     impl DepositWalletClock for MutableClock {
-        fn now_unix_seconds(&self) -> u64 {
-            *self.now.lock().unwrap()
+        fn now_unix_seconds(&self) -> Result<u64> {
+            Ok(*self.now.lock().unwrap())
         }
     }
 
