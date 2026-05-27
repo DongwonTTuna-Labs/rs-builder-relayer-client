@@ -1,5 +1,7 @@
 use polymarket_relayer::auth::builder::build_hmac_signature;
 use polymarket_relayer::auth::{AuthMethod, BuilderConfig};
+use ethers::types::Address;
+use ethers::utils::to_checksum;
 
 #[test]
 fn test_hmac_matches_reference_sdk() {
@@ -111,6 +113,36 @@ fn test_relayer_key_debug_redacts_malformed_address() {
 
     assert!(!rendered.contains(secret_key));
     assert!(!rendered.contains(malformed_address));
+    assert!(rendered.contains("<redacted>"));
+}
+
+#[test]
+fn test_relayer_key_debug_redacts_valid_address_to_checksum_summary() {
+    let secret_key = "secret-relayer-key";
+    let address = "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B";
+    let checksum = to_checksum(&address.parse::<Address>().unwrap(), None);
+    let expected_summary = format!("{}...{}", &checksum[..6], &checksum[38..]);
+    let auth = AuthMethod::relayer_key(secret_key, address);
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(secret_key));
+    assert!(!rendered.contains(address));
+    assert!(rendered.contains(&expected_summary));
+}
+
+#[test]
+fn test_builder_config_debug_redacts_all_secret_fields() {
+    let key = "builder-key-secret";
+    let secret = "builder-api-secret-material";
+    let passphrase = "builder-passphrase-secret";
+    let config = BuilderConfig::new(key, secret, passphrase);
+
+    let rendered = format!("{config:?}");
+
+    assert!(!rendered.contains(key));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains(passphrase));
     assert!(rendered.contains("<redacted>"));
 }
 
