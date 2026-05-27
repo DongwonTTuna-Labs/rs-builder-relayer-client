@@ -133,6 +133,22 @@ use super::*;
 
         let signed = signed_wallet_batch();
         let owner = signed.owner();
+        let production_batch_evidence = DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+            "unit-test owner serialization guard",
+            "production-batch-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        let error = DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "production WALLET submit",
+            production_batch_evidence,
+        )
+        .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+
         let error = client
             .submit_signed_wallet_batch(
                 signed,
@@ -161,6 +177,10 @@ use super::*;
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::AuthError(_)));
+        let rendered = error.to_string();
+        assert!(rendered.contains("submit authentication failed before POST"));
+        assert!(!rendered.contains("invalid"));
+        assert!(!rendered.contains(API_KEY));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
         let mut retry_reservation = client
@@ -499,6 +519,8 @@ use super::*;
                 assert!(error.to_string().contains("429"));
             }
             assert!(client.ambiguous_submit_block(owner).is_some());
+            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
             let blocked = client
                 .submit_signed_wallet_batch(signed_wallet_batch(), wallet_batch_mutation_permit_for(owner))
                 .await
@@ -761,6 +783,35 @@ use super::*;
         assert!(requests[1].path.contains("/nonce?address="));
         assert_eq!(requests[2].method, "POST");
         assert_eq!(requests[2].path, SUBMIT_PATH);
+    }
+
+#[tokio::test]
+    async fn signed_wallet_batch_nonce_mismatch_does_not_post_and_clears_reservation() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({"nonce": (signed.nonce() + U256::one()).to_string()}).to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .submit_signed_wallet_batch(signed, wallet_batch_mutation_permit_for(owner))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Signing(message) if message.contains("nonce")));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut retry_reservation = client
+            .reserve_owner_submit(owner, "payload:retry-after-nonce-mismatch".to_string())
+            .unwrap();
+        retry_reservation.clear().unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+        assert!(requests[0].path.contains("/nonce?address="));
     }
 
 #[tokio::test]
@@ -1041,6 +1092,8 @@ use super::*;
             .await
             .unwrap_err();
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+        let blocked_nonce = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked_nonce, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -1130,6 +1183,8 @@ use super::*;
 
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let _ = handle.await.unwrap();
 
         let (url, handle) = spawn_server(vec![TestResponse::json("429 Too Many Requests", "{}")
@@ -1148,6 +1203,8 @@ use super::*;
             .await
             .unwrap_err();
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }

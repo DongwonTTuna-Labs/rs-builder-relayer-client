@@ -169,9 +169,12 @@ impl DepositWalletRelayerClient {
                         let sleep_for = poll_error
                             .retry_after
                             .map(|retry_after| {
-                                retry_after
-                                    .min(MAX_RETRY_AFTER_INTERVAL)
-                                    .max(policy_interval)
+                                retry_after_poll_interval(
+                                    &transaction_id,
+                                    attempt,
+                                    policy_interval,
+                                    retry_after,
+                                )
                             })
                             .unwrap_or(policy_interval);
                         self.sleeper
@@ -262,6 +265,11 @@ impl DepositWalletRelayerClient {
                                 self.mark_transaction_reconciliation_required(&transaction_id)?;
                             }
                         }
+                    } else if let Some(owner) = owner_to_verify {
+                        if trusted_owner_recovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
+                        }
                     }
                     return Err(RelayerError::TransactionInvalid(format!(
                         "deposit wallet transaction {} invalid",
@@ -278,6 +286,11 @@ impl DepositWalletRelayerClient {
                             OwnerTransactionSource::LocalSubmit => {
                                 self.mark_transaction_reconciliation_required(&transaction_id)?;
                             }
+                        }
+                    } else if let Some(owner) = owner_to_verify {
+                        if trusted_owner_recovery {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
                         }
                     }
                     return Err(RelayerError::TransactionFailed(format!(
@@ -348,4 +361,20 @@ pub(super) fn transaction_poll_jitter(transaction_id: &str, attempt: usize, base
     input[transaction_id.len()..transaction_id.len() + attempt.len()].copy_from_slice(&attempt);
     let digest = keccak256(&input[..transaction_id.len() + attempt.len()]);
     Duration::from_millis((u64::from(digest[0]) % max_jitter_ms) + 1)
+}
+
+pub(super) fn retry_after_poll_interval(
+    transaction_id: &str,
+    attempt: usize,
+    policy_interval: Duration,
+    retry_after: Duration,
+) -> Duration {
+    let retry_after = retry_after.min(MAX_RETRY_AFTER_INTERVAL);
+    let base = retry_after.max(policy_interval);
+    if retry_after <= policy_interval {
+        return base;
+    }
+
+    base.saturating_add(transaction_poll_jitter(transaction_id, attempt, base))
+        .min(MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
 }

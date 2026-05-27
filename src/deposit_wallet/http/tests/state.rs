@@ -445,6 +445,51 @@ use super::*;
     }
 
 #[test]
+    fn manual_clear_rejects_terminal_observation_transaction_hash_mismatch() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "payload:terminal-hash-mismatch".to_string();
+        let transaction_id = "tx-terminal-hash-mismatch";
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+        client
+            .record_transaction_owner(transaction_id, owner, payload_hash.clone())
+            .unwrap();
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.terminal_observations.insert(
+                transaction_id.to_string(),
+                OwnerTransactionTerminalObservation {
+                    observed_state: RelayerTransactionState::Confirmed,
+                    transaction_hash: Some(
+                        "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload_transaction_observation(
+                    owner,
+                    payload_hash.clone(),
+                    transaction_id,
+                    RelayerTransactionState::Confirmed,
+                    Some("0x48cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
+                ),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+        let state = client.mutation_state().unwrap();
+        assert!(state.transaction_owners.contains_key(transaction_id));
+        assert!(state.terminal_observations.contains_key(transaction_id));
+    }
+
+#[test]
     fn manual_clear_rejects_stale_future_or_wrong_issuer_reconciliation_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
         let payload_hash = "payload:timed-reconciliation".to_string();

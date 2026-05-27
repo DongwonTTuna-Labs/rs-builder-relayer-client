@@ -49,6 +49,7 @@ const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_RETRY_AFTER_INTERVAL: Duration = Duration::from_secs(120);
+const MAX_RETRY_AFTER_JITTER: Duration = Duration::from_millis(250);
 const MAX_POLL_ATTEMPTS: usize = 120;
 const MAX_OWNER_MUTATION_RECORDS: usize = 1024;
 const MAX_OWNER_SERIALIZATION_LEASE_SECONDS: u64 = 300;

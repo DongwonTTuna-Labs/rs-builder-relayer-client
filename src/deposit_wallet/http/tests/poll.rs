@@ -87,7 +87,11 @@ use super::*;
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps, vec![Duration::from_secs(120)]);
+        assert_eq!(sleeps.len(), 1);
+        assert!(
+            (Duration::from_secs(120)..=Duration::from_secs(120).saturating_add(MAX_RETRY_AFTER_JITTER))
+                .contains(&sleeps[0])
+        );
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }
@@ -143,24 +147,27 @@ use super::*;
 
 #[tokio::test]
     async fn transient_poll_429_retry_after_uses_larger_policy_or_server_delay() {
-        for (transaction_id, retry_after, interval, expected_sleep) in [
+        for (transaction_id, retry_after, interval, min_sleep, max_sleep) in [
             (
                 "tx-retry-after-header",
                 "1".to_string(),
                 Duration::from_millis(100),
                 Duration::from_secs(1),
+                Duration::from_secs(1).saturating_add(MAX_RETRY_AFTER_JITTER),
             ),
             (
                 "tx-retry-after-long",
                 "120".to_string(),
                 Duration::from_millis(100),
                 Duration::from_secs(120),
+                Duration::from_secs(120).saturating_add(MAX_RETRY_AFTER_JITTER),
             ),
             (
                 "tx-retry-after-capped",
                 "600".to_string(),
                 Duration::from_millis(100),
                 MAX_RETRY_AFTER_INTERVAL,
+                MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER),
             ),
         ] {
             let owner = address(WALLET_CREATE_OWNER);
@@ -193,7 +200,15 @@ use super::*;
                 .unwrap();
 
             assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
-            assert_eq!(sleeper.sleeps(), vec![expected_sleep]);
+            let sleeps = sleeper.sleeps();
+            assert_eq!(sleeps.len(), 1);
+            assert!(
+                (min_sleep..=max_sleep).contains(&sleeps[0]),
+                "{transaction_id} sleep {:?} not in {:?}..={:?}",
+                sleeps[0],
+                min_sleep,
+                max_sleep
+            );
             let requests = handle.await.unwrap();
             assert_eq!(requests.len(), 2);
         }
@@ -256,6 +271,61 @@ use super::*;
         assert_eq!(
             capped.interval_for_transaction_attempt("tx-jitter-capped", 1),
             MAX_POLL_INTERVAL
+        );
+    }
+
+#[test]
+    fn retry_after_poll_interval_adds_deterministic_bounded_jitter_when_server_delay_wins() {
+        let policy_interval = Duration::from_millis(100);
+        let retry_after = Duration::from_secs(1);
+        let first = super::super::poll::retry_after_poll_interval(
+            "tx-retry-after-jitter-a",
+            0,
+            policy_interval,
+            retry_after,
+        );
+
+        assert_eq!(
+            first,
+            super::super::poll::retry_after_poll_interval(
+                "tx-retry-after-jitter-a",
+                0,
+                policy_interval,
+                retry_after,
+            )
+        );
+        assert!(
+            (retry_after..=retry_after.saturating_add(MAX_RETRY_AFTER_JITTER)).contains(&first)
+        );
+        assert!((0..64).any(|index| {
+            super::super::poll::retry_after_poll_interval(
+                &format!("tx-retry-after-jitter-{index}"),
+                0,
+                policy_interval,
+                retry_after,
+            ) != first
+        }));
+
+        assert_eq!(
+            super::super::poll::retry_after_poll_interval(
+                "tx-policy-interval-wins",
+                0,
+                Duration::from_secs(2),
+                retry_after,
+            ),
+            Duration::from_secs(2)
+        );
+
+        let capped = super::super::poll::retry_after_poll_interval(
+            "tx-retry-after-capped",
+            0,
+            policy_interval,
+            Duration::from_secs(600),
+        );
+        assert!(
+            (MAX_RETRY_AFTER_INTERVAL
+                ..=MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
+                .contains(&capped)
         );
     }
 
@@ -1062,6 +1132,89 @@ use super::*;
                 client.ambiguous_submit_block(owner),
                 Some("payload:ambiguous-before-recovery".to_string())
             );
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));
+        }
+    }
+
+#[tokio::test]
+    async fn owner_aware_recovery_permit_terminal_failure_without_payload_keeps_owner_blocked() {
+        let owner = address(WALLET_CREATE_OWNER);
+        for (transaction_id, state, expected_state) in [
+            (
+                "tx-no-payload-invalid",
+                "STATE_INVALID",
+                RelayerTransactionState::Invalid,
+            ),
+            (
+                "tx-no-payload-failed",
+                "STATE_FAILED",
+                RelayerTransactionState::Failed,
+            ),
+        ] {
+            let (url, handle) = spawn_server(vec![TestResponse::json(
+                "200 OK",
+                transaction_response(transaction_id, state),
+            )])
+            .await;
+            let client = test_client(url);
+
+            let error = client
+                .poll_owner_transaction_with_reconciliation_permit(
+                    owner,
+                    transaction_id,
+                    DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                    owner_recovery_poll_permit_for(owner),
+                )
+                .await
+                .unwrap_err();
+
+            match &expected_state {
+                RelayerTransactionState::Invalid => {
+                    assert!(matches!(error, RelayerError::TransactionInvalid(_)));
+                }
+                RelayerTransactionState::Failed => {
+                    assert!(matches!(error, RelayerError::TransactionFailed(_)));
+                }
+                _ => unreachable!(),
+            }
+            let payload_hash = client
+                .ambiguous_submit_block(owner)
+                .expect("terminal owner recovery should block until manual reconciliation");
+            assert_eq!(payload_hash, recovered_payload_hash(transaction_id));
+            {
+                let state = client.mutation_state().unwrap();
+                assert!(state
+                    .transaction_owners
+                    .get(transaction_id)
+                    .is_some_and(|record| record.owner == owner
+                        && record.payload_hash == payload_hash
+                        && record.source == OwnerTransactionSource::OwnerRecovery));
+                assert_eq!(
+                    state
+                        .terminal_observations
+                        .get(transaction_id)
+                        .map(|observation| &observation.observed_state),
+                    Some(&expected_state)
+                );
+            }
+            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+
+            client
+                .clear_ambiguous_submit_after_manual_reconciliation(
+                    submit_reconciliation_evidence_for_payload_transaction_observation(
+                        owner,
+                        payload_hash,
+                        transaction_id,
+                        expected_state.clone(),
+                        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
+                    ),
+                    manual_reconciliation_permit_token_for(owner),
+                )
+                .unwrap();
+            client.ensure_owner_unblocked(owner).unwrap();
             let requests = handle.await.unwrap();
             assert_eq!(requests.len(), 1);
             assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));

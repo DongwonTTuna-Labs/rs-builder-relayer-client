@@ -110,6 +110,8 @@ use super::*;
             .await
             .expect("nonce request should reach test server");
 
+        let second_nonce = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&second_nonce, MUTATION_BLOCKED_PREFIX));
         let blocked = match client.reserve_owner_submit(owner, "payload:nonce-race".to_string()) {
             Ok(_) => panic!("nonce read should block same-owner submit reservation"),
             Err(error) => error,
@@ -210,11 +212,11 @@ use super::*;
         )
         .to_string();
 
-        for (label, body, retryable_absence) in [
-            ("missing", missing, true),
-            ("duplicate", duplicate, false),
-            ("invalid", invalid, false),
-            ("oversized", oversized, false),
+        for (label, body, retryable_absence, expected_message) in [
+            ("missing", missing, true, "did not include requested transaction id"),
+            ("duplicate", duplicate, false, "duplicate requested transaction id"),
+            ("invalid", invalid, false, "invalid transactionID"),
+            ("oversized", oversized, false, "more than"),
         ] {
             let parse_error = parse_transaction_response(target, body.as_bytes()).unwrap_err();
             assert_eq!(
@@ -223,6 +225,7 @@ use super::*;
             );
             let error = parse_error.error;
             assert!(error.is_deposit_wallet_reconciliation_required());
+            assert!(error.to_string().contains(expected_message), "{label}: {error}");
             assert!(!error.to_string().contains(target));
         }
     }
