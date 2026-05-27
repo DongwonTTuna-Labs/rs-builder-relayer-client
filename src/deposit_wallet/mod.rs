@@ -6,6 +6,7 @@
 
 pub mod address;
 pub mod config;
+pub mod http;
 pub mod nonce;
 pub mod requests;
 pub mod signing;
@@ -17,6 +18,10 @@ pub use config::{
     deposit_wallet_contract_config, DepositWalletContractConfig, AMOY_CHAIN_ID,
     AMOY_DEPOSIT_WALLET_FACTORY, AMOY_DEPOSIT_WALLET_IMPLEMENTATION, POLYGON_CHAIN_ID,
     POLYGON_DEPOSIT_WALLET_FACTORY, POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
+};
+pub use http::{
+    DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletTransactionReceipt,
+    RelayerKeyAuth,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

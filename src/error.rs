@@ -46,3 +46,40 @@ pub enum RelayerError {
 }
 
 pub type Result<T> = std::result::Result<T, RelayerError>;
+
+impl RelayerError {
+    pub(crate) fn invalid_relayer_url(message: impl Into<String>) -> Self {
+        Self::Other(format!("Invalid relayer URL: {}", message.into()))
+    }
+
+    pub(crate) fn mutation_blocked(message: impl Into<String>) -> Self {
+        Self::Other(format!("Deposit-wallet mutation blocked: {}", message.into()))
+    }
+
+    pub(crate) fn reconciliation_required(message: impl Into<String>) -> Self {
+        Self::Other(format!(
+            "Deposit-wallet reconciliation required: {}",
+            message.into()
+        ))
+    }
+
+    pub fn is_deposit_wallet_mutation_blocked(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet mutation blocked:"))
+    }
+
+    pub fn is_deposit_wallet_reconciliation_required(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet reconciliation required:"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RelayerError;
+
+    #[test]
+    fn deposit_wallet_error_classifiers_do_not_require_consumer_prefix_parsing() {
+        assert!(RelayerError::mutation_blocked("locked").is_deposit_wallet_mutation_blocked());
+        assert!(RelayerError::reconciliation_required("manual check").is_deposit_wallet_reconciliation_required());
+        assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_mutation_blocked());
+    }
+}
