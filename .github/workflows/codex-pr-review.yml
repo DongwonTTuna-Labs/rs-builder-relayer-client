@@ -1,0 +1,575 @@
+name: Codex PR Review
+
+on:
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: resolve
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    timeout-minutes: 5
+    outputs:
+      should_run: ${{ steps.resolve.outputs.should_run }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      trigger: ${{ steps.resolve.outputs.trigger }}
+    steps:
+      - name: Checkout workflow helper
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve PR metadata
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 workflow/.github/scripts/post_review.py resolve-current
+
+  review:
+    name: review-${{ matrix.axis }}
+    needs: resolve
+    if: needs.resolve.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        axis: [correctness, security, performance, test-coverage, domain]
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build reviewer prompt
+        env:
+          AXIS: ${{ matrix.axis }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          TRIGGER: ${{ needs.resolve.outputs.trigger }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/${AXIS}-reviewer.md"
+          prompt_file="${RUNNER_TEMP}/prompt-${AXIS}.md"
+          changed_files="${RUNNER_TEMP}/changed-files-${AXIS}.txt"
+          diff_file="${RUNNER_TEMP}/diff-${AXIS}.patch"
+
+          test -f "$agent_file" || { echo "missing reviewer agent: $agent_file" >&2; exit 1; }
+          git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+          git -C workspace diff --unified=80 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
+          if [ "$(wc -c < "$diff_file")" -gt 180000 ]; then
+            head -c 180000 "$diff_file" > "${diff_file}.tmp"
+            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
+            mv "${diff_file}.tmp" "$diff_file"
+          fi
+
+          {
+            cat "$agent_file"
+            cat <<EOF
+
+          ---
+
+          Current GitHub workflow contract supersedes legacy Forgejo path references above.
+
+          Return only JSON matching the inline output schema supplied to openai/codex-action.
+
+          Rules:
+          - Use agent "${AXIS}" exactly.
+          - Return at most 13 findings.
+          - Use line numbers from the RIGHT side of the diff only. Use null file/line for cross-cutting findings.
+          - Write every human-readable review string in Korean: title, reason, positive notes, and impact summary fields.
+          - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
+          - Do not include secrets, tokens, or private keys.
+          - Do not modify files or post comments.
+
+          Pull request:
+          - repository: ${GITHUB_REPOSITORY}
+          - pr_number: ${PR_NUMBER}
+          - base_sha: ${BASE_SHA}
+          - head_sha: ${HEAD_SHA}
+          - trigger: ${TRIGGER}
+
+          Changed files:
+          EOF
+            cat "$changed_files"
+            cat <<'EOF'
+
+          Diff:
+          ```diff
+          EOF
+            cat "$diff_file"
+            cat <<'EOF'
+          ```
+          EOF
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run Codex reviewer
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-${{ matrix.axis }}.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["agent", "findings", "positive", "impact_summary"],
+              "properties": {
+                "agent": {
+                  "type": "string",
+                  "enum": ["correctness", "security", "performance", "test-coverage", "domain"]
+                },
+                "findings": {
+                  "type": "array",
+                  "maxItems": 13,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "type", "file", "line", "title", "reason", "rule_ref", "cross_cutting"],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": ["MUST", "SUGGEST", "IMO", "NITS", "ASK"]
+                      },
+                      "file": {
+                        "type": ["string", "null"]
+                      },
+                      "line": {
+                        "type": ["integer", "null"],
+                        "minimum": 1
+                      },
+                      "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 1000
+                      },
+                      "rule_ref": {
+                        "type": ["string", "null"],
+                        "maxLength": 200
+                      },
+                      "cross_cutting": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "positive": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "impact_summary": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["scope", "backward_compat", "external_integration", "env_settings", "other_notes"],
+                      "properties": {
+                        "scope": { "type": "string" },
+                        "backward_compat": { "type": "string" },
+                        "external_integration": { "type": "string" },
+                        "env_settings": { "type": "string" },
+                        "other_notes": { "type": "string" }
+                      }
+                    },
+                    { "type": "null" }
+                  ]
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/findings-${{ matrix.axis }}.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Validate reviewer findings
+        env:
+          AXIS: ${{ matrix.axis }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          axis = os.environ["AXIS"]
+          source = Path(os.environ["RUNNER_TEMP"]) / f"findings-{axis}.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          if data.get("agent") != axis:
+              raise SystemExit(f"agent mismatch: {data.get('agent')} != {axis}")
+          findings = data.get("findings")
+          if not isinstance(findings, list):
+              raise SystemExit("findings must be an array")
+          if len(findings) > 13:
+              raise SystemExit("too many findings")
+          out = Path("artifacts") / f"findings-{axis}.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload reviewer findings
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-review-${{ matrix.axis }}-findings
+          path: artifacts/findings-${{ matrix.axis }}.json
+          retention-days: 7
+
+  tech-lead:
+    name: tech-lead
+    needs: [resolve, review]
+    if: needs.resolve.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download reviewer findings
+        uses: actions/download-artifact@v8
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts
+          merge-multiple: true
+
+      - name: Combine reviewer findings
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          axes = ("correctness", "security", "performance", "test-coverage", "domain")
+          artifacts = Path("artifacts")
+          missing = [axis for axis in axes if not (artifacts / f"findings-{axis}.json").exists()]
+          if missing:
+              raise SystemExit("missing reviewer artifacts: " + ", ".join(missing))
+          combined = []
+          for axis in axes:
+              payload = json.loads((artifacts / f"findings-{axis}.json").read_text(encoding="utf-8"))
+              if payload.get("agent") != axis:
+                  raise SystemExit(f"agent mismatch in findings-{axis}.json")
+              for finding in payload.get("findings", []):
+                  item = dict(finding)
+                  item["agent"] = axis
+                  combined.append(item)
+          combined_path = artifacts / "combined-findings.json"
+          combined_path.write_text(json.dumps(combined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Build tech-lead prompt
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/tech-lead-reviewer.md"
+          combined_file="artifacts/combined-findings.json"
+          diff_file="${RUNNER_TEMP}/diff-tech-lead.patch"
+          prompt_file="${RUNNER_TEMP}/prompt-tech-lead.md"
+
+          test -f "$agent_file" || { echo "missing tech-lead agent: $agent_file" >&2; exit 1; }
+          test -f "$combined_file" || { echo "missing combined findings: $combined_file" >&2; exit 1; }
+          git -C workspace diff --unified=60 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
+          if [ "$(wc -c < "$diff_file")" -gt 120000 ]; then
+            head -c 120000 "$diff_file" > "${diff_file}.tmp"
+            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
+            mv "${diff_file}.tmp" "$diff_file"
+          fi
+
+          {
+            cat "$agent_file"
+            cat <<'EOF'
+
+          ---
+
+          Current GitHub workflow contract supersedes legacy Forgejo path references above.
+
+          Language rules:
+          - Write every human-readable decision string in Korean: decision reasons, judgment headline, and merge note reasons.
+          - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
+
+          Combined findings:
+          ```json
+          EOF
+            cat "$combined_file"
+            cat <<'EOF'
+          ```
+
+          PR diff excerpt:
+          ```diff
+          EOF
+            cat "$diff_file"
+            cat <<'EOF'
+          ```
+          EOF
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-tech-lead
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run tech-lead gate
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-tech-lead.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["decisions", "judgment", "merge_notes"],
+              "properties": {
+                "decisions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "allow", "reason"],
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+                      },
+                      "allow": { "type": "boolean" },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300
+                      }
+                    }
+                  }
+                },
+                "judgment": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["status", "headline"],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": ["LGTM", "NEEDS_CLARIFICATION", "NEEDS_WORK"]
+                        },
+                        "headline": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      }
+                    },
+                    { "type": "null" }
+                  ]
+                },
+                "merge_notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["primary_id", "merged_ids", "reason"],
+                    "properties": {
+                      "primary_id": {
+                        "type": "string",
+                        "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+                      },
+                      "merged_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "string",
+                          "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
+                        }
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/decisions-tech-lead.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-tech-lead
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Validate tech-lead decisions
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["RUNNER_TEMP"]) / "decisions-tech-lead.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          if not isinstance(data.get("decisions"), list):
+              raise SystemExit("decisions must be an array")
+          out = Path("artifacts") / "decisions-tech-lead.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload tech-lead decisions
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts/decisions-tech-lead.json
+          retention-days: 7
+
+  post:
+    name: post
+    needs: [resolve, review, tech-lead]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download reviewer findings
+        uses: actions/download-artifact@v8
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts
+          merge-multiple: true
+
+      - name: Download tech-lead decisions
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+
+      - name: Post PR review
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: >-
+          python3 trusted/.github/scripts/post_review.py post-current
+          --artifacts artifacts
+          --decisions artifacts/decisions-tech-lead.json
