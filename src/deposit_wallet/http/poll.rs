@@ -215,9 +215,19 @@ impl DepositWalletRelayerClient {
                 .flatten();
             match &receipt.state {
                 RelayerTransactionState::Confirmed => {
+                    if receipt.owner.is_none() {
+                        if let Some(owner) = owner_to_verify {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        }
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "confirmed deposit wallet transaction {} did not include owner evidence; manual reconciliation required",
+                            transaction_id_for_error
+                        )));
+                    }
                     if receipt.transaction_hash.is_none() {
                         if let Some(owner) = owner_to_verify {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
                         }
                         return Err(RelayerError::reconciliation_required(format!(
                             "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",

@@ -97,6 +97,35 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn public_poll_transaction_requires_owner_evidence_before_confirmed_success() {
+        let transaction_id = "tx-public-ownerless-confirmed";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": transaction_id,
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_transaction(
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(error.to_string().contains("owner evidence"));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
     async fn owner_aware_poll_final_retryable_failure_marks_known_transaction_ambiguous() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-final-retryable-failure";
@@ -718,6 +747,7 @@ use super::*;
                 .transaction_owners
                 .get(transaction_id)
                 .is_some_and(|record| record.owner == owner));
+            assert!(state.terminal_observations.contains_key(transaction_id));
         }
         let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));

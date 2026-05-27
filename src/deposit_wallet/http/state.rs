@@ -32,7 +32,7 @@ pub(super) struct OwnerTransactionTerminalObservation {
 
 impl OwnerTransactionTerminalObservation {
     pub(super) fn from_receipt(receipt: &DepositWalletTransactionReceipt) -> Option<Self> {
-        match receipt.state {
+        match &receipt.state {
             RelayerTransactionState::Confirmed
             | RelayerTransactionState::Invalid
             | RelayerTransactionState::Failed => Some(Self {
@@ -227,6 +227,16 @@ impl Drop for OwnerSubmitReservation {
             }
             OwnerSubmitReservationDropAction::Disarmed => {}
         }
+    }
+}
+
+impl OwnerNonceReadReservation {
+    pub(super) fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub(super) fn created_at_unix_seconds(&self) -> u64 {
+        self.created_at_unix_seconds
     }
 }
 
@@ -531,6 +541,51 @@ impl DepositWalletRelayerClient {
                 created_at_unix_seconds,
             },
         );
+        drop(state);
+        Ok(OwnerSubmitReservation::new(
+            self.mutation_state.clone(),
+            owner,
+            payload_hash,
+            created_at_unix_seconds,
+        ))
+    }
+
+    pub(super) fn promote_owner_nonce_read_to_submit(
+        &self,
+        nonce_read: OwnerNonceReadReservation,
+        payload_hash: String,
+    ) -> Result<OwnerSubmitReservation> {
+        let owner = nonce_read.owner();
+        let nonce_read_created_at = nonce_read.created_at_unix_seconds();
+        let mut state = self.mutation_state()?;
+        if let Some(block) = state.owner_blocks.get(&owner) {
+            return Err(owner_block_error(owner, block));
+        }
+        if state.nonce_reads.get(&owner).copied() != Some(nonce_read_created_at) {
+            return Err(RelayerError::mutation_blocked(format!(
+                "owner {} WALLET nonce lease is no longer current",
+                redacted_address(owner)
+            )));
+        }
+        if state.transaction_owners.len() >= MAX_OWNER_MUTATION_RECORDS {
+            return Err(RelayerError::mutation_blocked(format!(
+                "owner mutation state already tracks {MAX_OWNER_MUTATION_RECORDS} transactions; reconcile terminal transactions before accepting another submit"
+            )));
+        }
+        ensure_owner_mutation_capacity(&state, owner, None)?;
+
+        state.nonce_reads.remove(&owner);
+        let created_at_unix_seconds = self.clock.now_unix_seconds();
+        state.owner_blocks.insert(
+            owner,
+            OwnerMutationBlock::InFlight {
+                payload_hash: payload_hash.clone(),
+                transaction_id: None,
+                created_at_unix_seconds,
+            },
+        );
+        drop(state);
+        drop(nonce_read);
         Ok(OwnerSubmitReservation::new(
             self.mutation_state.clone(),
             owner,

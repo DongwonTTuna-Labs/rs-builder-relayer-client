@@ -22,8 +22,8 @@ pub use config::{
 pub use http::{
     DepositWalletIdlessSubmitReconciliationEvidence, DepositWalletMutationAction,
     DepositWalletMutationEnvironment, DepositWalletMutationGate, DepositWalletMutationPermit,
-    DepositWalletMutationScope, DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy,
-    DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletMutationScope, DepositWalletNonceLease, DepositWalletOwnerSerializationEvidence,
+    DepositWalletPollPolicy, DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
     DepositWalletTransactionReceipt, RelayerKeyAuth,
 };

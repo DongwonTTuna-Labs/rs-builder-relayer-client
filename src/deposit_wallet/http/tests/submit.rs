@@ -830,6 +830,87 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn submit_signed_wallet_batch_consumes_nonce_lease_without_second_nonce_get() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json(
+                "200 OK",
+                json!({"nonce": signed.nonce().to_string()}).to_string(),
+            ),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-wallet-nonce-lease", "STATE_NEW"),
+            ),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let nonce_lease = client
+            .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+            .await
+            .unwrap();
+        assert_eq!(nonce_lease.owner(), owner);
+        assert_eq!(nonce_lease.nonce(), signed.nonce());
+        let blocked = match client.reserve_owner_submit(
+            owner,
+            "payload:blocked-by-nonce-lease".to_string(),
+        ) {
+            Ok(_) => panic!("nonce lease should block same-owner submit reservation"),
+            Err(error) => error,
+        };
+        assert!(error_has_prefix(&blocked, MUTATION_BLOCKED_PREFIX));
+
+        let receipt = client
+            .submit_signed_wallet_batch_with_nonce_lease(
+                signed,
+                wallet_batch_mutation_permit_for(owner),
+                nonce_lease,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.transaction_id, "tx-wallet-nonce-lease");
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, "GET");
+        assert!(requests[0].path.contains("/nonce?address="));
+        assert_eq!(requests[1].method, "POST");
+        assert_eq!(requests[1].path, SUBMIT_PATH);
+    }
+
+#[tokio::test]
+    async fn submit_signed_wallet_batch_rejects_mismatched_nonce_lease_before_post() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({"nonce": (signed.nonce() + U256::one()).to_string()}).to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let nonce_lease = client
+            .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+            .await
+            .unwrap();
+        let error = client
+            .submit_signed_wallet_batch_with_nonce_lease(
+                signed,
+                wallet_batch_mutation_permit_for(owner),
+                nonce_lease,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Signing(message) if message.contains("nonce")));
+        client.ensure_owner_unblocked(owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
+#[tokio::test]
     async fn signed_wallet_local_request_build_failure_clears_owner_reservation() {
         let signed = signed_wallet_batch();
         let owner = signed.owner();
@@ -1260,7 +1341,8 @@ async fn post_api_failures_record_ambiguous_submit_including_quota() {
         assert!(!rendered.contains('\n'));
         assert!(!rendered.contains("STATE_WEIRD"));
         assert!(rendered.contains("<unrecognized relayer state>"));
-        assert!(rendered.contains("tx-weird"));
+        assert!(!rendered.contains("tx-weird"));
+        assert!(rendered.contains("sha3:0x"));
         assert!(client.ambiguous_submit_block(owner).is_some());
         assert_eq!(
             client.ambiguous_submit_transaction_ids(owner),

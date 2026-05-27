@@ -3,10 +3,42 @@ use super::response::{
     parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt, PollFetchError,
 };
 use super::redaction::{sanitized_external_token, unknown_state_error_summary};
+use super::state::OwnerNonceReadReservation;
 
 #[derive(Deserialize)]
 pub(super) struct WalletNonceResponse {
     nonce: serde_json::Value,
+}
+
+pub struct DepositWalletNonceLease {
+    owner: Address,
+    nonce: U256,
+    reservation: Option<OwnerNonceReadReservation>,
+}
+
+impl DepositWalletNonceLease {
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub(super) fn into_reservation(mut self) -> OwnerNonceReadReservation {
+        self.reservation
+            .take()
+            .expect("nonce lease reservation should be present until consumed")
+    }
+}
+
+impl fmt::Debug for DepositWalletNonceLease {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletNonceLease")
+            .field("owner", &super::redaction::redacted_address(self.owner))
+            .field("nonce", &self.nonce)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DepositWalletRelayerClient {
@@ -18,6 +50,27 @@ impl DepositWalletRelayerClient {
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
         let _reservation = self.reserve_owner_nonce_read(owner)?;
         self.fetch_wallet_nonce(owner).await
+    }
+
+    pub async fn get_wallet_nonce_with_lease(
+        &self,
+        owner: Address,
+        gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletNonceLease> {
+        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
+        let reservation = self.reserve_owner_nonce_read(owner)?;
+        let nonce = match self.fetch_wallet_nonce(owner).await {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                drop(reservation);
+                return Err(error);
+            }
+        };
+        Ok(DepositWalletNonceLease {
+            owner,
+            nonce,
+            reservation: Some(reservation),
+        })
     }
 
     pub(super) async fn fetch_wallet_nonce(&self, owner: Address) -> Result<U256> {

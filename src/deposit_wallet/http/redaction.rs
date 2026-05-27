@@ -1,18 +1,7 @@
 use super::*;
 
 pub(super) fn sanitized_external_token(value: &str) -> String {
-    let mut sanitized = String::new();
-    for ch in value.chars().take(MAX_ERROR_TOKEN_LEN) {
-        if ch.is_ascii_graphic() || ch == ' ' {
-            sanitized.push(ch);
-        } else {
-            sanitized.push('?');
-        }
-    }
-    if value.chars().count() > MAX_ERROR_TOKEN_LEN {
-        sanitized.push_str("...");
-    }
-    sanitized
+    external_token_hash(value)
 }
 
 pub(super) fn external_token_hash(value: &str) -> String {

@@ -3,8 +3,9 @@ use super::redaction::{
     display_payload_hash, external_token_hash, payload_hash_summary, redacted_address,
     signed_digest_payload_hash,
 };
+use super::read::DepositWalletNonceLease;
 use super::response::{extract_submit_transaction_id, parse_submit_response};
-use super::state::OwnerSubmitReservation;
+use super::state::{OwnerNonceReadReservation, OwnerSubmitReservation};
 
 impl DepositWalletRelayerClient {
     /// Submits a `WALLET-CREATE` request when the mutation gate permits it.
@@ -32,20 +33,67 @@ impl DepositWalletRelayerClient {
     /// default-deny in this PR. Production submit enablement is intentionally
     /// reserved for a later live-submit change with durable owner state.
     ///
-    /// The caller must bind nonce fetch, signing, and submit under the same
-    /// owner-scoped lease. This boundary does not add a second nonce GET because
-    /// that would serialize every WALLET submit behind an extra relayer roundtrip.
+    /// This compatibility boundary does not add a second nonce GET because that
+    /// would serialize every WALLET submit behind an extra relayer roundtrip.
+    /// Production live-submit flows should use
+    /// [`Self::get_wallet_nonce_with_lease`] and
+    /// [`Self::submit_signed_wallet_batch_with_nonce_lease`] so nonce fetch,
+    /// signing, and submit share one owner-scoped lease.
     pub async fn submit_signed_wallet_batch(
         &self,
         signed: SignedDepositWalletBatch,
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
+        self.submit_signed_wallet_batch_inner(signed, gate, None)
+            .await
+    }
+
+    pub async fn submit_signed_wallet_batch_with_nonce_lease(
+        &self,
+        signed: SignedDepositWalletBatch,
+        gate: DepositWalletMutationGate,
+        nonce_lease: DepositWalletNonceLease,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        let owner = signed.owner();
+        if nonce_lease.owner() != owner {
+            return Err(RelayerError::mutation_blocked(format!(
+                "signed WALLET batch owner {} did not match WALLET nonce lease owner {}",
+                redacted_address(owner),
+                redacted_address(nonce_lease.owner())
+            )));
+        }
+        if nonce_lease.nonce() != signed.nonce() {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        self.submit_signed_wallet_batch_inner(
+            signed,
+            gate,
+            Some(nonce_lease.into_reservation()),
+        )
+        .await
+    }
+
+    async fn submit_signed_wallet_batch_inner(
+        &self,
+        signed: SignedDepositWalletBatch,
+        gate: DepositWalletMutationGate,
+        nonce_reservation: Option<OwnerNonceReadReservation>,
+    ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
-        self.ensure_owner_unblocked(owner)?;
         self.ensure_deadline_fresh(&signed)?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
-        let mut reservation = self.reserve_owner_submit(owner, preflight_hash)?;
+        let mut reservation = match nonce_reservation {
+            Some(nonce_reservation) => {
+                self.promote_owner_nonce_read_to_submit(nonce_reservation, preflight_hash)?
+            }
+            None => {
+                self.ensure_owner_unblocked(owner)?;
+                self.reserve_owner_submit(owner, preflight_hash)?
+            }
+        };
 
         let request = match build_deposit_wallet_batch_request_from_signed(signed, self.config) {
             Ok(request) => request,

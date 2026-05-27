@@ -76,6 +76,7 @@ pub use permit::{
     DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
 };
 pub use poll::DepositWalletPollPolicy;
+pub use read::DepositWalletNonceLease;
 pub use response::DepositWalletTransactionReceipt;
 pub use url::DepositWalletRelayerUrl;
 
