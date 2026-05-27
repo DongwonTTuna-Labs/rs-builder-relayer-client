@@ -73,7 +73,7 @@ impl DepositWalletClock for SystemClock {
     fn now_unix_seconds(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
+            .expect("system clock must not be before UNIX_EPOCH")
             .as_secs()
     }
 }

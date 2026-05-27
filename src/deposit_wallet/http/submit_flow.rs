@@ -66,15 +66,11 @@ impl DepositWalletRelayerClient {
                 "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
             ));
         }
-        if nonce_lease.expires_at_unix_seconds() <= self.clock.now_unix_seconds() {
-            return Err(RelayerError::mutation_blocked(
-                "WALLET nonce lease expired before submit; fetch a fresh leased nonce".to_string(),
-            ));
-        }
+        let now_unix_seconds = self.clock.now_unix_seconds();
         self.submit_signed_wallet_batch_inner(
             signed,
             gate,
-            Some(nonce_lease.into_reservation()?),
+            Some(nonce_lease.into_unexpired_reservation(now_unix_seconds)?),
         )
         .await
     }

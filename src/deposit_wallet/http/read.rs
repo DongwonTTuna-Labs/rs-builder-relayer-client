@@ -28,11 +28,15 @@ impl DepositWalletNonceLease {
         self.nonce
     }
 
-    pub(super) fn expires_at_unix_seconds(&self) -> u64 {
-        self.expires_at_unix_seconds
-    }
-
-    pub(super) fn into_reservation(mut self) -> Result<OwnerNonceReadReservation> {
+    pub(super) fn into_unexpired_reservation(
+        mut self,
+        now_unix_seconds: u64,
+    ) -> Result<OwnerNonceReadReservation> {
+        if self.expires_at_unix_seconds <= now_unix_seconds {
+            return Err(RelayerError::mutation_blocked(
+                "WALLET nonce lease expired before submit; fetch a fresh leased nonce".to_string(),
+            ));
+        }
         self.reservation.take().ok_or_else(|| {
             RelayerError::reconciliation_required(
                 "WALLET nonce lease was already consumed; owner-scoped reconciliation required"
@@ -86,6 +90,12 @@ impl DepositWalletRelayerClient {
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletNonceLease> {
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
+        if self.base_url.is_production_host() {
+            return Err(RelayerError::mutation_blocked(
+                "production WALLET nonce lease reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
+                    .to_string(),
+            ));
+        }
         let expires_at_unix_seconds = match &gate {
             DepositWalletMutationGate::Permit(permit) => permit.expires_at_unix_seconds(),
             DepositWalletMutationGate::Deny => {

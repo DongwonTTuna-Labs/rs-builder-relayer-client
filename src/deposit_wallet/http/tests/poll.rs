@@ -124,6 +124,16 @@ use super::*;
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(error.to_string().contains("owner evidence"));
+        assert!(client.ambiguous_submit_block(address(WALLET_CREATE_OWNER)).is_none());
+        client
+            .ensure_owner_unblocked(address(WALLET_CREATE_OWNER))
+            .unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state.owner_blocks.is_empty());
+            assert!(state.transaction_owners.is_empty());
+            assert!(state.terminal_observations.is_empty());
+        }
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }

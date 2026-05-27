@@ -6,7 +6,6 @@ use std::fmt;
 use ethers::types::Address;
 use ethers::utils::to_checksum;
 use reqwest::header::HeaderMap;
-use secrecy::{ExposeSecret, SecretString};
 
 /// Authentication method for the relayer.
 #[derive(Clone)]
@@ -14,10 +13,7 @@ pub enum AuthMethod {
     /// Builder Program HMAC-SHA256 authentication.
     Builder(BuilderConfig),
     /// Simple Relayer API key authentication.
-    RelayerKey {
-        api_key: SecretString,
-        address: String,
-    },
+    RelayerKey { api_key: String, address: String },
 }
 
 impl fmt::Debug for AuthMethod {
@@ -42,7 +38,7 @@ impl AuthMethod {
     /// Create a Relayer Key auth method.
     pub fn relayer_key(api_key: &str, address: &str) -> Self {
         AuthMethod::RelayerKey {
-            api_key: SecretString::from(api_key.to_string()),
+            api_key: api_key.to_string(),
             address: address.to_string(),
         }
     }
@@ -56,9 +52,7 @@ impl AuthMethod {
     ) -> crate::error::Result<HeaderMap> {
         match self {
             AuthMethod::Builder(config) => builder::build_headers(config, method, path, body),
-            AuthMethod::RelayerKey { api_key, address } => {
-                relayer_key::build_headers(api_key.expose_secret(), address)
-            }
+            AuthMethod::RelayerKey { api_key, address } => relayer_key::build_headers(api_key, address),
         }
     }
 }
@@ -66,17 +60,17 @@ impl AuthMethod {
 /// Builder Program API key credentials.
 #[derive(Clone)]
 pub struct BuilderConfig {
-    pub key: SecretString,
-    pub secret: SecretString,
-    pub passphrase: SecretString,
+    pub key: String,
+    pub secret: String,
+    pub passphrase: String,
 }
 
 impl BuilderConfig {
     pub fn new(key: &str, secret: &str, passphrase: &str) -> Self {
         Self {
-            key: SecretString::from(key.to_string()),
-            secret: SecretString::from(secret.to_string()),
-            passphrase: SecretString::from(passphrase.to_string()),
+            key: key.to_string(),
+            secret: secret.to_string(),
+            passphrase: passphrase.to_string(),
         }
     }
 }

@@ -217,6 +217,24 @@ use super::*;
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
+#[test]
+    fn mutation_scope_exposes_runtime_context_for_permit_evidence() {
+        let config = deposit_wallet_contract_config(137).unwrap();
+        let client = test_client(
+            DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap(),
+        );
+
+        let scope = client
+            .mutation_scope(DepositWalletMutationAction::WalletBatch)
+            .unwrap();
+
+        assert_eq!(scope.chain_id(), 137);
+        assert_eq!(scope.factory(), config.factory);
+        assert_eq!(scope.implementation(), config.implementation);
+        assert_eq!(scope.environment(), DepositWalletMutationEnvironment::TestLoopback);
+        assert_eq!(scope.action(), DepositWalletMutationAction::WalletBatch);
+    }
+
 #[tokio::test]
     async fn mutation_scope_rejects_unsupported_contract_config_without_zero_chain_fallback() {
         let owner = address(WALLET_CREATE_OWNER);
@@ -546,6 +564,7 @@ use super::*;
 
         assert_eq!(receipt.transaction_id, "tx-wallet");
         assert_eq!(receipt.state, RelayerTransactionState::New);
+        assert_eq!(receipt.owner, Some(owner));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, expected["method"].as_str().unwrap());
@@ -983,6 +1002,7 @@ use super::*;
             .unwrap();
 
         assert_eq!(receipt.transaction_id, "tx-wallet-nonce-lease");
+        assert_eq!(receipt.owner, Some(owner));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].method, "GET");

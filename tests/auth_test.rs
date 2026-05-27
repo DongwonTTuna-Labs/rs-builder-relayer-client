@@ -1,6 +1,5 @@
 use polymarket_relayer::auth::builder::build_hmac_signature;
 use polymarket_relayer::auth::{AuthMethod, BuilderConfig};
-use secrecy::{ExposeSecret, SecretString};
 
 #[test]
 fn test_hmac_matches_reference_sdk() {
@@ -60,6 +59,9 @@ fn test_builder_auth_generates_all_required_headers() {
     assert!(headers.contains_key("POLY_BUILDER_SIGNATURE"));
     assert_eq!(headers.get("POLY_BUILDER_API_KEY").unwrap(), "test-key");
     assert_eq!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap(), "test-passphrase");
+    assert!(headers.get("POLY_BUILDER_API_KEY").unwrap().is_sensitive());
+    assert!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap().is_sensitive());
+    assert!(headers.get("POLY_BUILDER_SIGNATURE").unwrap().is_sensitive());
 }
 
 #[test]
@@ -69,6 +71,11 @@ fn test_relayer_key_auth_generates_headers() {
 
     assert_eq!(headers.get("RELAYER_API_KEY").unwrap(), "my-key");
     assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), "0x1234");
+    assert!(headers.get("RELAYER_API_KEY").unwrap().is_sensitive());
+    assert!(headers
+        .get("RELAYER_API_KEY_ADDRESS")
+        .unwrap()
+        .is_sensitive());
 }
 
 #[test]
@@ -96,7 +103,7 @@ fn test_relayer_key_debug_redacts_malformed_address() {
     let secret_key = "secret-relayer-key";
     let malformed_address = "not-a-valid-address-secret";
     let auth = AuthMethod::RelayerKey {
-        api_key: SecretString::from(secret_key.to_string()),
+        api_key: secret_key.to_string(),
         address: malformed_address.to_string(),
     };
 
@@ -112,9 +119,9 @@ fn test_auth_method_builder_convenience() {
     let auth = AuthMethod::builder("k", "s", "p");
     match auth {
         AuthMethod::Builder(config) => {
-            assert_eq!(config.key.expose_secret(), "k");
-            assert_eq!(config.secret.expose_secret(), "s");
-            assert_eq!(config.passphrase.expose_secret(), "p");
+            assert_eq!(config.key, "k");
+            assert_eq!(config.secret, "s");
+            assert_eq!(config.passphrase, "p");
         }
         _ => panic!("expected Builder variant"),
     }

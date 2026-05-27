@@ -3,7 +3,6 @@ use base64::{engine::general_purpose, Engine};
 use crate::error::{RelayerError, Result};
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderValue};
-use secrecy::ExposeSecret;
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -55,7 +54,7 @@ pub fn build_headers(
     let timestamp_str = timestamp.to_string();
 
     let signature = build_hmac_signature(
-        config.secret.expose_secret(),
+        &config.secret,
         &timestamp_str,
         method,
         path,
@@ -63,26 +62,23 @@ pub fn build_headers(
     )?;
 
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "POLY_BUILDER_API_KEY",
-        HeaderValue::from_str(config.key.expose_secret())
-            .map_err(|_| RelayerError::AuthError("Invalid key header value".to_string()))?,
-    );
+    let mut key = HeaderValue::from_str(&config.key)
+        .map_err(|_| RelayerError::AuthError("Invalid key header value".to_string()))?;
+    key.set_sensitive(true);
+    headers.insert("POLY_BUILDER_API_KEY", key);
     headers.insert(
         "POLY_BUILDER_TIMESTAMP",
         HeaderValue::from_str(&timestamp_str)
             .map_err(|_| RelayerError::AuthError("Invalid timestamp header value".to_string()))?,
     );
-    headers.insert(
-        "POLY_BUILDER_PASSPHRASE",
-        HeaderValue::from_str(config.passphrase.expose_secret())
-            .map_err(|_| RelayerError::AuthError("Invalid passphrase header value".to_string()))?,
-    );
-    headers.insert(
-        "POLY_BUILDER_SIGNATURE",
-        HeaderValue::from_str(&signature)
-            .map_err(|_| RelayerError::AuthError("Invalid signature header value".to_string()))?,
-    );
+    let mut passphrase = HeaderValue::from_str(&config.passphrase)
+        .map_err(|_| RelayerError::AuthError("Invalid passphrase header value".to_string()))?;
+    passphrase.set_sensitive(true);
+    headers.insert("POLY_BUILDER_PASSPHRASE", passphrase);
+    let mut signature = HeaderValue::from_str(&signature)
+        .map_err(|_| RelayerError::AuthError("Invalid signature header value".to_string()))?;
+    signature.set_sensitive(true);
+    headers.insert("POLY_BUILDER_SIGNATURE", signature);
 
     Ok(headers)
 }

@@ -54,6 +54,22 @@ impl DepositWalletMutationScope {
     pub fn action(&self) -> DepositWalletMutationAction {
         self.action
     }
+
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    pub fn factory(&self) -> Address {
+        self.factory
+    }
+
+    pub fn implementation(&self) -> Address {
+        self.implementation
+    }
+
+    pub fn environment(&self) -> DepositWalletMutationEnvironment {
+        self.environment
+    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]

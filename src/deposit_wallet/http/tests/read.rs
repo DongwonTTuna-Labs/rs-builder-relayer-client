@@ -86,6 +86,38 @@ use super::*;
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
+#[tokio::test]
+    async fn get_wallet_nonce_with_lease_rejects_production_even_with_internal_permit_before_http() {
+        let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+        let client = test_client(url);
+        let owner = address(WALLET_CREATE_OWNER);
+        let evidence = DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            client
+                .mutation_scope(DepositWalletMutationAction::WalletNonceRead)
+                .unwrap(),
+            "unit-test owner serialization guard",
+            "production-leased-nonce-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        let permit = unchecked_mutation_permit(
+            owner,
+            "internal test production WALLET nonce lease",
+            evidence,
+        );
+
+        let error = client
+            .get_wallet_nonce_with_lease(owner, DepositWalletMutationGate::Permit(permit))
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(error.to_string().contains("production WALLET nonce lease reads"));
+        client.ensure_owner_unblocked(owner).unwrap();
+    }
+
 #[test]
     fn wallet_nonce_parser_accepts_decimal_string_and_small_json_number() {
         let raw = "31";

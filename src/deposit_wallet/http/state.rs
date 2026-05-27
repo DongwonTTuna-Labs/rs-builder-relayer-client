@@ -567,7 +567,7 @@ impl DepositWalletRelayerClient {
         &self,
         owner: Address,
         payload_hash: String,
-        receipt: DepositWalletTransactionReceipt,
+        mut receipt: DepositWalletTransactionReceipt,
     ) -> Result<DepositWalletTransactionReceipt> {
         match &receipt.state {
             RelayerTransactionState::Unknown(raw) => {
@@ -607,6 +607,7 @@ impl DepositWalletRelayerClient {
             RelayerTransactionState::New
             | RelayerTransactionState::Executed
             | RelayerTransactionState::Mined => {
+                receipt.owner = Some(owner);
                 self.record_inflight_transaction(
                     owner,
                     payload_hash,
