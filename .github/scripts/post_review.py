@@ -17,6 +17,7 @@ INLINE_MARKER = "<!-- codex-review-inline -->"
 MAX_INLINE_COMMENTS = 50
 RESOLVE_BATCH_SIZE = 3
 TRUSTED_USER = "DongwonTTuna"
+TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna",)
 
 
 def require_env(name: str) -> str:
@@ -29,6 +30,10 @@ def require_env(name: str) -> str:
 def trim_text(value: Any, limit: int) -> str:
     text = "" if value is None else str(value)
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
+
+
+def is_trusted_codex_review_author(author: str) -> bool:
+    return author in TRUSTED_CODEX_REVIEW_AUTHORS or author.endswith("[bot]")
 
 
 def github_api(path: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
@@ -611,7 +616,7 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
             commit_oid = ((comment.get("commit") or {}).get("oid")) or ""
             if INLINE_MARKER not in body:
                 continue
-            if not author.endswith("[bot]"):
+            if not is_trusted_codex_review_author(author):
                 continue
             if commit_oid == head_sha:
                 continue
