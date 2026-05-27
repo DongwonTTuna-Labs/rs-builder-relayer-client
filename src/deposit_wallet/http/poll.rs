@@ -215,6 +215,7 @@ impl DepositWalletRelayerClient {
                     }
                     if let Some((owner, record)) = terminal_evidence {
                         if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                             return Err(RelayerError::reconciliation_required(format!(
                                 "confirmed owner-scoped recovery transaction {} did not prove the ambiguous submit payload; manual reconciliation required",
@@ -232,6 +233,7 @@ impl DepositWalletRelayerClient {
                 RelayerTransactionState::Invalid => {
                     if let Some((owner, record)) = terminal_evidence {
                         if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                         } else {
                             self.clear_transaction_block_if_current(
@@ -249,6 +251,7 @@ impl DepositWalletRelayerClient {
                 RelayerTransactionState::Failed => {
                     if let Some((owner, record)) = terminal_evidence {
                         if record.source == OwnerTransactionSource::OwnerRecovery {
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                         } else {
                             self.clear_transaction_block_if_current(

@@ -19,7 +19,8 @@
     use super::redaction::{recovered_payload_hash, signed_digest_payload_hash};
     use super::response::{parse_transaction_response, validate_transaction_id};
     use super::state::{
-        OwnerMutationBlock, OwnerMutationState, OwnerTransactionRecord, OwnerTransactionSource,
+        OwnerMutationBlock, OwnerMutationState, OwnerTransactionRecord,
+        OwnerTransactionSource, OwnerTransactionTerminalObservation,
     };
     use super::transport::retry_after_duration_at;
 
@@ -374,13 +375,23 @@
             .ambiguous_submit_block(owner)
             .expect("test owner should have an ambiguous submit block");
         let transaction_id = {
-            let state = client.mutation_state().expect("test state should be readable");
-            state
+            let mut state = client.mutation_state().expect("test state should be readable");
+            let transaction_id = state
                 .transaction_owners
                 .iter()
                 .find(|(_, record)| record.owner == owner && record.payload_hash == payload_hash)
                 .map(|(transaction_id, _)| transaction_id.clone())
-                .unwrap_or_else(|| "tx-manual-reconciliation".to_string())
+                .unwrap_or_else(|| "tx-manual-reconciliation".to_string());
+            if state.transaction_owners.contains_key(&transaction_id) {
+                state.terminal_observations.insert(
+                    transaction_id.clone(),
+                    OwnerTransactionTerminalObservation {
+                        observed_state: RelayerTransactionState::Failed,
+                        transaction_hash: None,
+                    },
+                );
+            }
+            transaction_id
         };
         submit_reconciliation_evidence_for_payload_and_transaction(owner, payload_hash, transaction_id)
     }

@@ -762,13 +762,10 @@ use super::*;
 #[tokio::test]
     async fn partial_submit_response_records_owner_scoped_ambiguous_block_until_cleared() {
         let owner = address(WALLET_CREATE_OWNER);
-        let (url, handle) = spawn_server(vec![
-            TestResponse::json(
-                "200 OK",
-                json!({"transactionID": "", "state": "STATE_NEW"}).to_string(),
-            ),
-            TestResponse::json("200 OK", json!({"nonce": "32"}).to_string()),
-        ])
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "", "state": "STATE_NEW"}).to_string(),
+        )])
         .await;
         let client = test_client(url);
 
@@ -831,19 +828,19 @@ use super::*;
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
 
-        client
+        let error = client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for(&client, owner),
                 manual_reconciliation_permit_token_for(owner),
             )
-            .unwrap();
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
-        assert_eq!(nonce, U256::from(32u64));
+            .unwrap_err();
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
 
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, SUBMIT_PATH);
-        assert!(requests[1].path.contains("/nonce?address="));
     }
 
 #[tokio::test]
@@ -1087,7 +1084,12 @@ use super::*;
         assert!(!rendered.contains('\n'));
         assert!(!rendered.contains("STATE_WEIRD"));
         assert!(rendered.contains("<unrecognized relayer state>"));
+        assert!(rendered.contains("tx-weird"));
         assert!(client.ambiguous_submit_block(owner).is_some());
+        assert_eq!(
+            client.ambiguous_submit_transaction_ids(owner),
+            vec!["tx-weird".to_string()]
+        );
         let _ = handle.await.unwrap();
     }
 

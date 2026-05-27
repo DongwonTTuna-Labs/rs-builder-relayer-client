@@ -273,6 +273,14 @@ impl DepositWalletSubmitReconciliationEvidence {
     pub fn transaction_id(&self) -> &str {
         &self.observation.transaction_id
     }
+
+    pub(super) fn observed_state(&self) -> &RelayerTransactionState {
+        &self.observation.observed_state
+    }
+
+    pub(super) fn transaction_hash(&self) -> Option<&str> {
+        self.observation.transaction_hash.as_deref()
+    }
 }
 
 impl fmt::Debug for DepositWalletSubmitReconciliationEvidence {
