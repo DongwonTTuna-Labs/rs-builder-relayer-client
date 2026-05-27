@@ -98,6 +98,34 @@ use super::*;
     }
 
 #[test]
+    fn poisoned_owner_mutation_state_blocks_follow_up_mutations_after_drop() {
+        let signed = signed_wallet_batch();
+        let owner = signed.owner();
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = signed_digest_payload_hash(signed.digest());
+        let reservation = client
+            .reserve_owner_submit(owner, payload_hash.clone())
+            .unwrap();
+        let state = Arc::clone(&client.mutation_state);
+
+        let poison = std::panic::catch_unwind(move || {
+            let _guard = state.lock().unwrap();
+            panic!("poison owner mutation state for regression coverage");
+        });
+        assert!(poison.is_err());
+        drop(reservation);
+
+        let blocked = match client.reserve_owner_submit(owner, "payload:after-poison".to_string()) {
+            Ok(_) => panic!("poisoned mutation state should block follow-up submit reservation"),
+            Err(error) => error,
+        };
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let unblocked = client.ensure_owner_unblocked(owner).unwrap_err();
+        assert!(error_has_prefix(&unblocked, RECONCILIATION_REQUIRED_PREFIX));
+    }
+
+#[test]
     fn nonce_read_promotion_replaces_nonce_read_with_submit_block() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =

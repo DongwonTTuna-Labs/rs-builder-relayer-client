@@ -771,7 +771,10 @@ mod tests {
 
     use super::*;
 
-    const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
+    const TEST_SERVER_ACCEPT_TIMEOUT: Duration = Duration::from_secs(10);
+    const TEST_SERVER_IO_TIMEOUT: Duration = Duration::from_secs(10);
+    const TEST_SERVER_JOIN_TIMEOUT: Duration = Duration::from_secs(30);
+    const TEST_CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
     #[tokio::test]
     async fn legacy_submit_maps_429_to_unit_quota_exhausted() {
@@ -780,12 +783,12 @@ mod tests {
             .expect("test server should bind");
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let (mut stream, _) = timeout(TEST_SERVER_TIMEOUT, listener.accept())
+            let (mut stream, _) = timeout(TEST_SERVER_ACCEPT_TIMEOUT, listener.accept())
                 .await
                 .expect("server accept should not hang")
                 .expect("server should accept");
             let mut buffer = [0u8; 1024];
-            let read = timeout(TEST_SERVER_TIMEOUT, stream.read(&mut buffer))
+            let read = timeout(TEST_SERVER_IO_TIMEOUT, stream.read(&mut buffer))
                 .await
                 .expect("request read should not hang")
                 .expect("request should read");
@@ -808,7 +811,7 @@ mod tests {
                 .unwrap();
         let client = RelayClient {
             http: Client::builder()
-                .timeout(Duration::from_secs(2))
+                .timeout(TEST_CLIENT_TIMEOUT)
                 .build()
                 .unwrap(),
             base_url: format!("http://{addr}"),
@@ -834,7 +837,7 @@ mod tests {
         let error = client.submit(request).await.unwrap_err();
 
         assert!(matches!(error, RelayerError::QuotaExhausted));
-        timeout(TEST_SERVER_TIMEOUT, server)
+        timeout(TEST_SERVER_JOIN_TIMEOUT, server)
             .await
             .expect("server task should not hang")
             .unwrap();

@@ -108,10 +108,9 @@ Consumer adapter migration status for PR #8:
 
 Nonce API migration status for PR #12:
 
-- future production signing flows must use a crate-trusted
-  `get_wallet_nonce_with_lease`, sign the batch with
-  `DepositWalletNonceLease::nonce()`, and consume the same lease via
-  `submit_signed_wallet_batch_with_nonce_lease`;
+- this PR does not expose a production-capable nonce lease API. Future
+  production signing must use a crate-owned nonce lease capability, then sign
+  the batch with the returned nonce and consume the same lease through submit;
 - `get_wallet_nonce` remains a compatibility/read-only diagnostic API for
   loopback tests and non-production inspection, but production bare nonce reads
   are rejected before HTTP so a consumer cannot fetch a nonce, drop the owner

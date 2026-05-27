@@ -110,12 +110,15 @@ use super::*;
 #[test]
     fn wallet_nonce_parser_rejects_invalid_boundaries() {
         let too_large = format!("{}0", U256::MAX);
+        let too_many_digits = "0".repeat(79);
         for value in [
+            json!(""),
             json!("not-decimal"),
             json!("-1"),
             serde_json::from_str::<serde_json::Value>("-1").unwrap(),
             serde_json::from_str::<serde_json::Value>("1.5").unwrap(),
             serde_json::from_str::<serde_json::Value>("1e3").unwrap(),
+            json!(too_many_digits),
             json!(too_large.clone()),
             serde_json::from_str::<serde_json::Value>(&too_large).unwrap(),
         ] {
@@ -320,6 +323,32 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn get_transaction_parse_errors_do_not_echo_response_values() {
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": 123,
+                "state": "STATE_CONFIRMED",
+                "metadata": "raw-relayer-secret-fragment"
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client.get_transaction("tx-redacted").await.unwrap_err();
+        let rendered = error.to_string();
+
+        assert!(rendered.contains("could not parse transaction response object"));
+        assert!(!rendered.contains("raw-relayer-secret-fragment"));
+        assert!(!rendered.contains("STATE_CONFIRMED"));
+        assert!(!rendered.contains("123"));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/transaction?id=tx-redacted");
+    }
+
+#[tokio::test]
     async fn get_transaction_is_read_only_and_does_not_clear_owner_blocks() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![
@@ -371,7 +400,8 @@ use super::*;
         let error = client.get_transaction("tx-array").await.unwrap_err();
 
         assert!(matches!(error, RelayerError::Other(_)));
-        assert!(error.to_string().contains("trailing characters"));
+        assert!(error.to_string().contains("could not parse transaction response array"));
+        assert!(!error.to_string().contains("trailing"));
         let requests = handle.await.unwrap();
         assert_eq!(requests[0].path, "/transaction?id=tx-array");
     }

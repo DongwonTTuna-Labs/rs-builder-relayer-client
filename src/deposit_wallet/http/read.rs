@@ -5,6 +5,8 @@ use super::response::{
 use super::redaction::{sanitized_external_token, unknown_state_error_summary};
 use super::state::OwnerNonceReadReservation;
 
+const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
+
 #[derive(Deserialize)]
 pub(super) struct WalletNonceResponse {
     nonce: serde_json::Value,
@@ -53,8 +55,8 @@ impl DepositWalletRelayerClient {
     /// Fetches a WALLET nonce without returning an owner-scoped lease.
     ///
     /// This compatibility API is limited to test-loopback and non-production
-    /// diagnostics. Production signing must use
-    /// [`Self::get_wallet_nonce_with_lease`] so the owner reservation survives
+    /// diagnostics. Production signing is not enabled in this PR; a later
+    /// crate-owned nonce lease capability must keep the owner reservation alive
     /// through signing and submit.
     pub async fn get_wallet_nonce(
         &self,
@@ -64,7 +66,7 @@ impl DepositWalletRelayerClient {
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
         if self.base_url.is_production_host() {
             return Err(RelayerError::mutation_blocked(
-                "production WALLET nonce reads for signing require DepositWalletNonceLease; use get_wallet_nonce_with_lease"
+                "production WALLET nonce reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
                     .to_string(),
             ));
         }
@@ -74,6 +76,10 @@ impl DepositWalletRelayerClient {
 
     /// Fetches a WALLET nonce and returns the owner-scoped lease that must be
     /// consumed by [`Self::submit_signed_wallet_batch_with_nonce_lease`].
+    ///
+    /// This PR does not expose a public production permit for this method.
+    /// Production signing needs a later crate-owned capability so consumers do
+    /// not replace the owner lease with an out-of-band nonce reader.
     pub async fn get_wallet_nonce_with_lease(
         &self,
         owner: Address,
@@ -112,7 +118,7 @@ impl DepositWalletRelayerClient {
             .append_pair("type", request.nonce_type());
         let response = self.send(Method::GET, url, None).await?;
         let nonce = serde_json::from_slice::<WalletNonceResponse>(&response)
-            .map_err(|e| RelayerError::Other(format!("could not parse WALLET nonce: {e}")))?;
+            .map_err(|_| RelayerError::Other("could not parse WALLET nonce".to_string()))?;
         parse_wallet_nonce_value(nonce.nonce)
     }
 
@@ -213,6 +219,15 @@ pub(super) fn parse_wallet_nonce_value(value: serde_json::Value) -> Result<U256>
 }
 
 fn parse_wallet_nonce_decimal(raw: &str) -> Result<U256> {
-    U256::from_dec_str(raw)
-        .map_err(|e| RelayerError::Other(format!("invalid WALLET nonce: {e}")))
+    if raw.is_empty()
+        || raw.len() > MAX_WALLET_NONCE_DECIMAL_DIGITS
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(RelayerError::Other(
+            "invalid WALLET nonce: expected 1-78 ASCII decimal digits".to_string(),
+        ));
+    }
+    U256::from_dec_str(raw).map_err(|_| {
+        RelayerError::Other("invalid WALLET nonce: outside U256 range".to_string())
+    })
 }

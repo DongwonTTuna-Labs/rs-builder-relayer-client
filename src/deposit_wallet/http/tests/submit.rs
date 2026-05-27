@@ -733,7 +733,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn submit_wallet_create_accepts_single_item_array_response() {
+    async fn submit_wallet_create_rejects_single_item_array_response() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
@@ -746,14 +746,14 @@ use super::*;
         .await;
         let client = test_client(url);
 
-        let receipt = client
+        let error = client
             .submit_wallet_create(owner, mutation_permit())
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(receipt.transaction_id, "tx-array-submit");
-        assert_eq!(receipt.state, RelayerTransactionState::New);
-        assert!(client.ambiguous_submit_block(owner).is_none());
+        assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, SUBMIT_PATH);
@@ -762,7 +762,7 @@ use super::*;
 #[tokio::test]
     async fn submit_array_response_failures_keep_owner_blocked() {
         let cases = [
-            ("empty", json!([]), None),
+            ("empty", json!([])),
             (
                 "multi",
                 json!([
@@ -775,7 +775,6 @@ use super::*;
                         "state": "STATE_NEW"
                     }
                 ]),
-                None,
             ),
             (
                 "single-unusable",
@@ -783,7 +782,6 @@ use super::*;
                     "transactionID": "tx-array-salvaged",
                     "state": {"raw": "STATE_UNUSABLE"}
                 }]),
-                Some("tx-array-salvaged"),
             ),
             (
                 "invalid-transaction-id",
@@ -791,11 +789,10 @@ use super::*;
                     "transactionID": "bad\ntransaction",
                     "state": "STATE_NEW"
                 }]),
-                None,
             ),
         ];
 
-        for (label, body, expected_transaction_id) in cases {
+        for (label, body) in cases {
             let owner = address(WALLET_CREATE_OWNER);
             let (url, handle) =
                 spawn_server(vec![TestResponse::json("200 OK", body.to_string())]).await;
@@ -814,13 +811,10 @@ use super::*;
                 client.ambiguous_submit_block(owner).is_some(),
                 "{label} array response should keep owner blocked"
             );
-            if let Some(transaction_id) = expected_transaction_id {
-                assert_eq!(
-                    client.ambiguous_submit_transaction_ids(owner),
-                    vec![transaction_id.to_string()],
-                    "{label} array response should salvage the transaction id"
-                );
-            }
+            assert!(
+                client.ambiguous_submit_transaction_ids(owner).is_empty(),
+                "{label} array response should not be accepted as a transaction record"
+            );
             let duplicate = client
                 .submit_wallet_create(owner, mutation_permit())
                 .await

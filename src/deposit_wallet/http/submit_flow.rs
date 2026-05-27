@@ -35,10 +35,9 @@ impl DepositWalletRelayerClient {
     ///
     /// This compatibility boundary does not add a second nonce GET because that
     /// would serialize every WALLET submit behind an extra relayer roundtrip.
-    /// Future production live-submit flows should use
-    /// [`Self::get_wallet_nonce_with_lease`] and
-    /// [`Self::submit_signed_wallet_batch_with_nonce_lease`] so nonce fetch,
-    /// signing, and submit share one owner-scoped lease.
+    /// This PR does not expose a production-capable nonce lease API. A future
+    /// live-submit change should add a crate-owned lease capability so nonce
+    /// fetch, signing, and submit share one owner-scoped lease.
     pub async fn submit_signed_wallet_batch(
         &self,
         signed: SignedDepositWalletBatch,
