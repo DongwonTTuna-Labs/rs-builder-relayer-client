@@ -123,12 +123,11 @@ impl DepositWalletRelayerClient {
                 }
                 Err(error) => {
                     if let Some(transaction_id) = extract_submit_transaction_id(&response) {
-                        self.record_inflight_transaction(
+                        self.record_transaction_owner(
+                            &transaction_id,
                             owner,
                             payload_hash.clone(),
-                            transaction_id.clone(),
                         )?;
-                        reservation.disarm();
                         return Err(RelayerError::ambiguous_submit(format!(
                             "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required: {}",
                             external_token_hash(&transaction_id),

@@ -41,10 +41,10 @@ pub(super) fn recovered_payload_hash(transaction_id: &str) -> String {
 
 pub(super) fn display_payload_hash(payload_hash: &str) -> String {
     let Some((prefix, hex)) = payload_hash.rsplit_once("0x") else {
-        return sanitized_external_token(payload_hash);
+        return external_token_hash(payload_hash);
     };
     if hex.len() != 64 || !hex.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return sanitized_external_token(payload_hash);
+        return external_token_hash(payload_hash);
     }
     format!("{prefix}0x{}...{}", &hex[..8], &hex[56..])
 }

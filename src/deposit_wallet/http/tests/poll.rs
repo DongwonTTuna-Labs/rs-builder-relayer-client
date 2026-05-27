@@ -93,6 +93,51 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn owner_aware_poll_final_retryable_failure_preserves_known_owner_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-final-retryable-failure";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "429 Too Many Requests",
+            "{}",
+        )
+        .with_header("retry-after", "1")])
+        .await;
+        let client = test_client(url);
+        client
+            .record_inflight_transaction(
+                owner,
+                "payload:final-retryable-failure".to_string(),
+                transaction_id.to_string(),
+            )
+            .unwrap();
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::QuotaExhausted));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(matches!(
+                state.owner_blocks.get(&owner),
+                Some(OwnerMutationBlock::InFlight {
+                    transaction_id: Some(existing),
+                    ..
+                }) if existing == transaction_id
+            ));
+            assert!(state.transaction_owners.contains_key(transaction_id));
+        }
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
     async fn transient_poll_429_retry_after_uses_larger_policy_or_server_delay() {
         for (transaction_id, retry_after, interval, expected_sleep) in [
             (

@@ -635,7 +635,7 @@ use super::*;
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(error.to_string().contains("transaction id hash"));
         assert!(!error.to_string().contains("tx-salvaged-submit"));
-        assert!(client.ambiguous_submit_block(owner).is_none());
+        assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 

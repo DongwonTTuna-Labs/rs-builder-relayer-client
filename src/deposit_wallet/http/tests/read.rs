@@ -42,6 +42,7 @@ use super::*;
     fn wallet_nonce_parser_accepts_u256_string_and_number_equivalently() {
         let raw = "18446744073709551616";
         let expected = U256::from_dec_str(raw).unwrap();
+        let max = U256::MAX.to_string();
 
         let string_nonce =
             super::super::read::parse_wallet_nonce_value(json!(raw)).unwrap();
@@ -52,6 +53,13 @@ use super::*;
 
         assert_eq!(string_nonce, expected);
         assert_eq!(numeric_nonce, expected);
+        assert_eq!(
+            super::super::read::parse_wallet_nonce_value(
+                serde_json::from_str::<serde_json::Value>(&max).unwrap()
+            )
+            .unwrap(),
+            U256::MAX
+        );
     }
 
 #[test]
@@ -62,6 +70,7 @@ use super::*;
             json!("-1"),
             serde_json::from_str::<serde_json::Value>("-1").unwrap(),
             serde_json::from_str::<serde_json::Value>("1.5").unwrap(),
+            serde_json::from_str::<serde_json::Value>("1e3").unwrap(),
             json!(too_large.clone()),
             serde_json::from_str::<serde_json::Value>(&too_large).unwrap(),
         ] {
@@ -190,6 +199,7 @@ use super::*;
         let target = "tx-array-boundary";
         let missing = json!([item("other-tx".to_string())]).to_string();
         let duplicate = json!([item(target.to_string()), item(target.to_string())]).to_string();
+        let invalid = json!([item("bad transaction id".to_string())]).to_string();
         let oversized = json!(
             (0..=MAX_TRANSACTION_RESPONSE_ITEMS)
                 .map(|index| item(format!("other-tx-{index}")))
@@ -197,7 +207,7 @@ use super::*;
         )
         .to_string();
 
-        for body in [missing, duplicate, oversized] {
+        for body in [missing, duplicate, invalid, oversized] {
             let error = parse_transaction_response(target, body.as_bytes())
                 .unwrap_err()
                 .error;
@@ -374,6 +384,9 @@ use super::*;
         let client = test_client(url);
 
         let receipt = client.get_transaction("tx-unknown").await.unwrap();
+        let rendered = format!("{receipt:?}");
+        assert!(!rendered.contains("STATE_WEIRD"));
+        assert!(rendered.contains("<unrecognized relayer state>"));
 
         match receipt.state {
             RelayerTransactionState::Unknown(raw) => {

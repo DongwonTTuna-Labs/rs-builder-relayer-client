@@ -1,5 +1,7 @@
 use super::*;
-use super::redaction::{external_token_hash, redacted_address, sanitized_external_token};
+use super::redaction::{
+    external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
+};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletTransactionReceipt {
@@ -13,10 +15,29 @@ impl fmt::Debug for DepositWalletTransactionReceipt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DepositWalletTransactionReceipt")
             .field("transaction_id", &sanitized_external_token(&self.transaction_id))
-            .field("state", &self.state)
+            .field("state", &ReceiptStateDebug(&self.state))
             .field("transaction_hash", &self.transaction_hash)
             .field("owner", &self.owner.map(redacted_address))
             .finish()
+    }
+}
+
+struct ReceiptStateDebug<'a>(&'a RelayerTransactionState);
+
+impl fmt::Debug for ReceiptStateDebug<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            RelayerTransactionState::New => f.write_str("New"),
+            RelayerTransactionState::Executed => f.write_str("Executed"),
+            RelayerTransactionState::Mined => f.write_str("Mined"),
+            RelayerTransactionState::Confirmed => f.write_str("Confirmed"),
+            RelayerTransactionState::Invalid => f.write_str("Invalid"),
+            RelayerTransactionState::Failed => f.write_str("Failed"),
+            RelayerTransactionState::Unknown(raw) => f
+                .debug_tuple("Unknown")
+                .field(&unknown_state_error_summary(raw))
+                .finish(),
+        }
     }
 }
 
@@ -205,7 +226,10 @@ pub(super) fn select_transaction_response_from_array(
                 if count > MAX_TRANSACTION_RESPONSE_ITEMS {
                     return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
                 }
-                if response.response.transaction_id == self.expected_transaction_id {
+                let response_transaction_id =
+                    validate_transaction_id(&response.response.transaction_id)
+                        .map_err(|_| de::Error::custom(TRANSACTION_RESPONSE_INVALID_ID_ERROR))?;
+                if response_transaction_id == self.expected_transaction_id {
                     if matching_response.is_some() {
                         return Err(de::Error::custom(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR));
                     }
@@ -244,6 +268,14 @@ pub(super) fn select_transaction_response_from_array(
                         "transaction response included duplicate requested transaction id hash {}; manual reconciliation required",
                         external_token_hash(expected_transaction_id)
                     )),
+                    None,
+                )
+            } else if message.contains(TRANSACTION_RESPONSE_INVALID_ID_ERROR) {
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(
+                        "transaction response included an invalid transactionID; manual reconciliation required"
+                            .to_string(),
+                    ),
                     None,
                 )
             } else {

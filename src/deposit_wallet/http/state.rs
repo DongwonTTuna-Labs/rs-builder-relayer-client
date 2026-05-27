@@ -81,6 +81,19 @@ impl OwnerMutationBlock {
             }
         }
     }
+
+    pub(super) fn created_at_unix_seconds(&self) -> u64 {
+        match self {
+            Self::InFlight {
+                created_at_unix_seconds,
+                ..
+            }
+            | Self::Ambiguous {
+                created_at_unix_seconds,
+                ..
+            } => *created_at_unix_seconds,
+        }
+    }
 }
 
 pub(super) struct OwnerSubmitReservation {
@@ -191,11 +204,17 @@ impl Drop for OwnerSubmitReservation {
                 clear_owner_block_if_payload(&mut state, self.owner, &self.payload_hash);
             }
             OwnerSubmitReservationDropAction::Ambiguous => {
+                let created_at_unix_seconds = state
+                    .owner_blocks
+                    .get(&self.owner)
+                    .filter(|block| block.payload_hash() == self.payload_hash)
+                    .map(OwnerMutationBlock::created_at_unix_seconds)
+                    .unwrap_or(self.created_at_unix_seconds);
                 state.owner_blocks.insert(
                     self.owner,
                     OwnerMutationBlock::Ambiguous {
                         payload_hash: self.payload_hash.clone(),
-                        created_at_unix_seconds: self.created_at_unix_seconds,
+                        created_at_unix_seconds,
                     },
                 );
             }
@@ -522,12 +541,19 @@ impl DepositWalletRelayerClient {
 
     pub(super) fn record_ambiguous(&self, owner: Address, payload_hash: String) -> Result<()> {
         let mut state = self.mutation_state()?;
-        state
+        let created_at_unix_seconds = state
             .owner_blocks
-            .insert(owner, OwnerMutationBlock::Ambiguous {
+            .get(&owner)
+            .filter(|block| block.payload_hash() == payload_hash)
+            .map(OwnerMutationBlock::created_at_unix_seconds)
+            .unwrap_or_else(|| self.clock.now_unix_seconds());
+        state.owner_blocks.insert(
+            owner,
+            OwnerMutationBlock::Ambiguous {
                 payload_hash,
-                created_at_unix_seconds: self.clock.now_unix_seconds(),
-            });
+                created_at_unix_seconds,
+            },
+        );
         Ok(())
     }
 

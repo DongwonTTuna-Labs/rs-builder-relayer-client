@@ -1,5 +1,14 @@
 use super::*;
 
+#[test]
+    fn display_payload_hash_redacts_noncanonical_payload_values() {
+        let rendered = super::super::redaction::display_payload_hash("secret-token\npayload");
+
+        assert!(rendered.starts_with("sha3:0x"));
+        assert!(!rendered.contains("secret-token"));
+        assert!(!rendered.contains("payload"));
+    }
+
 #[tokio::test]
     async fn manual_clear_rejects_active_submit_before_response() {
         let owner = address(WALLET_CREATE_OWNER);
@@ -86,6 +95,36 @@ use super::*;
 
         drop(reservation);
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+    }
+
+#[test]
+    fn repeated_ambiguous_recording_preserves_original_block_timestamp() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::Ambiguous {
+                    payload_hash: "payload:old-boundary".to_string(),
+                    created_at_unix_seconds: 123,
+                },
+            );
+        }
+
+        client
+            .record_ambiguous(owner, "payload:old-boundary".to_string())
+            .unwrap();
+
+        let state = client.mutation_state().unwrap();
+        assert!(matches!(
+            state.owner_blocks.get(&owner),
+            Some(OwnerMutationBlock::Ambiguous {
+                payload_hash,
+                created_at_unix_seconds: 123,
+            }) if payload_hash == "payload:old-boundary"
+        ));
     }
 
 #[test]
