@@ -124,7 +124,8 @@ impl DepositWalletRelayerClient {
             .await
     }
 
-    pub async fn poll_owner_transaction_with_reconciliation_permit(
+    #[cfg(test)]
+    pub(super) async fn poll_owner_transaction_with_reconciliation_permit(
         &self,
         owner: Address,
         transaction_id: &str,

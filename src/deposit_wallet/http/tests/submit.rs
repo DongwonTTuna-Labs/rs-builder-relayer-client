@@ -164,6 +164,39 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn mutation_scope_rejects_unsupported_contract_config_without_zero_chain_fallback() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
+        let invalid_config = DepositWalletContractConfig {
+            factory: Address::zero(),
+            implementation: Address::zero(),
+        };
+        let clock: Arc<dyn DepositWalletClock> = Arc::new(FixedClock { now: 1_700_000_000 });
+        let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
+        let client = DepositWalletRelayerClient::from_parts(
+            reqwest_client(Duration::from_secs(2)),
+            url,
+            relayer_auth(),
+            invalid_config,
+            clock,
+            sleeper,
+        );
+
+        let error = client
+            .try_mutation_scope(DepositWalletMutationAction::WalletCreate)
+            .unwrap_err();
+        assert!(matches!(error, RelayerError::Signing(_)));
+
+        let error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, RelayerError::Signing(_)));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+    }
+
+#[tokio::test]
     async fn submit_auth_failure_clears_owner_reservation_after_preflight() {
         let owner = address(WALLET_CREATE_OWNER);
         let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();

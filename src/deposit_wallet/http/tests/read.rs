@@ -204,7 +204,7 @@ use super::*;
         let target = "tx-array-boundary";
         let missing = json!([item("other-tx".to_string())]).to_string();
         let duplicate = json!([item(target.to_string()), item(target.to_string())]).to_string();
-        let invalid = json!([item("bad transaction id".to_string())]).to_string();
+        let invalid = json!([item("bad\ntransaction".to_string())]).to_string();
         let oversized = json!(
             (0..=MAX_TRANSACTION_RESPONSE_ITEMS)
                 .map(|index| item(format!("other-tx-{index}")))
@@ -380,11 +380,15 @@ use super::*;
             validate_transaction_id("tx-abc_123.period").unwrap(),
             "tx-abc_123.period"
         );
+        assert_eq!(
+            validate_transaction_id("tx:abc/123+query=value").unwrap(),
+            "tx:abc/123+query=value"
+        );
 
         let too_long = "a".repeat(MAX_TRANSACTION_ID_LEN + 1);
         assert!(validate_transaction_id(&too_long).is_err());
         assert!(validate_transaction_id("").is_err());
-        assert!(validate_transaction_id("tx/abc").is_err());
+        assert!(validate_transaction_id("tx abc").is_err());
         assert!(validate_transaction_id("tx\nabc").is_err());
     }
 

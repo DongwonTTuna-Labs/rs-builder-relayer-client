@@ -328,13 +328,13 @@ pub(super) fn receipt_from_submit_response(
 pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     if transaction_id.is_empty()
         || transaction_id.len() > MAX_TRANSACTION_ID_LEN
+        || transaction_id.trim() != transaction_id
         || !transaction_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            .chars()
+            .all(|character| !character.is_control() && !character.is_whitespace())
     {
         return Err(RelayerError::Other(
-            "transaction id must be 1-128 ASCII alphanumeric, hyphen, underscore, or period characters"
-                .to_string(),
+            "transaction id must be 1-128 non-whitespace, non-control characters".to_string(),
         ));
     }
 

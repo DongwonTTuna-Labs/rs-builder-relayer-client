@@ -139,14 +139,26 @@ impl DepositWalletRelayerClient {
         }
     }
 
-    pub fn mutation_scope(&self, action: DepositWalletMutationAction) -> DepositWalletMutationScope {
-        DepositWalletMutationScope::new(
-            deposit_wallet_contract_chain_id(self.config).unwrap_or(0),
+    pub fn try_mutation_scope(
+        &self,
+        action: DepositWalletMutationAction,
+    ) -> Result<DepositWalletMutationScope> {
+        let chain_id = deposit_wallet_contract_chain_id(self.config)?;
+        Ok(DepositWalletMutationScope::new(
+            chain_id,
             self.config.factory,
             self.config.implementation,
             self.base_url.mutation_environment(),
             action,
-        )
+        ))
+    }
+
+    pub fn mutation_scope(
+        &self,
+        action: DepositWalletMutationAction,
+    ) -> DepositWalletMutationScope {
+        self.try_mutation_scope(action)
+            .expect("deposit wallet relayer client config must resolve to a supported chain id")
     }
 }
 

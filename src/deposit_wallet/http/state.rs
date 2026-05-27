@@ -269,7 +269,7 @@ impl DepositWalletRelayerClient {
                 validate_reconciliation_evidence(
                     &evidence,
                     &permit,
-                    self.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+                    self.try_mutation_scope(DepositWalletMutationAction::ManualReconciliation)?,
                     created_at_unix_seconds,
                     self.clock.now_unix_seconds(),
                 )?;
@@ -387,7 +387,7 @@ impl DepositWalletRelayerClient {
                 validate_idless_reconciliation_evidence(
                     &evidence,
                     &permit,
-                    self.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+                    self.try_mutation_scope(DepositWalletMutationAction::ManualReconciliation)?,
                     created_at_unix_seconds,
                     self.clock.now_unix_seconds(),
                 )?;
@@ -918,7 +918,7 @@ impl DepositWalletRelayerClient {
         action: DepositWalletMutationAction,
     ) -> Result<()> {
         validate_permit_owner(permit, owner)?;
-        validate_permit_scope(permit, self.mutation_scope(action))?;
+        validate_permit_scope(permit, self.try_mutation_scope(action)?)?;
         validate_permit_fresh(permit, self.clock.now_unix_seconds())
     }
 
