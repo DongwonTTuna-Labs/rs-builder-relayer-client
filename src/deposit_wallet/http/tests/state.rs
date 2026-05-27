@@ -348,6 +348,12 @@ use super::*;
             )
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash.clone()));
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state.transaction_owners.contains_key("tx-known-terminal"));
+            assert!(!state.terminal_observations.contains_key("tx-known-terminal"));
+        }
 
         {
             let mut state = client.mutation_state().unwrap();
@@ -369,6 +375,12 @@ use super::*;
             )
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash.clone()));
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state.transaction_owners.contains_key("tx-known-terminal"));
+            assert!(state.terminal_observations.contains_key("tx-known-terminal"));
+        }
 
         {
             let mut state = client.mutation_state().unwrap();

@@ -4,8 +4,8 @@ use polymarket_relayer::{
     DepositWalletMutationAction, DepositWalletMutationGate, DepositWalletMutationPermit,
     DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
     DepositWalletRelayerUrl, DepositWalletSubmitReconciliationEvidence,
-    DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt,
-    DepositWalletWalletNonceEvidence, RelayerKeyAuth, RelayerTransactionState,
+    DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    RelayerTransactionState,
 };
 
 #[test]
@@ -61,7 +61,6 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
         transaction_hash: None,
         owner: None,
     };
-    let nonce_evidence: Option<DepositWalletWalletNonceEvidence> = None;
 
     let rendered = format!("{client:?}");
     assert!(rendered.contains("DepositWalletRelayerClient"));
@@ -73,6 +72,5 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
         reconciliation,
         idless_reconciliation,
         receipt,
-        nonce_evidence,
     );
 }

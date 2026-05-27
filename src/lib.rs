@@ -23,8 +23,7 @@ pub use deposit_wallet::{
     DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
     DepositWalletRelayerUrl, DepositWalletRequestContext, DepositWalletSubmitReconciliationEvidence,
     DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt,
-    DepositWalletWalletNonceEvidence, RelayerKeyAuth, RelayerSubmitResponse,
-    RelayerTransactionState, WalletNonceRequest,
+    RelayerKeyAuth, RelayerSubmitResponse, RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

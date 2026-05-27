@@ -155,6 +155,9 @@ use super::*;
 
         let error = client.get_transaction("tx-array").await.unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(error.to_string().contains("id hash"));
+        assert!(!error.to_string().contains("other-tx"));
+        assert!(!error.to_string().contains("tx-array"));
         let _ = handle.await.unwrap();
 
         let (url, handle) = spawn_server(vec![TestResponse::json(
@@ -173,6 +176,9 @@ use super::*;
 
         let error = client.get_transaction("tx-array").await.unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(error.to_string().contains("id hash"));
+        assert!(!error.to_string().contains("other-tx"));
+        assert!(!error.to_string().contains("tx-array"));
         let _ = handle.await.unwrap();
 
         let (url, handle) = spawn_server(vec![TestResponse::json(

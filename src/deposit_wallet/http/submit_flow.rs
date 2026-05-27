@@ -1,10 +1,9 @@
 use super::*;
 use super::redaction::{
-    display_payload_hash, payload_hash_summary, redacted_address, sanitized_external_token,
+    display_payload_hash, external_token_hash, payload_hash_summary, redacted_address,
     signed_digest_payload_hash,
 };
-use super::permit::validate_wallet_nonce_evidence;
-use super::response::parse_submit_response;
+use super::response::{extract_submit_transaction_id, parse_submit_response};
 use super::state::OwnerSubmitReservation;
 
 impl DepositWalletRelayerClient {
@@ -32,36 +31,16 @@ impl DepositWalletRelayerClient {
     /// As with [`Self::submit_wallet_create`], the public production API remains
     /// default-deny in this PR. Production submit enablement is intentionally
     /// reserved for a later live-submit change with durable owner state.
+    ///
+    /// This boundary re-fetches the current WALLET nonce immediately before
+    /// POST and rejects stale signed batches. It does not make a pre-signed
+    /// batch live-capable or prove signing-time nonce freshness for production;
+    /// that requires a future flow that binds nonce fetch, signing, and submit
+    /// under a durable owner-scoped capability.
     pub async fn submit_signed_wallet_batch(
         &self,
         signed: SignedDepositWalletBatch,
         gate: DepositWalletMutationGate,
-    ) -> Result<DepositWalletTransactionReceipt> {
-        self.submit_signed_wallet_batch_with_nonce_check(signed, gate, None)
-            .await
-    }
-
-    /// Submits a signed `WALLET` batch using caller-provided nonce evidence
-    /// from [`Self::get_wallet_nonce_with_evidence`].
-    ///
-    /// This avoids a second nonce GET on latency-sensitive paths while keeping
-    /// the owner-scoped mutation permit and evidence freshness checks in the
-    /// submit boundary.
-    pub async fn submit_signed_wallet_batch_with_nonce_evidence(
-        &self,
-        signed: SignedDepositWalletBatch,
-        gate: DepositWalletMutationGate,
-        nonce_evidence: DepositWalletWalletNonceEvidence,
-    ) -> Result<DepositWalletTransactionReceipt> {
-        self.submit_signed_wallet_batch_with_nonce_check(signed, gate, Some(nonce_evidence))
-            .await
-    }
-
-    async fn submit_signed_wallet_batch_with_nonce_check(
-        &self,
-        signed: SignedDepositWalletBatch,
-        gate: DepositWalletMutationGate,
-        nonce_evidence: Option<DepositWalletWalletNonceEvidence>,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
@@ -70,35 +49,19 @@ impl DepositWalletRelayerClient {
         let preflight_hash = signed_digest_payload_hash(signed.digest());
         let mut reservation = self.reserve_owner_submit(owner, preflight_hash)?;
 
-        match nonce_evidence {
-            Some(evidence) => {
-                if let Err(error) = validate_wallet_nonce_evidence(
-                    &evidence,
-                    owner,
-                    self.mutation_scope(DepositWalletMutationAction::WalletBatch),
-                    signed.nonce(),
-                    self.clock.now_unix_seconds(),
-                ) {
-                    reservation.clear()?;
-                    return Err(error);
-                }
+        let nonce = match self.fetch_wallet_nonce(owner).await {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                reservation.clear()?;
+                return Err(error);
             }
-            None => {
-                let nonce = match self.fetch_wallet_nonce(owner).await {
-                    Ok(nonce) => nonce,
-                    Err(error) => {
-                        reservation.clear()?;
-                        return Err(error);
-                    }
-                };
-                if nonce != signed.nonce() {
-                    reservation.clear()?;
-                    return Err(RelayerError::Signing(
-                        "signed deposit wallet batch nonce does not match current WALLET nonce"
-                            .to_string(),
-                    ));
-                }
-            }
+        };
+        if nonce != signed.nonce() {
+            reservation.clear()?;
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce does not match current WALLET nonce"
+                    .to_string(),
+            ));
         }
         if let Err(error) =
             self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)
@@ -159,6 +122,21 @@ impl DepositWalletRelayerClient {
                     result
                 }
                 Err(error) => {
+                    if let Some(transaction_id) = extract_submit_transaction_id(&response) {
+                        self.record_inflight_transaction(
+                            owner,
+                            payload_hash.clone(),
+                            transaction_id.clone(),
+                        )?;
+                        reservation.disarm();
+                        return Err(RelayerError::ambiguous_submit(format!(
+                            "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required: {}",
+                            external_token_hash(&transaction_id),
+                            redacted_address(owner),
+                            display_payload_hash(&payload_hash),
+                            error
+                        )));
+                    }
                     self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                     Err(RelayerError::ambiguous_submit(format!(
                     "submit response did not include a usable transactionID for owner {} payload {}: {}",
@@ -170,11 +148,24 @@ impl DepositWalletRelayerClient {
             },
             Err(RelayerError::Http(error)) => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
+                let category = if error.is_timeout() {
+                    "timeout"
+                } else if error.is_connect() {
+                    "connect"
+                } else if error.is_body() {
+                    "body"
+                } else if error.is_decode() {
+                    "decode"
+                } else if error.is_request() {
+                    "request"
+                } else {
+                    "transport"
+                };
                 Err(RelayerError::ambiguous_submit(format!(
-                    "submit transport failed for owner {} payload {}; retry status is ambiguous: {}",
+                    "submit transport failed for owner {} payload {}; retry status is ambiguous; transport category: {}",
                     redacted_address(owner),
                     display_payload_hash(&payload_hash),
-                    sanitized_external_token(&error.to_string())
+                    category
                 )))
             }
             Err(RelayerError::Api {

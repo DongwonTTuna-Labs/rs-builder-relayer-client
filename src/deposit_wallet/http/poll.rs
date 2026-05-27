@@ -160,7 +160,10 @@ impl DepositWalletRelayerClient {
             let parsed = match self.fetch_transaction_for_poll(&transaction_id).await {
                 Ok(parsed) => parsed,
                 Err(poll_error) => {
-                    if is_transient_poll_error(&poll_error.error) && attempt + 1 < policy.max_attempts {
+                    if (poll_error.retryable_absence
+                        || is_transient_poll_error(&poll_error.error))
+                        && attempt + 1 < policy.max_attempts
+                    {
                         let policy_interval =
                             policy.interval_for_transaction_attempt(&transaction_id, attempt);
                         let sleep_for = poll_error
@@ -210,6 +213,15 @@ impl DepositWalletRelayerClient {
                             "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
                             transaction_id_for_error
                         )));
+                    }
+                    if let Some(owner) = owner_to_verify {
+                        if trusted_owner_recovery && terminal_evidence.is_none() {
+                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            return Err(RelayerError::reconciliation_required(format!(
+                                "confirmed owner-scoped recovery transaction {} did not prove the ambiguous submit payload; manual reconciliation required",
+                                transaction_id_for_error
+                            )));
+                        }
                     }
                     if let Some((owner, record)) = terminal_evidence {
                         if record.source == OwnerTransactionSource::OwnerRecovery {
@@ -310,7 +322,7 @@ pub(super) fn is_transient_poll_error(error: &RelayerError) -> bool {
     match error {
         RelayerError::QuotaExhausted | RelayerError::Timeout | RelayerError::Http(_) => true,
         RelayerError::Api { status, .. } => {
-            matches!(*status, 408 | 425 | 429) || (500..=599).contains(status)
+            matches!(*status, 404 | 408 | 425 | 429) || (500..=599).contains(status)
         }
         RelayerError::Other(message) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => false,
         _ => false,

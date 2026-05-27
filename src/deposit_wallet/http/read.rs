@@ -15,20 +15,6 @@ impl DepositWalletRelayerClient {
         self.fetch_wallet_nonce(owner).await
     }
 
-    pub async fn get_wallet_nonce_with_evidence(
-        &self,
-        owner: Address,
-    ) -> Result<DepositWalletWalletNonceEvidence> {
-        self.ensure_owner_unblocked(owner)?;
-        let nonce = self.fetch_wallet_nonce(owner).await?;
-        Ok(DepositWalletWalletNonceEvidence::new(
-            owner,
-            self.mutation_scope(DepositWalletMutationAction::WalletBatch),
-            nonce,
-            self.clock.now_unix_seconds(),
-        ))
-    }
-
     pub(super) async fn fetch_wallet_nonce(&self, owner: Address) -> Result<U256> {
         let request = build_wallet_nonce_request(owner);
         let mut url = self.base_url.endpoint(request.path());

@@ -1,5 +1,5 @@
 use super::*;
-use super::redaction::{redacted_address, sanitized_external_token};
+use super::redaction::{external_token_hash, redacted_address, sanitized_external_token};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletTransactionReceipt {
@@ -43,6 +43,7 @@ pub(super) struct PollFetchError {
     pub(super) error: RelayerError,
     pub(super) retry_after: Option<Duration>,
     pub(super) owner: Option<Address>,
+    pub(super) retryable_absence: bool,
 }
 
 impl PollFetchError {
@@ -51,6 +52,7 @@ impl PollFetchError {
             error: error.error,
             retry_after: error.retry_after,
             owner: None,
+            retryable_absence: false,
         }
     }
 
@@ -59,6 +61,7 @@ impl PollFetchError {
             error: error.error,
             retry_after: None,
             owner: error.owner,
+            retryable_absence: error.retryable_absence,
         }
     }
 }
@@ -67,11 +70,24 @@ impl PollFetchError {
 pub(super) struct TransactionParseError {
     pub(super) error: RelayerError,
     pub(super) owner: Option<Address>,
+    pub(super) retryable_absence: bool,
 }
 
 impl TransactionParseError {
     pub(super) fn new(error: RelayerError, owner: Option<Address>) -> Self {
-        Self { error, owner }
+        Self {
+            error,
+            owner,
+            retryable_absence: false,
+        }
+    }
+
+    pub(super) fn retryable_absence(error: RelayerError) -> Self {
+        Self {
+            error,
+            owner: None,
+            retryable_absence: true,
+        }
     }
 }
 
@@ -91,6 +107,18 @@ pub(super) fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransac
     let response = serde_json::from_slice::<RelayerSubmitResponse>(bytes)
         .map_err(|e| RelayerError::Other(format!("could not parse submit response: {e}")))?;
     receipt_from_submit_response(response, None).map(|parsed| parsed.receipt)
+}
+
+pub(super) fn extract_submit_transaction_id(bytes: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SubmitTransactionIdOnly {
+        #[serde(rename = "transactionID", alias = "transactionId")]
+        transaction_id: String,
+    }
+
+    let response = serde_json::from_slice::<SubmitTransactionIdOnly>(bytes).ok()?;
+    validate_transaction_id(&response.transaction_id).ok()
 }
 
 pub(super) fn parse_transaction_response(
@@ -139,9 +167,9 @@ fn parse_verified_transaction_response(
     if response_transaction_id != expected_transaction_id {
         return Err(TransactionParseError::new(
             RelayerError::reconciliation_required(format!(
-                "transaction response id {} did not match requested id {}",
-                sanitized_external_token(&response_transaction_id),
-                sanitized_external_token(expected_transaction_id)
+                "transaction response id hash {} did not match requested id hash {}",
+                external_token_hash(&response_transaction_id),
+                external_token_hash(expected_transaction_id)
             )),
             None,
         ));
@@ -204,12 +232,11 @@ pub(super) fn select_transaction_response_from_array(
                     None,
                 )
             } else if message.contains(TRANSACTION_RESPONSE_MISSING_ID_ERROR) {
-                TransactionParseError::new(
+                TransactionParseError::retryable_absence(
                     RelayerError::reconciliation_required(format!(
-                        "transaction response did not include requested transaction id {}",
-                        sanitized_external_token(expected_transaction_id)
+                        "transaction response did not include requested transaction id hash {}",
+                        external_token_hash(expected_transaction_id)
                     )),
-                    None,
                 )
             } else if message.contains(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR) {
                 TransactionParseError::new(

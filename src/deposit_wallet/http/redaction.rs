@@ -15,6 +15,11 @@ pub(super) fn sanitized_external_token(value: &str) -> String {
     sanitized
 }
 
+pub(super) fn external_token_hash(value: &str) -> String {
+    let hex = hex::encode(keccak256(value.as_bytes()));
+    format!("sha3:0x{}...{}", &hex[..8], &hex[56..])
+}
+
 pub(super) fn unknown_state_error_summary(_value: &str) -> &'static str {
     "<unrecognized relayer state>"
 }

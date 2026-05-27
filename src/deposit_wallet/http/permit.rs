@@ -155,14 +155,6 @@ pub struct DepositWalletIdlessSubmitReconciliationEvidence {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct DepositWalletWalletNonceEvidence {
-    owner: Address,
-    scope: DepositWalletMutationScope,
-    nonce: U256,
-    fetched_at_unix_seconds: u64,
-}
-
-#[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletSubmitReconciliationObservation {
     transaction_id: String,
     observed_state: RelayerTransactionState,
@@ -394,45 +386,6 @@ impl fmt::Debug for DepositWalletIdlessSubmitReconciliationEvidence {
     }
 }
 
-impl DepositWalletWalletNonceEvidence {
-    pub(super) fn new(
-        owner: Address,
-        scope: DepositWalletMutationScope,
-        nonce: U256,
-        fetched_at_unix_seconds: u64,
-    ) -> Self {
-        Self {
-            owner,
-            scope,
-            nonce,
-            fetched_at_unix_seconds,
-        }
-    }
-
-    pub fn owner(&self) -> Address {
-        self.owner
-    }
-
-    pub fn nonce(&self) -> U256 {
-        self.nonce
-    }
-
-    pub fn fetched_at_unix_seconds(&self) -> u64 {
-        self.fetched_at_unix_seconds
-    }
-}
-
-impl fmt::Debug for DepositWalletWalletNonceEvidence {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DepositWalletWalletNonceEvidence")
-            .field("owner", &redacted_address(self.owner))
-            .field("scope", &self.scope)
-            .field("nonce", &self.nonce)
-            .field("fetched_at_unix_seconds", &self.fetched_at_unix_seconds)
-            .finish()
-    }
-}
-
 impl DepositWalletOwnerSerializationEvidence {
     /// Records caller-side proof that same-owner submit work is serialized.
     ///
@@ -643,48 +596,6 @@ pub(super) fn validate_idless_reconciliation_evidence(
     {
         return Err(RelayerError::mutation_blocked(
             "id-less submit reconciliation evidence check time is in the future".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_wallet_nonce_evidence(
-    evidence: &DepositWalletWalletNonceEvidence,
-    owner: Address,
-    expected_scope: DepositWalletMutationScope,
-    expected_nonce: U256,
-    now_unix_seconds: u64,
-) -> Result<()> {
-    if evidence.owner != owner {
-        return Err(RelayerError::mutation_blocked(format!(
-            "wallet nonce evidence owner {} does not match signed batch owner {}",
-            redacted_address(evidence.owner),
-            redacted_address(owner)
-        )));
-    }
-    if evidence.scope != expected_scope {
-        return Err(RelayerError::mutation_blocked(
-            "wallet nonce evidence scope does not match client submit scope".to_string(),
-        ));
-    }
-    if evidence.nonce != expected_nonce {
-        return Err(RelayerError::Signing(
-            "wallet nonce evidence does not match signed deposit wallet batch nonce".to_string(),
-        ));
-    }
-    if evidence.fetched_at_unix_seconds > now_unix_seconds.saturating_add(MAX_EVIDENCE_CLOCK_SKEW_SECONDS)
-    {
-        return Err(RelayerError::mutation_blocked(
-            "wallet nonce evidence fetch time is in the future".to_string(),
-        ));
-    }
-    if now_unix_seconds
-        > evidence
-            .fetched_at_unix_seconds
-            .saturating_add(MAX_OWNER_SERIALIZATION_LEASE_SECONDS)
-    {
-        return Err(RelayerError::mutation_blocked(
-            "wallet nonce evidence is stale".to_string(),
         ));
     }
     Ok(())

@@ -25,7 +25,7 @@ pub use http::{
     DepositWalletMutationScope, DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy,
     DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
-    DepositWalletTransactionReceipt, DepositWalletWalletNonceEvidence, RelayerKeyAuth,
+    DepositWalletTransactionReceipt, RelayerKeyAuth,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

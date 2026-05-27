@@ -69,7 +69,6 @@ pub use permit::{
     DepositWalletMutationEnvironment, DepositWalletMutationGate, DepositWalletMutationPermit,
     DepositWalletMutationScope, DepositWalletOwnerSerializationEvidence,
     DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
-    DepositWalletWalletNonceEvidence,
 };
 pub use poll::DepositWalletPollPolicy;
 pub use response::DepositWalletTransactionReceipt;
@@ -86,6 +85,9 @@ pub struct DepositWalletRelayerClient {
     base_url: DepositWalletRelayerUrl,
     auth: RelayerKeyAuth,
     config: DepositWalletContractConfig,
+    // Process-local mutation state is a bounded backstop and is never held
+    // across `.await`; production submit remains disabled until durable owner
+    // state replaces this in a later live-submit PR.
     mutation_state: Arc<Mutex<OwnerMutationState>>,
     error_body_drain_limiter: ErrorBodyDrainLimiter,
     clock: Arc<dyn DepositWalletClock>,

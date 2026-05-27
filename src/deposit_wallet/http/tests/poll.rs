@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
     async fn polling_keeps_mined_pending_until_confirmed_and_uses_injected_sleeper() {
-        let (result, requests, sleeper, _policy) = poll_sequence(
+        let (result, requests, sleeper, policy) = poll_sequence(
             &[
                 "STATE_NEW",
                 "STATE_EXECUTED",
@@ -20,10 +20,14 @@ use super::*;
             .iter()
             .all(|request| request.path == "/transaction?id=tx-123"));
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps.len(), 3);
-        assert!((Duration::from_millis(100)..=Duration::from_millis(125)).contains(&sleeps[0]));
-        assert!((Duration::from_millis(200)..=Duration::from_millis(250)).contains(&sleeps[1]));
-        assert!((Duration::from_millis(400)..=Duration::from_millis(500)).contains(&sleeps[2]));
+        assert_eq!(
+            sleeps,
+            vec![
+                policy.interval_for_transaction_attempt("tx-123", 0),
+                policy.interval_for_transaction_attempt("tx-123", 1),
+                policy.interval_for_transaction_attempt("tx-123", 2),
+            ]
+        );
         assert_ne!(sleeps[0], Duration::from_millis(100));
 
         let (result, _, _, _) = poll_sequence(&["STATE_INVALID"], 1).await;
@@ -170,6 +174,41 @@ use super::*;
         assert_eq!(sleeper.sleeps(), vec![expected_sleep]);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
+    }
+
+#[tokio::test]
+    async fn poll_retries_absent_transaction_array_and_404_before_confirmed() {
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", json!([]).to_string()),
+            TestResponse::json("404 Not Found", "{}"),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-delayed-visibility", "STATE_CONFIRMED"),
+            ),
+        ])
+        .await;
+        let sleeper = Arc::new(RecordingSleeper::default());
+        let client = test_client_with_sleeper(url, sleeper.clone());
+        let policy = DepositWalletPollPolicy::new(3, Duration::from_millis(100)).unwrap();
+
+        let receipt = client
+            .poll_transaction("tx-delayed-visibility", policy.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(
+            sleeper.sleeps(),
+            vec![
+                policy.interval_for_transaction_attempt("tx-delayed-visibility", 0),
+                policy.interval_for_transaction_attempt("tx-delayed-visibility", 1),
+            ]
+        );
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests
+            .iter()
+            .all(|request| request.path == "/transaction?id=tx-delayed-visibility"));
     }
 
 #[tokio::test]
@@ -756,6 +795,40 @@ use super::*;
         assert_eq!(
             requests[0].path,
             "/transaction?id=tx-recovered-from-ambiguous"
+        );
+    }
+
+#[tokio::test]
+    async fn owner_aware_recovery_permit_requires_payload_identity_before_confirmed_success() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-recovered-without-payload";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response(transaction_id, "STATE_CONFIRMED"),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .poll_owner_transaction_with_reconciliation_permit(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                owner_recovery_poll_permit_for(owner),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(error.to_string().contains("ambiguous submit payload"));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let duplicate = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].path,
+            "/transaction?id=tx-recovered-without-payload"
         );
     }
 
