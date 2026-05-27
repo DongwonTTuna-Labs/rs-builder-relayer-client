@@ -51,6 +51,11 @@ class ResolveCurrentReviewEventTests(unittest.TestCase):
         self.assertEqual(result["base_sha"], "base-sha")
         self.assertEqual(result["trigger"], "pull_request:synchronize")
 
+    def test_trusted_pull_request_target_runs(self):
+        result = self.resolve(pr_payload(), event_name="pull_request_target")
+        self.assertEqual(result["should_run"], "true")
+        self.assertEqual(result["trigger"], "pull_request_target:synchronize")
+
     def test_skips_untrusted_triggering_actor(self):
         result = self.resolve(pr_payload(), triggering_actor="somebody-else")
         self.assertEqual(result["should_run"], "false")
@@ -118,6 +123,12 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
 
     def test_trusted_pull_request_collects(self):
         result = self.resolve(pr_payload())
+        self.assertEqual(result["should_collect"], "true")
+        self.assertEqual(result["pr_number"], "54")
+        self.assertEqual(result["base_sha"], "base-sha")
+
+    def test_trusted_pull_request_target_collects(self):
+        result = self.resolve(pr_payload(), event_name="pull_request_target")
         self.assertEqual(result["should_collect"], "true")
         self.assertEqual(result["pr_number"], "54")
         self.assertEqual(result["base_sha"], "base-sha")

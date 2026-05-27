@@ -179,7 +179,7 @@ def resolve_current_review_event(
     if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
         return skipped_current_review()
 
-    if event_name == "pull_request":
+    if event_name in {"pull_request", "pull_request_target"}:
         pr = event.get("pull_request") or {}
         sender = (event.get("sender") or {}).get("login")
         base_ref = ((pr.get("base") or {}).get("ref")) or ""
@@ -200,7 +200,7 @@ def resolve_current_review_event(
             "head_sha": str(pr["head"]["sha"]),
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
-            "trigger": f"pull_request:{event.get('action', '')}",
+            "trigger": f"{event_name}:{event.get('action', '')}",
         }
 
     if event_name == "issue_comment":
@@ -237,7 +237,7 @@ def resolve_previous_review_event(
     actor: str,
     triggering_actor: str,
 ) -> dict[str, str]:
-    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER or event_name != "pull_request":
+    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER or event_name not in {"pull_request", "pull_request_target"}:
         return skipped_resolve_checker()
     pr = event.get("pull_request") or {}
     base_ref = ((pr.get("base") or {}).get("ref")) or ""
