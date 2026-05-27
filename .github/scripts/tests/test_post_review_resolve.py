@@ -1,6 +1,11 @@
+import argparse
 import importlib.util
+import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "post_review.py"
@@ -144,6 +149,102 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
         for event, overrides in cases:
             with self.subTest(event=event, overrides=overrides):
                 self.assertEqual(self.resolve(event, **overrides)["should_collect"], "false")
+
+
+def review_thread(*, author, commit_oid="old-sha", resolved=False):
+    return {
+        "id": "thread-node-id",
+        "isResolved": resolved,
+        "isOutdated": False,
+        "path": "src/lib.rs",
+        "line": 2,
+        "comments": {
+            "nodes": [
+                {
+                    "id": "comment-node-id",
+                    "fullDatabaseId": "3311706429",
+                    "body": "\n".join(
+                        [
+                            post_review.INLINE_MARKER,
+                            "<!-- codex-review-id: correctness-1 -->",
+                            "review body",
+                        ]
+                    ),
+                    "author": {"login": author},
+                    "commit": {"oid": commit_oid},
+                    "originalCommit": {"oid": "old-sha"},
+                    "outdated": False,
+                    "path": "src/lib.rs",
+                    "line": 2,
+                    "url": "https://github.example/review-comment",
+                }
+            ]
+        },
+    }
+
+
+class CollectResolutionsTests(unittest.TestCase):
+    def collect(self, threads, *, head_sha="head-sha"):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            batch_dir = root / "batches"
+            output_path = root / "github-output"
+            (workspace / "src").mkdir(parents=True)
+            (workspace / "src" / "lib.rs").write_text("fn one() {}\nfn two() {}\n", encoding="utf-8")
+            env = {
+                "GITHUB_REPOSITORY": "DongwonTTuna-Labs/rs-builder-relayer-client",
+                "PR_NUMBER": "12",
+                "HEAD_SHA": head_sha,
+                "GITHUB_OUTPUT": str(output_path),
+            }
+            args = argparse.Namespace(workspace=str(workspace), batch_dir=str(batch_dir))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review,
+                "collect_review_threads",
+                return_value=threads,
+            ):
+                post_review.command_collect_resolutions(args)
+            outputs = output_path.read_text(encoding="utf-8")
+            batches = {
+                path.name: json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted(batch_dir.glob("*.json"))
+            }
+            return outputs, batches
+
+    def test_collects_previous_inline_comment_from_codex_app_author(self):
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    commit_oid="old-sha",
+                )
+            ]
+        )
+
+        self.assertIn("has_comments=true", outputs)
+        self.assertIn("batch_indexes=[0]", outputs)
+        self.assertEqual(["resolve-batch-0.json"], list(batches))
+        self.assertEqual(3311706429, batches["resolve-batch-0.json"]["comments"][0]["comment_id"])
+
+    def test_ignores_human_authored_inline_marker_comments(self):
+        outputs, batches = self.collect([review_thread(author="DongwonTTuna", commit_oid="old-sha")])
+
+        self.assertIn("has_comments=false", outputs)
+        self.assertEqual({}, batches)
+
+    def test_ignores_current_head_inline_comments(self):
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    commit_oid="head-sha",
+                )
+            ]
+        )
+
+        self.assertIn("has_comments=false", outputs)
+        self.assertEqual({}, batches)
 
 
 if __name__ == "__main__":
