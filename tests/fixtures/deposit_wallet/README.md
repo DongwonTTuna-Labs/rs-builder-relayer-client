@@ -19,11 +19,11 @@ Sources checked while creating these fixtures:
 The `wallet_submit_body.json` signature is a synthetic 65-byte fixture string,
 not a live or production signature.
 
-`http_wire_requests.json` pins the HTTP method, path/query, and request body
-for `GET /nonce?type=WALLET`, `POST /submit` `WALLET-CREATE`, and
-`POST /submit` `WALLET`. It intentionally duplicates the exact wire payloads
-used by the focused request-body fixtures so HTTP tests can detect path or body
-drift in one fixture.
+The `wallet_nonce_http_request.json`,
+`wallet_create_http_submit_request.json`, and
+`wallet_signed_http_submit_request.json` fixtures pin the HTTP method,
+path/query, and request body for `GET /nonce?type=WALLET`, `POST /submit`
+`WALLET-CREATE`, and `POST /submit` `WALLET`.
 
 The `wallet_batch_eip712_multicall.json` and
 `wallet_signed_submit_body_multicall.json` fixtures were generated from a

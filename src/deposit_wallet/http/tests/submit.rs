@@ -473,8 +473,7 @@ use super::*;
 
 #[tokio::test]
     async fn submit_wallet_create_sends_fixture_body_with_explicit_permit() {
-        let wire_fixtures = fixture_value("http_wire_requests.json");
-        let expected = &wire_fixtures["walletCreateSubmit"];
+        let expected = fixture_value("wallet_create_http_submit_request.json");
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
             transaction_response("tx-create", "STATE_NEW"),
@@ -546,8 +545,7 @@ use super::*;
 
 #[tokio::test]
     async fn submit_signed_wallet_batch_sends_fixture_body_with_explicit_permit() {
-        let wire_fixtures = fixture_value("http_wire_requests.json");
-        let expected = &wire_fixtures["walletSubmit"];
+        let expected = fixture_value("wallet_signed_http_submit_request.json");
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let (url, handle) = spawn_server(vec![TestResponse::json(

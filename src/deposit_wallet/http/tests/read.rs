@@ -2,8 +2,7 @@ use super::*;
 
 #[tokio::test]
     async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
-        let wire_fixtures = fixture_value("http_wire_requests.json");
-        let expected = &wire_fixtures["walletNonceRequest"];
+        let expected = fixture_value("wallet_nonce_http_request.json");
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
             expected["response"].to_string(),
@@ -119,30 +118,28 @@ use super::*;
     }
 
 #[test]
-    fn wallet_nonce_parser_accepts_decimal_string_and_small_json_number() {
+    fn wallet_nonce_parser_accepts_decimal_string_and_json_numbers() {
         let raw = "31";
         let above_u64 = "18446744073709551616";
         let expected = U256::from(31u64);
         let max = U256::MAX.to_string();
+        let parse = |raw_nonce: &str| {
+            super::super::read::parse_wallet_nonce_response(
+                format!(r#"{{"nonce":{raw_nonce}}}"#).as_bytes(),
+            )
+        };
 
-        let string_nonce =
-            super::super::read::parse_wallet_nonce_value(json!(raw)).unwrap();
-        let numeric_nonce = super::super::read::parse_wallet_nonce_value(
-            serde_json::from_str::<serde_json::Value>(raw).unwrap(),
-        )
-        .unwrap();
+        let string_nonce = parse(&serde_json::to_string(raw).unwrap()).unwrap();
+        let numeric_nonce = parse(raw).unwrap();
 
         assert_eq!(string_nonce, expected);
         assert_eq!(numeric_nonce, expected);
         assert_eq!(
-            super::super::read::parse_wallet_nonce_value(
-                serde_json::from_str::<serde_json::Value>(above_u64).unwrap(),
-            )
-            .unwrap(),
+            parse(above_u64).unwrap(),
             U256::from_dec_str(above_u64).unwrap()
         );
         assert_eq!(
-            super::super::read::parse_wallet_nonce_value(json!(max)).unwrap(),
+            parse(&serde_json::to_string(&max).unwrap()).unwrap(),
             U256::MAX
         );
     }
@@ -151,21 +148,26 @@ use super::*;
     fn wallet_nonce_parser_rejects_invalid_boundaries() {
         let too_large = format!("{}0", U256::MAX);
         let too_many_digits = "0".repeat(79);
-        for value in [
-            json!(""),
-            json!("not-decimal"),
-            json!(" 1"),
-            json!("1 "),
-            json!("\u{ff11}"),
-            json!("-1"),
-            serde_json::from_str::<serde_json::Value>("-1").unwrap(),
-            serde_json::from_str::<serde_json::Value>("1.5").unwrap(),
-            serde_json::from_str::<serde_json::Value>("1e3").unwrap(),
-            json!(too_many_digits),
-            json!(too_large.clone()),
-            serde_json::from_str::<serde_json::Value>(&too_large).unwrap(),
+        for raw_nonce in [
+            serde_json::to_string("").unwrap(),
+            serde_json::to_string("not-decimal").unwrap(),
+            serde_json::to_string(" 1").unwrap(),
+            serde_json::to_string("1 ").unwrap(),
+            serde_json::to_string("\u{ff11}").unwrap(),
+            serde_json::to_string("-1").unwrap(),
+            "-1".to_string(),
+            "1.5".to_string(),
+            "1e3".to_string(),
+            serde_json::to_string(&too_many_digits).unwrap(),
+            serde_json::to_string(&too_large).unwrap(),
+            too_large.clone(),
         ] {
-            assert!(super::super::read::parse_wallet_nonce_value(value).is_err());
+            assert!(
+                super::super::read::parse_wallet_nonce_response(
+                    format!(r#"{{"nonce":{raw_nonce}}}"#).as_bytes()
+                )
+                .is_err()
+            );
         }
     }
 

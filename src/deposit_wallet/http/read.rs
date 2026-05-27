@@ -4,12 +4,14 @@ use super::response::{
 };
 use super::redaction::{sanitized_external_token, unknown_state_error_summary};
 use super::state::OwnerNonceReadReservation;
+use serde_json::value::RawValue;
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
 
 #[derive(Deserialize)]
-pub(super) struct WalletNonceResponse {
-    nonce: serde_json::Value,
+pub(super) struct WalletNonceResponse<'a> {
+    #[serde(borrow)]
+    nonce: &'a RawValue,
 }
 
 pub struct DepositWalletNonceLease {
@@ -127,9 +129,7 @@ impl DepositWalletRelayerClient {
             .append_pair("address", &to_checksum(&owner, None))
             .append_pair("type", request.nonce_type());
         let response = self.send(Method::GET, url, None).await?;
-        let nonce = serde_json::from_slice::<WalletNonceResponse>(&response)
-            .map_err(|_| RelayerError::Other("could not parse WALLET nonce".to_string()))?;
-        parse_wallet_nonce_value(nonce.nonce)
+        parse_wallet_nonce_response(&response)
     }
 
     pub async fn get_transaction(
@@ -218,16 +218,24 @@ fn validate_public_transaction_receipt(
     Ok(receipt)
 }
 
-pub(super) fn parse_wallet_nonce_value(value: serde_json::Value) -> Result<U256> {
-    match value {
-        serde_json::Value::String(raw) => parse_wallet_nonce_decimal(&raw),
-        serde_json::Value::Number(number) => {
-            parse_wallet_nonce_decimal(&number.to_string())
-        }
-        _ => Err(RelayerError::Other(
-            "invalid WALLET nonce: expected decimal string or JSON number".to_string(),
-        )),
+pub(super) fn parse_wallet_nonce_response(response: &[u8]) -> Result<U256> {
+    let nonce = serde_json::from_slice::<WalletNonceResponse>(response)
+        .map_err(|_| RelayerError::Other("could not parse WALLET nonce".to_string()))?;
+    parse_wallet_nonce_raw(nonce.nonce.get())
+}
+
+fn parse_wallet_nonce_raw(raw: &str) -> Result<U256> {
+    if raw.starts_with('"') {
+        let decoded = serde_json::from_str::<String>(raw)
+            .map_err(|_| RelayerError::Other("could not parse WALLET nonce".to_string()))?;
+        return parse_wallet_nonce_decimal(&decoded);
     }
+    if raw.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        return parse_wallet_nonce_decimal(raw);
+    }
+    Err(RelayerError::Other(
+        "invalid WALLET nonce: expected decimal string or JSON number".to_string(),
+    ))
 }
 
 fn parse_wallet_nonce_decimal(raw: &str) -> Result<U256> {
