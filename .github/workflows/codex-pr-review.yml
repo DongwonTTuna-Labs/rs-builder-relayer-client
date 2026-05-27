@@ -1,7 +1,7 @@
 name: Codex PR Review
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -18,10 +18,6 @@ permissions:
 concurrency:
   group: codex-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: true
-
-env:
-  CODEX_REVIEW_ARGS: >-
-    ["--enable","use_legacy_landlock","--disable","shell_tool","--ignore-user-config","--ignore-rules","--color","never","-c","model_provider=\"ai-relay\"","-c","model_providers.ai-relay.name=\"AI Relay\"","-c","model_providers.ai-relay.base_url=\"https://relay-ai.dongwontuna.net/v1\"","-c","model_providers.ai-relay.wire_api=\"responses\"","-c","model_providers.ai-relay.env_key=\"AI_RELAY_API_KEY\"","-c","model_providers.ai-relay.supports_websockets=true","-c","model_providers.ai-relay.requires_openai_auth=false","-c","shell_environment_policy.exclude=[\"AI_RELAY_API_KEY\"]","-c","sandbox_workspace_write.network_access=false"]
 
 jobs:
   resolve:
@@ -42,131 +38,32 @@ jobs:
       base_sha: ${{ steps.resolve.outputs.base_sha }}
       trigger: ${{ steps.resolve.outputs.trigger }}
     steps:
+      - name: Checkout workflow helper
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Resolve PR metadata
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import urllib.error
-          import urllib.request
-          from pathlib import Path
-
-          TRUSTED_USER = "DongwonTTuna"
-
-          def write_outputs(values):
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                  for key, value in values.items():
-                      output.write(f"{key}={value}\n")
-
-          def skipped():
-              return {
-                  "should_run": "false",
-                  "pr_number": "",
-                  "head_sha": "",
-                  "base_ref": "",
-                  "base_sha": "",
-                  "trigger": "",
-              }
-
-          def github_api(path):
-              request = urllib.request.Request(
-                  f"https://api.github.com{path}",
-                  headers={
-                      "Accept": "application/vnd.github+json",
-                      "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-                      "X-GitHub-Api-Version": "2022-11-28",
-                      "User-Agent": "codex-review",
-                  },
-              )
-              try:
-                  with urllib.request.urlopen(request, timeout=60) as response:
-                      return json.loads(response.read().decode("utf-8"))
-              except urllib.error.HTTPError as exc:
-                  body = exc.read().decode("utf-8", "replace")
-                  raise SystemExit(f"GET {path} failed with {exc.code}: {body[:800]}") from exc
-
-          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
-          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-          repo = os.environ["GITHUB_REPOSITORY"]
-          actor = os.environ.get("GITHUB_ACTOR", "")
-
-          if event_name == "pull_request":
-              pr = event.get("pull_request") or {}
-              sender = (event.get("sender") or {}).get("login")
-              head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
-              author = (pr.get("user") or {}).get("login")
-              if (
-                  not pr
-                  or pr.get("draft")
-                  or head_repo != repo
-                  or author != TRUSTED_USER
-                  or actor != TRUSTED_USER
-                  or sender != TRUSTED_USER
-              ):
-                  write_outputs(skipped())
-              else:
-                  write_outputs(
-                      {
-                          "should_run": "true",
-                          "pr_number": str(pr["number"]),
-                          "head_sha": str(pr["head"]["sha"]),
-                          "base_ref": str(pr["base"]["ref"]),
-                          "base_sha": str(pr["base"]["sha"]),
-                          "trigger": f"pull_request:{event.get('action', '')}",
-                      }
-                  )
-              raise SystemExit(0)
-
-          if event_name == "issue_comment":
-              issue = event.get("issue") or {}
-              comment = event.get("comment") or {}
-              body = str(comment.get("body") or "")
-              comment_user = ((comment.get("user") or {}).get("login")) or ""
-              if (
-                  "pull_request" not in issue
-                  or "/codex-review" not in body
-                  or comment_user != TRUSTED_USER
-                  or actor.endswith("[bot]")
-              ):
-                  write_outputs(skipped())
-                  raise SystemExit(0)
-              pr_number = str(issue["number"])
-              pr = github_api(f"/repos/{repo}/pulls/{pr_number}")
-              head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
-              author = (pr.get("user") or {}).get("login")
-              if head_repo != repo or author != TRUSTED_USER:
-                  write_outputs(skipped())
-              else:
-                  write_outputs(
-                      {
-                          "should_run": "true",
-                          "pr_number": pr_number,
-                          "head_sha": str(pr["head"]["sha"]),
-                          "base_ref": str(pr["base"]["ref"]),
-                          "base_sha": str(pr["base"]["sha"]),
-                          "trigger": "issue_comment:/codex-review",
-                      }
-                  )
-              raise SystemExit(0)
-
-          write_outputs(skipped())
-          PY
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 workflow/.github/scripts/post_review.py resolve-current
 
   review:
     name: review-${{ matrix.axis }}
     needs: resolve
-    if: needs.resolve.outputs.should_run == 'true'
+    if: needs.resolve.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
       pull-requests: read
-    env:
-      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
+      id-token: write
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -219,6 +116,8 @@ jobs:
           - Use agent "${AXIS}" exactly.
           - Return at most 13 findings.
           - Use line numbers from the RIGHT side of the diff only. Use null file/line for cross-cutting findings.
+          - Write every human-readable review string in Korean: title, reason, positive notes, and impact summary fields.
+          - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
           - Do not include secrets, tokens, or private keys.
           - Do not modify files or post comments.
 
@@ -243,18 +142,26 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Check relay secret
-        run: test -n "$AI_RELAY_API_KEY"
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
 
-      - name: Prepare Codex action home
+      - name: Validate Codex relay args
         env:
-          CODEX_ACTION_HOME: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
         run: |
-          mkdir -p "$CODEX_ACTION_HOME"
-          printf '{"port":0}\n' > "$CODEX_ACTION_HOME/${GITHUB_RUN_ID}.json"
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
 
       - name: Run Codex reviewer
         uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ runner.temp }}/prompt-${{ matrix.axis }}.md
           output-schema: |
@@ -347,7 +254,7 @@ jobs:
           codex-version: latest
           model: gpt-5.5
           effort: xhigh
-          codex-args: ${{ env.CODEX_REVIEW_ARGS }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
 
       - name: Validate reviewer findings
         env:
@@ -383,15 +290,14 @@ jobs:
   tech-lead:
     name: tech-lead
     needs: [resolve, review]
-    if: needs.resolve.outputs.should_run == 'true'
+    if: needs.resolve.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
       pull-requests: read
-    env:
-      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
+      id-token: write
     timeout-minutes: 30
     steps:
       - name: Checkout PR head
@@ -465,6 +371,10 @@ jobs:
 
           Current GitHub workflow contract supersedes legacy Forgejo path references above.
 
+          Language rules:
+          - Write every human-readable decision string in Korean: decision reasons, judgment headline, and merge note reasons.
+          - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
+
           Combined findings:
           ```json
           EOF
@@ -481,18 +391,26 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Check relay secret
-        run: test -n "$AI_RELAY_API_KEY"
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-tech-lead
 
-      - name: Prepare Codex action home
+      - name: Validate Codex relay args
         env:
-          CODEX_ACTION_HOME: ${{ runner.temp }}/codex-home-tech-lead
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
         run: |
-          mkdir -p "$CODEX_ACTION_HOME"
-          printf '{"port":0}\n' > "$CODEX_ACTION_HOME/${GITHUB_RUN_ID}.json"
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
 
       - name: Run tech-lead gate
         uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ runner.temp }}/prompt-tech-lead.md
           output-schema: |
@@ -580,7 +498,7 @@ jobs:
           codex-version: latest
           model: gpt-5.5
           effort: xhigh
-          codex-args: ${{ env.CODEX_REVIEW_ARGS }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
 
       - name: Validate tech-lead decisions
         run: |
@@ -608,7 +526,7 @@ jobs:
   post:
     name: post
     needs: [resolve, review, tech-lead]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -617,11 +535,11 @@ jobs:
       pull-requests: write
     timeout-minutes: 10
     steps:
-      - name: Checkout PR scripts
+      - name: Checkout trusted PR scripts
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve.outputs.head_sha }}
-          path: workspace
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
           fetch-depth: 1
           persist-credentials: false
 
@@ -652,6 +570,6 @@ jobs:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
         run: >-
-          python3 workspace/.github/scripts/post_review.py post-current
+          python3 trusted/.github/scripts/post_review.py post-current
           --artifacts artifacts
           --decisions artifacts/decisions-tech-lead.json

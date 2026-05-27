@@ -16,6 +16,7 @@ AXES = ("correctness", "security", "performance", "test-coverage", "domain")
 INLINE_MARKER = "<!-- codex-review-inline -->"
 MAX_INLINE_COMMENTS = 50
 RESOLVE_BATCH_SIZE = 3
+TRUSTED_USER = "DongwonTTuna"
 
 
 def require_env(name: str) -> str:
@@ -151,6 +152,138 @@ def write_github_output(values: dict[str, str]) -> None:
             output.write(f"{key}={value}\n")
 
 
+def skipped_current_review() -> dict[str, str]:
+    return {
+        "should_run": "false",
+        "pr_number": "",
+        "head_sha": "",
+        "base_ref": "",
+        "base_sha": "",
+        "trigger": "",
+    }
+
+
+def skipped_resolve_checker() -> dict[str, str]:
+    return {"should_collect": "false", "pr_number": "", "head_sha": "", "base_ref": "", "base_sha": ""}
+
+
+def resolve_current_review_event(
+    *,
+    event_name: str,
+    event: dict[str, Any],
+    repo: str,
+    actor: str,
+    triggering_actor: str,
+    fetch_pr: Any = github_api,
+) -> dict[str, str]:
+    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+        return skipped_current_review()
+
+    if event_name in {"pull_request", "pull_request_target"}:
+        pr = event.get("pull_request") or {}
+        sender = (event.get("sender") or {}).get("login")
+        base_ref = ((pr.get("base") or {}).get("ref")) or ""
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        author = (pr.get("user") or {}).get("login")
+        if (
+            not pr
+            or pr.get("draft")
+            or base_ref != "main"
+            or head_repo != repo
+            or author != TRUSTED_USER
+            or sender != TRUSTED_USER
+        ):
+            return skipped_current_review()
+        return {
+            "should_run": "true",
+            "pr_number": str(pr["number"]),
+            "head_sha": str(pr["head"]["sha"]),
+            "base_ref": "main",
+            "base_sha": str(pr["base"]["sha"]),
+            "trigger": f"{event_name}:{event.get('action', '')}",
+        }
+
+    if event_name == "issue_comment":
+        issue = event.get("issue") or {}
+        comment = event.get("comment") or {}
+        body = str(comment.get("body") or "")
+        comment_user = ((comment.get("user") or {}).get("login")) or ""
+        if "pull_request" not in issue or "/codex-review" not in body or comment_user != TRUSTED_USER or actor.endswith("[bot]"):
+            return skipped_current_review()
+        pr_number = str(issue["number"])
+        pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
+        base_ref = ((pr.get("base") or {}).get("ref")) or ""
+        head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+        author = (pr.get("user") or {}).get("login")
+        if base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
+            return skipped_current_review()
+        return {
+            "should_run": "true",
+            "pr_number": pr_number,
+            "head_sha": str(pr["head"]["sha"]),
+            "base_ref": "main",
+            "base_sha": str(pr["base"]["sha"]),
+            "trigger": "issue_comment:/codex-review",
+        }
+
+    return skipped_current_review()
+
+
+def resolve_previous_review_event(
+    *,
+    event_name: str,
+    event: dict[str, Any],
+    repo: str,
+    actor: str,
+    triggering_actor: str,
+) -> dict[str, str]:
+    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER or event_name not in {"pull_request", "pull_request_target"}:
+        return skipped_resolve_checker()
+    pr = event.get("pull_request") or {}
+    base_ref = ((pr.get("base") or {}).get("ref")) or ""
+    head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
+    author = (pr.get("user") or {}).get("login")
+    if not pr or pr.get("draft") or base_ref != "main" or head_repo != repo or author != TRUSTED_USER:
+        return skipped_resolve_checker()
+    return {
+        "should_collect": "true",
+        "pr_number": str(pr["number"]),
+        "head_sha": str(pr["head"]["sha"]),
+        "base_ref": "main",
+        "base_sha": str(pr["base"]["sha"]),
+    }
+
+
+def load_event_payload() -> dict[str, Any]:
+    return json.loads(Path(require_env("GITHUB_EVENT_PATH")).read_text(encoding="utf-8"))
+
+
+def command_resolve_current(args: argparse.Namespace) -> None:
+    del args
+    write_github_output(
+        resolve_current_review_event(
+            event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
+            event=load_event_payload(),
+            repo=require_env("GITHUB_REPOSITORY"),
+            actor=os.environ.get("GITHUB_ACTOR", ""),
+            triggering_actor=os.environ.get("GITHUB_TRIGGERING_ACTOR", ""),
+        )
+    )
+
+
+def command_resolve_previous(args: argparse.Namespace) -> None:
+    del args
+    write_github_output(
+        resolve_previous_review_event(
+            event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
+            event=load_event_payload(),
+            repo=require_env("GITHUB_REPOSITORY"),
+            actor=os.environ.get("GITHUB_ACTOR", ""),
+            triggering_actor=os.environ.get("GITHUB_TRIGGERING_ACTOR", ""),
+        )
+    )
+
+
 def load_current_findings(artifacts: Path) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     missing: list[str] = []
@@ -242,7 +375,7 @@ def render_current_inline(finding: dict[str, Any], decision: dict[str, Any] | No
         finding["reason"],
     ]
     if decision:
-        lines.extend(["", f"Tech lead: {decision['reason']}"])
+        lines.extend(["", f"테크리드: {decision['reason']}"])
     return "\n".join(lines)
 
 
@@ -257,36 +390,36 @@ def render_current_body(
     judgment = decisions.get("judgment") or {}
     lines = [
         "<!-- codex-review -->",
-        "Codex review completed.",
+        "Codex 리뷰가 완료되었습니다.",
         "",
-        f"- Event: {event}",
-        f"- Posted findings: {len(allowed)}",
-        f"- Filtered by tech lead: {denied_count}",
+        f"- 이벤트: {event}",
+        f"- 게시한 지적: {len(allowed)}",
+        f"- 테크리드가 필터링한 지적: {denied_count}",
     ]
     if judgment:
         lines.extend(
             [
-                f"- Tech-lead status: {judgment.get('status', 'UNKNOWN')}",
-                f"- Tech-lead headline: {judgment.get('headline', '')}",
+                f"- 테크리드 상태: {judgment.get('status', 'UNKNOWN')}",
+                f"- 테크리드 요약: {judgment.get('headline', '')}",
             ]
         )
     if unplaced:
-        lines.extend(["", "Unplaced findings:"])
+        lines.extend(["", "위치에 직접 달지 못한 지적:"])
         for finding, decision in unplaced[:25]:
-            location = finding.get("file") or "general"
+            location = finding.get("file") or "일반"
             if finding.get("line"):
                 location = f"{location}:{finding['line']}"
-            suffix = f" Tech lead: {decision['reason']}" if decision else ""
+            suffix = f" 테크리드: {decision['reason']}" if decision else ""
             lines.append(
                 f"- [{finding['type']}][{finding['agent']}] {finding['id']} {location} - "
                 f"{finding['title']}: {finding['reason']}{suffix}"
             )
     merge_notes = decisions.get("merge_notes") or []
     if merge_notes:
-        lines.extend(["", "Merge notes:"])
+        lines.extend(["", "병합 메모:"])
         for note in merge_notes[:10]:
             lines.append(
-                f"- {note.get('primary_id')}: merged {', '.join(note.get('merged_ids') or [])} - "
+                f"- {note.get('primary_id')}: 병합됨 {', '.join(note.get('merged_ids') or [])} - "
                 f"{note.get('reason', '')}"
             )
     return "\n".join(lines)
@@ -548,24 +681,24 @@ def render_resolution_body(
 ) -> str:
     lines = [
         "<!-- codex-resolve-check -->",
-        "Codex resolve check completed.",
+        "Codex 해결 여부 확인이 완료되었습니다.",
         "",
-        f"- Event: {event}",
-        f"- Resolved threads: {len(resolved)}",
-        f"- Still unresolved: {len(unresolved)}",
+        f"- 이벤트: {event}",
+        f"- 해결된 스레드: {len(resolved)}",
+        f"- 아직 미해결: {len(unresolved)}",
     ]
     if unresolved:
-        lines.extend(["", "Still unresolved:"])
+        lines.extend(["", "아직 미해결:"])
         for comment, resolution in unresolved[:25]:
-            location = comment.get("file") or "general"
+            location = comment.get("file") or "일반"
             if comment.get("line"):
                 location = f"{location}:{comment['line']}"
             url = comment.get("url") or ""
             lines.append(f"- {location} - {resolution['reason']} {url}".rstrip())
     if resolved:
-        lines.extend(["", "Resolved now:"])
+        lines.extend(["", "이번에 해결됨:"])
         for comment, resolution in resolved[:25]:
-            location = comment.get("file") or "general"
+            location = comment.get("file") or "일반"
             if comment.get("line"):
                 location = f"{location}:{comment['line']}"
             lines.append(f"- {location} - {resolution['reason']}")
@@ -611,6 +744,12 @@ def build_parser() -> argparse.ArgumentParser:
     post_current.add_argument("--artifacts", required=True)
     post_current.add_argument("--decisions", required=True)
     post_current.set_defaults(func=command_post_current)
+
+    resolve_current = subparsers.add_parser("resolve-current")
+    resolve_current.set_defaults(func=command_resolve_current)
+
+    resolve_previous = subparsers.add_parser("resolve-previous")
+    resolve_previous.set_defaults(func=command_resolve_previous)
 
     collect = subparsers.add_parser("collect-resolutions")
     collect.add_argument("--workspace", required=True)

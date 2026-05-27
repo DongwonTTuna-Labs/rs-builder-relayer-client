@@ -1,7 +1,7 @@
 name: Codex Resolve Checker
 
 on:
-  pull_request:
+  pull_request_target:
     branches:
       - main
     types:
@@ -15,18 +15,10 @@ concurrency:
   group: codex-resolve-checker-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
-env:
-  CODEX_REVIEW_ARGS: >-
-    ["--enable","use_legacy_landlock","--disable","shell_tool","--ignore-user-config","--ignore-rules","--color","never","-c","model_provider=\"ai-relay\"","-c","model_providers.ai-relay.name=\"AI Relay\"","-c","model_providers.ai-relay.base_url=\"https://relay-ai.dongwontuna.net/v1\"","-c","model_providers.ai-relay.wire_api=\"responses\"","-c","model_providers.ai-relay.env_key=\"AI_RELAY_API_KEY\"","-c","model_providers.ai-relay.supports_websockets=true","-c","model_providers.ai-relay.requires_openai_auth=false","-c","shell_environment_policy.exclude=[\"AI_RELAY_API_KEY\"]","-c","sandbox_workspace_write.network_access=false"]
-
 jobs:
   collect:
     name: collect
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.user.login == 'DongwonTTuna' &&
-      github.actor == 'DongwonTTuna'
+    if: github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -36,25 +28,54 @@ jobs:
     timeout-minutes: 10
     outputs:
       has_comments: ${{ steps.collect.outputs.has_comments }}
-      batch_indexes: ${{ steps.collect.outputs.batch_indexes }}
+      batch_indexes: ${{ steps.collect.outputs.batch_indexes || '[]' }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_ref: ${{ steps.resolve.outputs.base_ref }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
     steps:
-      - name: Checkout PR head
+      - name: Checkout workflow helper
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve PR metadata
+        id: resolve
+        env:
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: python3 workflow/.github/scripts/post_review.py resolve-previous
+
+      - name: Checkout PR head
+        if: steps.resolve.outputs.should_collect == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.head_sha }}
           path: workspace
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Checkout trusted PR scripts
+        if: steps.resolve.outputs.should_collect == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Collect previous Codex comments
+        if: steps.resolve.outputs.should_collect == 'true'
         id: collect
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
         run: >-
-          python3 workspace/.github/scripts/post_review.py collect-resolutions
+          python3 trusted/.github/scripts/post_review.py collect-resolutions
           --workspace workspace
           --batch-dir artifacts/resolve-batches
 
@@ -69,15 +90,14 @@ jobs:
   resolve-check:
     name: resolve-check-${{ matrix.batch }}
     needs: collect
-    if: needs.collect.outputs.has_comments == 'true'
+    if: needs.collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
       pull-requests: read
-    env:
-      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
+      id-token: write
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -87,7 +107,7 @@ jobs:
       - name: Checkout PR head
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ needs.collect.outputs.head_sha }}
           path: workspace
           fetch-depth: 1
           persist-credentials: false
@@ -121,6 +141,10 @@ jobs:
 
           Return only JSON matching the inline output schema supplied to openai/codex-action.
 
+          Language rules:
+          - Write every human-readable resolution reason in Korean.
+          - Keep schema field names, boolean values, comment ids, thread ids, file paths, code identifiers, and quoted code in their original language.
+
           Resolve-check input:
           ```json
           EOF
@@ -130,18 +154,26 @@ jobs:
           EOF
           } > "$prompt_file"
 
-      - name: Check relay secret
-        run: test -n "$AI_RELAY_API_KEY"
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@195993ee3cee666c09544aa66a5785726f462555
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
 
-      - name: Prepare Codex action home
+      - name: Validate Codex relay args
         env:
-          CODEX_ACTION_HOME: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
         run: |
-          mkdir -p "$CODEX_ACTION_HOME"
-          printf '{"port":0}\n' > "$CODEX_ACTION_HOME/${GITHUB_RUN_ID}.json"
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
 
       - name: Run resolve checker
         uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ runner.temp }}/prompt-resolve-${{ matrix.batch }}.md
           output-schema: |
@@ -183,7 +215,7 @@ jobs:
           codex-version: latest
           model: gpt-5.5
           effort: xhigh
-          codex-args: ${{ env.CODEX_REVIEW_ARGS }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
 
       - name: Validate resolve-check output
         env:
@@ -220,7 +252,7 @@ jobs:
   apply:
     name: apply
     needs: [collect, resolve-check]
-    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true'
+    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -229,11 +261,11 @@ jobs:
       pull-requests: write
     timeout-minutes: 10
     steps:
-      - name: Checkout PR scripts
+      - name: Checkout trusted PR scripts
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: workspace
+          ref: ${{ needs.collect.outputs.base_sha }}
+          path: trusted
           fetch-depth: 1
           persist-credentials: false
 
@@ -261,9 +293,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ needs.collect.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.collect.outputs.head_sha }}
         run: >-
-          python3 workspace/.github/scripts/post_review.py apply-resolutions
+          python3 trusted/.github/scripts/post_review.py apply-resolutions
           --batches artifacts/resolve-batches
           --results artifacts/resolutions
