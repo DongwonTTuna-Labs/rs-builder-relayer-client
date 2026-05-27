@@ -30,13 +30,26 @@ fn test_hmac_url_safe_base64() {
 }
 
 #[test]
+fn test_builder_auth_secret_parse_errors_are_generic() {
+    let secret = "not-base64-secret-material";
+
+    let error = build_hmac_signature(secret, "1000000", "GET", "/nonce", "").unwrap_err();
+    let rendered = error.to_string();
+
+    assert!(rendered.contains("Invalid builder API secret"));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains("Invalid byte"));
+    assert!(!rendered.contains("offset"));
+}
+
+#[test]
 fn test_builder_auth_generates_all_required_headers() {
     // Use a valid base64 secret
-    let config = BuilderConfig {
-        key: "test-key".to_string(),
-        secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-        passphrase: "test-passphrase".to_string(),
-    };
+    let config = BuilderConfig::new(
+        "test-key",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "test-passphrase",
+    );
     let auth = AuthMethod::Builder(config);
     let headers = auth.headers("POST", "/submit", r#"{"data":"test"}"#).unwrap();
 
@@ -46,6 +59,9 @@ fn test_builder_auth_generates_all_required_headers() {
     assert!(headers.contains_key("POLY_BUILDER_SIGNATURE"));
     assert_eq!(headers.get("POLY_BUILDER_API_KEY").unwrap(), "test-key");
     assert_eq!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap(), "test-passphrase");
+    assert!(headers.get("POLY_BUILDER_API_KEY").unwrap().is_sensitive());
+    assert!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap().is_sensitive());
+    assert!(headers.get("POLY_BUILDER_SIGNATURE").unwrap().is_sensitive());
 }
 
 #[test]
@@ -55,6 +71,11 @@ fn test_relayer_key_auth_generates_headers() {
 
     assert_eq!(headers.get("RELAYER_API_KEY").unwrap(), "my-key");
     assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), "0x1234");
+    assert!(headers.get("RELAYER_API_KEY").unwrap().is_sensitive());
+    assert!(headers
+        .get("RELAYER_API_KEY_ADDRESS")
+        .unwrap()
+        .is_sensitive());
 }
 
 #[test]
@@ -75,6 +96,22 @@ fn test_relayer_key_auth_identity_can_differ_from_wallet_owner() {
             .unwrap(),
         wallet_owner
     );
+}
+
+#[test]
+fn test_relayer_key_debug_redacts_malformed_address() {
+    let secret_key = "secret-relayer-key";
+    let malformed_address = "not-a-valid-address-secret";
+    let auth = AuthMethod::RelayerKey {
+        api_key: secret_key.to_string(),
+        address: malformed_address.to_string(),
+    };
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(secret_key));
+    assert!(!rendered.contains(malformed_address));
+    assert!(rendered.contains("<redacted>"));
 }
 
 #[test]

@@ -1,25 +1,42 @@
 pub mod builder;
 pub mod relayer_key;
 
+use std::fmt;
+
+use ethers::types::Address;
+use ethers::utils::to_checksum;
 use reqwest::header::HeaderMap;
 
 /// Authentication method for the relayer.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AuthMethod {
     /// Builder Program HMAC-SHA256 authentication.
     Builder(BuilderConfig),
     /// Simple Relayer API key authentication.
+    ///
+    /// The raw `String` fields are retained for legacy public API
+    /// compatibility. Prefer [`AuthMethod::relayer_key`] so callers do not
+    /// construct or log the secret-bearing variant by hand.
     RelayerKey { api_key: String, address: String },
+}
+
+impl fmt::Debug for AuthMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Builder(config) => f.debug_tuple("Builder").field(config).finish(),
+            Self::RelayerKey { address, .. } => f
+                .debug_struct("RelayerKey")
+                .field("api_key", &"<redacted>")
+                .field("address", &redacted_address_text(address))
+                .finish(),
+        }
+    }
 }
 
 impl AuthMethod {
     /// Create a Builder auth method.
     pub fn builder(key: &str, secret: &str, passphrase: &str) -> Self {
-        AuthMethod::Builder(BuilderConfig {
-            key: key.to_string(),
-            secret: secret.to_string(),
-            passphrase: passphrase.to_string(),
-        })
+        AuthMethod::Builder(BuilderConfig::new(key, secret, passphrase))
     }
 
     /// Create a Relayer Key auth method.
@@ -39,17 +56,52 @@ impl AuthMethod {
     ) -> crate::error::Result<HeaderMap> {
         match self {
             AuthMethod::Builder(config) => builder::build_headers(config, method, path, body),
-            AuthMethod::RelayerKey { api_key, address } => {
-                relayer_key::build_headers(api_key, address)
-            }
+            AuthMethod::RelayerKey { api_key, address } => relayer_key::build_headers(api_key, address),
         }
     }
 }
 
 /// Builder Program API key credentials.
-#[derive(Debug, Clone)]
+///
+/// These public `String` fields are a legacy compatibility surface for
+/// existing consumers that use struct literals. They are redacted in `Debug`
+/// and parsing errors are generic, but callers must still treat the fields as
+/// secret-bearing and avoid logging, snapshotting, or unnecessary cloning. A
+/// future breaking API revision should move these fields behind a private
+/// secret wrapper with an explicit migration path.
+#[derive(Clone)]
 pub struct BuilderConfig {
     pub key: String,
     pub secret: String,
     pub passphrase: String,
+}
+
+impl BuilderConfig {
+    pub fn new(key: &str, secret: &str, passphrase: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            secret: secret.to_string(),
+            passphrase: passphrase.to_string(),
+        }
+    }
+}
+
+impl fmt::Debug for BuilderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BuilderConfig")
+            .field("key", &"<redacted>")
+            .field("secret", &"<redacted>")
+            .field("passphrase", &"<redacted>")
+            .finish()
+    }
+}
+
+fn redacted_address_text(address: &str) -> String {
+    match address.parse::<Address>() {
+        Ok(address) => {
+            let checksum = to_checksum(&address, None);
+            format!("{}...{}", &checksum[..6], &checksum[38..])
+        }
+        Err(_) => "<redacted>".to_string(),
+    }
 }
