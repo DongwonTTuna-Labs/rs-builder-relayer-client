@@ -82,7 +82,7 @@ chain inference, and fallback targets are not allowed.
 ## Residual Risk
 
 - Correct calldata does not prove relayer execution or CLOB balance visibility.
-- Without these calldata builders, the production-capable HTTP client from PR 02
-  is not a complete live trading flow.
+- Without these calldata builders, the guarded HTTP surface from PR 02 remains a
+  mocked/read-only building block, not a complete live trading flow.
 - Current adapter routes may change. Each fixture must record the source used at
   implementation time.

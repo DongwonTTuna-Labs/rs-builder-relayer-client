@@ -2,20 +2,20 @@
 
 ## Summary
 
-Add a production-endpoint-capable HTTP client for relayer nonce and transaction
-polling, plus test-loopback submit transport for `WALLET-CREATE` and `WALLET`
-request construction. This PR connects existing request builders and signing
-outputs to relayer HTTP behavior while keeping production submit publicly
-blocked until a later live-submit PR adds durable owner state and a trusted
-mutation capability.
+Add a guarded relayer HTTP client for validated endpoint handling, transaction
+polling diagnostics, and test-loopback nonce/submit request construction for
+`WALLET-CREATE` and `WALLET`. This PR connects existing request builders and
+signing outputs to relayer HTTP behavior while keeping production WALLET nonce
+reads and production submit publicly blocked until a later live-submit PR adds
+durable owner state, acceptance evidence, and a trusted mutation capability.
 
 ## In Scope
 
 - Add `src/deposit_wallet/http.rs` for relayer HTTP transport.
 - Add a small `DepositWalletRelayerClient` wrapper that uses deposit-wallet
   request builders, signing outputs, and transaction state parsing.
-- Implement production URL validation for the allowlisted Polymarket relayer
-  and HTTP methods for `GET /nonce` and `GET /transaction`.
+- Implement production URL validation for the allowlisted Polymarket relayer,
+  read-only `GET /transaction`, and test-loopback `GET /nonce` coverage.
 - Implement test-loopback `POST /submit` transport for `WALLET-CREATE` and
   `WALLET` fixtures. Production `POST /submit` remains blocked by public permit
   construction in this PR.
@@ -53,12 +53,13 @@ mutation capability.
   until terminal success or terminal failure, preserving unknown states.
 
 The mutation gate must default to deny relayer mutation. A production URL, API
-key, or signer alone must not be enough to submit `WALLET-CREATE` or `WALLET`.
-In this PR, public owner-scoped permits are limited to test-loopback clients so
-production `POST /submit` cannot be reached through the public API. A later
-live-submit PR may add a crate-owned trusted capability for the allowlisted
-production endpoint only after durable owner state, dry-run evidence, rollback
-path, and operator approval are documented and tested. This implementation must
+key, or signer alone must not be enough to read WALLET nonce state or submit
+`WALLET-CREATE`/`WALLET`. In this PR, public owner-scoped permits are limited to
+test-loopback clients so production `GET /nonce?type=WALLET` and `POST /submit`
+cannot be reached through the public API. A later live-submit PR may add a
+crate-owned trusted capability for the allowlisted production endpoint only
+after durable owner state, dry-run evidence, rollback path, acceptance evidence,
+and operator approval are documented and tested. This implementation must
 document the permit type and the stable error returned when mutation is blocked.
 
 Relayer authentication headers must only be attached after endpoint validation.
