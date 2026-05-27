@@ -141,6 +141,10 @@ jobs:
 
           Return only JSON matching the inline output schema supplied to openai/codex-action.
 
+          Language rules:
+          - Write every human-readable resolution reason in Korean.
+          - Keep schema field names, boolean values, comment ids, thread ids, file paths, code identifiers, and quoted code in their original language.
+
           Resolve-check input:
           ```json
           EOF

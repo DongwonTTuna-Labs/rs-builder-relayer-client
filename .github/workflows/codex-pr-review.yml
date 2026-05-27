@@ -116,6 +116,8 @@ jobs:
           - Use agent "${AXIS}" exactly.
           - Return at most 13 findings.
           - Use line numbers from the RIGHT side of the diff only. Use null file/line for cross-cutting findings.
+          - Write every human-readable review string in Korean: title, reason, positive notes, and impact summary fields.
+          - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
           - Do not include secrets, tokens, or private keys.
           - Do not modify files or post comments.
 
@@ -368,6 +370,10 @@ jobs:
           ---
 
           Current GitHub workflow contract supersedes legacy Forgejo path references above.
+
+          Language rules:
+          - Write every human-readable decision string in Korean: decision reasons, judgment headline, and merge note reasons.
+          - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
 
           Combined findings:
           ```json

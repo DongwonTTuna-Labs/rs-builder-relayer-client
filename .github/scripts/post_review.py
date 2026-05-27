@@ -375,7 +375,7 @@ def render_current_inline(finding: dict[str, Any], decision: dict[str, Any] | No
         finding["reason"],
     ]
     if decision:
-        lines.extend(["", f"Tech lead: {decision['reason']}"])
+        lines.extend(["", f"테크리드: {decision['reason']}"])
     return "\n".join(lines)
 
 
@@ -390,36 +390,36 @@ def render_current_body(
     judgment = decisions.get("judgment") or {}
     lines = [
         "<!-- codex-review -->",
-        "Codex review completed.",
+        "Codex 리뷰가 완료되었습니다.",
         "",
-        f"- Event: {event}",
-        f"- Posted findings: {len(allowed)}",
-        f"- Filtered by tech lead: {denied_count}",
+        f"- 이벤트: {event}",
+        f"- 게시한 지적: {len(allowed)}",
+        f"- 테크리드가 필터링한 지적: {denied_count}",
     ]
     if judgment:
         lines.extend(
             [
-                f"- Tech-lead status: {judgment.get('status', 'UNKNOWN')}",
-                f"- Tech-lead headline: {judgment.get('headline', '')}",
+                f"- 테크리드 상태: {judgment.get('status', 'UNKNOWN')}",
+                f"- 테크리드 요약: {judgment.get('headline', '')}",
             ]
         )
     if unplaced:
-        lines.extend(["", "Unplaced findings:"])
+        lines.extend(["", "위치에 직접 달지 못한 지적:"])
         for finding, decision in unplaced[:25]:
-            location = finding.get("file") or "general"
+            location = finding.get("file") or "일반"
             if finding.get("line"):
                 location = f"{location}:{finding['line']}"
-            suffix = f" Tech lead: {decision['reason']}" if decision else ""
+            suffix = f" 테크리드: {decision['reason']}" if decision else ""
             lines.append(
                 f"- [{finding['type']}][{finding['agent']}] {finding['id']} {location} - "
                 f"{finding['title']}: {finding['reason']}{suffix}"
             )
     merge_notes = decisions.get("merge_notes") or []
     if merge_notes:
-        lines.extend(["", "Merge notes:"])
+        lines.extend(["", "병합 메모:"])
         for note in merge_notes[:10]:
             lines.append(
-                f"- {note.get('primary_id')}: merged {', '.join(note.get('merged_ids') or [])} - "
+                f"- {note.get('primary_id')}: 병합됨 {', '.join(note.get('merged_ids') or [])} - "
                 f"{note.get('reason', '')}"
             )
     return "\n".join(lines)
@@ -681,24 +681,24 @@ def render_resolution_body(
 ) -> str:
     lines = [
         "<!-- codex-resolve-check -->",
-        "Codex resolve check completed.",
+        "Codex 해결 여부 확인이 완료되었습니다.",
         "",
-        f"- Event: {event}",
-        f"- Resolved threads: {len(resolved)}",
-        f"- Still unresolved: {len(unresolved)}",
+        f"- 이벤트: {event}",
+        f"- 해결된 스레드: {len(resolved)}",
+        f"- 아직 미해결: {len(unresolved)}",
     ]
     if unresolved:
-        lines.extend(["", "Still unresolved:"])
+        lines.extend(["", "아직 미해결:"])
         for comment, resolution in unresolved[:25]:
-            location = comment.get("file") or "general"
+            location = comment.get("file") or "일반"
             if comment.get("line"):
                 location = f"{location}:{comment['line']}"
             url = comment.get("url") or ""
             lines.append(f"- {location} - {resolution['reason']} {url}".rstrip())
     if resolved:
-        lines.extend(["", "Resolved now:"])
+        lines.extend(["", "이번에 해결됨:"])
         for comment, resolution in resolved[:25]:
-            location = comment.get("file") or "general"
+            location = comment.get("file") or "일반"
             if comment.get("line"):
                 location = f"{location}:{comment['line']}"
             lines.append(f"- {location} - {resolution['reason']}")
