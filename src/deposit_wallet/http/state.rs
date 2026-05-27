@@ -236,62 +236,58 @@ impl DepositWalletRelayerClient {
                     .transaction_owners
                     .values()
                     .any(|record| record.owner == owner && record.payload_hash == evidence.payload_hash());
-                if has_payload_records
-                    && !state
-                        .transaction_owners
-                        .get(evidence.transaction_id())
-                        .is_some_and(|record| {
-                            record.owner == owner && record.payload_hash == evidence.payload_hash()
-                        })
-                {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "manual reconciliation transaction {} did not match current owner payload",
-                        sanitized_external_token(evidence.transaction_id())
-                    )));
-                }
-                let Some(record) = state.transaction_owners.get(evidence.transaction_id()) else {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "manual reconciliation transaction {} has no local owner payload record; use owner-scoped transaction polling before clearing",
-                        sanitized_external_token(evidence.transaction_id())
-                    )));
-                };
-                if record.owner != owner || record.payload_hash != evidence.payload_hash() {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "manual reconciliation transaction {} did not match current owner payload",
-                        sanitized_external_token(evidence.transaction_id())
-                    )));
-                }
-                let Some(observation) = state.terminal_observations.get(evidence.transaction_id())
-                else {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "manual reconciliation transaction {} has no trusted terminal poll observation; use owner-scoped transaction polling before clearing",
-                        sanitized_external_token(evidence.transaction_id())
-                    )));
-                };
-                if !observation.matches_evidence(&evidence) {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "manual reconciliation transaction {} did not match the trusted terminal poll observation",
-                        sanitized_external_token(evidence.transaction_id())
-                    )));
-                }
-                if state
-                    .transaction_owners
-                    .iter()
-                    .any(|(transaction_id, record)| {
-                        transaction_id.as_str() != evidence.transaction_id()
-                            && record.owner == owner
-                            && record.payload_hash == evidence.payload_hash()
-                    })
-                {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
-                        redacted_address(owner),
-                        display_payload_hash(evidence.payload_hash())
-                    )));
+                match state.transaction_owners.get(evidence.transaction_id()) {
+                    Some(record)
+                        if record.owner == owner
+                            && record.payload_hash == evidence.payload_hash() =>
+                    {
+                        let Some(observation) =
+                            state.terminal_observations.get(evidence.transaction_id())
+                        else {
+                            return Err(RelayerError::reconciliation_required(format!(
+                                "manual reconciliation transaction {} has no trusted terminal poll observation; use owner-scoped transaction polling before clearing",
+                                sanitized_external_token(evidence.transaction_id())
+                            )));
+                        };
+                        if !observation.matches_evidence(&evidence) {
+                            return Err(RelayerError::reconciliation_required(format!(
+                                "manual reconciliation transaction {} did not match the trusted terminal poll observation",
+                                sanitized_external_token(evidence.transaction_id())
+                            )));
+                        }
+                        if state
+                            .transaction_owners
+                            .iter()
+                            .any(|(transaction_id, record)| {
+                                transaction_id.as_str() != evidence.transaction_id()
+                                    && record.owner == owner
+                                    && record.payload_hash == evidence.payload_hash()
+                            })
+                        {
+                            return Err(RelayerError::reconciliation_required(format!(
+                                "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
+                                redacted_address(owner),
+                                display_payload_hash(evidence.payload_hash())
+                            )));
+                        }
+                        state.transaction_owners.remove(evidence.transaction_id());
+                        state.terminal_observations.remove(evidence.transaction_id());
+                    }
+                    Some(_) => {
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "manual reconciliation transaction {} did not match current owner payload",
+                            sanitized_external_token(evidence.transaction_id())
+                        )));
+                    }
+                    None if has_payload_records => {
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "manual reconciliation transaction {} did not match current owner payload",
+                            sanitized_external_token(evidence.transaction_id())
+                        )));
+                    }
+                    None => {}
                 }
                 state.owner_blocks.remove(&owner);
-                state.transaction_owners.remove(evidence.transaction_id());
-                state.terminal_observations.remove(evidence.transaction_id());
             }
             Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) => {
                 return Err(RelayerError::reconciliation_required(format!(

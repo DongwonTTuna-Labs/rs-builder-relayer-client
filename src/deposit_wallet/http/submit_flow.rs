@@ -154,6 +154,14 @@ impl DepositWalletRelayerClient {
                     display_payload_hash(&payload_hash)
                 )))
             }
+            Err(RelayerError::Timeout) => {
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
+                Err(RelayerError::ambiguous_submit(format!(
+                    "submit timed out after POST for owner {} payload {}; manual reconciliation required",
+                    redacted_address(owner),
+                    display_payload_hash(&payload_hash)
+                )))
+            }
             Err(RelayerError::Other(message)) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(

@@ -556,17 +556,27 @@ use super::*;
 #[tokio::test]
     async fn submit_signed_wallet_batch_rejects_stale_nonce_before_post() {
         let signed = signed_wallet_batch();
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            json!({"nonce": (signed.nonce() + U256::one()).to_string()}).to_string(),
-        )])
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json(
+                "200 OK",
+                json!({"nonce": (signed.nonce() + U256::one()).to_string()}).to_string(),
+            ),
+            TestResponse::json(
+                "200 OK",
+                json!({"nonce": signed.nonce().to_string()}).to_string(),
+            ),
+            TestResponse::json(
+                "200 OK",
+                transaction_response("tx-stale-nonce-retry", "STATE_NEW"),
+            ),
+        ])
         .await;
         let client = test_client(url);
         let owner = signed.owner();
 
         let error = client
             .submit_signed_wallet_batch(
-                signed,
+                signed.clone(),
                 mutation_permit_for_scope(
                     owner,
                     client.mutation_scope(DepositWalletMutationAction::WalletBatch),
@@ -578,13 +588,24 @@ use super::*;
         assert!(matches!(error, RelayerError::Signing(message) if message.contains("nonce")));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
-        let mut retry_reservation = client
-            .reserve_owner_submit(owner, "payload:retry-after-stale-nonce".to_string())
+
+        let receipt = client
+            .submit_signed_wallet_batch(
+                signed,
+                mutation_permit_for_scope(
+                    owner,
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                ),
+            )
+            .await
             .unwrap();
-        retry_reservation.clear().unwrap();
+        assert_eq!(receipt.transaction_id, "tx-stale-nonce-retry");
+
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 3);
         assert_eq!(requests[0].method, "GET");
+        assert_eq!(requests[1].method, "GET");
+        assert_eq!(requests[2].method, "POST");
     }
 
 #[tokio::test]
@@ -828,14 +849,14 @@ use super::*;
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
 
-        let error = client
+        client
             .clear_ambiguous_submit_after_manual_reconciliation(
                 submit_reconciliation_evidence_for(&client, owner),
                 manual_reconciliation_permit_token_for(owner),
             )
-            .unwrap_err();
-        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert!(client.ambiguous_submit_block(owner).is_some());
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_none());
         assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
 
         let requests = handle.await.unwrap();
@@ -857,6 +878,44 @@ use super::*;
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
 
+        let duplicate = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+        assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, SUBMIT_PATH);
+    }
+
+#[tokio::test]
+    async fn submit_post_client_timeout_records_ambiguous_block_and_blocks_duplicate() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                .await
+                .expect("server accept should not hang")
+                .expect("server should accept");
+            let request = read_request(&mut stream).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            vec![request]
+        });
+        let url = DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap();
+        let client =
+            test_client_with_auth_clock_timeout(url, relayer_auth(), 1_700_000_000, Duration::from_millis(100));
+
+        let error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
         let duplicate = client
             .submit_wallet_create(owner, mutation_permit())
             .await

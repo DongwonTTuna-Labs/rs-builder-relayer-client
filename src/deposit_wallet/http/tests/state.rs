@@ -111,6 +111,29 @@ use super::*;
     }
 
 #[test]
+    fn manual_clear_allows_structured_reconciliation_without_local_transaction_id() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "payload:idless-submit".to_string();
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload_and_transaction(
+                    owner,
+                    payload_hash,
+                    "tx-manual-idless-submit",
+                ),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap();
+
+        client.ensure_owner_unblocked(owner).unwrap();
+        assert!(client.ambiguous_submit_block(owner).is_none());
+    }
+
+#[test]
     fn submit_reconciliation_evidence_rejects_invalid_inputs() {
         let owner = address(WALLET_CREATE_OWNER);
         let scope = mutation_scope(DepositWalletMutationAction::ManualReconciliation);
@@ -227,6 +250,74 @@ use super::*;
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+    }
+
+#[test]
+    fn manual_clear_requires_trusted_terminal_observation_when_transaction_is_known() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "payload:known-terminal-observation".to_string();
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+        client
+            .record_transaction_owner("tx-known-terminal", owner, payload_hash.clone())
+            .unwrap();
+
+        let evidence = submit_reconciliation_evidence_for_payload_and_transaction(
+            owner,
+            payload_hash.clone(),
+            "tx-known-terminal",
+        );
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                evidence.clone(),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap_err();
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.terminal_observations.insert(
+                "tx-known-terminal".to_string(),
+                OwnerTransactionTerminalObservation {
+                    observed_state: RelayerTransactionState::Confirmed,
+                    transaction_hash: Some(
+                        "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                            .to_string(),
+                    ),
+                },
+            );
+        }
+        let error = client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                evidence.clone(),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap_err();
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.terminal_observations.insert(
+                "tx-known-terminal".to_string(),
+                OwnerTransactionTerminalObservation {
+                    observed_state: RelayerTransactionState::Failed,
+                    transaction_hash: None,
+                },
+            );
+        }
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                evidence,
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap();
+
+        client.ensure_owner_unblocked(owner).unwrap();
+        let state = client.mutation_state().unwrap();
+        assert!(!state.transaction_owners.contains_key("tx-known-terminal"));
+        assert!(!state.terminal_observations.contains_key("tx-known-terminal"));
     }
 
 #[test]

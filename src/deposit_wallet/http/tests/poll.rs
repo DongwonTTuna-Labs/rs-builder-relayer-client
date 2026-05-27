@@ -90,12 +90,100 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn transient_poll_429_retry_after_uses_larger_policy_or_capped_header() {
+        for (transaction_id, retry_after, interval, expected_sleep) in [
+            (
+                "tx-retry-after-header",
+                "1".to_string(),
+                Duration::from_millis(100),
+                Duration::from_secs(1),
+            ),
+            (
+                "tx-retry-after-cap",
+                httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(3600)),
+                Duration::from_millis(100),
+                MAX_POLL_INTERVAL,
+            ),
+        ] {
+            let owner = address(WALLET_CREATE_OWNER);
+            let (url, handle) = spawn_server(vec![
+                TestResponse::json("429 Too Many Requests", "{}")
+                    .with_header("retry-after", &retry_after),
+                TestResponse::json(
+                    "200 OK",
+                    transaction_response(transaction_id, "STATE_CONFIRMED"),
+                ),
+            ])
+            .await;
+            let sleeper = Arc::new(RecordingSleeper::default());
+            let client = test_client_with_sleeper(url, sleeper.clone());
+            client
+                .record_inflight_transaction(
+                    owner,
+                    format!("payload:{transaction_id}"),
+                    transaction_id.to_string(),
+                )
+                .unwrap();
+
+            let receipt = client
+                .poll_owner_transaction(
+                    owner,
+                    transaction_id,
+                    DepositWalletPollPolicy::new(2, interval).unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+            assert_eq!(sleeper.sleeps(), vec![expected_sleep]);
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 2);
+        }
+
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-retry-after-policy";
+        let policy = DepositWalletPollPolicy::new(2, Duration::from_secs(2)).unwrap();
+        let expected_sleep = policy.interval_for_transaction_attempt(transaction_id, 0);
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("429 Too Many Requests", "{}").with_header("retry-after", "1"),
+            TestResponse::json(
+                "200 OK",
+                transaction_response(transaction_id, "STATE_CONFIRMED"),
+            ),
+        ])
+        .await;
+        let sleeper = Arc::new(RecordingSleeper::default());
+        let client = test_client_with_sleeper(url, sleeper.clone());
+        client
+            .record_inflight_transaction(
+                owner,
+                "payload:retry-after-policy".to_string(),
+                transaction_id.to_string(),
+            )
+            .unwrap();
+
+        let receipt = client
+            .poll_owner_transaction(owner, transaction_id, policy)
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(sleeper.sleeps(), vec![expected_sleep]);
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
+    }
+
+#[tokio::test]
     async fn poll_policy_rejects_invalid_bounds_and_caps_backoff() {
         assert!(DepositWalletPollPolicy::new(0, Duration::from_secs(1)).is_err());
         assert!(DepositWalletPollPolicy::new(1, Duration::from_millis(99)).is_err());
         assert!(
             DepositWalletPollPolicy::new(MAX_POLL_ATTEMPTS + 1, Duration::from_secs(1)).is_err()
         );
+
+        let default_policy = DepositWalletPollPolicy::default();
+        assert_eq!(default_policy.max_attempts, 5);
+        assert_eq!(default_policy.interval, Duration::from_secs(1));
 
         let policy = DepositWalletPollPolicy::new(1, Duration::from_secs(10)).unwrap();
         assert_eq!(policy.interval_for_attempt(4), MAX_POLL_INTERVAL);
@@ -135,7 +223,7 @@ use super::*;
             .poll_owner_transaction(owner, "tx-pending", policy)
             .await
             .unwrap_err();
-        assert!(matches!(error, RelayerError::Timeout));
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
 
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
@@ -171,7 +259,7 @@ use super::*;
             )
             .await
             .unwrap_err();
-        assert!(matches!(timeout, RelayerError::Timeout));
+        assert!(error_has_prefix(&timeout, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
 
         let receipt = client
@@ -227,7 +315,7 @@ use super::*;
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::Timeout));
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
@@ -255,7 +343,7 @@ use super::*;
             )
             .await
             .unwrap_err();
-        assert!(matches!(error, RelayerError::Timeout));
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
 
         assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
@@ -778,7 +866,7 @@ use super::*;
         client.ensure_owner_unblocked(owner).unwrap();
         release_tx.send(()).unwrap();
         let poll_error = poll.await.unwrap().unwrap_err();
-        assert!(matches!(poll_error, RelayerError::Timeout));
+        assert!(error_has_prefix(&poll_error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -963,7 +1051,7 @@ use super::*;
             .await
             .unwrap_err();
 
-        assert!(matches!(error, RelayerError::Timeout));
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         {
             let state = client.mutation_state().unwrap();
             match state.owner_blocks.get(&owner) {

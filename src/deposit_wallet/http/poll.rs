@@ -1,5 +1,5 @@
 use super::*;
-use super::redaction::{sanitized_external_token, unknown_state_error_summary};
+use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
 use super::response::validate_transaction_id;
 use super::state::OwnerTransactionSource;
 
@@ -57,8 +57,8 @@ impl DepositWalletPollPolicy {
 impl Default for DepositWalletPollPolicy {
     fn default() -> Self {
         Self {
-            max_attempts: 60,
-            interval: Duration::from_secs(2),
+            max_attempts: 5,
+            interval: Duration::from_secs(1),
         }
     }
 }
@@ -292,8 +292,13 @@ impl DepositWalletRelayerClient {
             }
         }
 
-        if expected_owner.is_some() {
+        if let Some(owner) = expected_owner {
             self.mark_transaction_reconciliation_required(&transaction_id)?;
+            return Err(RelayerError::reconciliation_required(format!(
+                "owner-scoped transaction {} for owner {} did not reach a terminal state before poll timeout; owner-scoped repoll or manual reconciliation required",
+                transaction_id_for_error,
+                redacted_address(owner)
+            )));
         }
         Err(RelayerError::Timeout)
     }
