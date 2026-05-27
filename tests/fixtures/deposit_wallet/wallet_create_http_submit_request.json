@@ -1,0 +1,9 @@
+{
+  "method": "POST",
+  "path": "/submit",
+  "body": {
+    "type": "WALLET-CREATE",
+    "from": "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5",
+    "to": "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07"
+  }
+}

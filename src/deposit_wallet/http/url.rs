@@ -42,6 +42,16 @@ impl DepositWalletRelayerUrl {
         self.kind == DepositWalletRelayerUrlKind::Production
     }
 
+    pub(super) fn mutation_environment(&self) -> DepositWalletMutationEnvironment {
+        match self.kind {
+            DepositWalletRelayerUrlKind::Production => DepositWalletMutationEnvironment::Production,
+            #[cfg(test)]
+            DepositWalletRelayerUrlKind::MockLoopback => {
+                DepositWalletMutationEnvironment::TestLoopback
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn loopback(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)

@@ -78,6 +78,42 @@ pub(super) struct RelayerTransactionResponseWithOwner {
     owner: Option<Address>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitTransactionIdOnly {
+    #[serde(rename = "transactionID", alias = "transactionId")]
+    transaction_id: String,
+}
+
+pub(super) fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt> {
+    let response = parse_submit_response_body(bytes)?;
+    receipt_from_submit_response(response, None).map(|parsed| parsed.receipt)
+}
+
+pub(super) fn extract_submit_transaction_id(bytes: &[u8]) -> Option<String> {
+    let response = match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace())? {
+        b'{' => serde_json::from_slice::<SubmitTransactionIdOnly>(bytes).ok()?,
+        b'[' => return None,
+        _ => return None,
+    };
+    validate_transaction_id(&response.transaction_id).ok()
+}
+
+fn parse_submit_response_body(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
+    match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
+        Some(b'{') => serde_json::from_slice::<RelayerSubmitResponse>(bytes).map_err(|_| {
+            RelayerError::Other("could not parse submit response object".to_string())
+        }),
+        Some(b'[') => Err(RelayerError::reconciliation_required(
+            "submit response arrays are not an official relayer wire format; manual reconciliation required"
+                .to_string(),
+        )),
+        _ => Err(RelayerError::Other(
+            "could not parse submit response: expected JSON object".to_string(),
+        )),
+    }
+}
+
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
     expected_factory: Address,
@@ -330,7 +366,7 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     Ok(transaction_id.to_string())
 }
 
-fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
+pub(super) fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
     if transaction_hash.len() == 66 {
         if let Some(hex) = transaction_hash
             .strip_prefix("0x")

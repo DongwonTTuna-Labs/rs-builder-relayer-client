@@ -1,6 +1,9 @@
-use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
-use super::response::{parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt};
 use super::*;
+use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
+use super::response::{
+    parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt,
+};
+use super::state::OwnerNonceReadReservation;
 use serde_json::value::RawValue;
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
@@ -11,20 +14,113 @@ pub(super) struct WalletNonceResponse<'a> {
     nonce: &'a RawValue,
 }
 
+pub struct DepositWalletNonceLease {
+    owner: Address,
+    nonce: U256,
+    expires_at_unix_seconds: u64,
+    reservation: Option<OwnerNonceReadReservation>,
+}
+
+impl DepositWalletNonceLease {
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub(super) fn into_unexpired_reservation(
+        mut self,
+        now_unix_seconds: u64,
+    ) -> Result<OwnerNonceReadReservation> {
+        if self.expires_at_unix_seconds <= now_unix_seconds {
+            return Err(RelayerError::mutation_blocked(
+                "WALLET nonce lease expired before submit; fetch a fresh leased nonce".to_string(),
+            ));
+        }
+        self.reservation.take().ok_or_else(|| {
+            RelayerError::reconciliation_required(
+                "WALLET nonce lease was already consumed; owner-scoped reconciliation required"
+                    .to_string(),
+            )
+        })
+    }
+}
+
+impl fmt::Debug for DepositWalletNonceLease {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletNonceLease")
+            .field("owner", &super::redaction::redacted_address(self.owner))
+            .field("nonce", &self.nonce)
+            .finish_non_exhaustive()
+    }
+}
+
 impl DepositWalletRelayerClient {
-    /// Fetches a WALLET nonce for diagnostics and local test-loopback flows.
+    /// Fetches a WALLET nonce without returning an owner-scoped lease.
     ///
-    /// Production WALLET nonce reads remain disabled in this stack layer
-    /// because a later mutation-state PR must hold an owner-scoped nonce lease
+    /// This compatibility API is limited to test-loopback and non-production
+    /// diagnostics. Production signing is not enabled in this PR; a later
+    /// crate-owned nonce lease capability must keep the owner reservation alive
     /// through signing and submit.
-    pub async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
+    #[cfg(test)]
+    pub(super) async fn get_wallet_nonce(
+        &self,
+        owner: Address,
+        gate: DepositWalletMutationGate,
+    ) -> Result<U256> {
+        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
         if self.base_url.is_production_host() {
             return Err(RelayerError::mutation_blocked(
                 "production WALLET nonce reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
                     .to_string(),
             ));
         }
+        let _reservation = self.reserve_owner_nonce_read(owner)?;
         self.fetch_wallet_nonce(owner).await
+    }
+
+    /// Fetches a WALLET nonce and returns the owner-scoped lease that must be
+    /// consumed by [`Self::submit_signed_wallet_batch_with_nonce_lease`].
+    ///
+    /// This PR does not expose a public production permit for this method.
+    /// Production signing needs a later crate-owned capability so consumers do
+    /// not replace the owner lease with an out-of-band nonce reader.
+    pub async fn get_wallet_nonce_with_lease(
+        &self,
+        owner: Address,
+        gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletNonceLease> {
+        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
+        if self.base_url.is_production_host() {
+            return Err(RelayerError::mutation_blocked(
+                "production WALLET nonce lease reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
+                    .to_string(),
+            ));
+        }
+        let expires_at_unix_seconds = match &gate {
+            DepositWalletMutationGate::Permit(permit) => permit.expires_at_unix_seconds(),
+            DepositWalletMutationGate::Deny => {
+                return Err(RelayerError::mutation_blocked(
+                    "explicit deposit-wallet mutation permit required".to_string(),
+                ))
+            }
+        };
+        let reservation = self.reserve_owner_nonce_read(owner)?;
+        let nonce = match self.fetch_wallet_nonce(owner).await {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                drop(reservation);
+                return Err(error);
+            }
+        };
+        Ok(DepositWalletNonceLease {
+            owner,
+            nonce,
+            expires_at_unix_seconds,
+            reservation: Some(reservation),
+        })
     }
 
     pub(super) async fn fetch_wallet_nonce(&self, owner: Address) -> Result<U256> {
@@ -47,10 +143,7 @@ impl DepositWalletRelayerClient {
             .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
     }
 
-    pub(super) async fn fetch_transaction(
-        &self,
-        transaction_id: &str,
-    ) -> Result<ParsedTransactionReceipt> {
+    pub(super) async fn fetch_transaction(&self, transaction_id: &str) -> Result<ParsedTransactionReceipt> {
         if transaction_id.trim().is_empty() {
             return Err(RelayerError::Other(
                 "transaction id must not be empty".to_string(),
@@ -85,7 +178,6 @@ fn validate_owner_transaction_receipt(
             redacted_address(expected_owner)
         )));
     }
-
     match &receipt.state {
         RelayerTransactionState::Confirmed => {
             if receipt.transaction_hash.is_none() {
@@ -146,6 +238,7 @@ fn parse_wallet_nonce_decimal(raw: &str) -> Result<U256> {
             "invalid WALLET nonce: expected 1-78 ASCII decimal digits".to_string(),
         ));
     }
-    U256::from_dec_str(raw)
-        .map_err(|_| RelayerError::Other("invalid WALLET nonce: outside U256 range".to_string()))
+    U256::from_dec_str(raw).map_err(|_| {
+        RelayerError::Other("invalid WALLET nonce: outside U256 range".to_string())
+    })
 }
