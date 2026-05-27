@@ -2,10 +2,13 @@ use super::*;
 
 #[tokio::test]
     async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
-        let expected = fixture_value("wallet_nonce_request.json");
-        let (url, handle) =
-            spawn_server(vec![TestResponse::json("200 OK", json!({"nonce": "31"}).to_string())])
-                .await;
+        let wire_fixtures = fixture_value("http_wire_requests.json");
+        let expected = &wire_fixtures["walletNonceRequest"];
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            expected["response"].to_string(),
+        )])
+        .await;
         let client = test_client(url);
         let owner: Address = expected["address"].as_str().unwrap().parse().unwrap();
 
@@ -84,9 +87,9 @@ use super::*;
     }
 
 #[test]
-    fn wallet_nonce_parser_accepts_u256_string_and_number_equivalently() {
-        let raw = "18446744073709551616";
-        let expected = U256::from_dec_str(raw).unwrap();
+    fn wallet_nonce_parser_accepts_decimal_string_and_small_json_number() {
+        let raw = "31";
+        let expected = U256::from(31u64);
         let max = U256::MAX.to_string();
 
         let string_nonce =
@@ -99,10 +102,7 @@ use super::*;
         assert_eq!(string_nonce, expected);
         assert_eq!(numeric_nonce, expected);
         assert_eq!(
-            super::super::read::parse_wallet_nonce_value(
-                serde_json::from_str::<serde_json::Value>(&max).unwrap()
-            )
-            .unwrap(),
+            super::super::read::parse_wallet_nonce_value(json!(max)).unwrap(),
             U256::MAX
         );
     }

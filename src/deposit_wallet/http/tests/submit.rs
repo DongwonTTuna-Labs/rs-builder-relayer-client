@@ -455,6 +455,8 @@ use super::*;
 
 #[tokio::test]
     async fn submit_wallet_create_sends_fixture_body_with_explicit_permit() {
+        let wire_fixtures = fixture_value("http_wire_requests.json");
+        let expected = &wire_fixtures["walletCreateSubmit"];
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
             transaction_response("tx-create", "STATE_NEW"),
@@ -471,8 +473,8 @@ use super::*;
         assert_eq!(receipt.state, RelayerTransactionState::New);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "POST");
-        assert_eq!(requests[0].path, SUBMIT_PATH);
+        assert_eq!(requests[0].method, expected["method"].as_str().unwrap());
+        assert_eq!(requests[0].path, expected["path"].as_str().unwrap());
         assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
         assert_eq!(
             requests[0].header("content-type"),
@@ -480,7 +482,7 @@ use super::*;
         );
         assert_eq!(
             serde_json::from_str::<Value>(&requests[0].body).unwrap(),
-            fixture_value("wallet_create_submit_body.json")
+            expected["body"]
         );
     }
 
@@ -526,6 +528,8 @@ use super::*;
 
 #[tokio::test]
     async fn submit_signed_wallet_batch_sends_fixture_body_with_explicit_permit() {
+        let wire_fixtures = fixture_value("http_wire_requests.json");
+        let expected = &wire_fixtures["walletSubmit"];
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let (url, handle) = spawn_server(vec![TestResponse::json(
@@ -544,8 +548,8 @@ use super::*;
         assert_eq!(receipt.state, RelayerTransactionState::New);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "POST");
-        assert_eq!(requests[0].path, SUBMIT_PATH);
+        assert_eq!(requests[0].method, expected["method"].as_str().unwrap());
+        assert_eq!(requests[0].path, expected["path"].as_str().unwrap());
         assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
         assert_eq!(
             requests[0].header("RELAYER_API_KEY_ADDRESS"),
@@ -561,7 +565,7 @@ use super::*;
         );
         assert_eq!(
             serde_json::from_str::<Value>(&requests[0].body).unwrap(),
-            fixture_value("wallet_signed_submit_body.json")
+            expected["body"]
         );
     }
 
