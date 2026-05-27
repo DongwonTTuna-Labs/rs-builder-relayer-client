@@ -260,6 +260,23 @@ use super::*;
     }
 
 #[test]
+    fn idless_manual_clear_is_idempotent_after_owner_already_unblocked() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let payload_hash = "payload:idless-already-cleared".to_string();
+
+        client
+            .clear_idless_ambiguous_submit_after_manual_reconciliation(
+                idless_submit_reconciliation_evidence_for_payload(owner, payload_hash),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap();
+
+        client.ensure_owner_unblocked(owner).unwrap();
+    }
+
+#[test]
     fn idless_manual_clear_keeps_owner_blocked_without_authoritative_absence_evidence() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =

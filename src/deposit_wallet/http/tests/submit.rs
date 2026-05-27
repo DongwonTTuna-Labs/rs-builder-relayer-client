@@ -683,6 +683,7 @@ use super::*;
     async fn signed_submit_salvages_valid_transaction_id_from_unusable_success_response() {
         let signed = signed_wallet_batch();
         let owner = signed.owner();
+        let owner_text = to_checksum(&owner, None);
         let (url, handle) = spawn_server(vec![
             TestResponse::json(
                 "200 OK",
@@ -695,12 +696,11 @@ use super::*;
             ),
             TestResponse::json(
                 "200 OK",
-                json!({
-                    "transactionID": "tx-salvaged-submit",
-                    "state": "STATE_CONFIRMED",
-                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
-                    "owner": to_checksum(&owner, None)
-                })
+                transaction_response_value_for_owner(
+                    "tx-salvaged-submit",
+                    "STATE_CONFIRMED",
+                    &owner_text,
+                )
                 .to_string(),
             ),
         ])

@@ -787,12 +787,25 @@ mod tests {
                 .await
                 .expect("server accept should not hang")
                 .expect("server should accept");
-            let mut buffer = [0u8; 1024];
-            let read = timeout(TEST_SERVER_IO_TIMEOUT, stream.read(&mut buffer))
-                .await
-                .expect("request read should not hang")
-                .expect("request should read");
-            let request = String::from_utf8_lossy(&buffer[..read]);
+            let request = timeout(TEST_SERVER_IO_TIMEOUT, async {
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 1024];
+                loop {
+                    let read = stream.read(&mut buffer).await.expect("request should read");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                    assert!(request.len() <= 16 * 1024, "request headers too large");
+                }
+                request
+            })
+            .await
+            .expect("request read should not hang");
+            let request = String::from_utf8_lossy(&request);
             assert!(
                 request.starts_with("POST /submit HTTP/1.1\r\n"),
                 "unexpected request line: {request:?}"

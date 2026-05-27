@@ -1,5 +1,6 @@
 use polymarket_relayer::auth::builder::build_hmac_signature;
 use polymarket_relayer::auth::{AuthMethod, BuilderConfig};
+use secrecy::{ExposeSecret, SecretString};
 
 #[test]
 fn test_hmac_matches_reference_sdk() {
@@ -32,11 +33,11 @@ fn test_hmac_url_safe_base64() {
 #[test]
 fn test_builder_auth_generates_all_required_headers() {
     // Use a valid base64 secret
-    let config = BuilderConfig {
-        key: "test-key".to_string(),
-        secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-        passphrase: "test-passphrase".to_string(),
-    };
+    let config = BuilderConfig::new(
+        "test-key",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "test-passphrase",
+    );
     let auth = AuthMethod::Builder(config);
     let headers = auth.headers("POST", "/submit", r#"{"data":"test"}"#).unwrap();
 
@@ -82,7 +83,7 @@ fn test_relayer_key_debug_redacts_malformed_address() {
     let secret_key = "secret-relayer-key";
     let malformed_address = "not-a-valid-address-secret";
     let auth = AuthMethod::RelayerKey {
-        api_key: secret_key.to_string(),
+        api_key: SecretString::from(secret_key.to_string()),
         address: malformed_address.to_string(),
     };
 
@@ -98,9 +99,9 @@ fn test_auth_method_builder_convenience() {
     let auth = AuthMethod::builder("k", "s", "p");
     match auth {
         AuthMethod::Builder(config) => {
-            assert_eq!(config.key, "k");
-            assert_eq!(config.secret, "s");
-            assert_eq!(config.passphrase, "p");
+            assert_eq!(config.key.expose_secret(), "k");
+            assert_eq!(config.secret.expose_secret(), "s");
+            assert_eq!(config.passphrase.expose_secret(), "p");
         }
         _ => panic!("expected Builder variant"),
     }

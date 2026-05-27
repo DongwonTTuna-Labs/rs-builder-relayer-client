@@ -144,7 +144,7 @@ impl DepositWalletRelayerClient {
         let response = self
             .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
             .await?;
-        parse_transaction_response(&transaction_id, &response)
+        parse_transaction_response(&transaction_id, self.config.factory, &response)
             .map_err(|parse_error| parse_error.error)
     }
 
@@ -163,7 +163,7 @@ impl DepositWalletRelayerClient {
             )
             .await
             .map_err(PollFetchError::from_response_error)?;
-        parse_transaction_response(transaction_id, &response)
+        parse_transaction_response(transaction_id, self.config.factory, &response)
             .map_err(PollFetchError::from_transaction_parse_error)
     }
 }
@@ -211,7 +211,15 @@ fn validate_public_transaction_receipt(
 pub(super) fn parse_wallet_nonce_value(value: serde_json::Value) -> Result<U256> {
     match value {
         serde_json::Value::String(raw) => parse_wallet_nonce_decimal(&raw),
-        serde_json::Value::Number(number) => parse_wallet_nonce_decimal(&number.to_string()),
+        serde_json::Value::Number(number) => {
+            let nonce = number.as_u64().ok_or_else(|| {
+                RelayerError::Other(
+                    "invalid WALLET nonce: JSON number must be an unsigned integer within u64 range; use a decimal string for larger values"
+                        .to_string(),
+                )
+            })?;
+            Ok(U256::from(nonce))
+        }
         _ => Err(RelayerError::Other(
             "invalid WALLET nonce: expected decimal string or JSON number".to_string(),
         )),

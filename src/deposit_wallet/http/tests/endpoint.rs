@@ -69,11 +69,11 @@ use super::*;
         assert!(!rendered_headers.contains(API_KEY));
         assert!(!rendered_headers.contains(&to_checksum(&address(API_KEY_ADDRESS), None)));
 
-        let builder = BuilderConfig {
-            key: "builder-key-secret".to_string(),
-            secret: "builder-hmac-secret".to_string(),
-            passphrase: "builder-passphrase-secret".to_string(),
-        };
+        let builder = BuilderConfig::new(
+            "builder-key-secret",
+            "builder-hmac-secret",
+            "builder-passphrase-secret",
+        );
         let rendered = format!("{:?}", AuthMethod::Builder(builder));
         assert!(!rendered.contains("builder-key-secret"));
         assert!(!rendered.contains("builder-hmac-secret"));

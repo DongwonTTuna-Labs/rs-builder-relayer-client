@@ -387,12 +387,15 @@ impl DepositWalletRelayerClient {
         )?;
 
         let state = self.mutation_state()?;
-        let created_at_unix_seconds = state
-            .owner_blocks
-            .get(&owner)
+        let current_block = state.owner_blocks.get(&owner);
+        let created_at_unix_seconds = current_block
             .filter(|block| block.payload_hash() == evidence.payload_hash())
             .map(OwnerMutationBlock::created_at_unix_seconds);
+        let owner_is_unblocked = current_block.is_none();
         drop(state);
+        if owner_is_unblocked {
+            return Ok(());
+        }
         if let Some(created_at_unix_seconds) = created_at_unix_seconds {
             validate_idless_reconciliation_evidence(
                 &evidence,

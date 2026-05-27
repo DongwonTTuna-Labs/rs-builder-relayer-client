@@ -231,12 +231,7 @@ use super::*;
                     "state": "STATE_FAILED",
                     "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
                 },
-                {
-                    "transactionID": "tx-array",
-                    "state": "STATE_CONFIRMED",
-                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
-                    "owner": WALLET_CREATE_OWNER
-                }
+                transaction_response_value("tx-array", "STATE_CONFIRMED")
             ])
             .to_string(),
         )])
@@ -266,12 +261,8 @@ use super::*;
                 })
             })
             .collect::<Vec<_>>();
-        body[MAX_TRANSACTION_RESPONSE_ITEMS - 1] = json!({
-            "transactionId": "tx-array-alias",
-            "state": "STATE_CONFIRMED",
-            "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
-            "owner": WALLET_CREATE_OWNER
-        });
+        body[MAX_TRANSACTION_RESPONSE_ITEMS - 1] =
+            transaction_response_value("tx-array-alias", "STATE_CONFIRMED");
         let (url, handle) =
             spawn_server(vec![TestResponse::json("200 OK", json!(body).to_string())]).await;
         let client = test_client(url);
@@ -287,11 +278,7 @@ use super::*;
 #[test]
     fn transaction_array_parser_rejects_missing_duplicate_invalid_and_limit_cases() {
         let item = |transaction_id: String| {
-            json!({
-                "transactionID": transaction_id,
-                "state": "STATE_CONFIRMED",
-                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
-            })
+            transaction_response_value(&transaction_id, "STATE_CONFIRMED")
         };
         let target = "tx-array-boundary";
         let missing = json!([item("other-tx".to_string())]).to_string();
@@ -310,7 +297,12 @@ use super::*;
             ("invalid", invalid, false, "invalid transactionID"),
             ("oversized", oversized, false, "more than"),
         ] {
-            let parse_error = parse_transaction_response(target, body.as_bytes()).unwrap_err();
+            let parse_error = parse_transaction_response(
+                target,
+                deposit_wallet_contract_config(137).unwrap().factory,
+                body.as_bytes(),
+            )
+            .unwrap_err();
             assert_eq!(
                 parse_error.retryable_absence, retryable_absence,
                 "{label} array response retryable absence classification changed"
@@ -534,32 +526,31 @@ use super::*;
         for (transaction_id, body, expected_message) in [
             (
                 "tx-ownerless-new",
-                json!({
-                    "transactionID": "tx-ownerless-new",
-                    "state": "STATE_NEW",
-                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
-                })
-                .to_string(),
+                {
+                    let mut response = transaction_response_value("tx-ownerless-new", "STATE_NEW");
+                    response.as_object_mut().unwrap().remove("owner");
+                    response.to_string()
+                },
                 "owner evidence",
             ),
             (
                 "tx-ownerless-confirmed",
-                json!({
-                    "transactionID": "tx-ownerless-confirmed",
-                    "state": "STATE_CONFIRMED",
-                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
-                })
-                .to_string(),
+                {
+                    let mut response =
+                        transaction_response_value("tx-ownerless-confirmed", "STATE_CONFIRMED");
+                    response.as_object_mut().unwrap().remove("owner");
+                    response.to_string()
+                },
                 "owner evidence",
             ),
             (
                 "tx-confirmed-without-hash",
-                json!({
-                    "transactionID": "tx-confirmed-without-hash",
-                    "state": "STATE_CONFIRMED",
-                    "owner": WALLET_CREATE_OWNER
-                })
-                .to_string(),
+                {
+                    let mut response =
+                        transaction_response_value("tx-confirmed-without-hash", "STATE_CONFIRMED");
+                    response.as_object_mut().unwrap().remove("transactionHash");
+                    response.to_string()
+                },
                 "transactionHash",
             ),
         ] {
@@ -581,12 +572,11 @@ use super::*;
     async fn get_transaction_rejects_invalid_hash_and_oversized_success_body() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
-            json!({
-                "transactionID": "tx-bad-hash",
-                "state": "STATE_CONFIRMED",
-                "transactionHash": "bad\nhash"
-            })
-            .to_string(),
+            {
+                let mut response = transaction_response_value("tx-bad-hash", "STATE_CONFIRMED");
+                response["transactionHash"] = json!("bad\nhash");
+                response.to_string()
+            },
         )])
         .await;
         let client = test_client(url);
@@ -628,6 +618,9 @@ use super::*;
             "200 OK",
             json!({
                 "transactionID": "tx-large-metadata",
+                "type": WALLET_TRANSACTION_TYPE,
+                "from": WALLET_CREATE_OWNER,
+                "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
                 "state": "STATE_CONFIRMED",
                 "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
                 "owner": WALLET_CREATE_OWNER,
@@ -652,7 +645,12 @@ use super::*;
         let transaction_id = "0190b317-a1d3-7bec-9b91-eeb6dcd3a620";
         let fixture = fixture_text("wallet_transaction_response.json");
 
-        let parsed = parse_transaction_response(transaction_id, fixture.as_bytes()).unwrap();
+        let parsed = parse_transaction_response(
+            transaction_id,
+            deposit_wallet_contract_config(137).unwrap().factory,
+            fixture.as_bytes(),
+        )
+        .unwrap();
 
         assert_eq!(parsed.receipt.transaction_id, transaction_id);
         assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
@@ -672,12 +670,61 @@ use super::*;
         assert!(!rendered.contains("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"));
     }
 
+#[test]
+    fn transaction_response_validates_type_from_and_to_wire_evidence() {
+        let expected_to = deposit_wallet_contract_config(137).unwrap().factory;
+        let other_owner = "0x0000000000000000000000000000000000000001";
+        let other_to = "0x0000000000000000000000000000000000000002";
+
+        let mut missing_type = transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        missing_type.as_object_mut().unwrap().remove("type");
+        let mut wrong_type = transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        wrong_type["type"] = json!("SAFE");
+        let mut missing_owner = transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        missing_owner.as_object_mut().unwrap().remove("owner");
+        let mut missing_from = transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        missing_from.as_object_mut().unwrap().remove("from");
+        let mut mismatched_from =
+            transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        mismatched_from["from"] = json!(other_owner);
+        let mut missing_to = transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        missing_to.as_object_mut().unwrap().remove("to");
+        let mut mismatched_to =
+            transaction_response_value("tx-wire-evidence", "STATE_CONFIRMED");
+        mismatched_to["to"] = json!(other_to);
+
+        for (label, response, expected_message) in [
+            ("missing type", missing_type, "transaction type"),
+            ("wrong type", wrong_type, "not WALLET"),
+            ("missing owner", missing_owner, "owner evidence"),
+            ("missing from", missing_from, "from address"),
+            ("mismatched from", mismatched_from, "from address"),
+            ("missing to", missing_to, "to address"),
+            ("mismatched to", mismatched_to, "expected relayer target"),
+        ] {
+
+            let error =
+                parse_transaction_response("tx-wire-evidence", expected_to, response.to_string().as_bytes())
+                    .unwrap_err()
+                    .error;
+
+            assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX), "{label}: {error}");
+            assert!(
+                error.to_string().contains(expected_message),
+                "{label}: expected {expected_message:?}, got {error}"
+            );
+        }
+    }
+
 #[tokio::test]
     async fn get_transaction_rejects_body_over_transaction_limit() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
             json!({
                 "transactionID": "tx-too-large",
+                "type": WALLET_TRANSACTION_TYPE,
+                "from": WALLET_CREATE_OWNER,
+                "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
                 "state": "STATE_CONFIRMED",
                 "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
                 "owner": WALLET_CREATE_OWNER,
@@ -746,12 +793,11 @@ use super::*;
         let (url, handle) = spawn_server(vec![
             TestResponse::json(
                 "200 OK",
-                json!({
-                    "transactionID": "tx-empty-hash",
-                    "state": "STATE_NEW",
-                    "transactionHash": ""
-                })
-                .to_string(),
+                {
+                    let mut response = transaction_response_value("tx-empty-hash", "STATE_NEW");
+                    response["transactionHash"] = json!("");
+                    response.to_string()
+                },
             ),
             TestResponse::json(
                 "200 OK",

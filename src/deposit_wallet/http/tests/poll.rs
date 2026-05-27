@@ -103,6 +103,9 @@ use super::*;
             "200 OK",
             json!({
                 "transactionID": transaction_id,
+                "type": WALLET_TRANSACTION_TYPE,
+                "from": WALLET_CREATE_OWNER,
+                "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
                 "state": "STATE_CONFIRMED",
                 "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
             })
@@ -721,6 +724,9 @@ use super::*;
             "200 OK",
             json!({
                 "transactionID": transaction_id,
+                "type": WALLET_TRANSACTION_TYPE,
+                "from": WALLET_CREATE_OWNER,
+                "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
                 "state": "STATE_CONFIRMED",
                 "owner": WALLET_CREATE_OWNER
             })
@@ -763,6 +769,9 @@ use super::*;
             "200 OK",
             json!({
                 "transactionID": transaction_id,
+                "type": WALLET_TRANSACTION_TYPE,
+                "from": WALLET_CREATE_OWNER,
+                "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
                 "state": "STATE_CONFIRMED",
                 "transactionHash": "0xnot-a-transaction-hash",
                 "owner": WALLET_CREATE_OWNER
@@ -805,6 +814,9 @@ use super::*;
             "200 OK",
             json!({
                 "transactionID": "tx-wrong-owner",
+                "type": WALLET_TRANSACTION_TYPE,
+                "from": format!("{other_owner:?}"),
+                "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
                 "state": "STATE_NEW",
                 "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
                 "owner": format!("{other_owner:?}")

@@ -3,6 +3,7 @@ use base64::{engine::general_purpose, Engine};
 use crate::error::{RelayerError, Result};
 use hmac::{Hmac, Mac};
 use reqwest::header::{HeaderMap, HeaderValue};
+use secrecy::ExposeSecret;
 use sha2::Sha256;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -53,12 +54,18 @@ pub fn build_headers(
         .as_secs();
     let timestamp_str = timestamp.to_string();
 
-    let signature = build_hmac_signature(&config.secret, &timestamp_str, method, path, body)?;
+    let signature = build_hmac_signature(
+        config.secret.expose_secret(),
+        &timestamp_str,
+        method,
+        path,
+        body,
+    )?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
         "POLY_BUILDER_API_KEY",
-        HeaderValue::from_str(&config.key)
+        HeaderValue::from_str(config.key.expose_secret())
             .map_err(|_| RelayerError::AuthError("Invalid key header value".to_string()))?,
     );
     headers.insert(
@@ -68,7 +75,7 @@ pub fn build_headers(
     );
     headers.insert(
         "POLY_BUILDER_PASSPHRASE",
-        HeaderValue::from_str(&config.passphrase)
+        HeaderValue::from_str(config.passphrase.expose_secret())
             .map_err(|_| RelayerError::AuthError("Invalid passphrase header value".to_string()))?,
     );
     headers.insert(

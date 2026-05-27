@@ -2,6 +2,7 @@ use super::*;
 use super::redaction::{
     external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
+use crate::deposit_wallet::{WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletTransactionReceipt {
@@ -117,6 +118,12 @@ impl TransactionParseError {
 pub(super) struct RelayerTransactionResponseWithOwner {
     #[serde(flatten)]
     response: RelayerSubmitResponse,
+    #[serde(default, rename = "type")]
+    tx_type: Option<String>,
+    #[serde(default, rename = "from", deserialize_with = "deserialize_optional_address")]
+    from_address: Option<Address>,
+    #[serde(default, deserialize_with = "deserialize_optional_address")]
+    to: Option<Address>,
     // Official GET /transaction responses include owner as the owner address.
     // The parsed owner is retained separately so owner-scoped polling can
     // validate it before mutating local state.
@@ -162,6 +169,7 @@ fn parse_submit_response_body(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
 
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
+    expected_to: Address,
     bytes: &[u8],
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
@@ -173,7 +181,7 @@ pub(super) fn parse_transaction_response(
                         None,
                     )
                 })?;
-            return parse_verified_transaction_response(expected_transaction_id, response);
+            return parse_verified_transaction_response(expected_transaction_id, expected_to, response);
         }
         Some(b'[') => {}
         _ => {
@@ -188,11 +196,12 @@ pub(super) fn parse_transaction_response(
     }
 
     let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
-    parse_verified_transaction_response(expected_transaction_id, response)
+    parse_verified_transaction_response(expected_transaction_id, expected_to, response)
 }
 
 fn parse_verified_transaction_response(
     expected_transaction_id: &str,
+    expected_to: Address,
     response: RelayerTransactionResponseWithOwner,
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     let owner = response.owner;
@@ -213,9 +222,86 @@ fn parse_verified_transaction_response(
             None,
         ));
     }
+    validate_transaction_wire_evidence(&response, expected_to, owner)?;
     let parsed = receipt_from_submit_response(response.response, owner)
         .map_err(|error| TransactionParseError::new(error, owner))?;
     Ok(parsed)
+}
+
+fn validate_transaction_wire_evidence(
+    response: &RelayerTransactionResponseWithOwner,
+    expected_to: Address,
+    owner: Option<Address>,
+) -> std::result::Result<(), TransactionParseError> {
+    let tx_type = response.tx_type.as_deref().ok_or_else(|| {
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response did not include deposit-wallet transaction type; manual reconciliation required"
+                    .to_string(),
+            ),
+            owner,
+        )
+    })?;
+    if !matches!(tx_type, WALLET_CREATE_TRANSACTION_TYPE | WALLET_TRANSACTION_TYPE) {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
+                    .to_string(),
+            ),
+            owner,
+        ));
+    }
+
+    let owner = owner.ok_or_else(|| {
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "deposit wallet transaction response did not include owner evidence; manual reconciliation required"
+                    .to_string(),
+            ),
+            None,
+        )
+    })?;
+    let from_address = response.from_address.ok_or_else(|| {
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response did not include from address; manual reconciliation required"
+                    .to_string(),
+            ),
+            Some(owner),
+        )
+    })?;
+    if from_address != owner {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response from address {} did not match owner evidence {}; manual reconciliation required",
+                redacted_address(from_address),
+                redacted_address(owner)
+            )),
+            Some(owner),
+        ));
+    }
+
+    let to = response.to.ok_or_else(|| {
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response did not include to address; manual reconciliation required"
+                    .to_string(),
+            ),
+            Some(owner),
+        )
+    })?;
+    if to != expected_to {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response to address {} did not match expected relayer target {}; manual reconciliation required",
+                redacted_address(to),
+                redacted_address(expected_to)
+            )),
+            Some(owner),
+        ));
+    }
+
+    Ok(())
 }
 
 pub(super) fn select_transaction_response_from_array(

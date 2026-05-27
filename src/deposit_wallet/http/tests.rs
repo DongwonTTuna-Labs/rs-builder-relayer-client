@@ -11,7 +11,7 @@
     use crate::auth::{AuthMethod, BuilderConfig};
     use crate::deposit_wallet::{
         deposit_wallet_contract_config, validate_deposit_wallet_batch_signature,
-        DepositWalletBatchToSign, DepositWalletCall,
+        DepositWalletBatchToSign, DepositWalletCall, WALLET_TRANSACTION_TYPE,
     };
 
     use super::*;
@@ -731,14 +731,28 @@
             .expect("response should write");
     }
 
-    fn transaction_response(transaction_id: &str, state: &str) -> String {
+    fn transaction_response_value_for_owner(
+        transaction_id: &str,
+        state: &str,
+        owner: &str,
+    ) -> Value {
         json!({
             "transactionID": transaction_id,
+            "type": WALLET_TRANSACTION_TYPE,
+            "from": owner,
+            "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
             "state": state,
             "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
-            "owner": WALLET_CREATE_OWNER
+            "owner": owner
         })
-        .to_string()
+    }
+
+    fn transaction_response_value(transaction_id: &str, state: &str) -> Value {
+        transaction_response_value_for_owner(transaction_id, state, WALLET_CREATE_OWNER)
+    }
+
+    fn transaction_response(transaction_id: &str, state: &str) -> String {
+        transaction_response_value(transaction_id, state).to_string()
     }
 
     async fn poll_sequence(
