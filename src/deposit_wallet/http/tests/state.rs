@@ -569,7 +569,7 @@ use super::*;
     }
 
 #[test]
-    fn recovered_transaction_records_respect_capacity_when_owner_is_already_blocked() {
+    fn recovered_transaction_without_payload_record_does_not_allocate_at_capacity() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =
             test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
@@ -594,11 +594,17 @@ use super::*;
             }
         }
 
-        let error = client
+        client
             .record_recovered_inflight_transaction(owner, "tx-over-capacity")
-            .unwrap_err();
+            .unwrap();
 
-        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert_eq!(
+            client.ambiguous_submit_block(owner),
+            Some("payload:ambiguous-owner".to_string())
+        );
+        let state = client.mutation_state().unwrap();
+        assert_eq!(state.transaction_owners.len(), MAX_OWNER_MUTATION_RECORDS);
+        assert!(!state.transaction_owners.contains_key("tx-over-capacity"));
     }
 
 #[test]

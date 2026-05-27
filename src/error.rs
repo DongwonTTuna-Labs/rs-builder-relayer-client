@@ -66,4 +66,29 @@ impl RelayerError {
             message.into()
         ))
     }
+
+    pub fn is_deposit_wallet_mutation_blocked(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet mutation blocked:"))
+    }
+
+    pub fn is_deposit_wallet_ambiguous_submit(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Ambiguous deposit-wallet submit:"))
+    }
+
+    pub fn is_deposit_wallet_reconciliation_required(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet reconciliation required:"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RelayerError;
+
+    #[test]
+    fn deposit_wallet_error_classifiers_do_not_require_consumer_prefix_parsing() {
+        assert!(RelayerError::mutation_blocked("locked").is_deposit_wallet_mutation_blocked());
+        assert!(RelayerError::ambiguous_submit("unknown post result").is_deposit_wallet_ambiguous_submit());
+        assert!(RelayerError::reconciliation_required("manual check").is_deposit_wallet_reconciliation_required());
+        assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_ambiguous_submit());
+    }
 }

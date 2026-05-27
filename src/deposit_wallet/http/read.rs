@@ -5,7 +5,7 @@ use super::response::{
 
 #[derive(Deserialize)]
 pub(super) struct WalletNonceResponse {
-    nonce: String,
+    nonce: serde_json::Value,
 }
 
 
@@ -24,8 +24,7 @@ impl DepositWalletRelayerClient {
         let response = self.send(Method::GET, url, None).await?;
         let nonce = serde_json::from_slice::<WalletNonceResponse>(&response)
             .map_err(|e| RelayerError::Other(format!("could not parse WALLET nonce: {e}")))?;
-        U256::from_dec_str(&nonce.nonce)
-            .map_err(|e| RelayerError::Other(format!("invalid WALLET nonce: {e}")))
+        parse_wallet_nonce_value(nonce.nonce)
     }
 
     pub async fn get_transaction(
@@ -76,4 +75,18 @@ impl DepositWalletRelayerClient {
             .map_err(PollFetchError::from_transaction_parse_error)
     }
 
+}
+
+fn parse_wallet_nonce_value(value: serde_json::Value) -> Result<U256> {
+    match value {
+        serde_json::Value::String(raw) => U256::from_dec_str(&raw)
+            .map_err(|e| RelayerError::Other(format!("invalid WALLET nonce: {e}"))),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(U256::from)
+            .ok_or_else(|| RelayerError::Other("invalid WALLET nonce: non-u64 JSON number".to_string())),
+        _ => Err(RelayerError::Other(
+            "invalid WALLET nonce: expected decimal string or JSON number".to_string(),
+        )),
+    }
 }

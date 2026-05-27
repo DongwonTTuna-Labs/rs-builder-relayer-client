@@ -595,9 +595,16 @@ impl DepositWalletRelayerClient {
                     return Ok(());
                 }
                 OwnerMutationBlock::Ambiguous { payload_hash, .. } => {
-                    if let Some(record) = state.transaction_owners.get(transaction_id) {
-                        source = record.source;
+                    let Some(record) = state.transaction_owners.get(transaction_id) else {
+                        return Ok(());
+                    };
+                    if record.owner != owner || record.payload_hash != *payload_hash {
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "transaction {} is already associated with a different owner or payload; manual reconciliation required",
+                            sanitized_external_token(transaction_id)
+                        )));
                     }
+                    source = record.source;
                     payload_hash.clone()
                 }
                 _ => return Err(owner_block_error(owner, block)),

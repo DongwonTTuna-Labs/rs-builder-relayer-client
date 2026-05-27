@@ -24,6 +24,21 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn get_wallet_nonce_accepts_numeric_nonce_response() {
+        let (url, handle) =
+            spawn_server(vec![TestResponse::json("200 OK", json!({"nonce": 31}).to_string())])
+                .await;
+        let client = test_client(url);
+        let owner = address(WALLET_CREATE_OWNER);
+
+        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+
+        assert_eq!(nonce, U256::from(31u64));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
     async fn get_transaction_accepts_array_response() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
@@ -54,6 +69,34 @@ use super::*;
         );
         let requests = handle.await.unwrap();
         assert_eq!(requests[0].path, "/transaction?id=tx-array");
+    }
+
+#[tokio::test]
+    async fn get_transaction_accepts_array_alias_and_exact_item_limit() {
+        let mut body = (0..MAX_TRANSACTION_RESPONSE_ITEMS)
+            .map(|index| {
+                json!({
+                    "transactionID": format!("other-tx-{index}"),
+                    "state": "STATE_FAILED",
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                })
+            })
+            .collect::<Vec<_>>();
+        body[MAX_TRANSACTION_RESPONSE_ITEMS - 1] = json!({
+            "transactionId": "tx-array-alias",
+            "state": "STATE_CONFIRMED",
+            "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+        });
+        let (url, handle) =
+            spawn_server(vec![TestResponse::json("200 OK", json!(body).to_string())]).await;
+        let client = test_client(url);
+
+        let receipt = client.get_transaction("tx-array-alias").await.unwrap();
+
+        assert_eq!(receipt.transaction_id, "tx-array-alias");
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        let requests = handle.await.unwrap();
+        assert_eq!(requests[0].path, "/transaction?id=tx-array-alias");
     }
 
 #[tokio::test]

@@ -107,6 +107,12 @@ use super::*;
                 Duration::from_millis(100),
                 Duration::from_secs(120),
             ),
+            (
+                "tx-retry-after-capped",
+                "600".to_string(),
+                Duration::from_millis(100),
+                MAX_RETRY_AFTER_INTERVAL,
+            ),
         ] {
             let owner = address(WALLET_CREATE_OWNER);
             let (url, handle) = spawn_server(vec![
@@ -761,6 +767,63 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn owner_aware_recovery_permit_parse_errors_record_only_matching_response_owner() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let other_owner = address(API_KEY_ADDRESS);
+
+        for (label, response_owner, should_record) in [
+            ("matching", Some(owner), true),
+            ("mismatch", Some(other_owner), false),
+            ("missing", None, false),
+        ] {
+            let transaction_id = format!("tx-recovery-owner-{label}");
+            let mut body = json!({
+                "transactionID": transaction_id,
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "not-a-transaction-hash",
+            });
+            if let Some(response_owner) = response_owner {
+                body["owner"] = json!(to_checksum(&response_owner, None));
+            }
+            let (url, handle) =
+                spawn_server(vec![TestResponse::json("200 OK", body.to_string())]).await;
+            let client = test_client(url);
+
+            let error = client
+                .poll_owner_transaction_with_reconciliation_permit(
+                    owner,
+                    &transaction_id,
+                    DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                    owner_recovery_poll_permit_for(owner),
+                )
+                .await
+                .unwrap_err();
+
+            assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+            {
+                let state = client.mutation_state().unwrap();
+                assert_eq!(
+                    state.transaction_owners.contains_key(&transaction_id),
+                    should_record,
+                    "{label} response owner should control recovered transaction recording"
+                );
+            }
+            if should_record {
+                assert!(client.ambiguous_submit_block(owner).is_some());
+            } else {
+                assert!(client.ambiguous_submit_block(owner).is_none());
+                client.ensure_owner_unblocked(owner).unwrap();
+            }
+            let requests = handle.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(
+                requests[0].path,
+                format!("/transaction?id={transaction_id}")
+            );
+        }
+    }
+
+#[tokio::test]
     async fn owner_aware_recovery_permit_keeps_ambiguous_block_without_payload_identity() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-recovered-from-ambiguous";
@@ -796,6 +859,35 @@ use super::*;
             requests[0].path,
             "/transaction?id=tx-recovered-from-ambiguous"
         );
+    }
+
+#[tokio::test]
+    async fn owner_aware_recovery_permit_pending_without_payload_keeps_ambiguous_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-recovered-pending-without-payload";
+        let payload_hash = "payload:ambiguous-before-pending-recovery".to_string();
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response(transaction_id, "STATE_NEW"),
+        )])
+        .await;
+        let client = test_client(url);
+        client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+
+        let error = client
+            .poll_owner_transaction_with_reconciliation_permit(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+                owner_recovery_poll_permit_for(owner),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
     }
 
 #[tokio::test]

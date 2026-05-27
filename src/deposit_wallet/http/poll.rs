@@ -168,7 +168,11 @@ impl DepositWalletRelayerClient {
                             policy.interval_for_transaction_attempt(&transaction_id, attempt);
                         let sleep_for = poll_error
                             .retry_after
-                            .map(|retry_after| retry_after.max(policy_interval))
+                            .map(|retry_after| {
+                                retry_after
+                                    .min(MAX_RETRY_AFTER_INTERVAL)
+                                    .max(policy_interval)
+                            })
                             .unwrap_or(policy_interval);
                         self.sleeper
                             .sleep(sleep_for)
