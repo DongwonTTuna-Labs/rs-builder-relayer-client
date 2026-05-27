@@ -131,6 +131,23 @@ use super::*;
         .unwrap_err();
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
 
+        let production_nonce_evidence = DepositWalletOwnerSerializationEvidence::new(
+            address(WALLET_CREATE_OWNER),
+            client
+                .mutation_scope(DepositWalletMutationAction::WalletNonceRead)
+                .unwrap(),
+            "unit-test owner serialization guard",
+            "production-nonce-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "production WALLET nonce read",
+            production_nonce_evidence,
+        )
+        .unwrap();
+
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let production_batch_evidence = DepositWalletOwnerSerializationEvidence::new(
@@ -476,9 +493,6 @@ use super::*;
         let owner = signed.owner();
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
-            json!({"nonce": signed.nonce().to_string()}).to_string(),
-        ), TestResponse::json(
-            "200 OK",
             transaction_response("tx-wallet", "STATE_NEW"),
         )])
         .await;
@@ -492,12 +506,9 @@ use super::*;
         assert_eq!(receipt.transaction_id, "tx-wallet");
         assert_eq!(receipt.state, RelayerTransactionState::New);
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].method, "GET");
-        assert_eq!(
-            requests[0].path,
-            format!("/nonce?address={}&type=WALLET", to_checksum(&owner, None))
-        );
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, SUBMIT_PATH);
         assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
         assert_eq!(
             requests[0].header("RELAYER_API_KEY_ADDRESS"),
@@ -507,14 +518,12 @@ use super::*;
             requests[0].header("RELAYER_API_KEY_ADDRESS"),
             Some(to_checksum(&owner, None).as_str())
         );
-        assert_eq!(requests[1].method, "POST");
-        assert_eq!(requests[1].path, SUBMIT_PATH);
         assert_eq!(
-            requests[1].header("content-type"),
+            requests[0].header("content-type"),
             Some("application/json")
         );
         assert_eq!(
-            serde_json::from_str::<Value>(&requests[1].body).unwrap(),
+            serde_json::from_str::<Value>(&requests[0].body).unwrap(),
             fixture_value("wallet_signed_submit_body.json")
         );
     }
@@ -527,11 +536,7 @@ use super::*;
         ] {
             let signed = signed_wallet_batch();
             let owner = signed.owner();
-            let (url, handle) = spawn_server(vec![
-                TestResponse::json("200 OK", json!({"nonce": signed.nonce().to_string()}).to_string()),
-                TestResponse::json(status, "{}"),
-            ])
-            .await;
+            let (url, handle) = spawn_server(vec![TestResponse::json(status, "{}")]).await;
             let client = test_client(url);
 
             let error = client
@@ -554,9 +559,8 @@ use super::*;
                 .unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
             let requests = handle.await.unwrap();
-            assert_eq!(requests.len(), 2);
-            assert_eq!(requests[0].method, "GET");
-            assert_eq!(requests[1].method, "POST");
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "POST");
         }
     }
 
@@ -568,20 +572,8 @@ use super::*;
             .await
             .expect("test server should bind");
         let addr = listener.local_addr().unwrap();
-        let nonce = signed.nonce();
         let handle = tokio::spawn(async move {
             let mut requests = Vec::new();
-            let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
-                .await
-                .expect("server accept should not hang")
-                .expect("server should accept");
-            requests.push(read_request(&mut stream).await);
-            write_response(
-                &mut stream,
-                TestResponse::json("200 OK", json!({"nonce": nonce.to_string()}).to_string()),
-            )
-            .await;
-
             let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
                 .await
                 .expect("server accept should not hang")
@@ -609,8 +601,8 @@ use super::*;
         let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[1].path, SUBMIT_PATH);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, SUBMIT_PATH);
     }
 
 #[tokio::test]
@@ -618,7 +610,6 @@ use super::*;
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let (url, handle) = spawn_server(vec![
-            TestResponse::json("200 OK", json!({"nonce": signed.nonce().to_string()}).to_string()),
             TestResponse::json_without_content_length(
                 "200 OK",
                 "x".repeat(MAX_SUCCESS_BODY_BYTES + 1),
@@ -643,8 +634,8 @@ use super::*;
         let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[1].path, SUBMIT_PATH);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, SUBMIT_PATH);
     }
 
 #[tokio::test]
@@ -652,7 +643,6 @@ use super::*;
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let (url, handle) = spawn_server(vec![
-            TestResponse::json("200 OK", json!({"nonce": signed.nonce().to_string()}).to_string()),
             TestResponse::json(
                 "200 OK",
                 json!({
@@ -700,9 +690,9 @@ use super::*;
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[1].path, SUBMIT_PATH);
-        assert_eq!(requests[2].path, "/transaction?id=tx-salvaged-submit");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].path, SUBMIT_PATH);
+        assert_eq!(requests[1].path, "/transaction?id=tx-salvaged-submit");
     }
 
 #[tokio::test]
@@ -811,40 +801,15 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn submit_signed_wallet_batch_rejects_stale_nonce_before_post() {
+    async fn submit_signed_wallet_batch_posts_without_nonce_preflight() {
         let signed = signed_wallet_batch();
-        let (url, handle) = spawn_server(vec![
-            TestResponse::json(
-                "200 OK",
-                json!({"nonce": (signed.nonce() + U256::one()).to_string()}).to_string(),
-            ),
-            TestResponse::json(
-                "200 OK",
-                json!({"nonce": signed.nonce().to_string()}).to_string(),
-            ),
-            TestResponse::json(
-                "200 OK",
-                transaction_response("tx-stale-nonce-retry", "STATE_NEW"),
-            ),
-        ])
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response("tx-no-nonce-preflight", "STATE_NEW"),
+        )])
         .await;
         let client = test_client(url);
         let owner = signed.owner();
-
-        let error = client
-            .submit_signed_wallet_batch(
-                signed.clone(),
-                mutation_permit_for_scope(
-                    owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
-                ),
-            )
-            .await
-            .unwrap_err();
-
-        assert!(matches!(error, RelayerError::Signing(message) if message.contains("nonce")));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
 
         let receipt = client
             .submit_signed_wallet_batch(
@@ -856,56 +821,19 @@ use super::*;
             )
             .await
             .unwrap();
-        assert_eq!(receipt.transaction_id, "tx-stale-nonce-retry");
+        assert_eq!(receipt.transaction_id, "tx-no-nonce-preflight");
 
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[0].method, "GET");
-        assert!(requests[0].path.contains("/nonce?address="));
-        assert_eq!(requests[1].method, "GET");
-        assert!(requests[1].path.contains("/nonce?address="));
-        assert_eq!(requests[2].method, "POST");
-        assert_eq!(requests[2].path, SUBMIT_PATH);
-    }
-
-#[tokio::test]
-    async fn signed_wallet_batch_nonce_mismatch_does_not_post_and_clears_reservation() {
-        let signed = signed_wallet_batch();
-        let owner = signed.owner();
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            json!({"nonce": (signed.nonce() + U256::one()).to_string()}).to_string(),
-        )])
-        .await;
-        let client = test_client(url);
-
-        let error = client
-            .submit_signed_wallet_batch(signed, wallet_batch_mutation_permit_for(owner))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(error, RelayerError::Signing(message) if message.contains("nonce")));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
-        let mut retry_reservation = client
-            .reserve_owner_submit(owner, "payload:retry-after-nonce-mismatch".to_string())
-            .unwrap();
-        retry_reservation.clear().unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "GET");
-        assert!(requests[0].path.contains("/nonce?address="));
+        assert_eq!(requests[0].method, "POST");
+        assert_eq!(requests[0].path, SUBMIT_PATH);
     }
 
 #[tokio::test]
     async fn signed_wallet_local_request_build_failure_clears_owner_reservation() {
         let signed = signed_wallet_batch();
         let owner = signed.owner();
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            json!({"nonce": signed.nonce().to_string()}).to_string(),
-        )])
-        .await;
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
         let clock: Arc<dyn DepositWalletClock> = Arc::new(FixedClock { now: 1_700_000_000 });
         let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
         let client = DepositWalletRelayerClient::from_parts(
@@ -931,37 +859,15 @@ use super::*;
         assert!(matches!(error, RelayerError::Signing(_)), "{error:?}");
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "GET");
     }
 
 #[tokio::test]
-    async fn signed_wallet_batch_rechecks_deadline_after_nonce_lookup_before_post() {
+    async fn signed_wallet_batch_expired_permit_fails_before_http() {
         let signed = signed_wallet_batch();
-        let deadline = signed.deadline().as_u64();
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            json!({"nonce": signed.nonce().to_string()}).to_string(),
-        )])
-        .await;
-        let before_deadline = deadline - 100;
-        let clock: Arc<dyn DepositWalletClock> = Arc::new(SequenceClock::new([
-            before_deadline,
-            before_deadline,
-            before_deadline,
-            deadline,
-        ]));
-        let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
-        let client = DepositWalletRelayerClient::from_parts(
-            reqwest_client(Duration::from_secs(2)),
-            url,
-            relayer_auth(),
-            deposit_wallet_contract_config(137).unwrap(),
-            clock,
-            sleeper,
-        );
         let owner = signed.owner();
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
+        let client =
+            test_client_with_auth_clock_timeout(url, relayer_auth(), 1_700_000_000, Duration::from_secs(1));
 
         let error = client
             .submit_signed_wallet_batch(
@@ -969,79 +875,20 @@ use super::*;
                 DepositWalletMutationGate::Permit(mutation_permit_token_for_scope_times(
                     owner,
                     client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
-                    deadline - 200,
-                    deadline + 100,
+                    1_699_999_800,
+                    1_699_999_900,
                 )),
             )
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(error, RelayerError::Signing(ref message) if message.contains("expired")),
-            "{error:?}"
-        );
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
-        let mut retry_reservation = client
-            .reserve_owner_submit(owner, "payload:retry-after-deadline-error".to_string())
-            .unwrap();
-        retry_reservation.clear().unwrap();
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "GET");
-    }
-
-#[tokio::test]
-    async fn signed_wallet_batch_rechecks_permit_after_nonce_lookup_before_post() {
-        let signed = signed_wallet_batch();
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "200 OK",
-            json!({"nonce": signed.nonce().to_string()}).to_string(),
-        )])
-        .await;
-        let clock: Arc<dyn DepositWalletClock> = Arc::new(SequenceClock::new([
-            1_700_000_000,
-            1_700_000_000,
-            1_700_000_001,
-        ]));
-        let sleeper: Arc<dyn DepositWalletSleeper> = Arc::new(RecordingSleeper::default());
-        let client = DepositWalletRelayerClient::from_parts(
-            reqwest_client(Duration::from_secs(2)),
-            url,
-            relayer_auth(),
-            deposit_wallet_contract_config(137).unwrap(),
-            clock,
-            sleeper,
-        );
-        let owner = signed.owner();
-        let evidence = DepositWalletOwnerSerializationEvidence::new(
-            owner,
-            mutation_scope(DepositWalletMutationAction::WalletBatch),
-            "unit-test short owner serialization guard",
-            "unit-test-short-owner-lease",
-            1_699_999_900,
-            1_700_000_001,
-        )
-        .unwrap();
-        let gate = DepositWalletMutationGate::Permit(
-            DepositWalletMutationPermit::from_owner_serialization_evidence(
-                "unit-test permit expires after nonce lookup",
-                evidence,
-            )
-            .unwrap(),
-        );
-
-        let error = client
-            .submit_signed_wallet_batch(signed, gate)
             .await
             .unwrap_err();
 
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].method, "GET");
+        let mut retry_reservation = client
+            .reserve_owner_submit(owner, "payload:retry-after-expired-permit".to_string())
+            .unwrap();
+        retry_reservation.clear().unwrap();
     }
 
 #[tokio::test]
@@ -1222,35 +1069,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn signed_submit_nonce_failure_clears_owner_reservation() {
-        let signed = signed_wallet_batch();
-        let owner = signed.owner();
-        let (url, handle) = spawn_server(vec![TestResponse::json(
-            "400 Bad Request",
-            json!({"error": "nonce unavailable"}).to_string(),
-        )])
-        .await;
-        let client = test_client(url);
-
-        let error = client
-            .submit_signed_wallet_batch(signed, wallet_batch_mutation_permit_for(owner))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(error, RelayerError::Api { status: 400, .. }));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
-        let mut retry_reservation = client
-            .reserve_owner_submit(owner, "payload:retry-after-nonce-error".to_string())
-            .unwrap();
-        retry_reservation.clear().unwrap();
-        let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].path.contains("/nonce?address="));
-    }
-
-#[tokio::test]
-    async fn post_api_failures_record_ambiguous_submit_including_quota() {
+async fn post_api_failures_record_ambiguous_submit_including_quota() {
         let owner = address(WALLET_CREATE_OWNER);
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "400 Bad Request",

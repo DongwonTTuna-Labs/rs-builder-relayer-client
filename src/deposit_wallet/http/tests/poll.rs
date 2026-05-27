@@ -1771,12 +1771,11 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn public_poll_transaction_does_not_clear_local_owner_state() {
+    async fn public_poll_transaction_clears_known_local_owner_state() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-read-only-poll";
         let (url, handle) = spawn_server(vec![
             TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_NEW")),
-            TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_CONFIRMED")),
             TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_CONFIRMED")),
             TestResponse::json("200 OK", json!({"nonce": "34"}).to_string()),
         ])
@@ -1798,36 +1797,13 @@ use super::*;
             .unwrap();
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
 
-        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
-        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
-        {
-            let state = client.mutation_state().unwrap();
-            assert!(state.transaction_owners.contains_key(transaction_id));
-            match state.owner_blocks.get(&owner) {
-                Some(OwnerMutationBlock::InFlight {
-                    transaction_id: Some(blocked_transaction_id),
-                    ..
-                }) => assert_eq!(blocked_transaction_id, transaction_id),
-                block => panic!("expected in-flight owner block, got {block:?}"),
-            }
-        }
-
-        let receipt = client
-            .poll_owner_transaction(
-                owner,
-                transaction_id,
-                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         client.ensure_owner_unblocked(owner).unwrap();
         let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
         assert_eq!(nonce, U256::from(34u64));
 
         let requests = handle.await.unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 3);
     }
 
 #[tokio::test]

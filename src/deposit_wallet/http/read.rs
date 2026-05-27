@@ -2,12 +2,12 @@ use super::*;
 use super::response::{
     parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt, PollFetchError,
 };
+use super::redaction::{sanitized_external_token, unknown_state_error_summary};
 
 #[derive(Deserialize)]
 pub(super) struct WalletNonceResponse {
     nonce: serde_json::Value,
 }
-
 
 impl DepositWalletRelayerClient {
     pub async fn get_wallet_nonce(
@@ -36,12 +36,9 @@ impl DepositWalletRelayerClient {
         &self,
         transaction_id: &str,
     ) -> Result<DepositWalletTransactionReceipt> {
-        // Raw transaction lookup is intentionally read-only: it never records,
-        // clears, or bypasses owner-scoped mutation blocks. Callers that need
-        // owner recovery semantics must use poll_owner_transaction.
         self.fetch_transaction(transaction_id)
             .await
-            .map(|parsed| parsed.receipt)
+            .and_then(|parsed| validate_public_transaction_receipt(parsed.receipt))
     }
 
     pub(super) async fn fetch_transaction(&self, transaction_id: &str) -> Result<ParsedTransactionReceipt> {
@@ -79,7 +76,46 @@ impl DepositWalletRelayerClient {
         parse_transaction_response(transaction_id, &response)
             .map_err(PollFetchError::from_transaction_parse_error)
     }
+}
 
+fn validate_public_transaction_receipt(
+    receipt: DepositWalletTransactionReceipt,
+) -> Result<DepositWalletTransactionReceipt> {
+    let transaction_id = sanitized_external_token(&receipt.transaction_id);
+    if receipt.owner.is_none() {
+        return Err(RelayerError::reconciliation_required(format!(
+            "deposit wallet transaction {transaction_id} did not include owner evidence; manual reconciliation required"
+        )));
+    }
+    match &receipt.state {
+        RelayerTransactionState::Confirmed => {
+            if receipt.transaction_hash.is_none() {
+                return Err(RelayerError::reconciliation_required(format!(
+                    "confirmed deposit wallet transaction {transaction_id} did not include transactionHash; manual reconciliation required"
+                )));
+            }
+        }
+        RelayerTransactionState::Invalid => {
+            return Err(RelayerError::TransactionInvalid(format!(
+                "deposit wallet transaction {transaction_id} invalid"
+            )));
+        }
+        RelayerTransactionState::Failed => {
+            return Err(RelayerError::TransactionFailed(format!(
+                "deposit wallet transaction {transaction_id} failed"
+            )));
+        }
+        RelayerTransactionState::Unknown(raw) => {
+            return Err(RelayerError::reconciliation_required(format!(
+                "deposit wallet transaction {transaction_id} reached unknown state {}",
+                unknown_state_error_summary(raw)
+            )));
+        }
+        RelayerTransactionState::New
+        | RelayerTransactionState::Executed
+        | RelayerTransactionState::Mined => {}
+    }
+    Ok(receipt)
 }
 
 pub(super) fn parse_wallet_nonce_value(value: serde_json::Value) -> Result<U256> {

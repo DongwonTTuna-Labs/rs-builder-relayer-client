@@ -32,11 +32,9 @@ impl DepositWalletRelayerClient {
     /// default-deny in this PR. Production submit enablement is intentionally
     /// reserved for a later live-submit change with durable owner state.
     ///
-    /// This boundary re-fetches the current WALLET nonce immediately before
-    /// POST and rejects stale signed batches. It does not make a pre-signed
-    /// batch live-capable or prove signing-time nonce freshness for production;
-    /// that requires a future flow that binds nonce fetch, signing, and submit
-    /// under a durable owner-scoped capability.
+    /// The caller must bind nonce fetch, signing, and submit under the same
+    /// owner-scoped lease. This boundary does not add a second nonce GET because
+    /// that would serialize every WALLET submit behind an extra relayer roundtrip.
     pub async fn submit_signed_wallet_batch(
         &self,
         signed: SignedDepositWalletBatch,
@@ -49,30 +47,6 @@ impl DepositWalletRelayerClient {
         let preflight_hash = signed_digest_payload_hash(signed.digest());
         let mut reservation = self.reserve_owner_submit(owner, preflight_hash)?;
 
-        let nonce = match self.fetch_wallet_nonce(owner).await {
-            Ok(nonce) => nonce,
-            Err(error) => {
-                reservation.clear()?;
-                return Err(error);
-            }
-        };
-        if nonce != signed.nonce() {
-            reservation.clear()?;
-            return Err(RelayerError::Signing(
-                "signed deposit wallet batch nonce does not match current WALLET nonce"
-                    .to_string(),
-            ));
-        }
-        if let Err(error) =
-            self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)
-        {
-            reservation.clear()?;
-            return Err(error);
-        }
-        if let Err(error) = self.ensure_deadline_fresh(&signed) {
-            reservation.clear()?;
-            return Err(error);
-        }
         let request = match build_deposit_wallet_batch_request_from_signed(signed, self.config) {
             Ok(request) => request,
             Err(error) => {

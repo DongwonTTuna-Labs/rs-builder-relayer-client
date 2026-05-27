@@ -79,27 +79,29 @@ pub struct DepositWalletMutationPermit {
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit owner-scoped mutation permit for test-loopback clients.
+    /// Creates an explicit owner-scoped permit for test-loopback mutations or
+    /// production WALLET nonce reads.
     ///
     /// The evidence must come from a caller-side owner lock, nonce lease, or
     /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for the
     /// same owner. The crate validates the evidence shape and expiry before
     /// request construction.
     ///
-    /// Production mutation permits are intentionally not publicly constructible
-    /// in this PR because the in-memory owner state cannot survive process
-    /// restart. A later live-submit PR must add durable owner state and a
-    /// crate-owned trusted capability before production POST /submit can be
-    /// enabled.
+    /// Production POST mutation permits are intentionally not publicly
+    /// constructible in this PR because the in-memory owner state cannot survive
+    /// process restart. Production WALLET nonce reads are allowed so consumers
+    /// can fetch the nonce needed for signing without enabling live submit.
+    /// A later live-submit PR must add durable owner state and a crate-owned
+    /// trusted capability before production POST /submit can be enabled.
     pub fn from_owner_serialization_evidence(
         reason: impl Into<String>,
         owner_serialization_evidence: DepositWalletOwnerSerializationEvidence,
     ) -> Result<Self> {
-        if owner_serialization_evidence.scope.environment
-            == DepositWalletMutationEnvironment::Production
+        if owner_serialization_evidence.scope.environment == DepositWalletMutationEnvironment::Production
+            && owner_serialization_evidence.scope.action != DepositWalletMutationAction::WalletNonceRead
         {
             return Err(RelayerError::mutation_blocked(
-                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public permit construction is limited to test loopback clients in this PR".to_string(),
+                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public production permit construction is limited to WALLET nonce reads in this PR".to_string(),
             ));
         }
         let reason = reason.into();

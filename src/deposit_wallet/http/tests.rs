@@ -1,4 +1,3 @@
-    use std::collections::VecDeque;
     use std::io::ErrorKind;
     use std::sync::Arc;
 
@@ -41,29 +40,6 @@
     impl DepositWalletClock for FixedClock {
         fn now_unix_seconds(&self) -> u64 {
             self.now
-        }
-    }
-
-    struct SequenceClock {
-        values: Mutex<VecDeque<u64>>,
-    }
-
-    impl SequenceClock {
-        fn new(values: impl IntoIterator<Item = u64>) -> Self {
-            Self {
-                values: Mutex::new(values.into_iter().collect()),
-            }
-        }
-    }
-
-    impl DepositWalletClock for SequenceClock {
-        fn now_unix_seconds(&self) -> u64 {
-            let mut values = self.values.lock().unwrap();
-            if values.len() > 1 {
-                values.pop_front().unwrap()
-            } else {
-                *values.front().unwrap()
-            }
         }
     }
 

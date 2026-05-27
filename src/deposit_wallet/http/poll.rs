@@ -99,10 +99,8 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
         let transaction_id = validate_transaction_id(transaction_id)?;
-        // Public transaction polling is read-only. Owner mutation recovery must
-        // use the owner-scoped polling APIs below, which require local owner
-        // evidence or an explicit reconciliation permit.
-        self.poll_validated_transaction(transaction_id, policy, None, false)
+        let expected_owner = self.local_transaction_owner(&transaction_id)?;
+        self.poll_validated_transaction(transaction_id, policy, expected_owner, false)
             .await
     }
 
@@ -187,11 +185,13 @@ impl DepositWalletRelayerClient {
                     if let Some(owner) = expected_owner {
                         if response_owner == Some(owner) {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
-                        } else if self
-                            .current_recovery_payload_record(&transaction_id, owner)?
-                            .is_some()
-                        {
-                            self.mark_transaction_reconciliation_required(&transaction_id)?;
+                        } else {
+                            let has_current_record = self
+                                .current_recovery_payload_record(&transaction_id, owner)?
+                                .is_some();
+                            if has_current_record {
+                                self.mark_transaction_reconciliation_required(&transaction_id)?;
+                            }
                         }
                     }
                     return Err(error);

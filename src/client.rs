@@ -785,10 +785,15 @@ mod tests {
                 .expect("server accept should not hang")
                 .expect("server should accept");
             let mut buffer = [0u8; 1024];
-            let _ = timeout(TEST_SERVER_TIMEOUT, stream.read(&mut buffer))
+            let read = timeout(TEST_SERVER_TIMEOUT, stream.read(&mut buffer))
                 .await
                 .expect("request read should not hang")
                 .expect("request should read");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(
+                request.starts_with("POST /submit HTTP/1.1\r\n"),
+                "unexpected request line: {request:?}"
+            );
             stream
                 .write_all(
                     b"HTTP/1.1 429 Too Many Requests\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",

@@ -158,7 +158,8 @@ use super::*;
                 {
                     "transactionID": "tx-array",
                     "state": "STATE_CONFIRMED",
-                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                    "owner": WALLET_CREATE_OWNER
                 }
             ])
             .to_string(),
@@ -192,7 +193,8 @@ use super::*;
         body[MAX_TRANSACTION_RESPONSE_ITEMS - 1] = json!({
             "transactionId": "tx-array-alias",
             "state": "STATE_CONFIRMED",
-            "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+            "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+            "owner": WALLET_CREATE_OWNER
         });
         let (url, handle) =
             spawn_server(vec![TestResponse::json("200 OK", json!(body).to_string())]).await;
@@ -407,7 +409,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn get_transaction_preserves_unknown_state_wire_value_in_public_receipt() {
+    async fn get_transaction_rejects_unknown_state_without_exposing_raw_value() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "200 OK",
             transaction_response("tx-unknown", "STATE_WEIRD\nforged"),
@@ -415,18 +417,61 @@ use super::*;
         .await;
         let client = test_client(url);
 
-        let receipt = client.get_transaction("tx-unknown").await.unwrap();
-        let rendered = format!("{receipt:?}");
+        let error = client.get_transaction("tx-unknown").await.unwrap_err();
+        let rendered = error.to_string();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(!rendered.contains("STATE_WEIRD"));
         assert!(rendered.contains("<unrecognized relayer state>"));
-
-        match receipt.state {
-            RelayerTransactionState::Unknown(raw) => {
-                assert_eq!(raw, "STATE_WEIRD\nforged");
-            }
-            state => panic!("expected unknown state, got {state:?}"),
-        }
         let _ = handle.await.unwrap();
+    }
+
+#[tokio::test]
+    async fn get_transaction_rejects_ownerless_or_ambiguous_success_receipts() {
+        for (transaction_id, body, expected_message) in [
+            (
+                "tx-ownerless-new",
+                json!({
+                    "transactionID": "tx-ownerless-new",
+                    "state": "STATE_NEW",
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                })
+                .to_string(),
+                "owner evidence",
+            ),
+            (
+                "tx-ownerless-confirmed",
+                json!({
+                    "transactionID": "tx-ownerless-confirmed",
+                    "state": "STATE_CONFIRMED",
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+                })
+                .to_string(),
+                "owner evidence",
+            ),
+            (
+                "tx-confirmed-without-hash",
+                json!({
+                    "transactionID": "tx-confirmed-without-hash",
+                    "state": "STATE_CONFIRMED",
+                    "owner": WALLET_CREATE_OWNER
+                })
+                .to_string(),
+                "transactionHash",
+            ),
+        ] {
+            let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", body)]).await;
+            let client = test_client(url);
+
+            let error = client.get_transaction(transaction_id).await.unwrap_err();
+
+            assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+            assert!(
+                error.to_string().contains(expected_message),
+                "{transaction_id}: {error}"
+            );
+            let _ = handle.await.unwrap();
+        }
     }
 
 #[tokio::test]
