@@ -42,7 +42,8 @@ mutation capability.
   must be a validated endpoint newtype, not an arbitrary string. It must require
   HTTPS and an approved Polymarket relayer host allowlist before any request can
   attach relayer authentication headers.
-- `get_wallet_nonce(owner)`: fetches fresh `type=WALLET` nonce.
+- `get_wallet_nonce(owner, mutation_gate)`: fetches fresh `type=WALLET`
+  nonce only when owner-scoped serialization evidence permits the read.
 - `submit_wallet_create(owner, mutation_gate)`: submits `WALLET-CREATE` only
   when an explicit mutation gate permits relayer mutation.
 - `submit_signed_wallet_batch(batch, mutation_gate)`: submits a previously

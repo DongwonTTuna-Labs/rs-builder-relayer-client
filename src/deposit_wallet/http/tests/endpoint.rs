@@ -101,7 +101,7 @@ use super::*;
             spawn_server(vec![TestResponse::json("400 Bad Request", body)]).await;
         let client = test_client(url);
 
-        let error = client.get_wallet_nonce(signed.owner()).await.unwrap_err();
+        let error = client.get_wallet_nonce(signed.owner(), wallet_nonce_read_permit_for(signed.owner())).await.unwrap_err();
         let rendered = error.to_string();
         assert!(!rendered.contains(API_KEY));
         assert!(!rendered.contains(
@@ -126,7 +126,7 @@ use super::*;
         );
         let owner = address(WALLET_CREATE_OWNER);
 
-        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        let error = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         let rendered = error.to_string();
 
         assert!(!rendered.contains("/nonce"));
@@ -147,7 +147,7 @@ use super::*;
         );
         let owner = address(WALLET_CREATE_OWNER);
 
-        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        let error = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         let rendered = error.to_string();
 
         assert!(!rendered.contains("/nonce"));
@@ -169,7 +169,7 @@ use super::*;
         );
         let owner = address(WALLET_CREATE_OWNER);
 
-        let client_task = tokio::spawn(async move { client.get_wallet_nonce(owner).await });
+        let client_task = tokio::spawn(async move { client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await });
         headers_sent
             .await
             .expect("server should send non-success headers");
@@ -199,7 +199,7 @@ use super::*;
         let owner = address(WALLET_CREATE_OWNER);
 
         let client_for_request = client.clone();
-        let client_task = tokio::spawn(async move { client_for_request.get_wallet_nonce(owner).await });
+        let client_task = tokio::spawn(async move { client_for_request.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await });
         headers_sent
             .await
             .expect("server should send non-success headers");
@@ -222,7 +222,7 @@ use super::*;
 
         let error = tokio::time::timeout(
             Duration::from_secs(1),
-            client.get_wallet_nonce(address(WALLET_CREATE_OWNER)),
+            client.get_wallet_nonce(address(WALLET_CREATE_OWNER), wallet_nonce_read_permit_for(address(WALLET_CREATE_OWNER))),
         )
         .await
         .expect("truncated 400 drain should not wait for the client timeout")
@@ -237,7 +237,7 @@ use super::*;
         let client = test_client(url);
         let error = tokio::time::timeout(
             Duration::from_secs(1),
-            client.get_wallet_nonce(address(WALLET_CREATE_OWNER)),
+            client.get_wallet_nonce(address(WALLET_CREATE_OWNER), wallet_nonce_read_permit_for(address(WALLET_CREATE_OWNER))),
         )
         .await
         .expect("truncated 429 drain should not wait for the client timeout")
@@ -263,15 +263,15 @@ use super::*;
         .await;
         let client = test_client(url);
 
-        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        let error = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(matches!(error, RelayerError::Api { status: 503, .. }));
         assert!(error.to_string().contains("retry after 7s"));
 
-        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        let error = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(matches!(error, RelayerError::Api { status: 503, .. }));
         assert!(error.to_string().contains("retry after "));
 
-        let error = client.get_wallet_nonce(owner).await.unwrap_err();
+        let error = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(matches!(error, RelayerError::Api { status: 503, .. }));
         assert!(!error.to_string().contains("retry after"));
 
@@ -317,12 +317,10 @@ use super::*;
             "http://{target_addr}/redirect-target"
         ))])
         .await;
-        let client =
-            DepositWalletRelayerClient::new(url, relayer_auth(), deposit_wallet_contract_config(137).unwrap())
-                .unwrap();
+        let client = test_client(url);
 
         let error = client
-            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+            .get_wallet_nonce(address(WALLET_CREATE_OWNER), wallet_nonce_read_permit_for(address(WALLET_CREATE_OWNER)))
             .await
             .unwrap_err();
 

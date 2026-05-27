@@ -124,17 +124,16 @@ impl DepositWalletRelayerClient {
             .await
     }
 
-    #[cfg(test)]
-    pub(super) async fn poll_owner_transaction_with_reconciliation_permit(
+    pub async fn poll_owner_transaction_with_reconciliation_permit(
         &self,
         owner: Address,
         transaction_id: &str,
         policy: DepositWalletPollPolicy,
-        gate: DepositWalletMutationGate,
+        permit: DepositWalletMutationPermit,
     ) -> Result<DepositWalletTransactionReceipt> {
         policy.validate()?;
-        self.ensure_permitted_for_action(
-            &gate,
+        self.ensure_permit_token_for_action(
+            &permit,
             owner,
             DepositWalletMutationAction::OwnerRecoveryPoll,
         )?;

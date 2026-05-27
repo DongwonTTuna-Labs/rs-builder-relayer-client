@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
     async fn default_deny_gate_runs_before_auth_or_http() {
         let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
-        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let bad_auth = relayer_auth();
         let client =
             test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
 
@@ -91,7 +91,7 @@ use super::*;
 #[tokio::test]
     async fn production_submit_requires_trusted_permit_before_auth_or_http() {
         let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
-        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let bad_auth = relayer_auth();
         let client =
             test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
 
@@ -117,7 +117,7 @@ use super::*;
 
         let production_evidence = DepositWalletOwnerSerializationEvidence::new(
             address(WALLET_CREATE_OWNER),
-            client.mutation_scope(DepositWalletMutationAction::WalletCreate),
+            client.mutation_scope(DepositWalletMutationAction::WalletCreate).unwrap(),
             "unit-test owner serialization guard",
             "production-owner-lease",
             1_699_999_900,
@@ -135,7 +135,7 @@ use super::*;
         let owner = signed.owner();
         let production_batch_evidence = DepositWalletOwnerSerializationEvidence::new(
             owner,
-            client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+            client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
             "unit-test owner serialization guard",
             "production-batch-owner-lease",
             1_699_999_900,
@@ -186,6 +186,10 @@ use super::*;
             .try_mutation_scope(DepositWalletMutationAction::WalletCreate)
             .unwrap_err();
         assert!(matches!(error, RelayerError::Signing(_)));
+        let error = client
+            .mutation_scope(DepositWalletMutationAction::WalletCreate)
+            .unwrap_err();
+        assert!(matches!(error, RelayerError::Signing(_)));
 
         let error = client
             .submit_wallet_create(owner, mutation_permit())
@@ -197,29 +201,19 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn submit_auth_failure_clears_owner_reservation_after_preflight() {
-        let owner = address(WALLET_CREATE_OWNER);
-        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
-        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
-        let client =
-            test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
+    async fn relayer_key_auth_rejects_invalid_keys_before_client_creation() {
+        for invalid in ["", "   ", "invalid\nheader", "invalid header"] {
+            let error = RelayerKeyAuth::new(invalid, address(API_KEY_ADDRESS)).unwrap_err();
+            assert!(matches!(error, RelayerError::AuthError(_)));
+            if !invalid.is_empty() {
+                assert!(!error.to_string().contains(invalid));
+            }
+        }
 
-        let error = client
-            .submit_wallet_create(owner, mutation_permit())
-            .await
-            .unwrap_err();
-
+        let oversized = "a".repeat(4097);
+        let error = RelayerKeyAuth::new(oversized.clone(), address(API_KEY_ADDRESS)).unwrap_err();
         assert!(matches!(error, RelayerError::AuthError(_)));
-        let rendered = error.to_string();
-        assert!(rendered.contains("submit authentication failed before POST"));
-        assert!(!rendered.contains("invalid"));
-        assert!(!rendered.contains(API_KEY));
-        assert!(client.ambiguous_submit_block(owner).is_none());
-        client.ensure_owner_unblocked(owner).unwrap();
-        let mut retry_reservation = client
-            .reserve_owner_submit(owner, "payload:retry-after-auth-error".to_string())
-            .unwrap();
-        retry_reservation.clear().unwrap();
+        assert!(!error.to_string().contains(&oversized));
     }
 
 #[test]
@@ -351,7 +345,7 @@ use super::*;
 #[tokio::test]
     async fn mutation_permit_rejects_wrong_scope_or_future_lease_before_http() {
         let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
-        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let bad_auth = relayer_auth();
         let client =
             test_client_with_auth_clock_timeout(url, bad_auth, 1_700_000_000, Duration::from_secs(1));
         let owner = address(WALLET_CREATE_OWNER);
@@ -468,7 +462,7 @@ use super::*;
                     block => panic!("expected in-flight owner block, got {block:?}"),
                 }
             }
-            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
             let requests = handle.await.unwrap();
             assert_eq!(requests.len(), 1);
@@ -552,7 +546,7 @@ use super::*;
                 assert!(error.to_string().contains("429"));
             }
             assert!(client.ambiguous_submit_block(owner).is_some());
-            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
             let blocked = client
                 .submit_signed_wallet_batch(signed_wallet_batch(), wallet_batch_mutation_permit_for(owner))
@@ -604,7 +598,7 @@ use super::*;
                 signed,
                 mutation_permit_for_scope(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                 ),
             )
             .await
@@ -612,7 +606,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
@@ -638,7 +632,7 @@ use super::*;
                 signed,
                 mutation_permit_for_scope(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                 ),
             )
             .await
@@ -646,7 +640,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
@@ -691,7 +685,7 @@ use super::*;
         assert!(error.to_string().contains("transaction id hash"));
         assert!(!error.to_string().contains("tx-salvaged-submit"));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let receipt = client
@@ -709,6 +703,62 @@ use super::*;
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[1].path, SUBMIT_PATH);
         assert_eq!(requests[2].path, "/transaction?id=tx-salvaged-submit");
+    }
+
+#[tokio::test]
+    async fn submit_wallet_create_accepts_single_item_array_response() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!([{
+                "transactionID": "tx-array-submit",
+                "state": "STATE_NEW"
+            }])
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.transaction_id, "tx-array-submit");
+        assert_eq!(receipt.state, RelayerTransactionState::New);
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, SUBMIT_PATH);
+    }
+
+#[tokio::test]
+    async fn submit_parse_failure_ambiguity_redacts_response_details() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            json!({
+                "transactionID": "tx-redacted-submit",
+                "state": {"raw": "SECRET_STATE_SHOULD_NOT_LEAK"},
+                "error": "raw-relayer-body-fragment"
+            })
+            .to_string(),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap_err();
+        let rendered = error.to_string();
+
+        assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
+        assert!(rendered.contains("owner-scoped poll required"));
+        assert!(!rendered.contains("SECRET_STATE_SHOULD_NOT_LEAK"));
+        assert!(!rendered.contains("raw-relayer-body-fragment"));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
     }
 
 #[tokio::test]
@@ -739,7 +789,7 @@ use super::*;
             let payload_hash = client
                 .ambiguous_submit_block(owner)
                 .expect("id-less parse failure should keep an ambiguous payload block");
-            let nonce_error = client.get_wallet_nonce(owner).await.unwrap_err();
+            let nonce_error = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&nonce_error, RECONCILIATION_REQUIRED_PREFIX));
             let duplicate = client
                 .submit_wallet_create(owner, mutation_permit())
@@ -786,7 +836,7 @@ use super::*;
                 signed.clone(),
                 mutation_permit_for_scope(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                 ),
             )
             .await
@@ -801,7 +851,7 @@ use super::*;
                 signed,
                 mutation_permit_for_scope(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                 ),
             )
             .await
@@ -872,7 +922,7 @@ use super::*;
                 signed,
                 mutation_permit_for_scope(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                 ),
             )
             .await
@@ -918,7 +968,7 @@ use super::*;
                 signed,
                 DepositWalletMutationGate::Permit(mutation_permit_token_for_scope_times(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                     deadline - 200,
                     deadline + 100,
                 )),
@@ -997,7 +1047,7 @@ use super::*;
 #[tokio::test]
     async fn expired_signed_wallet_batch_fails_before_auth_or_http() {
         let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
-        let bad_auth = RelayerKeyAuth::new("invalid\nheader", address(API_KEY_ADDRESS));
+        let bad_auth = relayer_auth();
         let client =
             test_client_with_auth_clock_timeout(url, bad_auth, 2_000_000_000, Duration::from_secs(1));
 
@@ -1008,7 +1058,7 @@ use super::*;
                 signed,
                 DepositWalletMutationGate::Permit(mutation_permit_token_for_scope_times(
                     owner,
-                    client.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    client.mutation_scope(DepositWalletMutationAction::WalletBatch).unwrap(),
                     1_999_999_900,
                     2_000_000_100,
                 )),
@@ -1036,7 +1086,7 @@ use super::*;
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
 
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let error = client
@@ -1051,7 +1101,7 @@ use super::*;
             .unwrap_err();
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let error = client
@@ -1125,7 +1175,7 @@ use super::*;
             .await
             .unwrap_err();
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
-        let blocked_nonce = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked_nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked_nonce, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
@@ -1216,7 +1266,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, AMBIGUOUS_SUBMIT_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let _ = handle.await.unwrap();
 
@@ -1236,7 +1286,7 @@ use super::*;
             .await
             .unwrap_err();
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -1461,7 +1511,7 @@ use super::*;
                 .unwrap_err();
             assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
             assert!(client.ambiguous_submit_block(owner).is_some());
-            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
             let result = client
@@ -1480,7 +1530,7 @@ use super::*;
                 }
                 _ => unreachable!(),
             }
-            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
             let payload_hash = client
                 .ambiguous_submit_block(owner)
@@ -1504,7 +1554,7 @@ use super::*;
                 .unwrap();
             client.ensure_owner_unblocked(owner).unwrap();
 
-            let nonce = client.get_wallet_nonce(owner).await.unwrap();
+            let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
             assert_eq!(nonce, U256::from(34u64));
             let mut retry_reservation = client
                 .reserve_owner_submit(owner, format!("payload:retry-after-{transaction_id}"))
@@ -1543,7 +1593,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let receipt = client
@@ -1561,7 +1611,7 @@ use super::*;
             let state = client.mutation_state().unwrap();
             assert!(!state.transaction_owners.contains_key(transaction_id));
         }
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
         assert_eq!(nonce, U256::from(41u64));
 
         let requests = handle.await.unwrap();

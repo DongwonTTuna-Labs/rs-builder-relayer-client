@@ -66,6 +66,7 @@ pub trait RelayerPort: Send + Sync {
     async fn get_wallet_nonce(
         &self,
         owner: &DepositWalletOwner,
+        permit: &RelayerPermit,
     ) -> Result<RelayerNonce, RelayerError>;
 
     async fn submit_wallet_create(
@@ -254,7 +255,11 @@ where
 {
     pub async fn derive_deposit_wallet_address(&self, owner: Address) -> Result<Address>;
     pub async fn deploy_deposit_wallet(&self, owner: Address) -> Result<RelayerSubmitResponse>;
-    pub async fn get_wallet_nonce(&self, owner: Address) -> Result<U256>;
+    pub async fn get_wallet_nonce(
+        &self,
+        owner: Address,
+        mutation_gate: DepositWalletMutationGate,
+    ) -> Result<U256>;
     pub async fn sign_deposit_wallet_batch(
         &self,
         ctx: &DepositWalletRequestContext,

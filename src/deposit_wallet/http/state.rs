@@ -1050,6 +1050,7 @@ pub(super) fn current_recovery_payload_record(
             payload_hash: payload_hash.clone(),
             source: OwnerTransactionSource::OwnerRecovery,
         })),
+        Some(OwnerMutationBlock::Ambiguous { .. }) => Ok(None),
         Some(block) => Err(owner_block_error(owner, block)),
         None => Ok(None),
     }

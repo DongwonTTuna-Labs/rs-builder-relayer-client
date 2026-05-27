@@ -8,11 +8,13 @@ pub struct RelayerKeyAuth {
 }
 
 impl RelayerKeyAuth {
-    pub fn new(api_key: impl Into<String>, api_key_address: Address) -> Self {
-        Self {
-            api_key: Arc::new(SecretString::from(api_key.into())),
+    pub fn new(api_key: impl Into<String>, api_key_address: Address) -> Result<Self> {
+        let api_key = api_key.into();
+        validate_relayer_api_key(&api_key)?;
+        Ok(Self {
+            api_key: Arc::new(SecretString::from(api_key)),
             api_key_address,
-        }
+        })
     }
 
     pub fn api_key_address(&self) -> Address {
@@ -34,6 +36,31 @@ impl RelayerKeyAuth {
         headers.insert(relayer_api_key_address_header()?, api_key_address);
         Ok(headers)
     }
+}
+
+const MAX_RELAYER_API_KEY_LEN: usize = 4096;
+
+fn validate_relayer_api_key(api_key: &str) -> Result<()> {
+    if api_key.trim().is_empty() {
+        return Err(RelayerError::AuthError(
+            "relayer API key must not be empty".to_string(),
+        ));
+    }
+    if api_key.len() > MAX_RELAYER_API_KEY_LEN {
+        return Err(RelayerError::AuthError(format!(
+            "relayer API key must not exceed {MAX_RELAYER_API_KEY_LEN} bytes"
+        )));
+    }
+    if api_key.chars().any(|character| {
+        character.is_whitespace() || character.is_control()
+    }) {
+        return Err(RelayerError::AuthError(
+            "relayer API key must not contain whitespace or control characters".to_string(),
+        ));
+    }
+    HeaderValue::from_str(api_key)
+        .map(|_| ())
+        .map_err(|_| RelayerError::AuthError("invalid relayer API key".to_string()))
 }
 
 impl fmt::Debug for RelayerKeyAuth {

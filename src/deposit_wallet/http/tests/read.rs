@@ -9,7 +9,7 @@ use super::*;
         let client = test_client(url);
         let owner: Address = expected["address"].as_str().unwrap().parse().unwrap();
 
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
 
         assert_eq!(nonce, U256::from(31u64));
         let requests = handle.await.unwrap();
@@ -31,11 +31,25 @@ use super::*;
         let client = test_client(url);
         let owner = address(WALLET_CREATE_OWNER);
 
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
 
         assert_eq!(nonce, U256::from(31u64));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
+    async fn get_wallet_nonce_requires_owner_scoped_permit_before_http() {
+        let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();
+        let client = test_client(url);
+        let owner = address(WALLET_CREATE_OWNER);
+
+        let error = client
+            .get_wallet_nonce(owner, DepositWalletMutationGate::Deny)
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
 #[test]
@@ -105,12 +119,12 @@ use super::*;
         let url = DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap();
         let client = test_client(url);
         let request_client = client.clone();
-        let nonce_task = tokio::spawn(async move { request_client.get_wallet_nonce(owner).await });
+        let nonce_task = tokio::spawn(async move { request_client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await });
         request_seen_rx
             .await
             .expect("nonce request should reach test server");
 
-        let second_nonce = client.get_wallet_nonce(owner).await.unwrap_err();
+        let second_nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&second_nonce, MUTATION_BLOCKED_PREFIX));
         let blocked = match client.reserve_owner_submit(owner, "payload:nonce-race".to_string()) {
             Ok(_) => panic!("nonce read should block same-owner submit reservation"),
@@ -258,7 +272,7 @@ use super::*;
         assert_eq!(receipt.transaction_id, "tx-read-only");
         assert_eq!(receipt.owner, Some(owner));
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
@@ -441,7 +455,7 @@ use super::*;
         .await;
         let client = test_client(url);
 
-        let error = client.get_wallet_nonce(address(WALLET_CREATE_OWNER)).await.unwrap_err();
+        let error = client.get_wallet_nonce(address(WALLET_CREATE_OWNER), wallet_nonce_read_permit_for(address(WALLET_CREATE_OWNER))).await.unwrap_err();
         assert!(matches!(error, RelayerError::Other(message) if message.contains("maximum size")));
         let _ = handle.await.unwrap();
 
@@ -453,7 +467,7 @@ use super::*;
         let client = test_client(url);
 
         let error = client
-            .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+            .get_wallet_nonce(address(WALLET_CREATE_OWNER), wallet_nonce_read_permit_for(address(WALLET_CREATE_OWNER)))
             .await
             .unwrap_err();
         assert!(matches!(error, RelayerError::Other(message) if message.contains("maximum size")));
@@ -542,7 +556,7 @@ use super::*;
             let client = test_client(url);
 
             let error = client
-                .get_wallet_nonce(address(WALLET_CREATE_OWNER))
+                .get_wallet_nonce(address(WALLET_CREATE_OWNER), wallet_nonce_read_permit_for(address(WALLET_CREATE_OWNER)))
                 .await
                 .unwrap_err();
 

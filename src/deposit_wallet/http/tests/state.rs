@@ -35,7 +35,7 @@ use super::*;
                 block => panic!("expected active in-flight owner block, got {block:?}"),
             }
         }
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
     }
 

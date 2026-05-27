@@ -197,7 +197,7 @@
     }
 
     fn relayer_auth() -> RelayerKeyAuth {
-        RelayerKeyAuth::new(API_KEY, address(API_KEY_ADDRESS))
+        RelayerKeyAuth::new(API_KEY, address(API_KEY_ADDRESS)).unwrap()
     }
 
     fn mutation_permit() -> DepositWalletMutationGate {
@@ -219,10 +219,14 @@
         ))
     }
 
-    fn owner_recovery_poll_permit_for(owner: Address) -> DepositWalletMutationGate {
+    fn owner_recovery_poll_permit_token_for(owner: Address) -> DepositWalletMutationPermit {
+        mutation_permit_token_for_action(owner, DepositWalletMutationAction::OwnerRecoveryPoll)
+    }
+
+    fn wallet_nonce_read_permit_for(owner: Address) -> DepositWalletMutationGate {
         DepositWalletMutationGate::Permit(mutation_permit_token_for_action(
             owner,
-            DepositWalletMutationAction::OwnerRecoveryPoll,
+            DepositWalletMutationAction::WalletNonceRead,
         ))
     }
 

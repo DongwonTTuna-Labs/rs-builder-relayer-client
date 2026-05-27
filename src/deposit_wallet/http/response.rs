@@ -124,22 +124,115 @@ pub(super) struct RelayerTransactionResponseWithOwner {
     owner: Option<Address>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitTransactionIdOnly {
+    #[serde(rename = "transactionID", alias = "transactionId")]
+    transaction_id: String,
+}
+
 pub(super) fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt> {
-    let response = serde_json::from_slice::<RelayerSubmitResponse>(bytes)
-        .map_err(|e| RelayerError::Other(format!("could not parse submit response: {e}")))?;
+    let response = parse_submit_response_body(bytes)?;
     receipt_from_submit_response(response, None).map(|parsed| parsed.receipt)
 }
 
 pub(super) fn extract_submit_transaction_id(bytes: &[u8]) -> Option<String> {
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct SubmitTransactionIdOnly {
-        #[serde(rename = "transactionID", alias = "transactionId")]
-        transaction_id: String,
+    let response = match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace())? {
+        b'{' => serde_json::from_slice::<SubmitTransactionIdOnly>(bytes).ok()?,
+        b'[' => select_submit_transaction_id_from_array(bytes).ok()?,
+        _ => return None,
+    };
+    validate_transaction_id(&response.transaction_id).ok()
+}
+
+fn parse_submit_response_body(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
+    match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
+        Some(b'{') => serde_json::from_slice::<RelayerSubmitResponse>(bytes).map_err(|_| {
+            RelayerError::Other("could not parse submit response object".to_string())
+        }),
+        Some(b'[') => select_submit_response_from_array(bytes),
+        _ => Err(RelayerError::Other(
+            "could not parse submit response: expected JSON object or array".to_string(),
+        )),
+    }
+}
+
+fn select_submit_response_from_array(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
+    struct SelectSubmitVisitor;
+
+    impl<'de> Visitor<'de> for SelectSubmitVisitor {
+        type Value = RelayerSubmitResponse;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a single-item submit response array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let Some(response) = seq.next_element::<RelayerSubmitResponse>()? else {
+                return Err(de::Error::custom(SUBMIT_RESPONSE_EMPTY_ARRAY_ERROR));
+            };
+            if seq.next_element::<serde_json::Value>()?.is_some() {
+                return Err(de::Error::custom(SUBMIT_RESPONSE_MULTIPLE_ITEMS_ERROR));
+            }
+            Ok(response)
+        }
     }
 
-    let response = serde_json::from_slice::<SubmitTransactionIdOnly>(bytes).ok()?;
-    validate_transaction_id(&response.transaction_id).ok()
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let response = deserializer
+        .deserialize_seq(SelectSubmitVisitor)
+        .map_err(|error| {
+            let message = error.to_string();
+            if message.contains(SUBMIT_RESPONSE_EMPTY_ARRAY_ERROR) {
+                RelayerError::Other("submit response array must contain one item".to_string())
+            } else if message.contains(SUBMIT_RESPONSE_MULTIPLE_ITEMS_ERROR) {
+                RelayerError::reconciliation_required(
+                    "submit response array included multiple items; manual reconciliation required"
+                        .to_string(),
+                )
+            } else {
+                RelayerError::Other("could not parse submit response array".to_string())
+            }
+        })?;
+    deserializer.end().map_err(|_| {
+        RelayerError::Other("could not parse submit response array".to_string())
+    })?;
+    Ok(response)
+}
+
+fn select_submit_transaction_id_from_array(
+    bytes: &[u8],
+) -> std::result::Result<SubmitTransactionIdOnly, serde_json::Error> {
+    struct SelectSubmitTransactionIdVisitor;
+
+    impl<'de> Visitor<'de> for SelectSubmitTransactionIdVisitor {
+        type Value = SubmitTransactionIdOnly;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a single-item submit transaction id array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let Some(response) = seq.next_element::<SubmitTransactionIdOnly>()? else {
+                return Err(de::Error::custom(SUBMIT_RESPONSE_EMPTY_ARRAY_ERROR));
+            };
+            if seq.next_element::<serde_json::Value>()?.is_some() {
+                return Err(de::Error::custom(SUBMIT_RESPONSE_MULTIPLE_ITEMS_ERROR));
+            }
+            Ok(response)
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let response = deserializer.deserialize_seq(SelectSubmitTransactionIdVisitor)?;
+    deserializer.end()?;
+    Ok(response)
 }
 
 pub(super) fn parse_transaction_response(

@@ -121,7 +121,7 @@ impl DepositWalletRelayerClient {
                     }
                     result
                 }
-                Err(error) => {
+                Err(_error) => {
                     if let Some(transaction_id) = extract_submit_transaction_id(&response) {
                         self.record_transaction_owner(
                             &transaction_id,
@@ -129,19 +129,17 @@ impl DepositWalletRelayerClient {
                             payload_hash.clone(),
                         )?;
                         return Err(RelayerError::ambiguous_submit(format!(
-                            "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required: {}",
+                            "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required",
                             external_token_hash(&transaction_id),
                             redacted_address(owner),
-                            display_payload_hash(&payload_hash),
-                            error
+                            display_payload_hash(&payload_hash)
                         )));
                     }
                     self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                     Err(RelayerError::ambiguous_submit(format!(
-                    "submit response did not include a usable transactionID for owner {} payload {}: {}",
+                    "submit response did not include a usable transactionID for owner {} payload {}; manual reconciliation required",
                     redacted_address(owner),
-                        display_payload_hash(&payload_hash),
-                        error
+                        display_payload_hash(&payload_hash)
                     )))
                 }
             },

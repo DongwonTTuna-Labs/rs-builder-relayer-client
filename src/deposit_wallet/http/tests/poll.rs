@@ -416,7 +416,7 @@ use super::*;
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
 
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
@@ -464,7 +464,7 @@ use super::*;
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         assert_eq!(receipt.owner, Some(owner));
 
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
         assert_eq!(nonce, U256::from(38u64));
 
         let requests = handle.await.unwrap();
@@ -509,7 +509,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
@@ -531,14 +531,14 @@ use super::*;
                 owner,
                 "tx-recovered",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
 
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
@@ -577,7 +577,7 @@ use super::*;
             .unwrap();
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
 
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
         assert_eq!(nonce, U256::from(35u64));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 4);
@@ -603,7 +603,7 @@ use super::*;
                 owner,
                 "tx-no-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
         )
         .await
         .unwrap_err();
@@ -631,7 +631,7 @@ use super::*;
                 owner,
                 "tx-bad-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -670,7 +670,7 @@ use super::*;
             .await
             .unwrap_err();
         assert!(matches!(error, RelayerError::Other(_)));
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         {
             let state = client.mutation_state().unwrap();
@@ -705,7 +705,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -719,7 +719,7 @@ use super::*;
                 .get(transaction_id)
                 .is_some_and(|record| record.owner == owner));
         }
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -747,7 +747,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -761,7 +761,7 @@ use super::*;
                 .get(transaction_id)
                 .is_some_and(|record| record.owner == owner));
         }
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -789,7 +789,7 @@ use super::*;
                 owner,
                 "tx-wrong-owner",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -821,7 +821,7 @@ use super::*;
                 owner,
                 "tx-requested",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -869,7 +869,7 @@ use super::*;
             .unwrap_err();
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         {
             let state = client.mutation_state().unwrap();
@@ -913,7 +913,7 @@ use super::*;
                 owner,
                 "tx-recovery-fetch-failed",
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -954,7 +954,7 @@ use super::*;
                     owner,
                     &transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                    owner_recovery_poll_permit_for(owner),
+                    owner_recovery_poll_permit_token_for(owner),
                 )
                 .await
                 .unwrap_err();
@@ -1002,7 +1002,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -1013,6 +1013,19 @@ use super::*;
             client.ambiguous_submit_block(owner),
             Some("payload:ambiguous-before-recovery".to_string())
         );
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload_transaction_observation(
+                    owner,
+                    "payload:ambiguous-before-recovery",
+                    transaction_id,
+                    RelayerTransactionState::Confirmed,
+                    Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
+                ),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(
@@ -1039,7 +1052,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -1066,7 +1079,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -1077,7 +1090,7 @@ use super::*;
         let payload_hash = client
             .ambiguous_submit_block(owner)
             .expect("confirmed recovery should keep an ambiguous payload block");
-        let duplicate = client.get_wallet_nonce(owner).await.unwrap_err();
+        let duplicate = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
@@ -1103,9 +1116,9 @@ use super::*;
 #[tokio::test]
     async fn owner_aware_recovery_permit_keeps_ambiguous_block_for_terminal_failures() {
         let owner = address(WALLET_CREATE_OWNER);
-        for (transaction_id, state) in [
-            ("tx-recovered-invalid", "STATE_INVALID"),
-            ("tx-recovered-failed", "STATE_FAILED"),
+        for (transaction_id, state, expected_failure) in [
+            ("tx-recovered-invalid", "STATE_INVALID", "invalid"),
+            ("tx-recovered-failed", "STATE_FAILED", "failed"),
         ] {
             let (url, handle) = spawn_server(vec![TestResponse::json(
                 "200 OK",
@@ -1122,12 +1135,16 @@ use super::*;
                     owner,
                     transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                    owner_recovery_poll_permit_for(owner),
+                    owner_recovery_poll_permit_token_for(owner),
                 )
                 .await
                 .unwrap_err();
 
-            assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+            match expected_failure {
+                "invalid" => assert!(matches!(error, RelayerError::TransactionInvalid(_))),
+                "failed" => assert!(matches!(error, RelayerError::TransactionFailed(_))),
+                _ => unreachable!(),
+            }
             assert_eq!(
                 client.ambiguous_submit_block(owner),
                 Some("payload:ambiguous-before-recovery".to_string())
@@ -1165,7 +1182,7 @@ use super::*;
                     owner,
                     transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                    owner_recovery_poll_permit_for(owner),
+                    owner_recovery_poll_permit_token_for(owner),
                 )
                 .await
                 .unwrap_err();
@@ -1199,7 +1216,7 @@ use super::*;
                     Some(&expected_state)
                 );
             }
-            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
             client
@@ -1273,7 +1290,7 @@ use super::*;
             client.ambiguous_submit_block(owner),
             Some(payload_hash.to_string())
         );
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         {
             let state = client.mutation_state().unwrap();
@@ -1321,7 +1338,7 @@ use super::*;
                     owner,
                     transaction_id,
                     DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                    owner_recovery_poll_permit_for(owner),
+                    owner_recovery_poll_permit_token_for(owner),
                 )
                 .await
         });
@@ -1372,13 +1389,13 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Http(_)));
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         {
             let state = client.mutation_state().unwrap();
@@ -1470,7 +1487,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -1492,7 +1509,7 @@ use super::*;
                 .get(transaction_id)
                 .is_some_and(|record| record.owner == owner));
         }
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -1514,7 +1531,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -1536,7 +1553,7 @@ use super::*;
                 .get(transaction_id)
                 .is_some_and(|record| record.owner == owner));
         }
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
@@ -1578,7 +1595,7 @@ use super::*;
                 owner,
                 transaction_id,
                 DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
-                owner_recovery_poll_permit_for(owner),
+                owner_recovery_poll_permit_token_for(owner),
             )
             .await
             .unwrap_err();
@@ -1619,7 +1636,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
@@ -1662,7 +1679,7 @@ use super::*;
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         client
             .clear_ambiguous_submit_after_manual_reconciliation(
@@ -1701,7 +1718,7 @@ use super::*;
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Other(_)));
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         {
             let state = client.mutation_state().unwrap();
@@ -1733,7 +1750,7 @@ use super::*;
             .await
             .unwrap();
         assert_eq!(receipt.transaction_id, "tx-confirmed");
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let receipt = client
@@ -1746,7 +1763,7 @@ use super::*;
             .unwrap();
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
 
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
         assert_eq!(nonce, U256::from(33u64));
 
         let requests = handle.await.unwrap();
@@ -1781,7 +1798,7 @@ use super::*;
             .unwrap();
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
 
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_none());
         {
@@ -1806,7 +1823,7 @@ use super::*;
             .unwrap();
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         client.ensure_owner_unblocked(owner).unwrap();
-        let nonce = client.get_wallet_nonce(owner).await.unwrap();
+        let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
         assert_eq!(nonce, U256::from(34u64));
 
         let requests = handle.await.unwrap();
@@ -1848,7 +1865,7 @@ use super::*;
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(client.ambiguous_submit_block(owner).is_some());
 
-        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
         let requests = handle.await.unwrap();
@@ -1886,7 +1903,7 @@ use super::*;
                 .await
                 .unwrap();
             assert_eq!(receipt.transaction_id, transaction_id);
-            assert!(client.get_wallet_nonce(owner).await.is_err());
+            assert!(client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.is_err());
 
             let error = client
                 .poll_owner_transaction(
@@ -1905,7 +1922,7 @@ use super::*;
                 "expected {expected_error}, got {error:?}"
             );
 
-            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
             let payload_hash = client
                 .ambiguous_submit_block(owner)
@@ -1928,7 +1945,7 @@ use super::*;
                 )
                 .unwrap();
             client.ensure_owner_unblocked(owner).unwrap();
-            let nonce = client.get_wallet_nonce(owner).await.unwrap();
+            let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
             assert_eq!(nonce, U256::from(37u64));
 
             let requests = handle.await.unwrap();

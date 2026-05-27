@@ -17,6 +17,7 @@ pub enum DepositWalletMutationEnvironment {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepositWalletMutationAction {
+    WalletNonceRead,
     WalletCreate,
     WalletBatch,
     OwnerRecoveryPoll,

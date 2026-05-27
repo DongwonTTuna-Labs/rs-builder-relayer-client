@@ -11,14 +11,14 @@ use polymarket_relayer::{
 #[test]
 fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
-    let auth = RelayerKeyAuth::new("compile-test-api-key", Address::zero());
+    let auth = RelayerKeyAuth::new("compile-test-api-key", Address::zero()).unwrap();
     let config = deposit_wallet_contract_config(137).unwrap();
     let client = DepositWalletRelayerClient::new(url, auth, config).unwrap();
 
     let gate = DepositWalletMutationGate::Deny;
     let evidence = DepositWalletOwnerSerializationEvidence::new(
         Address::zero(),
-        client.mutation_scope(DepositWalletMutationAction::WalletCreate),
+        client.mutation_scope(DepositWalletMutationAction::WalletCreate).unwrap(),
         "compile-test owner lock",
         "compile-test owner serialization evidence",
         1,
@@ -33,7 +33,7 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     let policy = DepositWalletPollPolicy::default();
     let reconciliation = DepositWalletSubmitReconciliationEvidence::new(
         Address::zero(),
-        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation).unwrap(),
         "compile-test owner lock",
         "0x1111111111111111111111111111111111111111111111111111111111111111",
         DepositWalletSubmitReconciliationObservation::new(
@@ -48,7 +48,7 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
     .unwrap();
     let idless_reconciliation = DepositWalletIdlessSubmitReconciliationEvidence::new(
         Address::zero(),
-        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation).unwrap(),
         "compile-test owner lock",
         "0x1111111111111111111111111111111111111111111111111111111111111111",
         "compile-test id-less reconciliation",

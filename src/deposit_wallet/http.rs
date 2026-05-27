@@ -45,6 +45,8 @@ const TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR: &str = "transaction response item l
 const TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR: &str = "transaction response duplicate id";
 const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missing requested id";
 const TRANSACTION_RESPONSE_INVALID_ID_ERROR: &str = "transaction response invalid id";
+const SUBMIT_RESPONSE_EMPTY_ARRAY_ERROR: &str = "submit response array was empty";
+const SUBMIT_RESPONSE_MULTIPLE_ITEMS_ERROR: &str = "submit response array had multiple items";
 const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -156,9 +158,8 @@ impl DepositWalletRelayerClient {
     pub fn mutation_scope(
         &self,
         action: DepositWalletMutationAction,
-    ) -> DepositWalletMutationScope {
+    ) -> Result<DepositWalletMutationScope> {
         self.try_mutation_scope(action)
-            .expect("deposit wallet relayer client config must resolve to a supported chain id")
     }
 }
 

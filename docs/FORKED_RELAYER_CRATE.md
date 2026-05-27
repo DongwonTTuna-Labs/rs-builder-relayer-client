@@ -169,6 +169,7 @@ where
     pub async fn get_wallet_nonce(
         &self,
         owner: Address,
+        mutation_gate: DepositWalletMutationGate,
     ) -> Result<U256, RelayerError>;
 
     pub async fn sign_deposit_wallet_batch(
