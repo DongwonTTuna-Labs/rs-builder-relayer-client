@@ -1,7 +1,7 @@
+use super::*;
 use super::redaction::{
     external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
-use super::*;
 use crate::deposit_wallet::{WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -49,17 +49,67 @@ pub(super) struct ParsedTransactionReceipt {
 }
 
 #[derive(Debug)]
+pub(super) struct ResponseError {
+    pub(super) error: RelayerError,
+    pub(super) retry_after: Option<Duration>,
+}
+
+impl ResponseError {
+    pub(super) fn new(error: RelayerError, retry_after: Option<Duration>) -> Self {
+        Self { error, retry_after }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct PollFetchError {
+    pub(super) error: RelayerError,
+    pub(super) retry_after: Option<Duration>,
+    pub(super) owner: Option<Address>,
+    pub(super) retryable_absence: bool,
+}
+
+impl PollFetchError {
+    pub(super) fn from_response_error(error: ResponseError) -> Self {
+        Self {
+            error: error.error,
+            retry_after: error.retry_after,
+            owner: None,
+            retryable_absence: false,
+        }
+    }
+
+    pub(super) fn from_transaction_parse_error(error: TransactionParseError) -> Self {
+        Self {
+            error: error.error,
+            retry_after: None,
+            owner: error.owner,
+            retryable_absence: error.retryable_absence,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub(super) struct TransactionParseError {
     pub(super) error: RelayerError,
+    pub(super) owner: Option<Address>,
+    pub(super) retryable_absence: bool,
 }
 
 impl TransactionParseError {
-    pub(super) fn new(error: RelayerError) -> Self {
-        Self { error }
+    pub(super) fn new(error: RelayerError, owner: Option<Address>) -> Self {
+        Self {
+            error,
+            owner,
+            retryable_absence: false,
+        }
     }
 
     pub(super) fn retryable_absence(error: RelayerError) -> Self {
-        Self { error }
+        Self {
+            error,
+            owner: None,
+            retryable_absence: true,
+        }
     }
 }
 
@@ -74,6 +124,9 @@ pub(super) struct RelayerTransactionResponseWithOwner {
     from_address: Option<Address>,
     #[serde(default, deserialize_with = "deserialize_optional_address")]
     to: Option<Address>,
+    // Official GET /transaction responses include owner as the owner address.
+    // The parsed owner is retained separately so owner-scoped polling can
+    // validate it before mutating local state.
     #[serde(default, deserialize_with = "deserialize_optional_address")]
     owner: Option<Address>,
 }
@@ -123,21 +176,22 @@ pub(super) fn parse_transaction_response(
         Some(b'{') => {
             let response = serde_json::from_slice::<RelayerTransactionResponseWithOwner>(bytes)
                 .map_err(|_| {
-                    TransactionParseError::new(RelayerError::Other(
-                        "could not parse transaction response object".to_string(),
-                    ))
+                    TransactionParseError::new(
+                        RelayerError::Other("could not parse transaction response object".to_string()),
+                        None,
+                    )
                 })?;
-            return parse_verified_transaction_response(
-                expected_transaction_id,
-                expected_factory,
-                response,
-            );
+            return parse_verified_transaction_response(expected_transaction_id, expected_factory, response);
         }
         Some(b'[') => {}
         _ => {
-            return Err(TransactionParseError::new(RelayerError::Other(
-                "could not parse transaction response: expected JSON object or array".to_string(),
-            )))
+            return Err(TransactionParseError::new(
+                RelayerError::Other(
+                    "could not parse transaction response: expected JSON object or array"
+                        .to_string(),
+                ),
+                None,
+            ))
         }
     }
 
@@ -151,11 +205,12 @@ fn parse_verified_transaction_response(
     response: RelayerTransactionResponseWithOwner,
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     let owner = response.owner;
-    let response_transaction_id =
-        validate_transaction_id(&response.response.transaction_id).map_err(|_| {
-            TransactionParseError::new(RelayerError::Other(
-                "relayer response transactionID was invalid".to_string(),
-            ))
+    let response_transaction_id = validate_transaction_id(&response.response.transaction_id)
+        .map_err(|_| {
+            TransactionParseError::new(
+                RelayerError::Other("relayer response transactionID was invalid".to_string()),
+                None,
+            )
         })?;
     if response_transaction_id != expected_transaction_id {
         return Err(TransactionParseError::new(
@@ -164,11 +219,12 @@ fn parse_verified_transaction_response(
                 external_token_hash(&response_transaction_id),
                 external_token_hash(expected_transaction_id)
             )),
+            None,
         ));
     }
     validate_transaction_wire_evidence(&response, expected_factory, owner)?;
     let parsed = receipt_from_submit_response(response.response, owner)
-        .map_err(TransactionParseError::new)?;
+        .map_err(|error| TransactionParseError::new(error, owner))?;
     Ok(parsed)
 }
 
@@ -178,10 +234,13 @@ fn validate_transaction_wire_evidence(
     owner: Option<Address>,
 ) -> std::result::Result<(), TransactionParseError> {
     let tx_type = response.tx_type.as_deref().ok_or_else(|| {
-        TransactionParseError::new(RelayerError::reconciliation_required(
-            "transaction response did not include deposit-wallet transaction type; manual reconciliation required"
-                .to_string(),
-        ))
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response did not include deposit-wallet transaction type; manual reconciliation required"
+                    .to_string(),
+            ),
+            owner,
+        )
     })?;
     if !matches!(tx_type, WALLET_CREATE_TRANSACTION_TYPE | WALLET_TRANSACTION_TYPE) {
         return Err(TransactionParseError::new(
@@ -189,20 +248,31 @@ fn validate_transaction_wire_evidence(
                 "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
                     .to_string(),
             ),
+            owner,
         ));
     }
+    // Polymarket's deposit-wallet raw API uses the factory as top-level `to`
+    // for both WALLET-CREATE and WALLET. The concrete wallet target for WALLET
+    // lives inside `depositWalletParams.depositWallet`, not this response field.
+    let expected_to = expected_factory;
 
     let owner = owner.ok_or_else(|| {
-        TransactionParseError::new(RelayerError::reconciliation_required(
-            "deposit wallet transaction response did not include owner evidence; manual reconciliation required"
-                .to_string(),
-        ))
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "deposit wallet transaction response did not include owner evidence; manual reconciliation required"
+                    .to_string(),
+            ),
+            None,
+        )
     })?;
     let from_address = response.from_address.ok_or_else(|| {
-        TransactionParseError::new(RelayerError::reconciliation_required(
-            "transaction response did not include from address; manual reconciliation required"
-                .to_string(),
-        ))
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response did not include from address; manual reconciliation required"
+                    .to_string(),
+            ),
+            Some(owner),
+        )
     })?;
     if from_address != owner {
         return Err(TransactionParseError::new(
@@ -211,29 +281,34 @@ fn validate_transaction_wire_evidence(
                 redacted_address(from_address),
                 redacted_address(owner)
             )),
+            Some(owner),
         ));
     }
 
     let to = response.to.ok_or_else(|| {
-        TransactionParseError::new(RelayerError::reconciliation_required(
-            "transaction response did not include to address; manual reconciliation required"
-                .to_string(),
-        ))
+        TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response did not include to address; manual reconciliation required"
+                    .to_string(),
+            ),
+            Some(owner),
+        )
     })?;
-    if to != expected_factory {
+    if to != expected_to {
         return Err(TransactionParseError::new(
             RelayerError::reconciliation_required(format!(
                 "transaction response to address {} did not match expected relayer target {}; manual reconciliation required",
                 redacted_address(to),
-                redacted_address(expected_factory)
+                redacted_address(expected_to)
             )),
+            Some(owner),
         ));
     }
 
     Ok(())
 }
 
-fn select_transaction_response_from_array(
+pub(super) fn select_transaction_response_from_array(
     expected_transaction_id: &str,
     bytes: &[u8],
 ) -> std::result::Result<RelayerTransactionResponseWithOwner, TransactionParseError> {
@@ -259,20 +334,18 @@ fn select_transaction_response_from_array(
                 if count > MAX_TRANSACTION_RESPONSE_ITEMS {
                     return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
                 }
-                let response_transaction_id = validate_transaction_id(
-                    &response.response.transaction_id,
-                )
-                .map_err(|_| de::Error::custom(TRANSACTION_RESPONSE_INVALID_ID_ERROR))?;
+                let response_transaction_id =
+                    validate_transaction_id(&response.response.transaction_id)
+                        .map_err(|_| de::Error::custom(TRANSACTION_RESPONSE_INVALID_ID_ERROR))?;
                 if response_transaction_id == self.expected_transaction_id {
                     if matching_response.is_some() {
-                        return Err(de::Error::custom(
-                            TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR,
-                        ));
+                        return Err(de::Error::custom(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR));
                     }
                     matching_response = Some(response);
                 }
             }
-            matching_response.ok_or_else(|| de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
+            matching_response
+                .ok_or_else(|| de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
         }
     }
 
@@ -284,9 +357,12 @@ fn select_transaction_response_from_array(
         .map_err(|error| {
             let message = error.to_string();
             if message.contains(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR) {
-                TransactionParseError::new(RelayerError::reconciliation_required(format!(
-                    "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
-                )))
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(format!(
+                        "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
+                    )),
+                    None,
+                )
             } else if message.contains(TRANSACTION_RESPONSE_MISSING_ID_ERROR) {
                 TransactionParseError::retryable_absence(
                     RelayerError::reconciliation_required(format!(
@@ -295,30 +371,38 @@ fn select_transaction_response_from_array(
                     )),
                 )
             } else if message.contains(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR) {
-                TransactionParseError::new(RelayerError::reconciliation_required(format!(
-                    "transaction response included duplicate requested transaction id hash {}; manual reconciliation required",
-                    external_token_hash(expected_transaction_id)
-                )))
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(format!(
+                        "transaction response included duplicate requested transaction id hash {}; manual reconciliation required",
+                        external_token_hash(expected_transaction_id)
+                    )),
+                    None,
+                )
             } else if message.contains(TRANSACTION_RESPONSE_INVALID_ID_ERROR) {
-                TransactionParseError::new(RelayerError::reconciliation_required(
-                    "transaction response included an invalid transactionID; manual reconciliation required"
-                        .to_string(),
-                ))
+                TransactionParseError::new(
+                    RelayerError::reconciliation_required(
+                        "transaction response included an invalid transactionID; manual reconciliation required"
+                            .to_string(),
+                    ),
+                    None,
+                )
             } else {
-                TransactionParseError::new(RelayerError::Other(
-                    "could not parse transaction response array".to_string(),
-                ))
+                TransactionParseError::new(
+                    RelayerError::Other("could not parse transaction response array".to_string()),
+                    None,
+                )
             }
         })?;
     deserializer.end().map_err(|_| {
-        TransactionParseError::new(RelayerError::Other(
-            "could not parse transaction response array".to_string(),
-        ))
+        TransactionParseError::new(
+            RelayerError::Other("could not parse transaction response array".to_string()),
+            None,
+        )
     })?;
     Ok(response)
 }
 
-fn receipt_from_submit_response(
+pub(super) fn receipt_from_submit_response(
     response: RelayerSubmitResponse,
     owner: Option<Address>,
 ) -> Result<ParsedTransactionReceipt> {
@@ -383,9 +467,7 @@ pub(super) fn validate_transaction_hash(transaction_hash: &str) -> Result<String
     ))
 }
 
-fn deserialize_optional_address<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<Address>, D::Error>
+pub(super) fn deserialize_optional_address<'de, D>(deserializer: D) -> std::result::Result<Option<Address>, D::Error>
 where
     D: Deserializer<'de>,
 {

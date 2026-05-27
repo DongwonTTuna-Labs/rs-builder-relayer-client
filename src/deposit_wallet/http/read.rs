@@ -1,8 +1,8 @@
 use super::*;
-use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
 use super::response::{
-    parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt,
+    parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt, PollFetchError,
 };
+use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
 use super::state::OwnerNonceReadReservation;
 use serde_json::value::RawValue;
 
@@ -158,6 +158,25 @@ impl DepositWalletRelayerClient {
             .await?;
         parse_transaction_response(&transaction_id, self.config.factory, &response)
             .map_err(|parse_error| parse_error.error)
+    }
+
+    pub(super) async fn fetch_transaction_for_poll(
+        &self,
+        transaction_id: &str,
+    ) -> std::result::Result<ParsedTransactionReceipt, PollFetchError> {
+        let mut url = self.base_url.endpoint(TRANSACTION_PATH);
+        url.query_pairs_mut().append_pair("id", transaction_id);
+        let response = self
+            .send_with_success_limit_and_retry_after(
+                Method::GET,
+                url,
+                None,
+                MAX_TRANSACTION_SUCCESS_BODY_BYTES,
+            )
+            .await
+            .map_err(PollFetchError::from_response_error)?;
+        parse_transaction_response(transaction_id, self.config.factory, &response)
+            .map_err(PollFetchError::from_transaction_parse_error)
     }
 }
 

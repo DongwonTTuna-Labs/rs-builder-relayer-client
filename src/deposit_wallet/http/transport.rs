@@ -1,19 +1,26 @@
 use super::*;
+use super::response::ResponseError;
 
 #[derive(Clone)]
 pub(super) struct ErrorBodyDrainLimiter {
     semaphore: Arc<tokio::sync::Semaphore>,
+    #[cfg(test)]
+    dropped: Arc<AtomicUsize>,
 }
 
 impl ErrorBodyDrainLimiter {
     pub(super) fn new(limit: usize) -> Self {
         Self {
             semaphore: Arc::new(tokio::sync::Semaphore::new(limit)),
+            #[cfg(test)]
+            dropped: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub(super) fn try_spawn_error_response_body_drain(&self, response: reqwest::Response) {
         let Ok(permit) = self.semaphore.clone().try_acquire_owned() else {
+            #[cfg(test)]
+            self.dropped.fetch_add(1, Ordering::SeqCst);
             return;
         };
         tokio::spawn(async move {
@@ -21,15 +28,11 @@ impl ErrorBodyDrainLimiter {
             drain_error_response_body(response).await;
         });
     }
+
 }
 
 impl DepositWalletRelayerClient {
-    pub(super) async fn send(
-        &self,
-        method: Method,
-        url: Url,
-        body: Option<String>,
-    ) -> Result<Vec<u8>> {
+    pub(super) async fn send(&self, method: Method, url: Url, body: Option<String>) -> Result<Vec<u8>> {
         self.send_with_success_limit(method, url, body, MAX_SUCCESS_BODY_BYTES)
             .await
     }
@@ -41,12 +44,30 @@ impl DepositWalletRelayerClient {
         body: Option<String>,
         success_body_limit: usize,
     ) -> Result<Vec<u8>> {
-        let mut headers = self.auth.headers()?;
+        self.send_with_success_limit_and_retry_after(method, url, body, success_body_limit)
+            .await
+            .map_err(|error| error.error)
+    }
+
+    pub(super) async fn send_with_success_limit_and_retry_after(
+        &self,
+        method: Method,
+        url: Url,
+        body: Option<String>,
+        success_body_limit: usize,
+    ) -> std::result::Result<Vec<u8>, ResponseError> {
+        let mut headers = self
+            .auth
+            .headers()
+            .map_err(|error| ResponseError::new(error, None))?;
         if body.is_some() {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         }
 
-        let mut request = self.http.request(method, url).headers(headers);
+        let mut request = self
+            .http
+            .request(method.clone(), url)
+            .headers(headers);
         if let Some(body) = body {
             request = request.body(body);
         }
@@ -54,7 +75,7 @@ impl DepositWalletRelayerClient {
         let response = request
             .send()
             .await
-            .map_err(|error| RelayerError::Http(error.without_url()))?;
+            .map_err(|error| ResponseError::new(RelayerError::Http(error.without_url()), None))?;
         if !response.status().is_success() {
             let status = response.status();
             let retry_after = retry_after_duration(response.headers());
@@ -62,18 +83,23 @@ impl DepositWalletRelayerClient {
             self.error_body_drain_limiter
                 .try_spawn_error_response_body_drain(response);
             if status == StatusCode::TOO_MANY_REQUESTS {
-                return Err(RelayerError::QuotaExhausted);
+                return Err(ResponseError::new(RelayerError::QuotaExhausted, retry_after));
             }
-            return Err(RelayerError::Api {
-                status: status.as_u16(),
-                message: format!(
-                    "deposit-wallet relayer request failed with HTTP {status}{retry_after_message}"
-                ),
-            });
+            return Err(ResponseError::new(
+                RelayerError::Api {
+                    status: status.as_u16(),
+                    message: format!(
+                        "deposit-wallet relayer request failed with HTTP {status}{retry_after_message}"
+                    ),
+                },
+                retry_after,
+            ));
         }
 
         read_limited_response_body(response, success_body_limit).await
+            .map_err(|error| ResponseError::new(error, None))
     }
+
 }
 
 pub(super) async fn read_limited_response_body(
@@ -84,9 +110,7 @@ pub(super) async fn read_limited_response_body(
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
-        return Err(RelayerError::Other(
-            RESPONSE_BODY_TOO_LARGE_MESSAGE.to_string(),
-        ));
+        return Err(RelayerError::Other(RESPONSE_BODY_TOO_LARGE_MESSAGE.to_string()));
     }
 
     let mut body = Vec::new();
@@ -96,9 +120,7 @@ pub(super) async fn read_limited_response_body(
         .map_err(|error| RelayerError::Http(error.without_url()))?
     {
         if body.len().saturating_add(chunk.len()) > limit {
-            return Err(RelayerError::Other(
-                RESPONSE_BODY_TOO_LARGE_MESSAGE.to_string(),
-            ));
+            return Err(RelayerError::Other(RESPONSE_BODY_TOO_LARGE_MESSAGE.to_string()));
         }
         body.extend_from_slice(&chunk);
     }
@@ -114,7 +136,7 @@ pub(super) fn retry_after_duration(headers: &HeaderMap) -> Option<Duration> {
     retry_after_duration_at(headers, SystemTime::now())
 }
 
-fn retry_after_duration_at(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
+pub(super) fn retry_after_duration_at(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
     let value = headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())

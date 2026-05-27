@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard};
-use std::time::{Duration, SystemTime};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ::url::Url;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use ethers::types::{Address, H256, U256};
 use ethers::utils::{keccak256, to_checksum};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
@@ -12,13 +15,14 @@ use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
+use ::url::Url;
 
+use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
 use crate::deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, build_wallet_create_request,
     build_wallet_nonce_request, deposit_wallet_contract_config, DepositWalletContractConfig,
     RelayerSubmitResponse, RelayerTransactionState, SignedDepositWalletBatch, POLYGON_CHAIN_ID,
 };
-use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
 use crate::error::{RelayerError, Result};
 
 const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
@@ -40,12 +44,18 @@ const TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR: &str = "transaction response dupl
 const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missing requested id";
 const TRANSACTION_RESPONSE_INVALID_ID_ERROR: &str = "transaction response invalid id";
 const MAX_ERROR_TOKEN_LEN: usize = 96;
+const MIN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const MAX_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_RETRY_AFTER_INTERVAL: Duration = Duration::from_secs(30);
+const MAX_RETRY_AFTER_JITTER: Duration = Duration::from_millis(250);
+const MAX_POLL_ATTEMPTS: usize = 120;
 const MAX_OWNER_MUTATION_RECORDS: usize = 1024;
 const MAX_OWNER_SERIALIZATION_LEASE_SECONDS: u64 = 300;
 const MAX_EVIDENCE_CLOCK_SKEW_SECONDS: u64 = 30;
 
 mod auth;
 mod permit;
+mod poll;
 mod read;
 mod redaction;
 mod response;
@@ -61,10 +71,12 @@ pub use permit::{
     DepositWalletMutationScope, DepositWalletOwnerSerializationEvidence,
     DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
 };
+pub use poll::DepositWalletPollPolicy;
 pub use read::DepositWalletNonceLease;
 pub use response::DepositWalletTransactionReceipt;
 pub use url::DepositWalletRelayerUrl;
 
+use poll::{DepositWalletClock, DepositWalletSleeper, SystemClock, TokioSleeper};
 use state::OwnerMutationState;
 use transport::ErrorBodyDrainLimiter;
 use url::validate_relayer_contract_config;
@@ -75,9 +87,13 @@ pub struct DepositWalletRelayerClient {
     base_url: DepositWalletRelayerUrl,
     auth: RelayerKeyAuth,
     config: DepositWalletContractConfig,
+    // Process-local mutation state is a bounded backstop and is never held
+    // across `.await`; production submit remains disabled until durable owner
+    // state replaces this in a later live-submit PR.
     mutation_state: Arc<Mutex<OwnerMutationState>>,
     error_body_drain_limiter: ErrorBodyDrainLimiter,
     clock: Arc<dyn DepositWalletClock>,
+    sleeper: Arc<dyn DepositWalletSleeper>,
 }
 
 impl DepositWalletRelayerClient {
@@ -92,7 +108,14 @@ impl DepositWalletRelayerClient {
             .timeout(Duration::from_secs(30))
             .build()?;
 
-        Ok(Self::from_parts(http, base_url, auth, config, Arc::new(SystemClock)))
+        Ok(Self::from_parts(
+            http,
+            base_url,
+            auth,
+            config,
+            Arc::new(SystemClock),
+            Arc::new(TokioSleeper),
+        ))
     }
 
     fn from_parts(
@@ -101,6 +124,7 @@ impl DepositWalletRelayerClient {
         auth: RelayerKeyAuth,
         config: DepositWalletContractConfig,
         clock: Arc<dyn DepositWalletClock>,
+        sleeper: Arc<dyn DepositWalletSleeper>,
     ) -> Self {
         Self {
             http,
@@ -110,6 +134,7 @@ impl DepositWalletRelayerClient {
             mutation_state: Arc::new(Mutex::new(OwnerMutationState::default())),
             error_body_drain_limiter: ErrorBodyDrainLimiter::new(MAX_BACKGROUND_ERROR_BODY_DRAINS),
             clock,
+            sleeper,
         }
     }
 
@@ -142,21 +167,6 @@ impl fmt::Debug for DepositWalletRelayerClient {
             .field("auth", &self.auth)
             .field("config", &self.config)
             .finish_non_exhaustive()
-    }
-}
-
-trait DepositWalletClock: Send + Sync {
-    fn now_unix_seconds(&self) -> Result<u64>;
-}
-
-struct SystemClock;
-
-impl DepositWalletClock for SystemClock {
-    fn now_unix_seconds(&self) -> Result<u64> {
-        SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .map_err(|_| RelayerError::Other("system time before UNIX epoch".to_string()))
     }
 }
 

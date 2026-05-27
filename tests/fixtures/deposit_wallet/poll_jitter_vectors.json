@@ -1,0 +1,58 @@
+{
+  "transactionPollJitter": [
+    {
+      "transactionID": "tx-jitter-a",
+      "attempt": 0,
+      "baseMs": 200,
+      "expectedMs": 42
+    },
+    {
+      "transactionID": "tx-jitter-a",
+      "attempt": 1,
+      "baseMs": 200,
+      "expectedMs": 23
+    },
+    {
+      "transactionID": "tx-jitter-b",
+      "attempt": 0,
+      "baseMs": 200,
+      "expectedMs": 50
+    },
+    {
+      "transactionID": "tx-jitter-c",
+      "attempt": 2,
+      "baseMs": 200,
+      "expectedMs": 48
+    }
+  ],
+  "retryAfterPollInterval": [
+    {
+      "transactionID": "tx-retry-after-jitter-a",
+      "attempt": 0,
+      "policyIntervalMs": 100,
+      "retryAfterMs": 1000,
+      "expectedMs": 1023
+    },
+    {
+      "transactionID": "tx-retry-after-capped",
+      "attempt": 0,
+      "policyIntervalMs": 100,
+      "retryAfterMs": 600000,
+      "expectedMs": 30069
+    },
+    {
+      "transactionID": "tx-retry-after-max-boundary",
+      "attempt": 0,
+      "policyIntervalMs": 100,
+      "retryAfterMs": 30000,
+      "expectedMs": 30201
+    },
+    {
+      "transactionID": "tx-policy-interval-wins",
+      "attempt": 0,
+      "policyIntervalMs": 2000,
+      "retryAfterMs": 1000,
+      "expectedMs": 2000
+    }
+  ]
+}

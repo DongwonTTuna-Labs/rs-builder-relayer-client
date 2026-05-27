@@ -20,10 +20,10 @@ pub use deposit_wallet::{
     DepositWalletIdlessSubmitReconciliationEvidence, DepositWalletMutationAction,
     DepositWalletMutationEnvironment, DepositWalletMutationGate, DepositWalletMutationPermit,
     DepositWalletMutationScope, DepositWalletNonceLease, DepositWalletOwnerSerializationEvidence,
-    DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletRequestContext,
-    DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
-    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerSubmitResponse,
-    RelayerTransactionState, WalletNonceRequest,
+    DepositWalletPollPolicy, DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletRequestContext, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    RelayerSubmitResponse, RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

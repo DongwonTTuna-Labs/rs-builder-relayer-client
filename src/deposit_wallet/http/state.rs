@@ -4,8 +4,10 @@ use super::permit::{
     validate_permit_scope, validate_reconciliation_evidence,
 };
 use super::redaction::{
-    display_payload_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
+    display_payload_hash, recovered_payload_hash, redacted_address, sanitized_external_token,
+    unknown_state_error_summary,
 };
+use super::response::ParsedTransactionReceipt;
 
 #[derive(Default)]
 pub(super) struct OwnerMutationState {
@@ -19,6 +21,7 @@ pub(super) struct OwnerMutationState {
 pub(super) struct OwnerTransactionRecord {
     pub(super) owner: Address,
     pub(super) payload_hash: String,
+    pub(super) source: OwnerTransactionSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +31,21 @@ pub(super) struct OwnerTransactionTerminalObservation {
 }
 
 impl OwnerTransactionTerminalObservation {
+    pub(super) fn from_receipt(receipt: &DepositWalletTransactionReceipt) -> Option<Self> {
+        match &receipt.state {
+            RelayerTransactionState::Confirmed
+            | RelayerTransactionState::Invalid
+            | RelayerTransactionState::Failed => Some(Self {
+                observed_state: receipt.state.clone(),
+                transaction_hash: receipt.transaction_hash.clone(),
+            }),
+            RelayerTransactionState::New
+            | RelayerTransactionState::Executed
+            | RelayerTransactionState::Mined
+            | RelayerTransactionState::Unknown(_) => None,
+        }
+    }
+
     pub(super) fn matches_evidence(
         &self,
         evidence: &DepositWalletSubmitReconciliationEvidence,
@@ -35,6 +53,12 @@ impl OwnerTransactionTerminalObservation {
         &self.observed_state == evidence.observed_state()
             && self.transaction_hash.as_deref() == evidence.transaction_hash()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum OwnerTransactionSource {
+    LocalSubmit,
+    OwnerRecovery,
 }
 
 #[derive(Clone, Debug)]
@@ -652,6 +676,7 @@ impl DepositWalletRelayerClient {
             OwnerTransactionRecord {
                 owner,
                 payload_hash,
+                source: OwnerTransactionSource::LocalSubmit,
             },
         );
         Ok(())
@@ -671,8 +696,244 @@ impl DepositWalletRelayerClient {
             OwnerTransactionRecord {
                 owner,
                 payload_hash,
+                source: OwnerTransactionSource::LocalSubmit,
             },
         );
+        Ok(())
+    }
+
+    pub(super) fn record_recovered_inflight_transaction(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+    ) -> Result<()> {
+        let mut state = self.mutation_state()?;
+        let mut source = OwnerTransactionSource::OwnerRecovery;
+        let payload_hash = if let Some(block) = state.owner_blocks.get(&owner) {
+            match block {
+                OwnerMutationBlock::InFlight {
+                    transaction_id: Some(existing_transaction_id),
+                    ..
+                } if existing_transaction_id == transaction_id => {
+                    return Ok(());
+                }
+                OwnerMutationBlock::Ambiguous { payload_hash, .. } => {
+                    let Some(record) = state.transaction_owners.get(transaction_id) else {
+                        return Ok(());
+                    };
+                    if record.owner != owner || record.payload_hash != *payload_hash {
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "transaction {} is already associated with a different owner or payload; manual reconciliation required",
+                            sanitized_external_token(transaction_id)
+                        )));
+                    }
+                    source = record.source;
+                    payload_hash.clone()
+                }
+                _ => return Err(owner_block_error(owner, block)),
+            }
+        } else {
+            recovered_payload_hash(transaction_id)
+        };
+        ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
+        ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
+        state.owner_blocks.insert(
+            owner,
+            OwnerMutationBlock::InFlight {
+                payload_hash: payload_hash.clone(),
+                transaction_id: Some(transaction_id.to_string()),
+                created_at_unix_seconds: self.clock.now_unix_seconds()?,
+            },
+        );
+        state.transaction_owners.insert(
+            transaction_id.to_string(),
+            OwnerTransactionRecord {
+                owner,
+                payload_hash,
+                source,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn record_recovered_ambiguous_transaction(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+    ) -> Result<()> {
+        let mut state = self.mutation_state()?;
+        let current_record = current_recovery_payload_record(&state, transaction_id, owner)?;
+        let mut source = current_record
+            .as_ref()
+            .map(|record| record.source)
+            .unwrap_or(OwnerTransactionSource::OwnerRecovery);
+        let current_payload_hash = current_record
+            .map(|record| record.payload_hash)
+            .unwrap_or_else(|| recovered_payload_hash(transaction_id));
+        let payload_hash = match state.owner_blocks.get(&owner) {
+            Some(OwnerMutationBlock::InFlight {
+                payload_hash,
+                transaction_id: Some(existing_transaction_id),
+                ..
+            }) if existing_transaction_id == transaction_id => payload_hash.clone(),
+            Some(OwnerMutationBlock::Ambiguous { payload_hash, .. })
+                if state
+                    .transaction_owners
+                    .get(transaction_id)
+                    .is_some_and(|record| record.owner == owner && record.payload_hash == *payload_hash) =>
+            {
+                return Ok(());
+            }
+            Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) => {
+                source = OwnerTransactionSource::OwnerRecovery;
+                payload_hash.clone()
+            }
+            Some(block) => return Err(owner_block_error(owner, block)),
+            None => current_payload_hash,
+        };
+        ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
+        ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
+        state.owner_blocks.insert(
+            owner,
+            OwnerMutationBlock::Ambiguous {
+                payload_hash: payload_hash.clone(),
+                created_at_unix_seconds: self.clock.now_unix_seconds()?,
+            },
+        );
+        state.transaction_owners.insert(
+            transaction_id.to_string(),
+            OwnerTransactionRecord {
+                owner,
+                payload_hash,
+                source,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn has_recovery_owner_evidence(&self, owner: Address, transaction_id: &str) -> Result<bool> {
+        let state = self.mutation_state()?;
+        if let Some(record) = state.transaction_owners.get(transaction_id) {
+            if record.owner != owner {
+                return Err(RelayerError::reconciliation_required(format!(
+                    "transaction {} is already associated with a different owner; manual reconciliation required",
+                    sanitized_external_token(transaction_id)
+                )));
+            }
+            return Ok(true);
+        }
+
+        match state.owner_blocks.get(&owner) {
+            Some(OwnerMutationBlock::InFlight {
+                transaction_id: Some(existing_transaction_id),
+                ..
+            }) if existing_transaction_id == transaction_id => Ok(true),
+            Some(block) => Err(owner_block_error(owner, block)),
+            None => Ok(false),
+        }
+    }
+
+    pub(super) fn local_transaction_owner(&self, transaction_id: &str) -> Result<Option<Address>> {
+        let state = self.mutation_state()?;
+        Ok(state
+            .transaction_owners
+            .get(transaction_id)
+            .map(|record| record.owner))
+    }
+
+    pub(super) fn current_recovery_payload_record(
+        &self,
+        transaction_id: &str,
+        owner: Address,
+    ) -> Result<Option<OwnerTransactionRecord>> {
+        let state = self.mutation_state()?;
+        current_recovery_payload_record(&state, transaction_id, owner)
+    }
+
+    pub(super) fn require_transaction_owner(
+        &self,
+        transaction_id: &str,
+        parsed: &ParsedTransactionReceipt,
+        owner: Address,
+    ) -> Result<()> {
+        match parsed.owner {
+            Some(response_owner) if response_owner == owner => Ok(()),
+            Some(response_owner) => Err(RelayerError::reconciliation_required(format!(
+                "transaction {} owner {} did not match requested owner {}",
+                sanitized_external_token(transaction_id),
+                redacted_address(response_owner),
+                redacted_address(owner)
+            ))),
+            None => Err(RelayerError::reconciliation_required(format!(
+                "transaction {} response did not include owner evidence; owner-scoped recovery poll cannot be used",
+                sanitized_external_token(transaction_id)
+            ))),
+        }
+    }
+
+    pub(super) fn clear_transaction_block_if_current(
+        &self,
+        transaction_id: &str,
+        owner: Address,
+        payload_hash: &str,
+    ) -> Result<()> {
+        let mut state = self.mutation_state()?;
+        if state.transaction_owners.get(transaction_id).is_some_and(|record| {
+            record.owner == owner && record.payload_hash == payload_hash
+        }) {
+            state.transaction_owners.remove(transaction_id);
+            state.terminal_observations.remove(transaction_id);
+            if state
+                .transaction_owners
+                .iter()
+                .any(|(_, record)| record.owner == owner && record.payload_hash == payload_hash)
+            {
+                state.owner_blocks.insert(
+                    owner,
+                    OwnerMutationBlock::Ambiguous {
+                        payload_hash: payload_hash.to_string(),
+                        created_at_unix_seconds: self.clock.now_unix_seconds()?,
+                    },
+                );
+                return Err(RelayerError::reconciliation_required(format!(
+                    "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
+                    redacted_address(owner),
+                    display_payload_hash(payload_hash)
+                )));
+            }
+            clear_owner_block_if_payload(&mut state, owner, payload_hash);
+        }
+        Ok(())
+    }
+
+    pub(super) fn record_terminal_observation(
+        &self,
+        transaction_id: &str,
+        receipt: &DepositWalletTransactionReceipt,
+    ) -> Result<()> {
+        let Some(observation) = OwnerTransactionTerminalObservation::from_receipt(receipt) else {
+            return Ok(());
+        };
+        let mut state = self.mutation_state()?;
+        if state.transaction_owners.contains_key(transaction_id) {
+            state
+                .terminal_observations
+                .insert(transaction_id.to_string(), observation);
+        }
+        Ok(())
+    }
+
+    pub(super) fn mark_transaction_reconciliation_required(&self, transaction_id: &str) -> Result<()> {
+        let mut state = self.mutation_state()?;
+        if let Some(record) = state.transaction_owners.get(transaction_id).cloned() {
+            state.owner_blocks.insert(
+                record.owner,
+                OwnerMutationBlock::Ambiguous {
+                    payload_hash: record.payload_hash,
+                    created_at_unix_seconds: self.clock.now_unix_seconds()?,
+                },
+            );
+        }
         Ok(())
     }
 
@@ -813,4 +1074,35 @@ pub(super) fn ensure_transaction_owner_mapping_available(
         }
     }
     Ok(())
+}
+
+pub(super) fn current_recovery_payload_record(
+    state: &OwnerMutationState,
+    transaction_id: &str,
+    owner: Address,
+) -> Result<Option<OwnerTransactionRecord>> {
+    if let Some(existing) = state.transaction_owners.get(transaction_id) {
+        if existing.owner != owner {
+            return Err(RelayerError::reconciliation_required(format!(
+                "transaction {} is already associated with a different owner; manual reconciliation required",
+                sanitized_external_token(transaction_id)
+            )));
+        }
+        return Ok(Some(existing.clone()));
+    }
+
+    match state.owner_blocks.get(&owner) {
+        Some(OwnerMutationBlock::InFlight {
+            payload_hash,
+            transaction_id: Some(existing_transaction_id),
+            ..
+        }) if existing_transaction_id == transaction_id => Ok(Some(OwnerTransactionRecord {
+            owner,
+            payload_hash: payload_hash.clone(),
+            source: OwnerTransactionSource::OwnerRecovery,
+        })),
+        Some(OwnerMutationBlock::Ambiguous { .. }) => Ok(None),
+        Some(block) => Err(owner_block_error(owner, block)),
+        None => Ok(None),
+    }
 }
