@@ -367,6 +367,21 @@
         .unwrap()
     }
 
+    fn idless_submit_reconciliation_evidence_for_payload(
+        owner: Address,
+        payload_hash: impl Into<String>,
+    ) -> DepositWalletIdlessSubmitReconciliationEvidence {
+        DepositWalletIdlessSubmitReconciliationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+            "unit-test owner serialization guard",
+            payload_hash,
+            "unit-test relayer audit found no accepted transaction for the ambiguous payload",
+            1_700_000_001,
+        )
+        .unwrap()
+    }
+
     fn submit_reconciliation_evidence_for(
         client: &DepositWalletRelayerClient,
         owner: Address,

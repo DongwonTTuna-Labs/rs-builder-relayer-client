@@ -1,11 +1,11 @@
 use ethers::types::Address;
 use polymarket_relayer::{
-    deposit_wallet_contract_config, DepositWalletMutationAction, DepositWalletMutationGate,
-    DepositWalletMutationPermit, DepositWalletOwnerSerializationEvidence,
-    DepositWalletPollPolicy, DepositWalletRelayerClient, DepositWalletRelayerUrl,
-    DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
-    DepositWalletTransactionReceipt, RelayerKeyAuth,
-    RelayerTransactionState,
+    deposit_wallet_contract_config, DepositWalletIdlessSubmitReconciliationEvidence,
+    DepositWalletMutationAction, DepositWalletMutationGate, DepositWalletMutationPermit,
+    DepositWalletOwnerSerializationEvidence, DepositWalletPollPolicy, DepositWalletRelayerClient,
+    DepositWalletRelayerUrl, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt,
+    DepositWalletWalletNonceEvidence, RelayerKeyAuth, RelayerTransactionState,
 };
 
 #[test]
@@ -46,16 +46,33 @@ fn deposit_wallet_http_types_are_reexported_at_crate_root() {
         .unwrap(),
     )
     .unwrap();
+    let idless_reconciliation = DepositWalletIdlessSubmitReconciliationEvidence::new(
+        Address::zero(),
+        client.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+        "compile-test owner lock",
+        "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "compile-test id-less reconciliation",
+        1,
+    )
+    .unwrap();
     let receipt = DepositWalletTransactionReceipt {
         transaction_id: "tx-public-api".to_string(),
         state: RelayerTransactionState::New,
         transaction_hash: None,
         owner: None,
     };
+    let nonce_evidence: Option<DepositWalletWalletNonceEvidence> = None;
 
     let rendered = format!("{client:?}");
     assert!(rendered.contains("DepositWalletRelayerClient"));
     assert!(!rendered.contains("compile-test-api-key"));
 
-    let _ = (gate, policy, reconciliation, receipt);
+    let _ = (
+        gate,
+        policy,
+        reconciliation,
+        idless_reconciliation,
+        receipt,
+        nonce_evidence,
+    );
 }

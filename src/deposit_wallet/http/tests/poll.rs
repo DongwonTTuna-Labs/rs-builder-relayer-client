@@ -51,10 +51,9 @@ use super::*;
 #[tokio::test]
     async fn transient_poll_fetch_error_retries_without_ambiguous_owner_block() {
         let owner = address(WALLET_CREATE_OWNER);
-        let retry_at = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(3600));
         let (url, handle) = spawn_server(vec![
             TestResponse::json("503 Service Unavailable", "{}")
-                .with_header("retry-after", &retry_at),
+                .with_header("retry-after", "120"),
             TestResponse::json(
                 "200 OK",
                 transaction_response("tx-transient", "STATE_CONFIRMED"),
@@ -84,13 +83,13 @@ use super::*;
         assert!(client.ambiguous_submit_block(owner).is_none());
         client.ensure_owner_unblocked(owner).unwrap();
         let sleeps = sleeper.sleeps();
-        assert_eq!(sleeps, vec![MAX_POLL_INTERVAL]);
+        assert_eq!(sleeps, vec![Duration::from_secs(120)]);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }
 
 #[tokio::test]
-    async fn transient_poll_429_retry_after_uses_larger_policy_or_capped_header() {
+    async fn transient_poll_429_retry_after_uses_larger_policy_or_server_delay() {
         for (transaction_id, retry_after, interval, expected_sleep) in [
             (
                 "tx-retry-after-header",
@@ -99,10 +98,10 @@ use super::*;
                 Duration::from_secs(1),
             ),
             (
-                "tx-retry-after-cap",
-                httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(3600)),
+                "tx-retry-after-long",
+                "120".to_string(),
                 Duration::from_millis(100),
-                MAX_POLL_INTERVAL,
+                Duration::from_secs(120),
             ),
         ] {
             let owner = address(WALLET_CREATE_OWNER);
@@ -271,6 +270,7 @@ use super::*;
             .await
             .unwrap();
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(receipt.owner, Some(owner));
 
         let nonce = client.get_wallet_nonce(owner).await.unwrap();
         assert_eq!(nonce, U256::from(38u64));
@@ -632,6 +632,49 @@ use super::*;
         client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
+    async fn owner_aware_poll_mismatched_transaction_response_keeps_known_owner_blocked() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-requested-known";
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_NEW")),
+            TestResponse::json(
+                "200 OK",
+                json!({
+                    "transactionID": "other-tx",
+                    "state": "STATE_CONFIRMED",
+                    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+                    "owner": WALLET_CREATE_OWNER
+                })
+                .to_string(),
+            ),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .submit_wallet_create(owner, mutation_permit())
+            .await
+            .unwrap();
+        assert_eq!(receipt.transaction_id, transaction_id);
+
+        let error = client
+            .poll_owner_transaction(
+                owner,
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert!(client.ambiguous_submit_block(owner).is_some());
+        let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+        assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
 #[tokio::test]

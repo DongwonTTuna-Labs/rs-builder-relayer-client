@@ -1,7 +1,7 @@
 use super::*;
 use super::permit::{
-    validate_permit_fresh, validate_permit_owner, validate_permit_scope,
-    validate_reconciliation_evidence,
+    validate_idless_reconciliation_evidence, validate_permit_fresh, validate_permit_owner,
+    validate_permit_scope, validate_reconciliation_evidence,
 };
 use super::redaction::{
     display_payload_hash, recovered_payload_hash, redacted_address, sanitized_external_token,
@@ -285,7 +285,12 @@ impl DepositWalletRelayerClient {
                             sanitized_external_token(evidence.transaction_id())
                         )));
                     }
-                    None => {}
+                    None => {
+                        return Err(RelayerError::reconciliation_required(format!(
+                            "manual reconciliation transaction {} has no local owner payload record; use id-less submit reconciliation evidence before clearing",
+                            sanitized_external_token(evidence.transaction_id())
+                        )));
+                    }
                 }
                 state.owner_blocks.remove(&owner);
             }
@@ -310,6 +315,75 @@ impl DepositWalletRelayerClient {
             Some(OwnerMutationBlock::InFlight { .. }) => {
                 return Err(RelayerError::mutation_blocked(format!(
                     "owner {} has an active submit request; wait for the response before clearing",
+                    redacted_address(owner)
+                )));
+            }
+            None => {}
+        }
+        Ok(())
+    }
+
+    pub fn clear_idless_ambiguous_submit_after_manual_reconciliation(
+        &self,
+        evidence: DepositWalletIdlessSubmitReconciliationEvidence,
+        permit: DepositWalletMutationPermit,
+    ) -> Result<()> {
+        let owner = evidence.owner();
+        self.ensure_permitted_for_action(
+            &DepositWalletMutationGate::Permit(permit.clone()),
+            owner,
+            DepositWalletMutationAction::ManualReconciliation,
+        )?;
+
+        let mut state = self.mutation_state()?;
+        match state.owner_blocks.get(&owner).cloned() {
+            Some(OwnerMutationBlock::Ambiguous {
+                payload_hash,
+                created_at_unix_seconds,
+            })
+                if payload_hash == evidence.payload_hash() =>
+            {
+                validate_idless_reconciliation_evidence(
+                    &evidence,
+                    &permit,
+                    self.mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+                    created_at_unix_seconds,
+                    self.clock.now_unix_seconds(),
+                )?;
+                if state
+                    .transaction_owners
+                    .values()
+                    .any(|record| record.owner == owner && record.payload_hash == evidence.payload_hash())
+                {
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "owner {} has known transactions for payload {}; reconcile each transaction before id-less clearing",
+                        redacted_address(owner),
+                        display_payload_hash(evidence.payload_hash())
+                    )));
+                }
+                state.owner_blocks.remove(&owner);
+            }
+            Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) => {
+                return Err(RelayerError::reconciliation_required(format!(
+                    "id-less reconciliation evidence payload {} did not match current ambiguous payload {} for owner {}",
+                    display_payload_hash(evidence.payload_hash()),
+                    display_payload_hash(&payload_hash),
+                    redacted_address(owner)
+                )));
+            }
+            Some(OwnerMutationBlock::InFlight {
+                transaction_id: Some(transaction_id),
+                ..
+            }) => {
+                return Err(RelayerError::mutation_blocked(format!(
+                    "owner {} has known in-flight submit transaction {}; poll it to a terminal state before id-less clearing",
+                    redacted_address(owner),
+                    sanitized_external_token(&transaction_id)
+                )));
+            }
+            Some(OwnerMutationBlock::InFlight { .. }) => {
+                return Err(RelayerError::mutation_blocked(format!(
+                    "owner {} has an active submit request; wait for the response before id-less clearing",
                     redacted_address(owner)
                 )));
             }

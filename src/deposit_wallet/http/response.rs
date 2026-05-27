@@ -1,12 +1,23 @@
 use super::*;
-use super::redaction::sanitized_external_token;
+use super::redaction::{redacted_address, sanitized_external_token};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletTransactionReceipt {
     pub transaction_id: String,
     pub state: RelayerTransactionState,
     pub transaction_hash: Option<String>,
     pub owner: Option<Address>,
+}
+
+impl fmt::Debug for DepositWalletTransactionReceipt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletTransactionReceipt")
+            .field("transaction_id", &sanitized_external_token(&self.transaction_id))
+            .field("state", &self.state)
+            .field("transaction_hash", &self.transaction_hash)
+            .field("owner", &self.owner.map(redacted_address))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -249,7 +260,7 @@ pub(super) fn receipt_from_submit_response(
             transaction_id,
             state: response.state,
             transaction_hash,
-            owner,
+            owner: None,
         },
         owner,
     })

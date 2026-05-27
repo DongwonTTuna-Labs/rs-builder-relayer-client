@@ -165,9 +165,7 @@ impl DepositWalletRelayerClient {
                             policy.interval_for_transaction_attempt(&transaction_id, attempt);
                         let sleep_for = poll_error
                             .retry_after
-                            .map(|retry_after| {
-                                retry_after.min(MAX_POLL_INTERVAL).max(policy_interval)
-                            })
+                            .map(|retry_after| retry_after.max(policy_interval))
                             .unwrap_or(policy_interval);
                         self.sleeper
                             .sleep(sleep_for)
@@ -194,7 +192,7 @@ impl DepositWalletRelayerClient {
                     return Err(error);
                 }
             }
-            let receipt = parsed.receipt;
+            let mut receipt = parsed.receipt;
             let terminal_evidence = owner_to_verify
                 .map(|owner| {
                     self.current_recovery_payload_record(&transaction_id, owner)
@@ -227,6 +225,9 @@ impl DepositWalletRelayerClient {
                             owner,
                             &record.payload_hash,
                         )?;
+                    }
+                    if let Some(owner) = owner_to_verify {
+                        receipt.owner = Some(owner);
                     }
                     return Ok(receipt);
                 }

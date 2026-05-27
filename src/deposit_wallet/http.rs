@@ -65,10 +65,11 @@ mod url;
 
 pub use auth::RelayerKeyAuth;
 pub use permit::{
-    DepositWalletMutationAction, DepositWalletMutationEnvironment, DepositWalletMutationGate,
-    DepositWalletMutationPermit, DepositWalletMutationScope,
-    DepositWalletOwnerSerializationEvidence, DepositWalletSubmitReconciliationEvidence,
-    DepositWalletSubmitReconciliationObservation,
+    DepositWalletIdlessSubmitReconciliationEvidence, DepositWalletMutationAction,
+    DepositWalletMutationEnvironment, DepositWalletMutationGate, DepositWalletMutationPermit,
+    DepositWalletMutationScope, DepositWalletOwnerSerializationEvidence,
+    DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
+    DepositWalletWalletNonceEvidence,
 };
 pub use poll::DepositWalletPollPolicy;
 pub use response::DepositWalletTransactionReceipt;

@@ -7,6 +7,11 @@ use super::response::{validate_transaction_hash, validate_transaction_id};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DepositWalletMutationEnvironment {
     Production,
+    /// Crate-local mock relayer environment used by unit tests.
+    ///
+    /// Production builds cannot construct a matching `DepositWalletRelayerUrl`;
+    /// public production URLs always produce [`Self::Production`] scopes and
+    /// reject permits carrying this environment.
     TestLoopback,
 }
 
@@ -137,6 +142,24 @@ pub struct DepositWalletSubmitReconciliationEvidence {
     issuer: String,
     payload_hash: String,
     observation: DepositWalletSubmitReconciliationObservation,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct DepositWalletIdlessSubmitReconciliationEvidence {
+    owner: Address,
+    scope: DepositWalletMutationScope,
+    issuer: String,
+    payload_hash: String,
+    reason: String,
+    checked_at_unix_seconds: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct DepositWalletWalletNonceEvidence {
+    owner: Address,
+    scope: DepositWalletMutationScope,
+    nonce: U256,
+    fetched_at_unix_seconds: u64,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -291,6 +314,121 @@ impl fmt::Debug for DepositWalletSubmitReconciliationEvidence {
             .field("issuer", &"<redacted>")
             .field("payload_hash", &display_payload_hash(&self.payload_hash))
             .field("observation", &self.observation)
+            .finish()
+    }
+}
+
+impl DepositWalletIdlessSubmitReconciliationEvidence {
+    /// Records audited evidence that an ambiguous submit without a local
+    /// transaction id was not accepted by the relayer before clearing the
+    /// owner block.
+    pub fn new(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+        issuer: impl Into<String>,
+        payload_hash: impl Into<String>,
+        reason: impl Into<String>,
+        checked_at_unix_seconds: u64,
+    ) -> Result<Self> {
+        if scope.action != DepositWalletMutationAction::ManualReconciliation {
+            return Err(RelayerError::mutation_blocked(
+                "id-less submit reconciliation evidence scope must be manual reconciliation"
+                    .to_string(),
+            ));
+        }
+        let issuer = issuer.into();
+        if issuer.trim().is_empty() {
+            return Err(RelayerError::mutation_blocked(
+                "id-less submit reconciliation evidence issuer required".to_string(),
+            ));
+        }
+        let payload_hash = payload_hash.into();
+        if payload_hash.trim().is_empty()
+            || payload_hash.chars().any(char::is_whitespace)
+            || payload_hash.len() > MAX_ERROR_TOKEN_LEN
+        {
+            return Err(RelayerError::mutation_blocked(
+                "id-less submit reconciliation evidence payload hash is invalid".to_string(),
+            ));
+        }
+        let reason = reason.into();
+        if reason.trim().is_empty() {
+            return Err(RelayerError::mutation_blocked(
+                "id-less submit reconciliation evidence reason required".to_string(),
+            ));
+        }
+        if checked_at_unix_seconds == 0 {
+            return Err(RelayerError::mutation_blocked(
+                "id-less submit reconciliation evidence check timestamp required".to_string(),
+            ));
+        }
+        Ok(Self {
+            owner,
+            scope,
+            issuer,
+            payload_hash,
+            reason,
+            checked_at_unix_seconds,
+        })
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn payload_hash(&self) -> &str {
+        &self.payload_hash
+    }
+}
+
+impl fmt::Debug for DepositWalletIdlessSubmitReconciliationEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletIdlessSubmitReconciliationEvidence")
+            .field("owner", &redacted_address(self.owner))
+            .field("scope", &self.scope)
+            .field("issuer", &"<redacted>")
+            .field("payload_hash", &display_payload_hash(&self.payload_hash))
+            .field("reason", &"<redacted>")
+            .field("checked_at_unix_seconds", &self.checked_at_unix_seconds)
+            .finish()
+    }
+}
+
+impl DepositWalletWalletNonceEvidence {
+    pub(super) fn new(
+        owner: Address,
+        scope: DepositWalletMutationScope,
+        nonce: U256,
+        fetched_at_unix_seconds: u64,
+    ) -> Self {
+        Self {
+            owner,
+            scope,
+            nonce,
+            fetched_at_unix_seconds,
+        }
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub fn fetched_at_unix_seconds(&self) -> u64 {
+        self.fetched_at_unix_seconds
+    }
+}
+
+impl fmt::Debug for DepositWalletWalletNonceEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletWalletNonceEvidence")
+            .field("owner", &redacted_address(self.owner))
+            .field("scope", &self.scope)
+            .field("nonce", &self.nonce)
+            .field("fetched_at_unix_seconds", &self.fetched_at_unix_seconds)
             .finish()
     }
 }
@@ -465,6 +603,88 @@ pub(super) fn validate_reconciliation_evidence(
     {
         return Err(RelayerError::mutation_blocked(
             "submit reconciliation evidence check time is in the future".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_idless_reconciliation_evidence(
+    evidence: &DepositWalletIdlessSubmitReconciliationEvidence,
+    permit: &DepositWalletMutationPermit,
+    expected_scope: DepositWalletMutationScope,
+    block_created_at_unix_seconds: u64,
+    now_unix_seconds: u64,
+) -> Result<()> {
+    if evidence.scope != expected_scope {
+        return Err(RelayerError::mutation_blocked(
+            "id-less submit reconciliation evidence scope does not match client reconciliation scope"
+                .to_string(),
+        ));
+    }
+    if permit.owner_serialization_evidence.scope != expected_scope {
+        return Err(RelayerError::mutation_blocked(
+            "manual reconciliation permit scope does not match client reconciliation scope"
+                .to_string(),
+        ));
+    }
+    if permit.owner_serialization_evidence.issuer != evidence.issuer {
+        return Err(RelayerError::mutation_blocked(
+            "id-less submit reconciliation evidence issuer does not match mutation permit issuer"
+                .to_string(),
+        ));
+    }
+    if evidence.checked_at_unix_seconds < block_created_at_unix_seconds {
+        return Err(RelayerError::mutation_blocked(
+            "id-less submit reconciliation evidence predates the ambiguous owner block".to_string(),
+        ));
+    }
+    if evidence.checked_at_unix_seconds
+        > now_unix_seconds.saturating_add(MAX_EVIDENCE_CLOCK_SKEW_SECONDS)
+    {
+        return Err(RelayerError::mutation_blocked(
+            "id-less submit reconciliation evidence check time is in the future".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_wallet_nonce_evidence(
+    evidence: &DepositWalletWalletNonceEvidence,
+    owner: Address,
+    expected_scope: DepositWalletMutationScope,
+    expected_nonce: U256,
+    now_unix_seconds: u64,
+) -> Result<()> {
+    if evidence.owner != owner {
+        return Err(RelayerError::mutation_blocked(format!(
+            "wallet nonce evidence owner {} does not match signed batch owner {}",
+            redacted_address(evidence.owner),
+            redacted_address(owner)
+        )));
+    }
+    if evidence.scope != expected_scope {
+        return Err(RelayerError::mutation_blocked(
+            "wallet nonce evidence scope does not match client submit scope".to_string(),
+        ));
+    }
+    if evidence.nonce != expected_nonce {
+        return Err(RelayerError::Signing(
+            "wallet nonce evidence does not match signed deposit wallet batch nonce".to_string(),
+        ));
+    }
+    if evidence.fetched_at_unix_seconds > now_unix_seconds.saturating_add(MAX_EVIDENCE_CLOCK_SKEW_SECONDS)
+    {
+        return Err(RelayerError::mutation_blocked(
+            "wallet nonce evidence fetch time is in the future".to_string(),
+        ));
+    }
+    if now_unix_seconds
+        > evidence
+            .fetched_at_unix_seconds
+            .saturating_add(MAX_OWNER_SERIALIZATION_LEASE_SECONDS)
+    {
+        return Err(RelayerError::mutation_blocked(
+            "wallet nonce evidence is stale".to_string(),
         ));
     }
     Ok(())

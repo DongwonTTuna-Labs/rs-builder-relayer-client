@@ -82,6 +82,7 @@ use super::*;
         let receipt = client.get_transaction("tx-read-only").await.unwrap();
 
         assert_eq!(receipt.transaction_id, "tx-read-only");
+        assert_eq!(receipt.owner, None);
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
@@ -292,6 +293,7 @@ use super::*;
 
         assert_eq!(receipt.transaction_id, "tx-large-metadata");
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(receipt.owner, None);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
@@ -313,10 +315,9 @@ use super::*;
             parsed.owner,
             Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
         );
-        assert_eq!(
-            parsed.receipt.owner,
-            Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
-        );
+        assert_eq!(parsed.receipt.owner, None);
+        let rendered = format!("{:?}", parsed.receipt);
+        assert!(!rendered.contains("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"));
     }
 
 #[tokio::test]
@@ -417,6 +418,7 @@ use super::*;
             .unwrap();
 
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(receipt.owner, None);
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }

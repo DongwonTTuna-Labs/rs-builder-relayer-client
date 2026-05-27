@@ -3,6 +3,7 @@ use super::redaction::{
     display_payload_hash, payload_hash_summary, redacted_address, sanitized_external_token,
     signed_digest_payload_hash,
 };
+use super::permit::validate_wallet_nonce_evidence;
 use super::response::parse_submit_response;
 use super::state::OwnerSubmitReservation;
 
@@ -36,6 +37,32 @@ impl DepositWalletRelayerClient {
         signed: SignedDepositWalletBatch,
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletTransactionReceipt> {
+        self.submit_signed_wallet_batch_with_nonce_check(signed, gate, None)
+            .await
+    }
+
+    /// Submits a signed `WALLET` batch using caller-provided nonce evidence
+    /// from [`Self::get_wallet_nonce_with_evidence`].
+    ///
+    /// This avoids a second nonce GET on latency-sensitive paths while keeping
+    /// the owner-scoped mutation permit and evidence freshness checks in the
+    /// submit boundary.
+    pub async fn submit_signed_wallet_batch_with_nonce_evidence(
+        &self,
+        signed: SignedDepositWalletBatch,
+        gate: DepositWalletMutationGate,
+        nonce_evidence: DepositWalletWalletNonceEvidence,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        self.submit_signed_wallet_batch_with_nonce_check(signed, gate, Some(nonce_evidence))
+            .await
+    }
+
+    async fn submit_signed_wallet_batch_with_nonce_check(
+        &self,
+        signed: SignedDepositWalletBatch,
+        gate: DepositWalletMutationGate,
+        nonce_evidence: Option<DepositWalletWalletNonceEvidence>,
+    ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
         self.ensure_owner_unblocked(owner)?;
@@ -43,25 +70,41 @@ impl DepositWalletRelayerClient {
         let preflight_hash = signed_digest_payload_hash(signed.digest());
         let mut reservation = self.reserve_owner_submit(owner, preflight_hash)?;
 
-        let nonce = match self.fetch_wallet_nonce(owner).await {
-            Ok(nonce) => nonce,
-            Err(error) => {
-                reservation.clear()?;
-                return Err(error);
+        match nonce_evidence {
+            Some(evidence) => {
+                if let Err(error) = validate_wallet_nonce_evidence(
+                    &evidence,
+                    owner,
+                    self.mutation_scope(DepositWalletMutationAction::WalletBatch),
+                    signed.nonce(),
+                    self.clock.now_unix_seconds(),
+                ) {
+                    reservation.clear()?;
+                    return Err(error);
+                }
             }
-        };
+            None => {
+                let nonce = match self.fetch_wallet_nonce(owner).await {
+                    Ok(nonce) => nonce,
+                    Err(error) => {
+                        reservation.clear()?;
+                        return Err(error);
+                    }
+                };
+                if nonce != signed.nonce() {
+                    reservation.clear()?;
+                    return Err(RelayerError::Signing(
+                        "signed deposit wallet batch nonce does not match current WALLET nonce"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
         if let Err(error) =
             self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)
         {
             reservation.clear()?;
             return Err(error);
-        }
-        if nonce != signed.nonce() {
-            reservation.clear()?;
-            return Err(RelayerError::Signing(
-                "signed deposit wallet batch nonce does not match current WALLET nonce"
-                    .to_string(),
-            ));
         }
         if let Err(error) = self.ensure_deadline_fresh(&signed) {
             reservation.clear()?;
