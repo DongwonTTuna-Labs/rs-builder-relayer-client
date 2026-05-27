@@ -115,6 +115,21 @@ fn test_relayer_key_debug_redacts_malformed_address() {
 }
 
 #[test]
+fn test_builder_auth_debug_redacts_all_secret_fields() {
+    let key = "builder-key-secret";
+    let secret = "builder-api-secret-material";
+    let passphrase = "builder-passphrase-secret";
+    let auth = AuthMethod::Builder(BuilderConfig::new(key, secret, passphrase));
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(key));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains(passphrase));
+    assert!(rendered.contains("<redacted>"));
+}
+
+#[test]
 fn test_auth_method_builder_convenience() {
     let auth = AuthMethod::builder("k", "s", "p");
     match auth {
