@@ -148,6 +148,41 @@ use super::*;
         )
         .unwrap();
 
+        let production_recovery_evidence = DepositWalletOwnerSerializationEvidence::new(
+            address(WALLET_CREATE_OWNER),
+            client
+                .mutation_scope(DepositWalletMutationAction::OwnerRecoveryPoll)
+                .unwrap(),
+            "unit-test owner serialization guard",
+            "production-recovery-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "production owner recovery poll",
+            production_recovery_evidence,
+        )
+        .unwrap();
+
+        let production_manual_evidence = DepositWalletOwnerSerializationEvidence::new(
+            address(WALLET_CREATE_OWNER),
+            client
+                .mutation_scope(DepositWalletMutationAction::ManualReconciliation)
+                .unwrap(),
+            "unit-test owner serialization guard",
+            "production-manual-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        let error = DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "production manual clear",
+            production_manual_evidence,
+        )
+        .unwrap_err();
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+
         let signed = signed_wallet_batch();
         let owner = signed.owner();
         let production_batch_evidence = DepositWalletOwnerSerializationEvidence::new(

@@ -79,29 +79,30 @@ pub struct DepositWalletMutationPermit {
 }
 
 impl DepositWalletMutationPermit {
-    /// Creates an explicit owner-scoped permit for test-loopback mutations or
-    /// production WALLET nonce reads.
+    /// Creates an explicit owner-scoped permit for test-loopback mutations,
+    /// production WALLET nonce reads, or production owner-scoped transaction
+    /// recovery polling.
     ///
     /// The evidence must come from a caller-side owner lock, nonce lease, or
     /// actor queue that prevents concurrent WALLET-CREATE/WALLET submits for the
     /// same owner. The crate validates the evidence shape and expiry before
     /// request construction.
     ///
-    /// Production POST mutation permits are intentionally not publicly
-    /// constructible in this PR because the in-memory owner state cannot survive
-    /// process restart. Production WALLET nonce reads are allowed so consumers
-    /// can fetch the nonce needed for signing without enabling live submit.
+    /// Production POST mutation and manual-clear permits are intentionally not
+    /// publicly constructible in this PR because the in-memory owner state
+    /// cannot survive process restart. Production WALLET nonce reads and
+    /// owner-scoped transaction recovery polling are read-only relayer calls;
+    /// production signing must preserve the nonce with [`DepositWalletNonceLease`].
     /// A later live-submit PR must add durable owner state and a crate-owned
-    /// trusted capability before production POST /submit can be enabled.
+    /// trusted capability before production POST /submit or manual clear can be
+    /// enabled.
     pub fn from_owner_serialization_evidence(
         reason: impl Into<String>,
         owner_serialization_evidence: DepositWalletOwnerSerializationEvidence,
     ) -> Result<Self> {
-        if owner_serialization_evidence.scope.environment == DepositWalletMutationEnvironment::Production
-            && owner_serialization_evidence.scope.action != DepositWalletMutationAction::WalletNonceRead
-        {
+        if production_scope_requires_trusted_capability(owner_serialization_evidence.scope) {
             return Err(RelayerError::mutation_blocked(
-                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public production permit construction is limited to WALLET nonce reads in this PR".to_string(),
+                "production deposit-wallet mutation permits require durable owner state and a crate-owned trusted capability; public production permit construction is limited to WALLET nonce reads and owner recovery polling in this PR".to_string(),
             ));
         }
         let reason = reason.into();
@@ -116,6 +117,15 @@ impl DepositWalletMutationPermit {
             owner_serialization_evidence,
         })
     }
+}
+
+fn production_scope_requires_trusted_capability(scope: DepositWalletMutationScope) -> bool {
+    scope.environment == DepositWalletMutationEnvironment::Production
+        && !matches!(
+            scope.action,
+            DepositWalletMutationAction::WalletNonceRead
+                | DepositWalletMutationAction::OwnerRecoveryPoll
+        )
 }
 
 impl fmt::Debug for DepositWalletMutationPermit {

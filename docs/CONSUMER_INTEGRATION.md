@@ -106,6 +106,23 @@ Consumer adapter migration status for PR #8:
   consumer adapter that has not completed this migration must not treat this PR
   as live-submit capable.
 
+Nonce API migration status for PR #12:
+
+- production signing flows must use `get_wallet_nonce_with_lease`, sign the
+  batch with `DepositWalletNonceLease::nonce()`, and consume the same lease via
+  `submit_signed_wallet_batch_with_nonce_lease`;
+- `get_wallet_nonce` remains a compatibility/read-only diagnostic API for
+  loopback tests and non-production inspection, but production bare nonce reads
+  are rejected before HTTP so a consumer cannot fetch a nonce, drop the owner
+  reservation, and sign concurrently for the same owner;
+- consumer adapters that previously called `get_wallet_nonce` directly must
+  migrate the nonce-read/sign/submit sequence in one adapter change. Until that
+  adapter change lands, keep deposit-wallet live submit disabled and pin the
+  consumer to the previous audited commit SHA;
+- rollback path: revert the consumer pin to the previous audited commit SHA or
+  keep the relayer adapter's live-submit feature flag disabled. This PR does
+  not require a consumer to enable live submit.
+
 ### RelayerError matching in 0.2.x
 
 The deposit-wallet HTTP client preserves the existing public `RelayerError`

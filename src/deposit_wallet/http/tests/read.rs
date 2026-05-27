@@ -52,6 +52,36 @@ use super::*;
         assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
     }
 
+#[tokio::test]
+    async fn get_wallet_nonce_rejects_production_bare_nonce_reads_before_http() {
+        let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+        let client = test_client(url);
+        let owner = address(WALLET_CREATE_OWNER);
+        let evidence = DepositWalletOwnerSerializationEvidence::new(
+            owner,
+            client
+                .mutation_scope(DepositWalletMutationAction::WalletNonceRead)
+                .unwrap(),
+            "unit-test owner serialization guard",
+            "production-bare-nonce-owner-lease",
+            1_699_999_900,
+            1_700_000_200,
+        )
+        .unwrap();
+        let gate = DepositWalletMutationGate::Permit(
+            DepositWalletMutationPermit::from_owner_serialization_evidence(
+                "production bare nonce read",
+                evidence,
+            )
+            .unwrap(),
+        );
+
+        let error = client.get_wallet_nonce(owner, gate).await.unwrap_err();
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        assert!(error.to_string().contains("get_wallet_nonce_with_lease"));
+    }
+
 #[test]
     fn wallet_nonce_parser_accepts_u256_string_and_number_equivalently() {
         let raw = "18446744073709551616";
@@ -143,6 +173,48 @@ use super::*;
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].path.starts_with("/nonce?"));
+    }
+
+#[tokio::test]
+    async fn get_wallet_nonce_with_lease_holds_same_owner_after_response_and_allows_other_owner() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let other_owner = address("0x0000000000000000000000000000000000000001");
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+            TestResponse::json("200 OK", json!({"nonce": "41"}).to_string()),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let lease = client
+            .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+            .await
+            .unwrap();
+        assert_eq!(lease.nonce(), U256::from(31u64));
+        let second_same_owner = client
+            .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+            .await
+            .unwrap_err();
+        assert!(error_has_prefix(&second_same_owner, MUTATION_BLOCKED_PREFIX));
+
+        let other_lease = client
+            .get_wallet_nonce_with_lease(other_owner, wallet_nonce_read_permit_for(other_owner))
+            .await
+            .unwrap();
+        assert_eq!(other_lease.nonce(), U256::from(41u64));
+
+        drop(lease);
+        drop(other_lease);
+        client.ensure_owner_unblocked(owner).unwrap();
+        client.ensure_owner_unblocked(other_owner).unwrap();
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0]
+            .path
+            .contains(&format!("address={}", to_checksum(&owner, None))));
+        assert!(requests[1]
+            .path
+            .contains(&format!("address={}", to_checksum(&other_owner, None))));
     }
 
 #[tokio::test]

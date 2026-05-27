@@ -25,10 +25,13 @@ impl DepositWalletNonceLease {
         self.nonce
     }
 
-    pub(super) fn into_reservation(mut self) -> OwnerNonceReadReservation {
-        self.reservation
-            .take()
-            .expect("nonce lease reservation should be present until consumed")
+    pub(super) fn into_reservation(mut self) -> Result<OwnerNonceReadReservation> {
+        self.reservation.take().ok_or_else(|| {
+            RelayerError::reconciliation_required(
+                "WALLET nonce lease was already consumed; owner-scoped reconciliation required"
+                    .to_string(),
+            )
+        })
     }
 }
 
@@ -42,16 +45,30 @@ impl fmt::Debug for DepositWalletNonceLease {
 }
 
 impl DepositWalletRelayerClient {
+    /// Fetches a WALLET nonce without returning an owner-scoped lease.
+    ///
+    /// This compatibility API is limited to test-loopback and non-production
+    /// diagnostics. Production signing must use
+    /// [`Self::get_wallet_nonce_with_lease`] so the owner reservation survives
+    /// through signing and submit.
     pub async fn get_wallet_nonce(
         &self,
         owner: Address,
         gate: DepositWalletMutationGate,
     ) -> Result<U256> {
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
+        if self.base_url.is_production_host() {
+            return Err(RelayerError::mutation_blocked(
+                "production WALLET nonce reads for signing require DepositWalletNonceLease; use get_wallet_nonce_with_lease"
+                    .to_string(),
+            ));
+        }
         let _reservation = self.reserve_owner_nonce_read(owner)?;
         self.fetch_wallet_nonce(owner).await
     }
 
+    /// Fetches a WALLET nonce and returns the owner-scoped lease that must be
+    /// consumed by [`Self::submit_signed_wallet_batch_with_nonce_lease`].
     pub async fn get_wallet_nonce_with_lease(
         &self,
         owner: Address,

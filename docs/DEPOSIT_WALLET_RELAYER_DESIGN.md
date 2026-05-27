@@ -260,6 +260,11 @@ where
         owner: Address,
         mutation_gate: DepositWalletMutationGate,
     ) -> Result<U256>;
+    pub async fn get_wallet_nonce_with_lease(
+        &self,
+        owner: Address,
+        mutation_gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletNonceLease>;
     pub async fn sign_deposit_wallet_batch(
         &self,
         ctx: &DepositWalletRequestContext,
@@ -276,6 +281,13 @@ where
     pub async fn poll_transaction(&self, id: RelayerTransactionId) -> Result<RelayerTransactionStatus>;
 }
 ```
+
+Production WALLET signing must use the leased nonce path:
+`get_wallet_nonce_with_lease` -> sign with `lease.nonce()` ->
+`submit_signed_wallet_batch_with_nonce_lease`. The bare `get_wallet_nonce`
+method is retained for compatibility and diagnostics, but it is not a
+production live-signing API because its owner reservation ends when the `U256`
+is returned.
 
 ## CTF/pUSD adapter policy
 

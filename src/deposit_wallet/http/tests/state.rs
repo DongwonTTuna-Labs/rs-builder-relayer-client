@@ -98,6 +98,65 @@ use super::*;
     }
 
 #[test]
+    fn nonce_read_promotion_replaces_nonce_read_with_submit_block() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let nonce_read = client.reserve_owner_nonce_read(owner).unwrap();
+        let payload_hash = "payload:promoted-nonce-read".to_string();
+
+        let reservation = client
+            .promote_owner_nonce_read_to_submit(nonce_read, payload_hash.clone())
+            .unwrap();
+
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(!state.nonce_reads.contains_key(&owner));
+            assert!(matches!(
+                state.owner_blocks.get(&owner),
+                Some(OwnerMutationBlock::InFlight {
+                    payload_hash: current_payload_hash,
+                    transaction_id: None,
+                    ..
+                }) if current_payload_hash == &payload_hash
+            ));
+        }
+        drop(reservation);
+        client.ensure_owner_unblocked(owner).unwrap();
+    }
+
+#[test]
+    fn stale_nonce_read_promotion_preserves_current_nonce_read() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let stale_nonce_read = client.reserve_owner_nonce_read(owner).unwrap();
+        let replacement_created_at = stale_nonce_read.created_at_unix_seconds() + 1;
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.nonce_reads.insert(owner, replacement_created_at);
+        }
+
+        let error = match client.promote_owner_nonce_read_to_submit(
+            stale_nonce_read,
+            "payload:stale-nonce-read".to_string(),
+        ) {
+            Ok(_) => panic!("stale nonce read should not promote to submit"),
+            Err(error) => error,
+        };
+
+        assert!(error_has_prefix(&error, MUTATION_BLOCKED_PREFIX));
+        {
+            let state = client.mutation_state().unwrap();
+            assert_eq!(
+                state.nonce_reads.get(&owner).copied(),
+                Some(replacement_created_at)
+            );
+            assert!(!state.owner_blocks.contains_key(&owner));
+        }
+    }
+
+#[test]
     fn repeated_ambiguous_recording_preserves_original_block_timestamp() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =

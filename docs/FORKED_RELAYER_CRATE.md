@@ -139,6 +139,10 @@ pub struct DepositWalletCall {
     pub data: Bytes,
 }
 
+pub struct DepositWalletNonceLease {
+    // fields private
+}
+
 pub struct DepositWalletRelayerClient<S> {
     // fields private
     _phantom: std::marker::PhantomData<S>,
@@ -172,6 +176,12 @@ where
         mutation_gate: DepositWalletMutationGate,
     ) -> Result<U256, RelayerError>;
 
+    pub async fn get_wallet_nonce_with_lease(
+        &self,
+        owner: Address,
+        mutation_gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletNonceLease, RelayerError>;
+
     pub async fn sign_deposit_wallet_batch(
         &self,
         ctx: &DepositWalletRequestContext,
@@ -193,6 +203,11 @@ where
     ) -> Result<RelayerTransactionStatus, RelayerError>;
 }
 ```
+
+Production signing flows must preserve the owner-scoped nonce lease from nonce
+read through submit. The bare `get_wallet_nonce` API is a compatibility and
+diagnostic boundary; it must not be used to fetch a production nonce for live
+WALLET signing because the reservation cannot outlive the returned `U256`.
 
 ## Address separation rule
 

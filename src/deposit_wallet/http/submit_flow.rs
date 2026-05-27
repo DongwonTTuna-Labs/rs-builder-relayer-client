@@ -70,7 +70,7 @@ impl DepositWalletRelayerClient {
         self.submit_signed_wallet_batch_inner(
             signed,
             gate,
-            Some(nonce_lease.into_reservation()),
+            Some(nonce_lease.into_reservation()?),
         )
         .await
     }
