@@ -184,6 +184,11 @@ impl DepositWalletRelayerClient {
                     if let Some(owner) = expected_owner {
                         if response_owner == Some(owner) {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                        } else if self
+                            .current_recovery_payload_record(&transaction_id, owner)?
+                            .is_some()
+                        {
+                            self.mark_transaction_reconciliation_required(&transaction_id)?;
                         }
                     }
                     return Err(error);
@@ -219,6 +224,7 @@ impl DepositWalletRelayerClient {
                     if let Some(owner) = owner_to_verify {
                         if trusted_owner_recovery && terminal_evidence.is_none() {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            self.record_terminal_observation(&transaction_id, &receipt)?;
                             return Err(RelayerError::reconciliation_required(format!(
                                 "confirmed owner-scoped recovery transaction {} did not prove the ambiguous submit payload; manual reconciliation required",
                                 transaction_id_for_error
@@ -247,15 +253,14 @@ impl DepositWalletRelayerClient {
                 }
                 RelayerTransactionState::Invalid => {
                     if let Some((owner, record)) = terminal_evidence {
-                        if record.source == OwnerTransactionSource::OwnerRecovery {
-                            self.record_terminal_observation(&transaction_id, &receipt)?;
-                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
-                        } else {
-                            self.clear_transaction_block_if_current(
-                                &transaction_id,
-                                owner,
-                                &record.payload_hash,
-                            )?;
+                        self.record_terminal_observation(&transaction_id, &receipt)?;
+                        match record.source {
+                            OwnerTransactionSource::OwnerRecovery => {
+                                self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            }
+                            OwnerTransactionSource::LocalSubmit => {
+                                self.mark_transaction_reconciliation_required(&transaction_id)?;
+                            }
                         }
                     }
                     return Err(RelayerError::TransactionInvalid(format!(
@@ -265,15 +270,14 @@ impl DepositWalletRelayerClient {
                 }
                 RelayerTransactionState::Failed => {
                     if let Some((owner, record)) = terminal_evidence {
-                        if record.source == OwnerTransactionSource::OwnerRecovery {
-                            self.record_terminal_observation(&transaction_id, &receipt)?;
-                            self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
-                        } else {
-                            self.clear_transaction_block_if_current(
-                                &transaction_id,
-                                owner,
-                                &record.payload_hash,
-                            )?;
+                        self.record_terminal_observation(&transaction_id, &receipt)?;
+                        match record.source {
+                            OwnerTransactionSource::OwnerRecovery => {
+                                self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
+                            }
+                            OwnerTransactionSource::LocalSubmit => {
+                                self.mark_transaction_reconciliation_required(&transaction_id)?;
+                            }
                         }
                     }
                     return Err(RelayerError::TransactionFailed(format!(
@@ -337,8 +341,11 @@ pub(super) fn transaction_poll_jitter(transaction_id: &str, attempt: usize, base
         return Duration::ZERO;
     }
 
-    let mut input = transaction_id.as_bytes().to_vec();
-    input.extend_from_slice(&attempt.to_be_bytes());
-    let digest = keccak256(input);
+    let transaction_id = transaction_id.as_bytes();
+    let attempt = attempt.to_be_bytes();
+    let mut input = [0u8; MAX_TRANSACTION_ID_LEN + std::mem::size_of::<usize>()];
+    input[..transaction_id.len()].copy_from_slice(transaction_id);
+    input[transaction_id.len()..transaction_id.len() + attempt.len()].copy_from_slice(&attempt);
+    let digest = keccak256(&input[..transaction_id.len() + attempt.len()]);
     Duration::from_millis((u64::from(digest[0]) % max_jitter_ms) + 1)
 }

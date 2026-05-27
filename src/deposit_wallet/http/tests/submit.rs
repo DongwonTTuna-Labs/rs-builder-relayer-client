@@ -661,6 +661,11 @@ use super::*;
         for response in [
             TestResponse::json("200 OK", ""),
             TestResponse::json("200 OK", "{"),
+            TestResponse::json(
+                "200 OK",
+                json!({"transactionID": "bad transaction id", "state": "STATE_CONFIRMED"})
+                    .to_string(),
+            ),
             TestResponse::json_without_content_length(
                 "200 OK",
                 "x".repeat(MAX_SUCCESS_BODY_BYTES + 1),
@@ -751,8 +756,11 @@ use super::*;
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 3);
         assert_eq!(requests[0].method, "GET");
+        assert!(requests[0].path.contains("/nonce?address="));
         assert_eq!(requests[1].method, "GET");
+        assert!(requests[1].path.contains("/nonce?address="));
         assert_eq!(requests[2].method, "POST");
+        assert_eq!(requests[2].path, SUBMIT_PATH);
     }
 
 #[tokio::test]
@@ -1335,9 +1343,19 @@ use super::*;
     async fn immediate_terminal_failure_submit_requires_owner_poll_reconciliation() {
         let owner = address(WALLET_CREATE_OWNER);
 
-        for (transaction_id, state, expected_error) in [
-            ("tx-invalid-now", "STATE_INVALID", "invalid"),
-            ("tx-failed-now", "STATE_FAILED", "failed"),
+        for (transaction_id, state, expected_state, expected_error) in [
+            (
+                "tx-invalid-now",
+                "STATE_INVALID",
+                RelayerTransactionState::Invalid,
+                "invalid",
+            ),
+            (
+                "tx-failed-now",
+                "STATE_FAILED",
+                RelayerTransactionState::Failed,
+                "failed",
+            ),
         ] {
             let (url, handle) = spawn_server(vec![
                 TestResponse::json("200 OK", transaction_response(transaction_id, state)),
@@ -1372,11 +1390,29 @@ use super::*;
                 }
                 _ => unreachable!(),
             }
-            client.ensure_owner_unblocked(owner).unwrap();
+            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+            let payload_hash = client
+                .ambiguous_submit_block(owner)
+                .expect("terminal failure should keep owner blocked until manual reconciliation");
             {
                 let state = client.mutation_state().unwrap();
-                assert!(!state.transaction_owners.contains_key(transaction_id));
+                assert!(state.transaction_owners.contains_key(transaction_id));
+                assert!(state.terminal_observations.contains_key(transaction_id));
             }
+            client
+                .clear_ambiguous_submit_after_manual_reconciliation(
+                    submit_reconciliation_evidence_for_payload_transaction_observation(
+                        owner,
+                        payload_hash,
+                        transaction_id,
+                        expected_state,
+                        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
+                    ),
+                    manual_reconciliation_permit_token_for(owner),
+                )
+                .unwrap();
+            client.ensure_owner_unblocked(owner).unwrap();
 
             let nonce = client.get_wallet_nonce(owner).await.unwrap();
             assert_eq!(nonce, U256::from(34u64));

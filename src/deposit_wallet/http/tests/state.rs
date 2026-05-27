@@ -608,6 +608,59 @@ use super::*;
     }
 
 #[test]
+    fn owner_mutation_state_terminal_clear_releases_transaction_capacity() {
+        let client =
+            test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap());
+        let owner = address(WALLET_CREATE_OWNER);
+        let payload_hash = "payload:capacity-terminal-clear".to_string();
+        {
+            let mut state = client.mutation_state().unwrap();
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::InFlight {
+                    payload_hash: payload_hash.clone(),
+                    transaction_id: Some("tx-terminal-capacity".to_string()),
+                    created_at_unix_seconds: 1_700_000_000,
+                },
+            );
+            for index in 0..MAX_OWNER_MUTATION_RECORDS {
+                state.transaction_owners.insert(
+                    if index == 0 {
+                        "tx-terminal-capacity".to_string()
+                    } else {
+                        format!("tx-existing-{index}")
+                    },
+                    OwnerTransactionRecord {
+                        owner,
+                        payload_hash: if index == 0 {
+                            payload_hash.clone()
+                        } else {
+                            format!("payload-existing-{index}")
+                        },
+                        source: OwnerTransactionSource::LocalSubmit,
+                    },
+                );
+            }
+        }
+
+        client
+            .clear_transaction_block_if_current("tx-terminal-capacity", owner, &payload_hash)
+            .unwrap();
+
+        {
+            let state = client.mutation_state().unwrap();
+            assert_eq!(state.transaction_owners.len(), MAX_OWNER_MUTATION_RECORDS - 1);
+            assert!(!state.transaction_owners.contains_key("tx-terminal-capacity"));
+            assert!(state.transaction_owners.contains_key("tx-existing-1"));
+        }
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut reservation = client
+            .reserve_owner_submit(owner, "payload:after-capacity-clear".to_string())
+            .unwrap();
+        reservation.clear().unwrap();
+    }
+
+#[test]
     fn recovered_transaction_without_payload_record_does_not_allocate_at_capacity() {
         let owner = address(WALLET_CREATE_OWNER);
         let client =

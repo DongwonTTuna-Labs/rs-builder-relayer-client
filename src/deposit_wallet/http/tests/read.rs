@@ -79,7 +79,7 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn get_wallet_nonce_rechecks_owner_block_before_returning_nonce() {
+    async fn get_wallet_nonce_serializes_same_owner_mutations_until_response() {
         let owner = address(WALLET_CREATE_OWNER);
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -110,17 +110,20 @@ use super::*;
             .await
             .expect("nonce request should reach test server");
 
-        client
-            .record_ambiguous(owner, "payload:nonce-race".to_string())
-            .unwrap();
+        let blocked = match client.reserve_owner_submit(owner, "payload:nonce-race".to_string()) {
+            Ok(_) => panic!("nonce read should block same-owner submit reservation"),
+            Err(error) => error,
+        };
+        assert!(error_has_prefix(&blocked, MUTATION_BLOCKED_PREFIX));
         release_tx.send(()).unwrap();
 
-        let error = nonce_task.await.unwrap().unwrap_err();
-        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert_eq!(
-            client.ambiguous_submit_block(owner),
-            Some("payload:nonce-race".to_string())
-        );
+        let nonce = nonce_task.await.unwrap().unwrap();
+        assert_eq!(nonce, U256::from(31u64));
+        client.ensure_owner_unblocked(owner).unwrap();
+        let mut reservation = client
+            .reserve_owner_submit(owner, "payload:after-nonce".to_string())
+            .unwrap();
+        reservation.clear().unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].path.starts_with("/nonce?"));
@@ -188,7 +191,7 @@ use super::*;
     }
 
 #[test]
-    fn transaction_array_parser_rejects_limit_duplicate_and_missing_ids() {
+    fn transaction_array_parser_rejects_missing_duplicate_invalid_and_limit_cases() {
         let item = |transaction_id: String| {
             json!({
                 "transactionID": transaction_id,
@@ -207,10 +210,18 @@ use super::*;
         )
         .to_string();
 
-        for body in [missing, duplicate, invalid, oversized] {
-            let error = parse_transaction_response(target, body.as_bytes())
-                .unwrap_err()
-                .error;
+        for (label, body, retryable_absence) in [
+            ("missing", missing, true),
+            ("duplicate", duplicate, false),
+            ("invalid", invalid, false),
+            ("oversized", oversized, false),
+        ] {
+            let parse_error = parse_transaction_response(target, body.as_bytes()).unwrap_err();
+            assert_eq!(
+                parse_error.retryable_absence, retryable_absence,
+                "{label} array response retryable absence classification changed"
+            );
+            let error = parse_error.error;
             assert!(error.is_deposit_wallet_reconciliation_required());
             assert!(!error.to_string().contains(target));
         }
@@ -242,7 +253,7 @@ use super::*;
         let receipt = client.get_transaction("tx-read-only").await.unwrap();
 
         assert_eq!(receipt.transaction_id, "tx-read-only");
-        assert_eq!(receipt.owner, None);
+        assert_eq!(receipt.owner, Some(owner));
         assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash));
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
@@ -462,7 +473,7 @@ use super::*;
 
         assert_eq!(receipt.transaction_id, "tx-large-metadata");
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
-        assert_eq!(receipt.owner, None);
+        assert_eq!(receipt.owner, Some(address(WALLET_CREATE_OWNER)));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
@@ -484,7 +495,10 @@ use super::*;
             parsed.owner,
             Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
         );
-        assert_eq!(parsed.receipt.owner, None);
+        assert_eq!(
+            parsed.receipt.owner,
+            Some(address("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"))
+        );
         let rendered = format!("{:?}", parsed.receipt);
         assert!(!rendered.contains("0x6e0c80c90ea6c15917308f820eac91ce2724b5b5"));
     }
@@ -587,7 +601,7 @@ use super::*;
             .unwrap();
 
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
-        assert_eq!(receipt.owner, None);
+        assert_eq!(receipt.owner, Some(address(WALLET_CREATE_OWNER)));
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }

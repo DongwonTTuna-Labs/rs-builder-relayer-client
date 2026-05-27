@@ -12,6 +12,7 @@ use super::response::ParsedTransactionReceipt;
 #[derive(Default)]
 pub(super) struct OwnerMutationState {
     pub(super) owner_blocks: HashMap<Address, OwnerMutationBlock>,
+    pub(super) nonce_reads: HashMap<Address, u64>,
     pub(super) transaction_owners: HashMap<String, OwnerTransactionRecord>,
     pub(super) terminal_observations: HashMap<String, OwnerTransactionTerminalObservation>,
 }
@@ -102,6 +103,12 @@ pub(super) struct OwnerSubmitReservation {
     payload_hash: String,
     created_at_unix_seconds: u64,
     drop_action: OwnerSubmitReservationDropAction,
+}
+
+pub(super) struct OwnerNonceReadReservation {
+    state: Arc<Mutex<OwnerMutationState>>,
+    owner: Address,
+    created_at_unix_seconds: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -219,6 +226,21 @@ impl Drop for OwnerSubmitReservation {
                 );
             }
             OwnerSubmitReservationDropAction::Disarmed => {}
+        }
+    }
+}
+
+impl Drop for OwnerNonceReadReservation {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state
+            .nonce_reads
+            .get(&self.owner)
+            .is_some_and(|created_at| *created_at == self.created_at_unix_seconds)
+        {
+            state.nonce_reads.remove(&self.owner);
         }
     }
 }
@@ -449,7 +471,36 @@ impl DepositWalletRelayerClient {
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
         }
+        if let Some(created_at_unix_seconds) = state.nonce_reads.get(&owner) {
+            return Err(owner_nonce_read_error(owner, *created_at_unix_seconds));
+        }
         Ok(())
+    }
+
+    pub(super) fn reserve_owner_nonce_read(
+        &self,
+        owner: Address,
+    ) -> Result<OwnerNonceReadReservation> {
+        let mut state = self.mutation_state()?;
+        if let Some(block) = state.owner_blocks.get(&owner) {
+            return Err(owner_block_error(owner, block));
+        }
+        if let Some(created_at_unix_seconds) = state.nonce_reads.get(&owner) {
+            return Err(owner_nonce_read_error(owner, *created_at_unix_seconds));
+        }
+        if state.nonce_reads.len() >= MAX_OWNER_MUTATION_RECORDS {
+            return Err(RelayerError::mutation_blocked(format!(
+                "owner mutation state already tracks {MAX_OWNER_MUTATION_RECORDS} nonce reads; retry after in-flight reads complete"
+            )));
+        }
+
+        let created_at_unix_seconds = self.clock.now_unix_seconds();
+        state.nonce_reads.insert(owner, created_at_unix_seconds);
+        Ok(OwnerNonceReadReservation {
+            state: self.mutation_state.clone(),
+            owner,
+            created_at_unix_seconds,
+        })
     }
 
     pub(super) fn reserve_owner_submit(
@@ -460,6 +511,9 @@ impl DepositWalletRelayerClient {
         let mut state = self.mutation_state()?;
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
+        }
+        if let Some(created_at_unix_seconds) = state.nonce_reads.get(&owner) {
+            return Err(owner_nonce_read_error(owner, *created_at_unix_seconds));
         }
         if state.transaction_owners.len() >= MAX_OWNER_MUTATION_RECORDS {
             return Err(RelayerError::mutation_blocked(format!(
@@ -903,6 +957,17 @@ pub(super) fn owner_block_error(owner: Address, block: &OwnerMutationBlock) -> R
             ),
         ),
     }
+}
+
+pub(super) fn owner_nonce_read_error(
+    owner: Address,
+    created_at_unix_seconds: u64,
+) -> RelayerError {
+    RelayerError::mutation_blocked(format!(
+        "owner {} has in-flight nonce read since {}; wait for it before another owner mutation",
+        redacted_address(owner),
+        created_at_unix_seconds
+    ))
 }
 
 pub(super) fn clear_owner_block_if_payload(

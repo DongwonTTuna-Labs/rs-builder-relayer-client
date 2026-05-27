@@ -118,8 +118,8 @@ pub(super) struct RelayerTransactionResponseWithOwner {
     #[serde(flatten)]
     response: RelayerSubmitResponse,
     // Official GET /transaction responses include owner as the owner address.
-    // Keep it internal because the public receipt intentionally exposes only
-    // non-sensitive polling identifiers.
+    // The parsed owner is retained separately so owner-scoped polling can
+    // validate it before mutating local state.
     #[serde(default, deserialize_with = "deserialize_optional_address")]
     owner: Option<Address>,
 }
@@ -319,7 +319,7 @@ pub(super) fn receipt_from_submit_response(
             transaction_id,
             state: response.state,
             transaction_hash,
-            owner: None,
+            owner,
         },
         owner,
     })

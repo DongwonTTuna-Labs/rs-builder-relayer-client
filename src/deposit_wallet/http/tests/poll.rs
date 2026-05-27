@@ -93,9 +93,10 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn owner_aware_poll_final_retryable_failure_preserves_known_owner_block() {
+    async fn owner_aware_poll_final_retryable_failure_marks_known_transaction_ambiguous() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-final-retryable-failure";
+        let payload_hash = "payload:final-retryable-failure";
         let (url, handle) = spawn_server(vec![TestResponse::json(
             "429 Too Many Requests",
             "{}",
@@ -106,7 +107,7 @@ use super::*;
         client
             .record_inflight_transaction(
                 owner,
-                "payload:final-retryable-failure".to_string(),
+                payload_hash.to_string(),
                 transaction_id.to_string(),
             )
             .unwrap();
@@ -121,15 +122,18 @@ use super::*;
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::QuotaExhausted));
-        assert!(client.ambiguous_submit_block(owner).is_none());
+        assert_eq!(
+            client.ambiguous_submit_block(owner),
+            Some(payload_hash.to_string())
+        );
         {
             let state = client.mutation_state().unwrap();
             assert!(matches!(
                 state.owner_blocks.get(&owner),
-                Some(OwnerMutationBlock::InFlight {
-                    transaction_id: Some(existing),
+                Some(OwnerMutationBlock::Ambiguous {
+                    payload_hash: current,
                     ..
-                }) if existing == transaction_id
+                }) if current == payload_hash
             ));
             assert!(state.transaction_owners.contains_key(transaction_id));
         }
@@ -602,10 +606,8 @@ use super::*;
             let state = client.mutation_state().unwrap();
             assert!(matches!(
                 state.owner_blocks.get(&owner),
-                Some(OwnerMutationBlock::InFlight {
-                    transaction_id: Some(existing),
-                    ..
-                }) if existing == "tx-known-bad-owner"
+                Some(OwnerMutationBlock::Ambiguous { payload_hash, .. })
+                    if payload_hash == "payload:known-bad-owner"
             ));
         }
         let requests = handle.await.unwrap();
@@ -803,10 +805,7 @@ use super::*;
             let state = client.mutation_state().unwrap();
             assert!(matches!(
                 state.owner_blocks.get(&owner),
-                Some(OwnerMutationBlock::InFlight {
-                    transaction_id: Some(existing),
-                    ..
-                }) if existing == transaction_id
+                Some(OwnerMutationBlock::Ambiguous { .. })
             ));
         }
         let requests = handle.await.unwrap();
@@ -1005,8 +1004,24 @@ use super::*;
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
         assert!(error.to_string().contains("ambiguous submit payload"));
         assert!(client.ambiguous_submit_block(owner).is_some());
+        let payload_hash = client
+            .ambiguous_submit_block(owner)
+            .expect("confirmed recovery should keep an ambiguous payload block");
         let duplicate = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&duplicate, RECONCILIATION_REQUIRED_PREFIX));
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload_transaction_observation(
+                    owner,
+                    payload_hash,
+                    transaction_id,
+                    RelayerTransactionState::Confirmed,
+                    Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
+                ),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap();
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(
@@ -1216,10 +1231,8 @@ use super::*;
             let state = client.mutation_state().unwrap();
             assert!(matches!(
                 state.owner_blocks.get(&owner),
-                Some(OwnerMutationBlock::InFlight {
-                    transaction_id: Some(existing),
-                    ..
-                }) if existing == transaction_id
+                Some(OwnerMutationBlock::Ambiguous { payload_hash, .. })
+                    if payload_hash == &recovered_payload_hash(transaction_id)
             ));
             assert!(state.transaction_owners.contains_key(transaction_id));
         }
@@ -1541,10 +1554,7 @@ use super::*;
             let state = client.mutation_state().unwrap();
             assert!(matches!(
                 state.owner_blocks.get(&owner),
-                Some(OwnerMutationBlock::InFlight {
-                    transaction_id: Some(existing),
-                    ..
-                }) if existing == "tx-malformed"
+                Some(OwnerMutationBlock::Ambiguous { .. })
             ));
         }
         let requests = handle.await.unwrap();
@@ -1693,16 +1703,22 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn terminal_error_poll_clears_owner_inflight_block() {
+    async fn terminal_error_poll_keeps_owner_block_until_manual_reconciliation() {
         let owner = address(WALLET_CREATE_OWNER);
 
-        for (transaction_id, terminal_state, expected_error) in [
+        for (transaction_id, terminal_state, observed_state, expected_error) in [
             (
                 "tx-terminal-invalid",
                 "STATE_INVALID",
+                RelayerTransactionState::Invalid,
                 "transaction invalid",
             ),
-            ("tx-terminal-failed", "STATE_FAILED", "transaction failed"),
+            (
+                "tx-terminal-failed",
+                "STATE_FAILED",
+                RelayerTransactionState::Failed,
+                "transaction failed",
+            ),
         ] {
             let (url, handle) = spawn_server(vec![
                 TestResponse::json("200 OK", transaction_response(transaction_id, "STATE_NEW")),
@@ -1736,11 +1752,29 @@ use super::*;
                 "expected {expected_error}, got {error:?}"
             );
 
-            client.ensure_owner_unblocked(owner).unwrap();
+            let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
+            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+            let payload_hash = client
+                .ambiguous_submit_block(owner)
+                .expect("terminal failure should keep owner blocked");
             {
                 let state = client.mutation_state().unwrap();
-                assert!(!state.transaction_owners.contains_key(transaction_id));
+                assert!(state.transaction_owners.contains_key(transaction_id));
+                assert!(state.terminal_observations.contains_key(transaction_id));
             }
+            client
+                .clear_ambiguous_submit_after_manual_reconciliation(
+                    submit_reconciliation_evidence_for_payload_transaction_observation(
+                        owner,
+                        payload_hash,
+                        transaction_id,
+                        observed_state,
+                        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
+                    ),
+                    manual_reconciliation_permit_token_for(owner),
+                )
+                .unwrap();
+            client.ensure_owner_unblocked(owner).unwrap();
             let nonce = client.get_wallet_nonce(owner).await.unwrap();
             assert_eq!(nonce, U256::from(37u64));
 

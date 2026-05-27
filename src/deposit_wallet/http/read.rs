@@ -11,10 +11,8 @@ pub(super) struct WalletNonceResponse {
 
 impl DepositWalletRelayerClient {
     pub async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
-        self.ensure_owner_unblocked(owner)?;
-        let nonce = self.fetch_wallet_nonce(owner).await?;
-        self.ensure_owner_unblocked(owner)?;
-        Ok(nonce)
+        let _reservation = self.reserve_owner_nonce_read(owner)?;
+        self.fetch_wallet_nonce(owner).await
     }
 
     pub(super) async fn fetch_wallet_nonce(&self, owner: Address) -> Result<U256> {

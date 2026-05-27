@@ -203,9 +203,18 @@ impl DepositWalletRelayerClient {
                     display_payload_hash(&payload_hash)
                 )))
             }
-            Err(error) => {
+            Err(RelayerError::AuthError(message)) => {
                 reservation.clear()?;
-                Err(error)
+                Err(RelayerError::AuthError(message))
+            }
+            Err(error) => {
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
+                Err(RelayerError::ambiguous_submit(format!(
+                    "submit failed after POST boundary for owner {} payload {}; manual reconciliation required: {}",
+                    redacted_address(owner),
+                    display_payload_hash(&payload_hash),
+                    error
+                )))
             }
         }
     }

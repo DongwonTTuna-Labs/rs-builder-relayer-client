@@ -110,6 +110,7 @@
             if let Some(state) = state {
                 let mut state = state.lock().unwrap();
                 state.owner_blocks.clear();
+                state.nonce_reads.clear();
                 state.transaction_owners.clear();
             }
             Box::pin(async {})
@@ -350,6 +351,22 @@
         payload_hash: impl Into<String>,
         transaction_id: impl AsRef<str>,
     ) -> DepositWalletSubmitReconciliationEvidence {
+        submit_reconciliation_evidence_for_payload_transaction_observation(
+            owner,
+            payload_hash,
+            transaction_id,
+            RelayerTransactionState::Failed,
+            None::<&str>,
+        )
+    }
+
+    fn submit_reconciliation_evidence_for_payload_transaction_observation(
+        owner: Address,
+        payload_hash: impl Into<String>,
+        transaction_id: impl AsRef<str>,
+        observed_state: RelayerTransactionState,
+        transaction_hash: Option<impl AsRef<str>>,
+    ) -> DepositWalletSubmitReconciliationEvidence {
         DepositWalletSubmitReconciliationEvidence::new(
             owner,
             mutation_scope(DepositWalletMutationAction::ManualReconciliation),
@@ -357,8 +374,8 @@
             payload_hash,
             DepositWalletSubmitReconciliationObservation::new(
                 transaction_id,
-                RelayerTransactionState::Failed,
-                None::<&str>,
+                observed_state,
+                transaction_hash,
                 "unit-test manual submit reconciliation",
                 1_700_000_001,
             )
