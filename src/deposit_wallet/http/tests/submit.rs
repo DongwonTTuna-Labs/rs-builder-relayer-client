@@ -250,6 +250,51 @@ use super::*;
         .is_err());
     }
 
+#[test]
+    fn mutation_permit_freshness_validates_clock_skew_lease_and_expiry_boundaries() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let scope = mutation_scope(DepositWalletMutationAction::WalletCreate);
+        let now = 1_700_000_000;
+        let permit_for = |acquired_at_unix_seconds, expires_at_unix_seconds| {
+            DepositWalletMutationPermit::from_owner_serialization_evidence(
+                "freshness boundary test",
+                DepositWalletOwnerSerializationEvidence::new(
+                    owner,
+                    scope,
+                    "unit-test owner serialization guard",
+                    "freshness-lease",
+                    acquired_at_unix_seconds,
+                    expires_at_unix_seconds,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        };
+
+        let skew_boundary =
+            permit_for(now + MAX_EVIDENCE_CLOCK_SKEW_SECONDS, now + MAX_EVIDENCE_CLOCK_SKEW_SECONDS + 1);
+        assert!(super::super::permit::validate_permit_fresh(&skew_boundary, now).is_ok());
+        let future_beyond_skew = permit_for(
+            now + MAX_EVIDENCE_CLOCK_SKEW_SECONDS + 1,
+            now + MAX_EVIDENCE_CLOCK_SKEW_SECONDS + 2,
+        );
+        assert!(super::super::permit::validate_permit_fresh(&future_beyond_skew, now).is_err());
+
+        let acquired_at = now - MAX_OWNER_SERIALIZATION_LEASE_SECONDS + 1;
+        let last_fresh = permit_for(acquired_at, acquired_at + MAX_OWNER_SERIALIZATION_LEASE_SECONDS);
+        assert!(super::super::permit::validate_permit_fresh(&last_fresh, now).is_ok());
+        let expired_at_now = permit_for(
+            now - MAX_OWNER_SERIALIZATION_LEASE_SECONDS,
+            now,
+        );
+        assert!(super::super::permit::validate_permit_fresh(&expired_at_now, now).is_err());
+        let stale = permit_for(
+            now - MAX_OWNER_SERIALIZATION_LEASE_SECONDS - 1,
+            now - 1,
+        );
+        assert!(super::super::permit::validate_permit_fresh(&stale, now).is_err());
+    }
+
 #[tokio::test]
     async fn mutation_permit_rejects_wrong_scope_or_future_lease_before_http() {
         let url = DepositWalletRelayerUrl::loopback("http://127.0.0.1:1").unwrap();

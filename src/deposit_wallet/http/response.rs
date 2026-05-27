@@ -241,8 +241,8 @@ pub(super) fn select_transaction_response_from_array(
             } else if message.contains(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR) {
                 TransactionParseError::new(
                     RelayerError::reconciliation_required(format!(
-                        "transaction response included duplicate requested transaction id {}; manual reconciliation required",
-                        sanitized_external_token(expected_transaction_id)
+                        "transaction response included duplicate requested transaction id hash {}; manual reconciliation required",
+                        external_token_hash(expected_transaction_id)
                     )),
                     None,
                 )

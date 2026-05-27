@@ -182,6 +182,34 @@ use super::*;
         assert_eq!(requests.len(), 2);
     }
 
+#[test]
+    fn transaction_poll_jitter_is_deterministic_bounded_and_capped() {
+        let base = Duration::from_millis(200);
+        let first = super::super::poll::transaction_poll_jitter("tx-jitter-a", 0, base);
+
+        assert_eq!(
+            first,
+            super::super::poll::transaction_poll_jitter("tx-jitter-a", 0, base)
+        );
+        assert!((Duration::from_millis(1)..=Duration::from_millis(50)).contains(&first));
+        assert_eq!(
+            super::super::poll::transaction_poll_jitter("tx-jitter-a", 0, Duration::ZERO),
+            Duration::ZERO
+        );
+        let variants = [
+            super::super::poll::transaction_poll_jitter("tx-jitter-a", 1, base),
+            super::super::poll::transaction_poll_jitter("tx-jitter-b", 0, base),
+            super::super::poll::transaction_poll_jitter("tx-jitter-c", 2, base),
+        ];
+        assert!(variants.iter().any(|candidate| *candidate != first));
+
+        let capped = DepositWalletPollPolicy::new(5, MAX_POLL_INTERVAL).unwrap();
+        assert_eq!(
+            capped.interval_for_transaction_attempt("tx-jitter-capped", 1),
+            MAX_POLL_INTERVAL
+        );
+    }
+
 #[tokio::test]
     async fn poll_retries_absent_transaction_array_and_404_before_confirmed() {
         let (url, handle) = spawn_server(vec![
@@ -523,9 +551,18 @@ use super::*;
             .await
             .unwrap_err();
         assert!(matches!(error, RelayerError::Other(_)));
-        assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(matches!(
+                state.owner_blocks.get(&owner),
+                Some(OwnerMutationBlock::InFlight {
+                    transaction_id: Some(existing),
+                    ..
+                }) if existing == "tx-known-bad-owner"
+            ));
+        }
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
@@ -715,9 +752,18 @@ use super::*;
             .unwrap_err();
 
         assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
-        assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(matches!(
+                state.owner_blocks.get(&owner),
+                Some(OwnerMutationBlock::InFlight {
+                    transaction_id: Some(existing),
+                    ..
+                }) if existing == transaction_id
+            ));
+        }
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }
@@ -1119,16 +1165,19 @@ use super::*;
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Http(_)));
-        assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
-        client
-            .clear_ambiguous_submit_after_manual_reconciliation(
-                submit_reconciliation_evidence_for(&client, owner),
-                manual_reconciliation_permit_token_for(owner),
-            )
-            .unwrap();
-        client.ensure_owner_unblocked(owner).unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(matches!(
+                state.owner_blocks.get(&owner),
+                Some(OwnerMutationBlock::InFlight {
+                    transaction_id: Some(existing),
+                    ..
+                }) if existing == transaction_id
+            ));
+            assert!(state.transaction_owners.contains_key(transaction_id));
+        }
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, "/transaction?id=tx-known-fetch-failed");
@@ -1441,16 +1490,18 @@ use super::*;
             .unwrap_err();
 
         assert!(matches!(error, RelayerError::Other(_)));
-        assert!(client.ambiguous_submit_block(owner).is_some());
         let blocked = client.get_wallet_nonce(owner).await.unwrap_err();
         assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
-        client
-            .clear_ambiguous_submit_after_manual_reconciliation(
-                submit_reconciliation_evidence_for(&client, owner),
-                manual_reconciliation_permit_token_for(owner),
-            )
-            .unwrap();
-        client.ensure_owner_unblocked(owner).unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(matches!(
+                state.owner_blocks.get(&owner),
+                Some(OwnerMutationBlock::InFlight {
+                    transaction_id: Some(existing),
+                    ..
+                }) if existing == "tx-malformed"
+            ));
+        }
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 2);
     }

@@ -211,8 +211,8 @@ impl DepositWalletRelayerClient {
         permit: DepositWalletMutationPermit,
     ) -> Result<()> {
         let owner = evidence.owner();
-        self.ensure_permitted_for_action(
-            &DepositWalletMutationGate::Permit(permit.clone()),
+        self.ensure_permit_token_for_action(
+            &permit,
             owner,
             DepositWalletMutationAction::ManualReconciliation,
         )?;
@@ -255,23 +255,23 @@ impl DepositWalletRelayerClient {
                                 sanitized_external_token(evidence.transaction_id())
                             )));
                         }
-                        if state
+                        let has_additional_payload_records = state
                             .transaction_owners
                             .iter()
                             .any(|(transaction_id, record)| {
                                 transaction_id.as_str() != evidence.transaction_id()
                                     && record.owner == owner
                                     && record.payload_hash == evidence.payload_hash()
-                            })
-                        {
+                            });
+                        state.transaction_owners.remove(evidence.transaction_id());
+                        state.terminal_observations.remove(evidence.transaction_id());
+                        if has_additional_payload_records {
                             return Err(RelayerError::reconciliation_required(format!(
                                 "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
                                 redacted_address(owner),
                                 display_payload_hash(evidence.payload_hash())
                             )));
                         }
-                        state.transaction_owners.remove(evidence.transaction_id());
-                        state.terminal_observations.remove(evidence.transaction_id());
                     }
                     Some(_) => {
                         return Err(RelayerError::reconciliation_required(format!(
@@ -329,8 +329,8 @@ impl DepositWalletRelayerClient {
         permit: DepositWalletMutationPermit,
     ) -> Result<()> {
         let owner = evidence.owner();
-        self.ensure_permitted_for_action(
-            &DepositWalletMutationGate::Permit(permit.clone()),
+        self.ensure_permit_token_for_action(
+            &permit,
             owner,
             DepositWalletMutationAction::ManualReconciliation,
         )?;
@@ -823,14 +823,23 @@ impl DepositWalletRelayerClient {
     ) -> Result<()> {
         match gate {
             DepositWalletMutationGate::Permit(permit) => {
-                validate_permit_owner(permit, owner)?;
-                validate_permit_scope(permit, self.mutation_scope(action))?;
-                validate_permit_fresh(permit, self.clock.now_unix_seconds())
+                self.ensure_permit_token_for_action(permit, owner, action)
             }
             DepositWalletMutationGate::Deny => Err(RelayerError::mutation_blocked(
                 "explicit deposit-wallet mutation permit required".to_string(),
             )),
         }
+    }
+
+    pub(super) fn ensure_permit_token_for_action(
+        &self,
+        permit: &DepositWalletMutationPermit,
+        owner: Address,
+        action: DepositWalletMutationAction,
+    ) -> Result<()> {
+        validate_permit_owner(permit, owner)?;
+        validate_permit_scope(permit, self.mutation_scope(action))?;
+        validate_permit_fresh(permit, self.clock.now_unix_seconds())
     }
 
 }

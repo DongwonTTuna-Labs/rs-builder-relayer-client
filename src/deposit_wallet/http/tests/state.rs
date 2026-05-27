@@ -745,6 +745,20 @@ use super::*;
                     source: OwnerTransactionSource::LocalSubmit,
                 },
             );
+            state.terminal_observations.insert(
+                "tx-owner-stale".to_string(),
+                OwnerTransactionTerminalObservation {
+                    observed_state: RelayerTransactionState::Failed,
+                    transaction_hash: None,
+                },
+            );
+            state.terminal_observations.insert(
+                "tx-owner-other".to_string(),
+                OwnerTransactionTerminalObservation {
+                    observed_state: RelayerTransactionState::Failed,
+                    transaction_hash: None,
+                },
+            );
         }
 
         let error = client
@@ -764,8 +778,33 @@ use super::*;
             Some("payload-owner".to_string())
         );
         let state = client.mutation_state().unwrap();
-        assert!(state.transaction_owners.contains_key("tx-owner-stale"));
+        assert!(!state.transaction_owners.contains_key("tx-owner-stale"));
+        assert!(!state.terminal_observations.contains_key("tx-owner-stale"));
         assert!(state.transaction_owners.contains_key("tx-owner-other"));
+        assert_eq!(
+            state
+                .transaction_owners
+                .get("tx-other-live")
+                .map(|record| record.owner),
+            Some(other_owner)
+        );
+        drop(state);
+
+        client
+            .clear_ambiguous_submit_after_manual_reconciliation(
+                submit_reconciliation_evidence_for_payload_and_transaction(
+                    owner,
+                    "payload-owner",
+                    "tx-owner-other",
+                ),
+                manual_reconciliation_permit_token_for(owner),
+            )
+            .unwrap();
+
+        client.ensure_owner_unblocked(owner).unwrap();
+        let state = client.mutation_state().unwrap();
+        assert!(!state.transaction_owners.contains_key("tx-owner-other"));
+        assert!(!state.terminal_observations.contains_key("tx-owner-other"));
         assert_eq!(
             state
                 .transaction_owners

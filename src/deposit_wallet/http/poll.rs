@@ -182,9 +182,7 @@ impl DepositWalletRelayerClient {
                     let response_owner = poll_error.owner;
                     let error = poll_error.error;
                     if let Some(owner) = expected_owner {
-                        if response_owner == Some(owner)
-                            || self.has_recovery_owner_evidence(owner, &transaction_id)?
-                        {
+                        if response_owner == Some(owner) {
                             self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                         }
                     }

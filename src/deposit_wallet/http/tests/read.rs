@@ -38,6 +38,85 @@ use super::*;
         assert_eq!(requests.len(), 1);
     }
 
+#[test]
+    fn wallet_nonce_parser_accepts_u256_string_and_number_equivalently() {
+        let raw = "18446744073709551616";
+        let expected = U256::from_dec_str(raw).unwrap();
+
+        let string_nonce =
+            super::super::read::parse_wallet_nonce_value(json!(raw)).unwrap();
+        let numeric_nonce = super::super::read::parse_wallet_nonce_value(
+            serde_json::from_str::<serde_json::Value>(raw).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(string_nonce, expected);
+        assert_eq!(numeric_nonce, expected);
+    }
+
+#[test]
+    fn wallet_nonce_parser_rejects_invalid_boundaries() {
+        let too_large = format!("{}0", U256::MAX);
+        for value in [
+            json!("not-decimal"),
+            json!("-1"),
+            serde_json::from_str::<serde_json::Value>("-1").unwrap(),
+            serde_json::from_str::<serde_json::Value>("1.5").unwrap(),
+            json!(too_large.clone()),
+            serde_json::from_str::<serde_json::Value>(&too_large).unwrap(),
+        ] {
+            assert!(super::super::read::parse_wallet_nonce_value(value).is_err());
+        }
+    }
+
+#[tokio::test]
+    async fn get_wallet_nonce_rechecks_owner_block_before_returning_nonce() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let addr = listener.local_addr().unwrap();
+        let (request_seen_tx, request_seen_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+                .await
+                .expect("server accept should not hang")
+                .expect("server should accept");
+            let request = read_request(&mut stream).await;
+            let _ = request_seen_tx.send(());
+            let _ = release_rx.await;
+            write_response(
+                &mut stream,
+                TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+            )
+            .await;
+            vec![request]
+        });
+        let url = DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap();
+        let client = test_client(url);
+        let request_client = client.clone();
+        let nonce_task = tokio::spawn(async move { request_client.get_wallet_nonce(owner).await });
+        request_seen_rx
+            .await
+            .expect("nonce request should reach test server");
+
+        client
+            .record_ambiguous(owner, "payload:nonce-race".to_string())
+            .unwrap();
+        release_tx.send(()).unwrap();
+
+        let error = nonce_task.await.unwrap().unwrap_err();
+        assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
+        assert_eq!(
+            client.ambiguous_submit_block(owner),
+            Some("payload:nonce-race".to_string())
+        );
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.starts_with("/nonce?"));
+    }
+
 #[tokio::test]
     async fn get_transaction_accepts_array_response() {
         let (url, handle) = spawn_server(vec![TestResponse::json(
@@ -97,6 +176,34 @@ use super::*;
         assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
         let requests = handle.await.unwrap();
         assert_eq!(requests[0].path, "/transaction?id=tx-array-alias");
+    }
+
+#[test]
+    fn transaction_array_parser_rejects_limit_duplicate_and_missing_ids() {
+        let item = |transaction_id: String| {
+            json!({
+                "transactionID": transaction_id,
+                "state": "STATE_CONFIRMED",
+                "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"
+            })
+        };
+        let target = "tx-array-boundary";
+        let missing = json!([item("other-tx".to_string())]).to_string();
+        let duplicate = json!([item(target.to_string()), item(target.to_string())]).to_string();
+        let oversized = json!(
+            (0..=MAX_TRANSACTION_RESPONSE_ITEMS)
+                .map(|index| item(format!("other-tx-{index}")))
+                .collect::<Vec<_>>()
+        )
+        .to_string();
+
+        for body in [missing, duplicate, oversized] {
+            let error = parse_transaction_response(target, body.as_bytes())
+                .unwrap_err()
+                .error;
+            assert!(error.is_deposit_wallet_reconciliation_required());
+            assert!(!error.to_string().contains(target));
+        }
     }
 
 #[tokio::test]
