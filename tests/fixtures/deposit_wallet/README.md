@@ -24,6 +24,9 @@ The `wallet_nonce_http_request.json`,
 `wallet_signed_http_submit_request.json` fixtures pin the HTTP method,
 path/query, and request body for `GET /nonce?type=WALLET`, `POST /submit`
 `WALLET-CREATE`, and `POST /submit` `WALLET`.
+`transaction_array_response_cases.json` pins transaction-array selection and
+error-boundary ids for matching, missing, duplicate, invalid, and oversized
+relayer response arrays.
 
 The `wallet_batch_eip712_multicall.json` and
 `wallet_signed_submit_body_multicall.json` fixtures were generated from a

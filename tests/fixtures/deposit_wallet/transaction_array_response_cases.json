@@ -1,0 +1,51 @@
+{
+  "target": "tx-array-boundary",
+  "matchingIds": [
+    "tx-array-boundary"
+  ],
+  "missingIds": [
+    "other-tx"
+  ],
+  "duplicateIds": [
+    "tx-array-boundary",
+    "tx-array-boundary"
+  ],
+  "invalidIds": [
+    "bad\ntransaction"
+  ],
+  "oversizedIds": [
+    "other-tx-0",
+    "other-tx-1",
+    "other-tx-2",
+    "other-tx-3",
+    "other-tx-4",
+    "other-tx-5",
+    "other-tx-6",
+    "other-tx-7",
+    "other-tx-8",
+    "other-tx-9",
+    "other-tx-10",
+    "other-tx-11",
+    "other-tx-12",
+    "other-tx-13",
+    "other-tx-14",
+    "other-tx-15",
+    "other-tx-16",
+    "other-tx-17",
+    "other-tx-18",
+    "other-tx-19",
+    "other-tx-20",
+    "other-tx-21",
+    "other-tx-22",
+    "other-tx-23",
+    "other-tx-24",
+    "other-tx-25",
+    "other-tx-26",
+    "other-tx-27",
+    "other-tx-28",
+    "other-tx-29",
+    "other-tx-30",
+    "other-tx-31",
+    "other-tx-32"
+  ]
+}

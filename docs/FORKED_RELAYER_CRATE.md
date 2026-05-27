@@ -170,12 +170,6 @@ where
         owner: Address,
     ) -> Result<RelayerSubmitResponse, RelayerError>;
 
-    pub async fn get_wallet_nonce(
-        &self,
-        owner: Address,
-        mutation_gate: DepositWalletMutationGate,
-    ) -> Result<U256, RelayerError>;
-
     pub async fn get_wallet_nonce_with_lease(
         &self,
         owner: Address,
@@ -204,11 +198,9 @@ where
 }
 ```
 
-This PR does not expose a production-capable nonce lease API. Future production
-signing must preserve a crate-owned owner-scoped nonce lease from nonce read
-through submit. The bare `get_wallet_nonce` API is a compatibility and
-diagnostic boundary; it must not be used to fetch a production nonce for live
-WALLET signing because the reservation cannot outlive the returned `U256`.
+This PR does not expose a production-capable nonce lease API or a public bare
+nonce-read API. Future production signing must preserve a crate-owned
+owner-scoped nonce lease from nonce read through submit.
 
 ## Address separation rule
 

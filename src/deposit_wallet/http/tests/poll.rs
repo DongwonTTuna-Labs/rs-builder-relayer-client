@@ -140,6 +140,38 @@ use super::*;
     }
 
 #[tokio::test]
+    async fn public_poll_transaction_accepts_owner_evidence_without_local_state() {
+        let owner = address(WALLET_CREATE_OWNER);
+        let transaction_id = "tx-public-owner-evidence-confirmed";
+        let (url, handle) = spawn_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response(transaction_id, "STATE_CONFIRMED"),
+        )])
+        .await;
+        let client = test_client(url);
+
+        let receipt = client
+            .poll_transaction(
+                transaction_id,
+                DepositWalletPollPolicy::new(1, Duration::from_millis(100)).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+        assert_eq!(receipt.owner, Some(owner));
+        client.ensure_owner_unblocked(owner).unwrap();
+        {
+            let state = client.mutation_state().unwrap();
+            assert!(state.owner_blocks.is_empty());
+            assert!(state.transaction_owners.is_empty());
+            assert!(state.terminal_observations.is_empty());
+        }
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+    }
+
+#[tokio::test]
     async fn owner_aware_poll_final_retryable_failure_marks_known_transaction_ambiguous() {
         let owner = address(WALLET_CREATE_OWNER);
         let transaction_id = "tx-final-retryable-failure";
@@ -305,6 +337,7 @@ use super::*;
             first,
             super::super::poll::transaction_poll_jitter("tx-jitter-a", 0, base)
         );
+        assert_eq!(first, Duration::from_millis(42));
         assert!((Duration::from_millis(1)..=Duration::from_millis(50)).contains(&first));
         assert_eq!(
             super::super::poll::transaction_poll_jitter("tx-jitter-a", 0, Duration::ZERO),
@@ -315,6 +348,8 @@ use super::*;
             super::super::poll::transaction_poll_jitter("tx-jitter-b", 0, base),
             super::super::poll::transaction_poll_jitter("tx-jitter-c", 2, base),
         ];
+        assert_eq!(variants[0], Duration::from_millis(23));
+        assert_eq!(variants[1], Duration::from_millis(50));
         assert!(variants.iter().any(|candidate| *candidate != first));
 
         let capped = DepositWalletPollPolicy::new(5, MAX_POLL_INTERVAL).unwrap();
@@ -347,6 +382,7 @@ use super::*;
         assert!(
             (retry_after..=retry_after.saturating_add(MAX_RETRY_AFTER_JITTER)).contains(&first)
         );
+        assert_eq!(first, Duration::from_millis(1_023));
         assert!((0..64).any(|index| {
             super::super::poll::retry_after_poll_interval(
                 &format!("tx-retry-after-jitter-{index}"),
@@ -377,6 +413,7 @@ use super::*;
                 ..=MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
                 .contains(&capped)
         );
+        assert_eq!(capped, Duration::from_millis(30_069));
 
         let max_boundary = super::super::poll::retry_after_poll_interval(
             "tx-retry-after-max-boundary",
@@ -389,6 +426,7 @@ use super::*;
                 ..=MAX_RETRY_AFTER_INTERVAL.saturating_add(MAX_RETRY_AFTER_JITTER))
                 .contains(&max_boundary)
         );
+        assert_eq!(max_boundary, Duration::from_millis(30_201));
     }
 
 #[test]
@@ -1930,20 +1968,18 @@ use super::*;
     }
 
 #[tokio::test]
-    async fn terminal_error_poll_keeps_owner_block_until_manual_reconciliation() {
+    async fn terminal_error_poll_clears_local_submit_owner_block() {
         let owner = address(WALLET_CREATE_OWNER);
 
-        for (transaction_id, terminal_state, observed_state, expected_error) in [
+        for (transaction_id, terminal_state, expected_error) in [
             (
                 "tx-terminal-invalid",
                 "STATE_INVALID",
-                RelayerTransactionState::Invalid,
                 "transaction invalid",
             ),
             (
                 "tx-terminal-failed",
                 "STATE_FAILED",
-                RelayerTransactionState::Failed,
                 "transaction failed",
             ),
         ] {
@@ -1979,29 +2015,12 @@ use super::*;
                 "expected {expected_error}, got {error:?}"
             );
 
-            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
-            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
-            let payload_hash = client
-                .ambiguous_submit_block(owner)
-                .expect("terminal failure should keep owner blocked");
+            client.ensure_owner_unblocked(owner).unwrap();
             {
                 let state = client.mutation_state().unwrap();
-                assert!(state.transaction_owners.contains_key(transaction_id));
-                assert!(state.terminal_observations.contains_key(transaction_id));
+                assert!(!state.transaction_owners.contains_key(transaction_id));
+                assert!(!state.terminal_observations.contains_key(transaction_id));
             }
-            client
-                .clear_ambiguous_submit_after_manual_reconciliation(
-                    submit_reconciliation_evidence_for_payload_transaction_observation(
-                        owner,
-                        payload_hash,
-                        transaction_id,
-                        observed_state,
-                        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
-                    ),
-                    manual_reconciliation_permit_token_for(owner),
-                )
-                .unwrap();
-            client.ensure_owner_unblocked(owner).unwrap();
             let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
             assert_eq!(nonce, U256::from(37u64));
 

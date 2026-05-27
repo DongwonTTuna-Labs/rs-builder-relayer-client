@@ -63,12 +63,6 @@ Do not assume any two of these are equal.
 ```rust
 #[async_trait::async_trait]
 pub trait RelayerPort: Send + Sync {
-    async fn get_wallet_nonce(
-        &self,
-        owner: &DepositWalletOwner,
-        permit: &RelayerPermit,
-    ) -> Result<RelayerNonce, RelayerError>;
-
     async fn submit_wallet_create(
         &self,
         request: WalletCreateRequest,
@@ -255,11 +249,6 @@ where
 {
     pub async fn derive_deposit_wallet_address(&self, owner: Address) -> Result<Address>;
     pub async fn deploy_deposit_wallet(&self, owner: Address) -> Result<RelayerSubmitResponse>;
-    pub async fn get_wallet_nonce(
-        &self,
-        owner: Address,
-        mutation_gate: DepositWalletMutationGate,
-    ) -> Result<U256>;
     pub async fn get_wallet_nonce_with_lease(
         &self,
         owner: Address,
@@ -282,12 +271,10 @@ where
 }
 ```
 
-This PR does not expose a production-capable nonce lease API. Future production
-WALLET signing must add a crate-owned leased nonce capability, sign with the
-returned nonce, and consume that same lease through submit. The bare
-`get_wallet_nonce` method is retained for compatibility and diagnostics, but it
-is not a production live-signing API because its owner reservation ends when
-the `U256` is returned.
+This PR does not expose a production-capable nonce lease API or a public bare
+nonce-read method. Future production WALLET signing must add a crate-owned
+leased nonce capability, sign with the returned nonce, and consume that same
+lease through submit.
 
 ## CTF/pUSD adapter policy
 

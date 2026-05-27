@@ -1554,22 +1554,12 @@ async fn post_api_failures_record_ambiguous_submit_including_quota() {
     }
 
 #[tokio::test]
-    async fn immediate_terminal_failure_submit_requires_owner_poll_reconciliation() {
+    async fn immediate_terminal_failure_submit_unblocks_after_owner_poll() {
         let owner = address(WALLET_CREATE_OWNER);
 
-        for (transaction_id, state, expected_state, expected_error) in [
-            (
-                "tx-invalid-now",
-                "STATE_INVALID",
-                RelayerTransactionState::Invalid,
-                "invalid",
-            ),
-            (
-                "tx-failed-now",
-                "STATE_FAILED",
-                RelayerTransactionState::Failed,
-                "failed",
-            ),
+        for (transaction_id, state, expected_error) in [
+            ("tx-invalid-now", "STATE_INVALID", "invalid"),
+            ("tx-failed-now", "STATE_FAILED", "failed"),
         ] {
             let (url, handle) = spawn_server(vec![
                 TestResponse::json("200 OK", transaction_response(transaction_id, state)),
@@ -1585,7 +1575,10 @@ async fn post_api_failures_record_ambiguous_submit_including_quota() {
                 .unwrap_err();
             assert!(error_has_prefix(&error, RECONCILIATION_REQUIRED_PREFIX));
             assert!(client.ambiguous_submit_block(owner).is_some());
-            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
+            let blocked = client
+                .get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner))
+                .await
+                .unwrap_err();
             assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
 
             let result = client
@@ -1604,29 +1597,12 @@ async fn post_api_failures_record_ambiguous_submit_including_quota() {
                 }
                 _ => unreachable!(),
             }
-            let blocked = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap_err();
-            assert!(error_has_prefix(&blocked, RECONCILIATION_REQUIRED_PREFIX));
-            let payload_hash = client
-                .ambiguous_submit_block(owner)
-                .expect("terminal failure should keep owner blocked until manual reconciliation");
+            client.ensure_owner_unblocked(owner).unwrap();
             {
                 let state = client.mutation_state().unwrap();
-                assert!(state.transaction_owners.contains_key(transaction_id));
-                assert!(state.terminal_observations.contains_key(transaction_id));
+                assert!(!state.transaction_owners.contains_key(transaction_id));
+                assert!(!state.terminal_observations.contains_key(transaction_id));
             }
-            client
-                .clear_ambiguous_submit_after_manual_reconciliation(
-                    submit_reconciliation_evidence_for_payload_transaction_observation(
-                        owner,
-                        payload_hash,
-                        transaction_id,
-                        expected_state,
-                        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8"),
-                    ),
-                    manual_reconciliation_permit_token_for(owner),
-                )
-                .unwrap();
-            client.ensure_owner_unblocked(owner).unwrap();
 
             let nonce = client.get_wallet_nonce(owner, wallet_nonce_read_permit_for(owner)).await.unwrap();
             assert_eq!(nonce, U256::from(34u64));

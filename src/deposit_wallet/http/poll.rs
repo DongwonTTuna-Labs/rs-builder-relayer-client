@@ -274,7 +274,11 @@ impl DepositWalletRelayerClient {
                                 self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                             }
                             OwnerTransactionSource::LocalSubmit => {
-                                self.mark_transaction_reconciliation_required(&transaction_id)?;
+                                self.clear_transaction_block_if_current(
+                                    &transaction_id,
+                                    owner,
+                                    &record.payload_hash,
+                                )?;
                             }
                         }
                     } else if let Some(owner) = owner_to_verify {
@@ -296,7 +300,11 @@ impl DepositWalletRelayerClient {
                                 self.record_recovered_ambiguous_transaction(owner, &transaction_id)?;
                             }
                             OwnerTransactionSource::LocalSubmit => {
-                                self.mark_transaction_reconciliation_required(&transaction_id)?;
+                                self.clear_transaction_block_if_current(
+                                    &transaction_id,
+                                    owner,
+                                    &record.payload_hash,
+                                )?;
                             }
                         }
                     } else if let Some(owner) = owner_to_verify {

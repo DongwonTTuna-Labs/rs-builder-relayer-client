@@ -129,6 +129,7 @@ use super::*;
             )
         };
 
+        assert_eq!(parse("0").unwrap(), U256::zero());
         let string_nonce = parse(&serde_json::to_string(raw).unwrap()).unwrap();
         let numeric_nonce = parse(raw).unwrap();
 
@@ -151,6 +152,7 @@ use super::*;
         for raw_nonce in [
             serde_json::to_string("").unwrap(),
             serde_json::to_string("not-decimal").unwrap(),
+            serde_json::to_string("0x1").unwrap(),
             serde_json::to_string(" 1").unwrap(),
             serde_json::to_string("1 ").unwrap(),
             serde_json::to_string("\u{ff11}").unwrap(),
@@ -321,20 +323,36 @@ use super::*;
     }
 
 #[test]
-    fn transaction_array_parser_rejects_missing_duplicate_invalid_and_limit_cases() {
+    fn transaction_array_parser_uses_fixture_for_selection_and_error_cases() {
+        let fixture = fixture_value("transaction_array_response_cases.json");
+        let target = fixture["target"].as_str().unwrap();
         let item = |transaction_id: String| {
             transaction_response_value(&transaction_id, "STATE_CONFIRMED")
         };
-        let target = "tx-array-boundary";
-        let missing = json!([item("other-tx".to_string())]).to_string();
-        let duplicate = json!([item(target.to_string()), item(target.to_string())]).to_string();
-        let invalid = json!([item("bad\ntransaction".to_string())]).to_string();
-        let oversized = json!(
-            (0..=MAX_TRANSACTION_RESPONSE_ITEMS)
-                .map(|index| item(format!("other-tx-{index}")))
-                .collect::<Vec<_>>()
+
+        let body_from_ids = |ids: &Value| {
+            json!(
+                ids.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|id| item(id.as_str().unwrap().to_string()))
+                    .collect::<Vec<_>>()
+            )
+            .to_string()
+        };
+        let matching = body_from_ids(&fixture["matchingIds"]);
+        let missing = body_from_ids(&fixture["missingIds"]);
+        let duplicate = body_from_ids(&fixture["duplicateIds"]);
+        let invalid = body_from_ids(&fixture["invalidIds"]);
+        let oversized = body_from_ids(&fixture["oversizedIds"]);
+
+        let parsed = parse_transaction_response(
+            target,
+            deposit_wallet_contract_config(137).unwrap().factory,
+            matching.as_bytes(),
         )
-        .to_string();
+        .unwrap();
+        assert_eq!(parsed.receipt.transaction_id, target);
 
         for (label, body, retryable_absence, expected_message) in [
             ("missing", missing, true, "did not include requested transaction id"),

@@ -356,6 +356,31 @@ use super::*;
             .unwrap()
         };
 
+        assert!(DepositWalletSubmitReconciliationObservation::new(
+            "tx-manual-confirmed",
+            RelayerTransactionState::Confirmed,
+            Some(transaction_hash),
+            "checked",
+            1_700_000_001,
+        )
+        .is_ok());
+        assert!(DepositWalletSubmitReconciliationObservation::new(
+            "tx-manual-invalid",
+            RelayerTransactionState::Invalid,
+            None::<&str>,
+            "checked",
+            1_700_000_001,
+        )
+        .is_ok());
+        assert!(DepositWalletSubmitReconciliationObservation::new(
+            "tx-manual-failed",
+            RelayerTransactionState::Failed,
+            None::<&str>,
+            "checked",
+            1_700_000_001,
+        )
+        .is_ok());
+
         assert!(DepositWalletSubmitReconciliationEvidence::new(
             owner,
             mutation_scope(DepositWalletMutationAction::WalletCreate),

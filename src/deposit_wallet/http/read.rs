@@ -64,7 +64,8 @@ impl DepositWalletRelayerClient {
     /// diagnostics. Production signing is not enabled in this PR; a later
     /// crate-owned nonce lease capability must keep the owner reservation alive
     /// through signing and submit.
-    pub async fn get_wallet_nonce(
+    #[cfg(test)]
+    pub(super) async fn get_wallet_nonce(
         &self,
         owner: Address,
         gate: DepositWalletMutationGate,

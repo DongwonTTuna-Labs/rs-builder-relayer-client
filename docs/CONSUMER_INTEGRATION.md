@@ -111,17 +111,17 @@ Nonce API migration status for PR #12:
 - this PR does not expose a production-capable nonce lease API. Future
   production signing must use a crate-owned nonce lease capability, then sign
   the batch with the returned nonce and consume the same lease through submit;
-- `get_wallet_nonce` remains a compatibility/read-only diagnostic API for
-  loopback tests and non-production inspection, but production bare nonce reads
-  are rejected before HTTP so a consumer cannot fetch a nonce, drop the owner
-  reservation, and sign concurrently for the same owner;
+- bare `get_wallet_nonce` is not part of this PR's public consumer API. The
+  HTTP nonce path remains covered by loopback fixtures/tests only, so a
+  consumer cannot fetch a nonce, drop the owner reservation, and sign
+  concurrently for the same owner through this crate surface;
 - production nonce-read, owner-recovery, submit, and manual-clear permits remain
   non-public in this PR. A later live-submit change must add durable owner state
   and trusted reconciliation evidence before enabling those flows;
-- consumer adapters that previously called `get_wallet_nonce` directly must
-  migrate the nonce-read/sign/submit sequence in one adapter change. Until that
-  adapter change lands, keep deposit-wallet live submit disabled and pin the
-  consumer to the previous audited commit SHA;
+- consumer adapters must wait for a later crate-owned nonce lease capability
+  before wiring live nonce-read/sign/submit. Until that adapter change lands,
+  keep deposit-wallet live submit disabled and pin the consumer to the previous
+  audited commit SHA;
 - rollback path: revert the consumer pin to the previous audited commit SHA or
   keep the relayer adapter's live-submit feature flag disabled. This PR does
   not require a consumer to enable live submit.
