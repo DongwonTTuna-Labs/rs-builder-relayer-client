@@ -251,6 +251,8 @@ fn transaction_response_value(transaction_id: &str, state: &str) -> Value {
 fn relayer_key_auth_validates_redacts_and_marks_headers_sensitive() {
     assert!(RelayerKeyAuth::new("", address(API_KEY_ADDRESS)).is_err());
     assert!(RelayerKeyAuth::new("with whitespace", address(API_KEY_ADDRESS)).is_err());
+    assert!(RelayerKeyAuth::new("a".repeat(4096), address(API_KEY_ADDRESS)).is_ok());
+    assert!(RelayerKeyAuth::new("a".repeat(4097), address(API_KEY_ADDRESS)).is_err());
 
     let auth = relayer_auth();
     let headers = auth.headers().unwrap();
@@ -282,6 +284,13 @@ fn relayer_url_enforces_production_boundary() {
     assert!(DepositWalletRelayerUrl::loopback("http://192.0.2.1/").is_err());
 
     let production = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+    assert!(DepositWalletRelayerClient::new(
+        production.clone(),
+        relayer_auth(),
+        deposit_wallet_contract_config(137).unwrap()
+    )
+    .is_ok());
+
     let amoy = deposit_wallet_contract_config(80002).unwrap();
     let error = DepositWalletRelayerClient::new(production, relayer_auth(), amoy).unwrap_err();
     assert!(error.to_string().contains("Polygon deposit wallet contract config"));
@@ -369,8 +378,12 @@ fn transaction_response_fixture_matches_official_owner_field() {
     assert_eq!(parsed.receipt.owner, Some(address(WALLET_OWNER)));
     let debug = format!("{:?}", parsed.receipt);
     let owner_checksum = to_checksum(&address(WALLET_OWNER), None);
+    let transaction_hash =
+        "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8";
     assert!(!debug.contains(&owner_checksum));
     assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
+    assert!(!debug.contains(transaction_hash));
+    assert!(!debug.contains(&transaction_hash.to_ascii_uppercase()));
 }
 
 #[tokio::test]
@@ -509,7 +522,7 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
         .get_transaction_for_owner(address(WALLET_OWNER), "tx-missing-array")
         .await
         .unwrap_err();
-    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.is_deposit_wallet_transaction_absent());
     assert!(error.to_string().contains("did not include requested transaction id hash"));
     let _ = handle.await.unwrap();
 
@@ -557,7 +570,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     )
     .unwrap_err()
     .error;
-    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.is_deposit_wallet_transaction_absent());
     assert!(error.to_string().contains("did not include requested transaction id"));
 
     let object_mismatch = transaction_response_value("other-object-id", "STATE_CONFIRMED");
@@ -673,7 +686,11 @@ fn transaction_response_rejects_malformed_address_evidence() {
         .error;
 
         assert!(
-            matches!(error, RelayerError::Other(ref message) if message == "could not parse transaction response object"),
+            error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {error}"
+        );
+        assert!(
+            error.to_string().contains("address evidence"),
             "{label}: {error}"
         );
     }

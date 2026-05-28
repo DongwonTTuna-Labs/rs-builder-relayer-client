@@ -113,6 +113,21 @@ requires relayer wire evidence that the response is a `WALLET` transaction, that
 treated as WALLET owner evidence by this parser because deployment identity and
 wallet mutation identity are reviewed separately.
 
+Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
+
+```text
+https://docs.polymarket.com/trading/gasless
+https://docs.polymarket.com/api-reference/relayer-api-keys/get-all-relayer-api-keys
+```
+
+Those docs name `RELAYER_API_KEY` and `RELAYER_API_KEY_ADDRESS` as the Relayer
+API key auth headers and define `RELAYER_API_KEY_ADDRESS` as the address that
+owns the key. This HTTP read client sends those headers on read requests as
+credential identity, while still treating transaction `owner`/`from` evidence
+as a separate owner-bound response contract. Consumers must not assume the
+relayer API key address, owner signer, deposit wallet, or funder are the same
+identity.
+
 `get_wallet_nonce` is public only for diagnostics and local loopback tests in
 this layer. Production URLs reject WALLET nonce reads until the mutation-state
 stack owns a nonce lease from nonce fetch through signing and submit. Consumers

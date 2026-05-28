@@ -3,6 +3,7 @@ use super::redaction::{
 };
 use super::*;
 use crate::deposit_wallet::WALLET_TRANSACTION_TYPE;
+use serde_json::Value;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletTransactionReceipt {
@@ -17,7 +18,10 @@ impl fmt::Debug for DepositWalletTransactionReceipt {
         f.debug_struct("DepositWalletTransactionReceipt")
             .field("transaction_id", &sanitized_external_token(&self.transaction_id))
             .field("state", &ReceiptStateDebug(&self.state))
-            .field("transaction_hash", &self.transaction_hash)
+            .field(
+                "transaction_hash",
+                &self.transaction_hash.as_deref().map(sanitized_external_token),
+            )
             .field("owner", &self.owner.map(redacted_address))
             .finish()
     }
@@ -85,7 +89,14 @@ pub(super) fn parse_transaction_response(
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
         Some(b'{') => {
-            let response = serde_json::from_slice::<RelayerTransactionResponseWithOwner>(bytes)
+            let value = serde_json::from_slice::<Value>(bytes)
+                .map_err(|_| {
+                    TransactionParseError::new(RelayerError::Other(
+                        "could not parse transaction response object".to_string(),
+                    ))
+                })?;
+            validate_transaction_address_evidence_shape(&value)?;
+            let response = serde_json::from_value::<RelayerTransactionResponseWithOwner>(value)
                 .map_err(|_| {
                     TransactionParseError::new(RelayerError::Other(
                         "could not parse transaction response object".to_string(),
@@ -253,7 +264,7 @@ fn select_transaction_response_from_array(
                 )))
             } else if message.contains(TRANSACTION_RESPONSE_MISSING_ID_ERROR) {
                 TransactionParseError::retryable_absence(
-                    RelayerError::reconciliation_required(format!(
+                    RelayerError::transaction_absent(format!(
                         "transaction response did not include requested transaction id hash {}",
                         external_token_hash(expected_transaction_id)
                     )),
@@ -280,6 +291,44 @@ fn select_transaction_response_from_array(
         ))
     })?;
     Ok(response)
+}
+
+fn validate_transaction_address_evidence_shape(
+    value: &Value,
+) -> std::result::Result<(), TransactionParseError> {
+    let Some(object) = value.as_object() else {
+        return Err(TransactionParseError::new(RelayerError::Other(
+            "could not parse transaction response object".to_string(),
+        )));
+    };
+    for field in ["from", "to", "owner"] {
+        validate_optional_address_evidence_value(object, field)?;
+    }
+    Ok(())
+}
+
+fn validate_optional_address_evidence_value(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> std::result::Result<(), TransactionParseError> {
+    let Some(value) = object.get(field) else {
+        return Ok(());
+    };
+
+    match value {
+        Value::Null => Ok(()),
+        Value::String(raw) if raw.parse::<Address>().is_ok() => Ok(()),
+        Value::String(_) => Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response {field} address evidence was malformed; manual reconciliation required"
+            )),
+        )),
+        _ => Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response {field} address evidence was not a string; manual reconciliation required"
+            )),
+        )),
+    }
 }
 
 fn receipt_from_submit_response(
