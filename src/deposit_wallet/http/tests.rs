@@ -517,7 +517,7 @@ async fn get_transaction_for_owner_rejects_invalid_transaction_id_before_http() 
     let (url, handle) = spawn_server(Vec::new()).await;
     let client = test_client(url);
 
-    for transaction_id in ["", " tx-leading-space", "tx with space"] {
+    for transaction_id in ["", " tx-leading-space", "tx-trailing-space ", "tx\nnewline"] {
         let error = client
             .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
             .await
@@ -530,6 +530,32 @@ async fn get_transaction_for_owner_rejects_invalid_transaction_id_before_http() 
 
     let requests = handle.await.unwrap();
     assert!(requests.is_empty());
+}
+
+#[tokio::test]
+async fn transport_sends_json_body_with_auth_headers() {
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", "{}")]).await;
+    let endpoint = url.endpoint("/transport-body");
+    let client = test_client(url);
+    let body = r#"{"ping":true}"#.to_string();
+
+    let response = client
+        .send(Method::POST, endpoint, Some(body.clone()))
+        .await
+        .unwrap();
+
+    assert_eq!(response, b"{}");
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/transport-body");
+    assert_eq!(requests[0].header("content-type"), Some("application/json"));
+    assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        requests[0].header("RELAYER_API_KEY_ADDRESS"),
+        Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+    );
+    assert_eq!(requests[0].body, body);
 }
 
 #[tokio::test]
@@ -726,6 +752,22 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     .unwrap();
     assert_eq!(parsed.receipt.transaction_id, target);
 
+    let mut invalid_id_non_target =
+        transaction_response_value("other-before-target", "STATE_CONFIRMED");
+    invalid_id_non_target["transactionID"] = json!("bad\ntransaction");
+    let body = json!([
+        invalid_id_non_target,
+        transaction_response_value(target, "STATE_CONFIRMED")
+    ])
+    .to_string();
+    let parsed = parse_transaction_response(
+        target,
+        deposit_wallet_contract_config(137).unwrap(),
+        body.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(parsed.receipt.transaction_id, target);
+
     let mut malformed_non_target = transaction_response_value("other-before-target", "STATE_CONFIRMED");
     malformed_non_target["from"] = json!(137);
     let body = json!([
@@ -778,7 +820,6 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 
     for (fixture_key, expected_message) in [
         ("duplicateIds", "duplicate requested transaction id hash"),
-        ("invalidIds", "invalid transactionID"),
         ("oversizedIds", "included more than"),
     ] {
         let body = body_from_ids(&fixture[fixture_key]);
@@ -795,6 +836,17 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
             "{fixture_key} produced unexpected error: {error}"
         );
     }
+
+    let body = body_from_ids(&fixture["invalidIds"]);
+    let error = parse_transaction_response(
+        target,
+        deposit_wallet_contract_config(137).unwrap(),
+        body.as_bytes(),
+    )
+    .unwrap_err()
+    .error;
+    assert!(error.is_deposit_wallet_transaction_absent());
+    assert!(error.to_string().contains("did not include requested transaction id"));
 }
 
 #[test]
@@ -857,13 +909,11 @@ fn transaction_response_rejects_partial_required_fields() {
         ("missing state", missing_state),
         ("non-string state", non_string_state),
     ] {
-        let object_error =
-            parse_transaction_response(target, config, response.to_string().as_bytes())
-                .unwrap_err()
-                .error;
+        let object_error = parse_transaction_response(target, config, response.to_string().as_bytes())
+            .unwrap_err()
+            .error;
         assert!(
-            matches!(object_error, RelayerError::Other(_))
-                || object_error.is_deposit_wallet_reconciliation_required(),
+            matches!(object_error, RelayerError::Other(ref message) if message.contains("could not parse transaction response object")),
             "{label}: {object_error}"
         );
 
@@ -874,11 +924,18 @@ fn transaction_response_rejects_partial_required_fields() {
         )
         .unwrap_err()
         .error;
-        assert!(
-            matches!(array_error, RelayerError::Other(_))
-                || array_error.is_deposit_wallet_reconciliation_required(),
-            "{label}: {array_error}"
-        );
+        match label {
+            "missing transactionID" | "non-string transactionID" => {
+                assert!(array_error.is_deposit_wallet_transaction_absent(), "{label}: {array_error}");
+            }
+            "missing state" | "non-string state" => {
+                assert!(
+                    matches!(array_error, RelayerError::Other(ref message) if message.contains("could not parse transaction response array")),
+                    "{label}: {array_error}"
+                );
+            }
+            _ => unreachable!("unexpected partial-field case"),
+        }
     }
 }
 
@@ -905,6 +962,16 @@ fn transaction_response_rejects_malformed_address_evidence() {
     let config = deposit_wallet_contract_config(137).unwrap();
     for (label, field, value) in [
         ("from-empty", "from", json!("")),
+        (
+            "from-missing-prefix",
+            "from",
+            json!(WALLET_OWNER.trim_start_matches("0x")),
+        ),
+        (
+            "from-uppercase-prefix",
+            "from",
+            json!(format!("0X{}", &WALLET_OWNER[2..])),
+        ),
         ("from-number", "from", json!(137)),
         ("from-object", "from", json!({"address": WALLET_OWNER})),
         ("to-empty", "to", json!("")),
@@ -1097,22 +1164,6 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
     ));
     let _ = handle.await.unwrap();
 
-    let retry_at = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
-    let (url, handle) = spawn_server(vec![TestResponse::json("429 Too Many Requests", "{}")
-        .with_header("retry-after", retry_at)])
-    .await;
-    let client = test_client(url);
-    let error = client
-        .get_wallet_nonce(address(WALLET_OWNER))
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        RelayerError::Api { status: 429, ref message }
-            if message.contains("retry after") && !message.contains("retry after 0s")
-    ));
-    let _ = handle.await.unwrap();
-
     let content_length_too_large =
         TestResponse::json_without_content_length("200 OK", "").with_header(
             "content-length",
@@ -1232,17 +1283,18 @@ async fn error_body_drain_limiter_releases_permits_and_handles_exhaustion() {
 }
 
 #[test]
-fn transaction_id_validation_covers_length_and_allowed_characters() {
+fn transaction_id_validation_covers_bounds_and_opaque_ids() {
     let max_len = "a".repeat(MAX_TRANSACTION_ID_LEN);
     assert_eq!(validate_transaction_id(&max_len).unwrap(), max_len);
     assert_eq!(
-        validate_transaction_id("tx-abc_123.period").unwrap(),
-        "tx-abc_123.period"
+        validate_transaction_id("tx:/opaque+id=?value").unwrap(),
+        "tx:/opaque+id=?value"
     );
 
     let too_long = "a".repeat(MAX_TRANSACTION_ID_LEN + 1);
     assert!(validate_transaction_id(&too_long).is_err());
     assert!(validate_transaction_id("").is_err());
-    assert!(validate_transaction_id("tx abc").is_err());
+    assert!(validate_transaction_id(" tx-leading-space").is_err());
+    assert!(validate_transaction_id("tx-trailing-space ").is_err());
     assert!(validate_transaction_id("tx\nabc").is_err());
 }

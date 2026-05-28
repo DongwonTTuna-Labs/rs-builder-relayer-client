@@ -263,7 +263,6 @@ fn select_transaction_response_from_array(
         {
             let mut count = 0usize;
             let mut matching_response = None;
-            let mut saw_invalid_transaction_id = false;
             while let Some(response_value) = seq.next_element::<Value>()? {
                 count += 1;
                 if count > MAX_TRANSACTION_RESPONSE_ITEMS {
@@ -271,12 +270,10 @@ fn select_transaction_response_from_array(
                 }
                 let Some(response_transaction_id) = transaction_id_from_value(&response_value)
                 else {
-                    saw_invalid_transaction_id = true;
                     continue;
                 };
                 let Ok(response_transaction_id) = validate_transaction_id(response_transaction_id)
                 else {
-                    saw_invalid_transaction_id = true;
                     continue;
                 };
                 if response_transaction_id != self.expected_transaction_id {
@@ -296,8 +293,6 @@ fn select_transaction_response_from_array(
             }
             if let Some(response) = matching_response {
                 Ok(response)
-            } else if saw_invalid_transaction_id {
-                Err(de::Error::custom(TRANSACTION_RESPONSE_INVALID_ID_ERROR))
             } else {
                 Err(de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
             }
@@ -327,11 +322,6 @@ fn select_transaction_response_from_array(
                     "transaction response included duplicate requested transaction id hash {}; manual reconciliation required",
                     external_token_hash(expected_transaction_id)
                 )))
-            } else if message.contains(TRANSACTION_RESPONSE_INVALID_ID_ERROR) {
-                TransactionParseError::new(RelayerError::reconciliation_required(
-                    "transaction response included an invalid transactionID; manual reconciliation required"
-                        .to_string(),
-                ))
             } else if let Some(reason) =
                 reconciliation_reason_from_deserializer_error(&message)
             {
@@ -384,7 +374,7 @@ fn validate_optional_address_evidence_value(
 
     match value {
         Value::Null => Ok(()),
-        Value::String(raw) if raw.parse::<Address>().is_ok() => Ok(()),
+        Value::String(raw) if is_official_address_wire_format(raw) => Ok(()),
         Value::String(_) => Err(TransactionParseError::new(
             RelayerError::reconciliation_required(format!(
                 "transaction response {field} address evidence was malformed; manual reconciliation required"
@@ -435,12 +425,10 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     if transaction_id.is_empty()
         || transaction_id.len() > MAX_TRANSACTION_ID_LEN
         || transaction_id.trim() != transaction_id
-        || !transaction_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || transaction_id.bytes().any(|byte| byte.is_ascii_control())
     {
         return Err(RelayerError::Other(
-            "transaction id must be 1-128 ASCII letters, digits, dash, underscore, or dot"
+            "transaction id must be 1-128 bytes without leading/trailing whitespace or control characters"
                 .to_string(),
         ));
     }
@@ -465,6 +453,12 @@ fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
     ))
 }
 
+fn is_official_address_wire_format(raw: &str) -> bool {
+    raw.len() == 42
+        && raw.starts_with("0x")
+        && raw[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn deserialize_optional_address<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Address>, D::Error>
@@ -474,5 +468,10 @@ where
     let Some(raw) = Option::<String>::deserialize(deserializer)? else {
         return Ok(None);
     };
+    if !is_official_address_wire_format(&raw) {
+        return Err(serde::de::Error::custom(
+            "address evidence must match ^0x[a-fA-F0-9]{40}$",
+        ));
+    }
     raw.parse().map(Some).map_err(serde::de::Error::custom)
 }
