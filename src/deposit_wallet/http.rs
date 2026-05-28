@@ -69,6 +69,13 @@ use state::OwnerMutationStore;
 use transport::ErrorBodyDrainLimiter;
 use url::validate_relayer_contract_config;
 
+/// HTTP client for deposit-wallet relayer calls.
+///
+/// Owner mutation state is local to this client allocation: cloned clients share
+/// the same in-memory store, but separately constructed clients do not
+/// coordinate nonce leases or submit reservations. Production mutation permits
+/// remain unavailable in this PR; shared or durable owner state belongs with the
+/// later live-execution capability.
 #[derive(Clone)]
 pub struct DepositWalletRelayerClient {
     http: Client,
