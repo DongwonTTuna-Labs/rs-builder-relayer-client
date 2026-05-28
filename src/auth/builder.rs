@@ -24,12 +24,12 @@ pub fn build_hmac_signature(
         .decode(secret)
         .or_else(|_| general_purpose::URL_SAFE.decode(secret))
         .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(secret))
-        .map_err(|e| RelayerError::AuthError(format!("Failed to decode base64 secret: {e}")))?;
+        .map_err(|_| RelayerError::AuthError("Invalid builder API secret".to_string()))?;
 
     let message = format!("{}{}{}{}", timestamp, method, path, body);
 
     let mut mac = HmacSha256::new_from_slice(&decoded_secret)
-        .map_err(|e| RelayerError::AuthError(format!("HMAC key error: {e}")))?;
+        .map_err(|_| RelayerError::AuthError("Invalid builder API secret".to_string()))?;
     mac.update(message.as_bytes());
     let result = mac.finalize().into_bytes();
 
@@ -51,31 +51,39 @@ pub fn build_headers(
         .duration_since(UNIX_EPOCH)
         .map_err(|_| RelayerError::AuthError("System time before UNIX EPOCH".to_string()))?
         .as_secs();
+
+    build_headers_with_timestamp(config, method, path, body, timestamp)
+}
+
+fn build_headers_with_timestamp(
+    config: &BuilderConfig,
+    method: &str,
+    path: &str,
+    body: &str,
+    timestamp: u64,
+) -> Result<HeaderMap> {
     let timestamp_str = timestamp.to_string();
 
     let signature = build_hmac_signature(&config.secret, &timestamp_str, method, path, body)?;
 
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "POLY_BUILDER_API_KEY",
-        HeaderValue::from_str(&config.key)
-            .map_err(|_| RelayerError::AuthError("Invalid key header value".to_string()))?,
-    );
+    let mut key = HeaderValue::from_str(&config.key)
+        .map_err(|_| RelayerError::AuthError("Invalid key header value".to_string()))?;
+    key.set_sensitive(true);
+    headers.insert("POLY_BUILDER_API_KEY", key);
     headers.insert(
         "POLY_BUILDER_TIMESTAMP",
         HeaderValue::from_str(&timestamp_str)
             .map_err(|_| RelayerError::AuthError("Invalid timestamp header value".to_string()))?,
     );
-    headers.insert(
-        "POLY_BUILDER_PASSPHRASE",
-        HeaderValue::from_str(&config.passphrase)
-            .map_err(|_| RelayerError::AuthError("Invalid passphrase header value".to_string()))?,
-    );
-    headers.insert(
-        "POLY_BUILDER_SIGNATURE",
-        HeaderValue::from_str(&signature)
-            .map_err(|_| RelayerError::AuthError("Invalid signature header value".to_string()))?,
-    );
+    let mut passphrase = HeaderValue::from_str(&config.passphrase)
+        .map_err(|_| RelayerError::AuthError("Invalid passphrase header value".to_string()))?;
+    passphrase.set_sensitive(true);
+    headers.insert("POLY_BUILDER_PASSPHRASE", passphrase);
+    let mut signature = HeaderValue::from_str(&signature)
+        .map_err(|_| RelayerError::AuthError("Invalid signature header value".to_string()))?;
+    signature.set_sensitive(true);
+    headers.insert("POLY_BUILDER_SIGNATURE", signature);
 
     Ok(headers)
 }
@@ -94,5 +102,41 @@ mod tests {
 
         let sig = build_hmac_signature(secret, timestamp, method, path, body).unwrap();
         assert_eq!(sig, "ZwAdJKvoYRlEKDkNMwd5BuwNNtg93kNaR_oU2HrfVvc=");
+    }
+
+    #[test]
+    fn test_build_headers_uses_fixed_timestamp_for_signature() {
+        let config = BuilderConfig::new(
+            "builder-key",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "builder-passphrase",
+        );
+        let timestamp = 1_700_000_001;
+        let method = "POST";
+        let path = "/wallet";
+        let body = r#"{"owner":"0xabc"}"#;
+
+        let headers =
+            build_headers_with_timestamp(&config, method, path, body, timestamp).unwrap();
+        let expected_signature =
+            build_hmac_signature(&config.secret, &timestamp.to_string(), method, path, body)
+                .unwrap();
+
+        assert_eq!(headers.get("POLY_BUILDER_TIMESTAMP").unwrap(), "1700000001");
+        assert_eq!(
+            headers.get("POLY_BUILDER_SIGNATURE").unwrap(),
+            &expected_signature
+        );
+        assert_eq!(headers.get("POLY_BUILDER_API_KEY").unwrap(), "builder-key");
+        assert_eq!(
+            headers.get("POLY_BUILDER_PASSPHRASE").unwrap(),
+            "builder-passphrase"
+        );
+        assert!(headers.get("POLY_BUILDER_API_KEY").unwrap().is_sensitive());
+        assert!(headers.get("POLY_BUILDER_SIGNATURE").unwrap().is_sensitive());
+        assert!(headers
+            .get("POLY_BUILDER_PASSPHRASE")
+            .unwrap()
+            .is_sensitive());
     }
 }

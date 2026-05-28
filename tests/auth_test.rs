@@ -1,5 +1,7 @@
 use polymarket_relayer::auth::builder::build_hmac_signature;
 use polymarket_relayer::auth::{AuthMethod, BuilderConfig};
+use ethers::types::Address;
+use ethers::utils::to_checksum;
 
 #[test]
 fn test_hmac_matches_reference_sdk() {
@@ -30,13 +32,26 @@ fn test_hmac_url_safe_base64() {
 }
 
 #[test]
+fn test_builder_auth_secret_parse_errors_are_generic() {
+    let secret = "not-base64-secret-material";
+
+    let error = build_hmac_signature(secret, "1000000", "GET", "/nonce", "").unwrap_err();
+    let rendered = error.to_string();
+
+    assert!(rendered.contains("Invalid builder API secret"));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains("Invalid byte"));
+    assert!(!rendered.contains("offset"));
+}
+
+#[test]
 fn test_builder_auth_generates_all_required_headers() {
     // Use a valid base64 secret
-    let config = BuilderConfig {
-        key: "test-key".to_string(),
-        secret: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-        passphrase: "test-passphrase".to_string(),
-    };
+    let config = BuilderConfig::new(
+        "test-key",
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "test-passphrase",
+    );
     let auth = AuthMethod::Builder(config);
     let headers = auth.headers("POST", "/submit", r#"{"data":"test"}"#).unwrap();
 
@@ -46,6 +61,9 @@ fn test_builder_auth_generates_all_required_headers() {
     assert!(headers.contains_key("POLY_BUILDER_SIGNATURE"));
     assert_eq!(headers.get("POLY_BUILDER_API_KEY").unwrap(), "test-key");
     assert_eq!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap(), "test-passphrase");
+    assert!(headers.get("POLY_BUILDER_API_KEY").unwrap().is_sensitive());
+    assert!(headers.get("POLY_BUILDER_PASSPHRASE").unwrap().is_sensitive());
+    assert!(headers.get("POLY_BUILDER_SIGNATURE").unwrap().is_sensitive());
 }
 
 #[test]
@@ -55,6 +73,11 @@ fn test_relayer_key_auth_generates_headers() {
 
     assert_eq!(headers.get("RELAYER_API_KEY").unwrap(), "my-key");
     assert_eq!(headers.get("RELAYER_API_KEY_ADDRESS").unwrap(), "0x1234");
+    assert!(headers.get("RELAYER_API_KEY").unwrap().is_sensitive());
+    assert!(headers
+        .get("RELAYER_API_KEY_ADDRESS")
+        .unwrap()
+        .is_sensitive());
 }
 
 #[test]
@@ -75,6 +98,67 @@ fn test_relayer_key_auth_identity_can_differ_from_wallet_owner() {
             .unwrap(),
         wallet_owner
     );
+}
+
+#[test]
+fn test_relayer_key_debug_redacts_malformed_address() {
+    let secret_key = "secret-relayer-key";
+    let malformed_address = "not-a-valid-address-secret";
+    let auth = AuthMethod::RelayerKey {
+        api_key: secret_key.to_string(),
+        address: malformed_address.to_string(),
+    };
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(secret_key));
+    assert!(!rendered.contains(malformed_address));
+    assert!(rendered.contains("<redacted>"));
+}
+
+#[test]
+fn test_relayer_key_debug_redacts_valid_address_to_checksum_summary() {
+    let secret_key = "secret-relayer-key";
+    let address = "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B";
+    let checksum = to_checksum(&address.parse::<Address>().unwrap(), None);
+    let expected_summary = format!("{}...{}", &checksum[..6], &checksum[38..]);
+    let auth = AuthMethod::relayer_key(secret_key, address);
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(secret_key));
+    assert!(!rendered.contains(address));
+    assert!(rendered.contains(&expected_summary));
+}
+
+#[test]
+fn test_builder_config_debug_redacts_all_secret_fields() {
+    let key = "builder-key-secret";
+    let secret = "builder-api-secret-material";
+    let passphrase = "builder-passphrase-secret";
+    let config = BuilderConfig::new(key, secret, passphrase);
+
+    let rendered = format!("{config:?}");
+
+    assert!(!rendered.contains(key));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains(passphrase));
+    assert!(rendered.contains("<redacted>"));
+}
+
+#[test]
+fn test_builder_auth_debug_redacts_all_secret_fields() {
+    let key = "builder-key-secret";
+    let secret = "builder-api-secret-material";
+    let passphrase = "builder-passphrase-secret";
+    let auth = AuthMethod::Builder(BuilderConfig::new(key, secret, passphrase));
+
+    let rendered = format!("{auth:?}");
+
+    assert!(!rendered.contains(key));
+    assert!(!rendered.contains(secret));
+    assert!(!rendered.contains(passphrase));
+    assert!(rendered.contains("<redacted>"));
 }
 
 #[test]
