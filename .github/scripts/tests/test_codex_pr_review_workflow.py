@@ -52,14 +52,21 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         job = self.job("design-post")
         permissions = job["permissions"]
         step_names = [step.get("name") for step in job["steps"]]
+        checkout = self.step("design-post", "Checkout trusted PR scripts")
         download = self.step("design-post", "Download design plan")
         post = self.step("design-post", "Post sticky design plan")
 
+        self.assertEqual(["resolve", "tech-lead", "design-coordinate"], job["needs"])
+        self.assertIn("needs.design-coordinate.result == 'success'", job["if"])
         self.assertEqual("write", permissions["issues"])
-        self.assertEqual("write", permissions["pull-requests"])
         self.assertEqual("read", permissions["contents"])
+        self.assertNotIn("pull-requests", permissions)
         self.assertNotIn("id-token", permissions)
         self.assertNotIn("Checkout PR head", step_names)
+        self.assertEqual("actions/checkout@v6", checkout["uses"])
+        self.assertEqual("${{ needs.resolve.outputs.base_sha }}", checkout["with"]["ref"])
+        self.assertEqual("trusted", checkout["with"]["path"])
+        self.assertIs(False, checkout["with"]["persist-credentials"])
         self.assertLess(
             self.step_index("design-post", "Download design plan"),
             self.step_index("design-post", "Post sticky design plan"),
