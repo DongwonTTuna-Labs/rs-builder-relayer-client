@@ -42,6 +42,12 @@ impl DepositWalletRelayerClient {
         owner: Address,
         transaction_id: &str,
     ) -> Result<DepositWalletTransactionReceipt> {
+        if self.base_url.is_production_host() {
+            return Err(RelayerError::read_blocked(
+                "production WALLET transaction reads are disabled in this PR until an official or recorded WALLET polling response fixture is reviewed"
+                    .to_string(),
+            ));
+        }
         self.fetch_transaction(transaction_id)
             .await
             .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))

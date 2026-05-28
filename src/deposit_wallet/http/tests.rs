@@ -380,10 +380,45 @@ fn transaction_response_fixture_matches_official_owner_field() {
     let owner_checksum = to_checksum(&address(WALLET_OWNER), None);
     let transaction_hash =
         "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8";
+    assert!(!debug.contains(transaction_id));
     assert!(!debug.contains(&owner_checksum));
     assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
     assert!(!debug.contains(transaction_hash));
     assert!(!debug.contains(&transaction_hash.to_ascii_uppercase()));
+}
+
+#[tokio::test]
+async fn get_transaction_for_owner_rejects_production_until_wallet_polling_evidence_is_recorded() {
+    let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+    let client = test_client(url);
+
+    let error = client
+        .get_transaction_for_owner(address(WALLET_OWNER), "tx-production")
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_read_blocked());
+    assert!(error.to_string().contains("WALLET polling response fixture"));
+}
+
+#[tokio::test]
+async fn get_transaction_for_owner_rejects_invalid_transaction_id_before_http() {
+    let (url, handle) = spawn_server(Vec::new()).await;
+    let client = test_client(url);
+
+    for transaction_id in ["", " tx-leading-space", "tx with space"] {
+        let error = client
+            .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("transaction id"),
+            "{transaction_id:?}: {error}"
+        );
+    }
+
+    let requests = handle.await.unwrap();
+    assert!(requests.is_empty());
 }
 
 #[tokio::test]
@@ -563,6 +598,21 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     .unwrap();
     assert_eq!(parsed.receipt.transaction_id, target);
 
+    let mut malformed_non_target = transaction_response_value("other-before-target", "STATE_CONFIRMED");
+    malformed_non_target["from"] = json!(137);
+    let body = json!([
+        malformed_non_target,
+        transaction_response_value(target, "STATE_CONFIRMED")
+    ])
+    .to_string();
+    let parsed = parse_transaction_response(
+        target,
+        deposit_wallet_contract_config(137).unwrap().factory,
+        body.as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(parsed.receipt.transaction_id, target);
+
     let error = parse_transaction_response(
         target,
         deposit_wallet_contract_config(137).unwrap().factory,
@@ -677,7 +727,7 @@ fn transaction_response_rejects_malformed_address_evidence() {
         let mut response = transaction_response_value(&transaction_id, "STATE_CONFIRMED");
         response[field] = value;
 
-        let error = parse_transaction_response(
+        let object_error = parse_transaction_response(
             &transaction_id,
             expected_factory,
             response.to_string().as_bytes(),
@@ -686,12 +736,30 @@ fn transaction_response_rejects_malformed_address_evidence() {
         .error;
 
         assert!(
-            error.is_deposit_wallet_reconciliation_required(),
-            "{label}: {error}"
+            object_error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {object_error}"
         );
         assert!(
-            error.to_string().contains("address evidence"),
-            "{label}: {error}"
+            object_error.to_string().contains("address evidence"),
+            "{label}: {object_error}"
+        );
+
+        let array_error = parse_transaction_response(
+            &transaction_id,
+            expected_factory,
+            json!([transaction_response_value("other-tx", "STATE_CONFIRMED"), response])
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap_err()
+        .error;
+        assert!(
+            array_error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {array_error}"
+        );
+        assert!(
+            array_error.to_string().contains("address evidence"),
+            "{label}: {array_error}"
         );
     }
 }
@@ -825,7 +893,8 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
         error,
         RelayerError::Other(ref message) if message.contains("maximum size")
     ));
-    let _ = handle.await;
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
 
     let oversized_body = "x".repeat(MAX_SUCCESS_BODY_BYTES + 1);
     let (url, handle) = spawn_server(vec![TestResponse::json_without_content_length(
@@ -842,7 +911,8 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
         error,
         RelayerError::Other(ref message) if message.contains("maximum size")
     ));
-    let _ = handle.await;
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
 }
 
 #[test]

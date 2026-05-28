@@ -5,7 +5,11 @@ use super::*;
 use crate::deposit_wallet::WALLET_TRANSACTION_TYPE;
 use serde_json::Value;
 
+const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
+    "Deposit-wallet reconciliation required: ";
+
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DepositWalletTransactionReceipt {
     pub transaction_id: String,
     pub state: RelayerTransactionState,
@@ -229,25 +233,44 @@ fn select_transaction_response_from_array(
         {
             let mut count = 0usize;
             let mut matching_response = None;
-            while let Some(response) = seq.next_element::<RelayerTransactionResponseWithOwner>()? {
+            let mut saw_invalid_transaction_id = false;
+            while let Some(response_value) = seq.next_element::<Value>()? {
                 count += 1;
                 if count > MAX_TRANSACTION_RESPONSE_ITEMS {
                     return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
                 }
-                let response_transaction_id = validate_transaction_id(
-                    &response.response.transaction_id,
-                )
-                .map_err(|_| de::Error::custom(TRANSACTION_RESPONSE_INVALID_ID_ERROR))?;
-                if response_transaction_id == self.expected_transaction_id {
-                    if matching_response.is_some() {
-                        return Err(de::Error::custom(
-                            TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR,
-                        ));
-                    }
-                    matching_response = Some(response);
+                let Some(response_transaction_id) = transaction_id_from_value(&response_value)
+                else {
+                    saw_invalid_transaction_id = true;
+                    continue;
+                };
+                let Ok(response_transaction_id) = validate_transaction_id(response_transaction_id)
+                else {
+                    saw_invalid_transaction_id = true;
+                    continue;
+                };
+                if response_transaction_id != self.expected_transaction_id {
+                    continue;
                 }
+                if matching_response.is_some() {
+                    return Err(de::Error::custom(
+                        TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR,
+                    ));
+                }
+                validate_transaction_address_evidence_shape(&response_value)
+                    .map_err(|error| de::Error::custom(error.error.to_string()))?;
+                let response =
+                    serde_json::from_value::<RelayerTransactionResponseWithOwner>(response_value)
+                        .map_err(de::Error::custom)?;
+                matching_response = Some(response);
             }
-            matching_response.ok_or_else(|| de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
+            if let Some(response) = matching_response {
+                Ok(response)
+            } else if saw_invalid_transaction_id {
+                Err(de::Error::custom(TRANSACTION_RESPONSE_INVALID_ID_ERROR))
+            } else {
+                Err(de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
+            }
         }
     }
 
@@ -279,6 +302,10 @@ fn select_transaction_response_from_array(
                     "transaction response included an invalid transactionID; manual reconciliation required"
                         .to_string(),
                 ))
+            } else if let Some(reason) =
+                reconciliation_reason_from_deserializer_error(&message)
+            {
+                TransactionParseError::new(RelayerError::reconciliation_required(reason))
             } else {
                 TransactionParseError::new(RelayerError::Other(
                     "could not parse transaction response array".to_string(),
@@ -291,6 +318,16 @@ fn select_transaction_response_from_array(
         ))
     })?;
     Ok(response)
+}
+
+fn transaction_id_from_value(value: &Value) -> Option<&str> {
+    value.as_object()?.get("transactionID")?.as_str()
+}
+
+fn reconciliation_reason_from_deserializer_error(message: &str) -> Option<String> {
+    let start = message.find(DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX)?
+        + DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX.len();
+    Some(message[start..].to_string())
 }
 
 fn validate_transaction_address_evidence_shape(

@@ -107,15 +107,23 @@ DepositWalletRelayerClient::get_transaction_for_owner
 DepositWalletRelayerClient::get_wallet_nonce
 ```
 
-`get_transaction_for_owner` is the production-facing read API in this layer. It
-requires relayer wire evidence that the response is a `WALLET` transaction, that
-`owner` is present, and that `from == owner`. `WALLET-CREATE` responses are not
-treated as WALLET owner evidence by this parser because deployment identity and
-wallet mutation identity are reviewed separately.
+`get_transaction_for_owner` is the owner-bound transaction read API in this
+layer, but production URLs reject it in this PR. The current official
+`GET /transaction` reference documents `SAFE`/`PROXY` transaction types, while
+the deposit-wallet docs describe `WALLET` submit/body construction without
+documenting the polling response shape. Until an official or recorded `WALLET`
+polling response fixture is reviewed, this crate must not claim production
+deposit-wallet transaction polling compatibility. Local loopback and recorded
+fixture tests still require relayer wire evidence that the response is a
+`WALLET` transaction, that `owner` is present, and that `from == owner`.
+`WALLET-CREATE` responses are not treated as WALLET owner evidence by this
+parser because deployment identity and wallet mutation identity are reviewed
+separately.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
 ```text
+https://docs.polymarket.com/api-reference/relayer/get-a-transaction-by-id
 https://docs.polymarket.com/trading/gasless
 https://docs.polymarket.com/api-reference/relayer-api-keys/get-all-relayer-api-keys
 ```

@@ -70,6 +70,10 @@ impl RelayerError {
         ))
     }
 
+    pub(crate) fn read_blocked(message: impl Into<String>) -> Self {
+        Self::Other(format!("Deposit-wallet read blocked: {}", message.into()))
+    }
+
     pub fn is_deposit_wallet_mutation_blocked(&self) -> bool {
         matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet mutation blocked:"))
     }
@@ -80,6 +84,10 @@ impl RelayerError {
 
     pub fn is_deposit_wallet_transaction_absent(&self) -> bool {
         matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet transaction temporarily absent:"))
+    }
+
+    pub fn is_deposit_wallet_read_blocked(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet read blocked:"))
     }
 }
 
@@ -92,7 +100,9 @@ mod tests {
         assert!(RelayerError::mutation_blocked("locked").is_deposit_wallet_mutation_blocked());
         assert!(RelayerError::reconciliation_required("manual check").is_deposit_wallet_reconciliation_required());
         assert!(RelayerError::transaction_absent("not indexed").is_deposit_wallet_transaction_absent());
+        assert!(RelayerError::read_blocked("no evidence").is_deposit_wallet_read_blocked());
         assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_mutation_blocked());
         assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_transaction_absent());
+        assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_read_blocked());
     }
 }
