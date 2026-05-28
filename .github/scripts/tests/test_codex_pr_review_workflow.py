@@ -39,6 +39,10 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         upload = self.step("design-coordinate", "Upload design plan")
         artifact_paths = upload["with"]["path"]
 
+        self.assertLess(
+            self.step_index("design-coordinate", "Render design plan"),
+            self.step_index("design-coordinate", "Upload design plan"),
+        )
         self.assertEqual("actions/upload-artifact@v7", upload["uses"])
         self.assertEqual("codex-design-plan", upload["with"]["name"])
         self.assertIn("artifacts/design-plan.json", artifact_paths)
@@ -52,17 +56,22 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         job = self.job("design-post")
         permissions = job["permissions"]
         step_names = [step.get("name") for step in job["steps"]]
+        checkouts = [step for step in job["steps"] if step.get("uses") == "actions/checkout@v6"]
         checkout = self.step("design-post", "Checkout trusted PR scripts")
         download = self.step("design-post", "Download design plan")
         post = self.step("design-post", "Post sticky design plan")
 
         self.assertEqual(["resolve", "tech-lead", "design-coordinate"], job["needs"])
-        self.assertIn("needs.design-coordinate.result == 'success'", job["if"])
+        self.assertEqual(
+            "needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success' && github.triggering_actor == 'DongwonTTuna'",
+            job["if"],
+        )
         self.assertEqual("write", permissions["issues"])
         self.assertEqual("read", permissions["contents"])
         self.assertNotIn("pull-requests", permissions)
         self.assertNotIn("id-token", permissions)
         self.assertNotIn("Checkout PR head", step_names)
+        self.assertEqual([checkout], checkouts)
         self.assertEqual("actions/checkout@v6", checkout["uses"])
         self.assertEqual("${{ needs.resolve.outputs.base_sha }}", checkout["with"]["ref"])
         self.assertEqual("trusted", checkout["with"]["path"])
