@@ -16,8 +16,10 @@ use serde::Deserializer;
 
 use crate::deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, build_wallet_create_request,
-    build_wallet_nonce_request, deposit_wallet_contract_config, DepositWalletContractConfig,
-    RelayerSubmitResponse, RelayerTransactionState, SignedDepositWalletBatch, POLYGON_CHAIN_ID,
+    build_wallet_nonce_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
+    DepositWalletContractConfig, RelayerSubmitResponse, RelayerTransactionState,
+    SignedDepositWalletBatch, WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
+    POLYGON_CHAIN_ID,
 };
 use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
 use crate::error::{RelayerError, Result};

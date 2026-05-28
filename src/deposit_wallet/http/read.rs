@@ -5,6 +5,8 @@ use super::response::{
 use super::state::OwnerNonceReadReservation;
 use super::*;
 use serde_json::value::RawValue;
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
 
@@ -19,6 +21,7 @@ pub struct DepositWalletNonceLease {
     nonce: U256,
     expires_at_unix_seconds: u64,
     reservation: Option<OwnerNonceReadReservation>,
+    _not_send_sync: PhantomData<Rc<()>>,
 }
 
 impl DepositWalletNonceLease {
@@ -129,6 +132,7 @@ impl DepositWalletRelayerClient {
             nonce,
             expires_at_unix_seconds,
             reservation: Some(reservation),
+            _not_send_sync: PhantomData,
         })
     }
 
@@ -164,6 +168,7 @@ impl DepositWalletRelayerClient {
             }
             Err(error) => return Err(error),
         };
+        let transaction_type = parsed.transaction_type;
         let receipt = match validate_owner_transaction_evidence(owner, parsed.receipt) {
             Ok(receipt) => receipt,
             Err(error) if error.is_deposit_wallet_reconciliation_required() => {
@@ -175,7 +180,7 @@ impl DepositWalletRelayerClient {
             }
             Err(error) => return Err(error),
         };
-        self.record_terminal_observation_from_receipt(owner, &receipt)?;
+        self.record_terminal_observation_from_receipt(owner, &receipt, transaction_type)?;
         classify_owner_transaction_receipt(receipt)
     }
 

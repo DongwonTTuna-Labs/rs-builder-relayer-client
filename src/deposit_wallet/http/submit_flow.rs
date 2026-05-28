@@ -25,7 +25,8 @@ impl DepositWalletRelayerClient {
         let request = build_wallet_create_request(owner, self.config);
         let body = serde_json::to_string(&request)
             .map_err(|e| RelayerError::Other(format!("could not serialize WALLET-CREATE: {e}")))?;
-        self.submit_owner_body(owner, body).await
+        self.submit_owner_body(owner, body, WALLET_CREATE_TRANSACTION_TYPE)
+            .await
     }
 
     /// Submits a signed `WALLET` batch using a nonce lease returned by
@@ -43,6 +44,29 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
+        if signed.nonce_owner() != owner {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce owner does not match owner signer".to_string(),
+            ));
+        }
+        if signed.submit_from() != owner {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch submit from does not match owner signer".to_string(),
+            ));
+        }
+        let expected_chain_id = deposit_wallet_contract_chain_id(self.config)?;
+        if signed.chain_id() != expected_chain_id {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch chain id does not match client config".to_string(),
+            ));
+        }
+        let expected_deposit_wallet = derive_deposit_wallet_address(owner, self.config)?;
+        if signed.deposit_wallet() != expected_deposit_wallet {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch wallet does not match owner/config derived wallet"
+                    .to_string(),
+            ));
+        }
         if nonce_lease.owner() != owner {
             return Err(RelayerError::mutation_blocked(format!(
                 "signed WALLET batch owner {} did not match WALLET nonce lease owner {}",
@@ -69,7 +93,6 @@ impl DepositWalletRelayerClient {
         nonce_reservation: OwnerNonceReadReservation,
     ) -> Result<DepositWalletTransactionReceipt> {
         self.ensure_deadline_fresh(&signed)?;
-        self.auth.headers()?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
         let mut reservation =
             self.promote_owner_nonce_read_to_submit(nonce_reservation, preflight_hash)?;
@@ -91,24 +114,27 @@ impl DepositWalletRelayerClient {
             }
         };
         reservation.update_payload_hash(payload_hash_summary(body.as_bytes()))?;
-        self.submit_reserved_owner_body(reservation, body).await
+        self.submit_reserved_owner_body(reservation, body, WALLET_TRANSACTION_TYPE)
+            .await
     }
 
     pub(super) async fn submit_owner_body(
         &self,
         owner: Address,
         body: String,
+        transaction_type: &'static str,
     ) -> Result<DepositWalletTransactionReceipt> {
-        self.auth.headers()?;
         let payload_hash = payload_hash_summary(body.as_bytes());
         let reservation = self.reserve_owner_submit(owner, payload_hash)?;
-        self.submit_reserved_owner_body(reservation, body).await
+        self.submit_reserved_owner_body(reservation, body, transaction_type)
+            .await
     }
 
     pub(super) async fn submit_reserved_owner_body(
         &self,
         mut reservation: OwnerSubmitReservation,
         body: String,
+        transaction_type: &'static str,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = reservation.owner();
         let payload_hash = reservation.payload_hash().to_string();
@@ -128,7 +154,12 @@ impl DepositWalletRelayerClient {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => {
                     let transaction_id = receipt.transaction_id.clone();
-                    match self.handle_submit_receipt(owner, payload_hash.clone(), receipt) {
+                    match self.handle_submit_receipt(
+                        owner,
+                        payload_hash.clone(),
+                        receipt,
+                        transaction_type,
+                    ) {
                         Ok(receipt) => {
                             reservation.disarm();
                             Ok(receipt)
@@ -176,7 +207,12 @@ impl DepositWalletRelayerClient {
                 Err(_error) => {
                     if let Some(transaction_id) = extract_submit_transaction_id(&response) {
                         if self
-                            .record_transaction_owner(&transaction_id, owner, payload_hash.clone())
+                            .record_transaction_owner(
+                                &transaction_id,
+                                owner,
+                                payload_hash.clone(),
+                                transaction_type,
+                            )
                             .is_err()
                         {
                             self.record_ambiguous_post_boundary(
@@ -195,6 +231,11 @@ impl DepositWalletRelayerClient {
                                 display_payload_hash(&payload_hash)
                             )));
                         }
+                        self.record_ambiguous_post_boundary(
+                            &mut reservation,
+                            owner,
+                            payload_hash.clone(),
+                        )?;
                         return Err(RelayerError::ambiguous_submit(format!(
                             "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required",
                             external_token_hash(&transaction_id),
