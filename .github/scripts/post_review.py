@@ -24,6 +24,9 @@ RESOLVE_SEARCH_MAX_TERMS = 8
 RESOLVE_SEARCH_MAX_MATCHES = 3
 REVIEW_CONTEXT_MAX_CHARS = 60000
 REVIEW_CONTEXT_SECTION_LIMIT = 12000
+DESIGN_PLAN_SUMMARY_LIMIT = 800
+DESIGN_PLAN_ROOT_CAUSE_LIMIT = 1200
+DESIGN_PLAN_ITEM_LIMIT = 600
 TRUSTED_USER = "DongwonTTuna"
 TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna",)
 
@@ -1057,17 +1060,40 @@ def command_classify_design_need(args: argparse.Namespace) -> None:
     print(f"needs_design={needs_design} blocking_count={blocking_count}")
 
 
+DESIGN_PLAN_LIST_KEYS = (
+    "invariants",
+    "retired_approaches",
+    "intended_architecture",
+    "edit_sequence",
+    "tests",
+    "acceptance_criteria",
+    "open_questions",
+)
+
+
 def design_plan_list(plan: dict[str, Any], key: str) -> list[str]:
     value = plan.get(key)
     if not isinstance(value, list):
         return []
-    return [trim_text(redact_secrets(str(item)), 600).strip() for item in value if str(item).strip()]
+    return [trim_text(redact_secrets(str(item)), DESIGN_PLAN_ITEM_LIMIT).strip() for item in value if str(item).strip()]
+
+
+def compact_design_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {
+        "version": plan.get("version", 1),
+        "summary": trim_text(redact_secrets(str(plan.get("summary") or "")), DESIGN_PLAN_SUMMARY_LIMIT).strip(),
+        "root_cause": trim_text(redact_secrets(str(plan.get("root_cause") or "")), DESIGN_PLAN_ROOT_CAUSE_LIMIT).strip(),
+    }
+    for key in DESIGN_PLAN_LIST_KEYS:
+        compact[key] = design_plan_list(plan, key)
+    return compact
 
 
 def render_design_plan_body(plan: dict[str, Any]) -> str:
-    summary = trim_text(redact_secrets(str(plan.get("summary") or "")), 800).strip() or "설계 요약이 제공되지 않았습니다."
+    plan = compact_design_plan(plan)
+    summary = str(plan.get("summary") or "").strip() or "설계 요약이 제공되지 않았습니다."
     root_cause = (
-        trim_text(redact_secrets(str(plan.get("root_cause") or "")), 1200).strip()
+        str(plan.get("root_cause") or "").strip()
         or "root cause가 명시되지 않았습니다."
     )
     lines = [
@@ -1107,7 +1133,7 @@ def render_design_plan_body(plan: dict[str, Any]) -> str:
             "## Machine Readable JSON",
             "",
             "```json",
-            redact_secrets(json.dumps(plan, ensure_ascii=False, indent=2)),
+            json.dumps(plan, ensure_ascii=False, indent=2),
             "```",
         ]
     )
@@ -1115,7 +1141,9 @@ def render_design_plan_body(plan: dict[str, Any]) -> str:
 
 
 def command_render_design_plan(args: argparse.Namespace) -> None:
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    plan_path = Path(args.plan)
+    plan = compact_design_plan(json.loads(plan_path.read_text(encoding="utf-8")))
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     Path(args.output).write_text(render_design_plan_body(plan), encoding="utf-8")
     print(f"wrote design plan markdown to {args.output}")
 
