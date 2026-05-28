@@ -390,20 +390,44 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
 }
 
 #[tokio::test]
-async fn get_transaction_for_owner_accepts_confirmed_without_hash() {
+async fn get_transaction_for_owner_rejects_confirmed_without_hash() {
     let mut response = transaction_response_value("tx-confirmed-no-hash", "STATE_CONFIRMED");
     response["transactionHash"] = json!("");
     let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", response.to_string())]).await;
     let client = test_client(url);
 
-    let receipt = client
+    let error = client
         .get_transaction_for_owner(address(WALLET_OWNER), "tx-confirmed-no-hash")
         .await
-        .unwrap();
+        .unwrap_err();
 
-    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
-    assert_eq!(receipt.transaction_hash, None);
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("did not include transactionHash"));
     let _ = handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn get_transaction_for_owner_accepts_non_terminal_states_without_hash() {
+    for (transaction_id, state, expected_state) in [
+        ("tx-new", "STATE_NEW", RelayerTransactionState::New),
+        ("tx-executed", "STATE_EXECUTED", RelayerTransactionState::Executed),
+        ("tx-mined", "STATE_MINED", RelayerTransactionState::Mined),
+    ] {
+        let mut response = transaction_response_value(transaction_id, state);
+        response.as_object_mut().unwrap().remove("transactionHash");
+        let (url, handle) =
+            spawn_server(vec![TestResponse::json("200 OK", response.to_string())]).await;
+        let client = test_client(url);
+
+        let receipt = client
+            .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.state, expected_state);
+        assert_eq!(receipt.transaction_hash, None);
+        let _ = handle.await.unwrap();
+    }
 }
 
 async fn transaction_state_error(transaction_id: &str, state: &str) -> RelayerError {
@@ -531,6 +555,18 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     assert!(error.is_deposit_wallet_reconciliation_required());
     assert!(error.to_string().contains("did not include requested transaction id"));
 
+    let object_mismatch = transaction_response_value("other-object-id", "STATE_CONFIRMED");
+    let error = parse_transaction_response(
+        target,
+        deposit_wallet_contract_config(137).unwrap().factory,
+        object_mismatch.to_string().as_bytes(),
+    )
+    .unwrap_err()
+    .error;
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("did not match requested id hash"));
+    assert!(!error.to_string().contains("other-object-id"));
+
     for (fixture_key, expected_message) in [
         ("duplicateIds", "duplicate requested transaction id hash"),
         ("invalidIds", "invalid transactionID"),
@@ -548,6 +584,43 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
         assert!(
             error.to_string().contains(expected_message),
             "{fixture_key} produced unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn transaction_response_rejects_malformed_transaction_hashes() {
+    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    for (label, malformed_hash) in [
+        ("too-short", "0x1234"),
+        (
+            "missing-prefix",
+            "38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+        ),
+        (
+            "non-hex",
+            "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535dg",
+        ),
+    ] {
+        let transaction_id = format!("tx-bad-hash-{label}");
+        let mut response = transaction_response_value(&transaction_id, "STATE_CONFIRMED");
+        response["transactionHash"] = json!(malformed_hash);
+
+        let error = parse_transaction_response(
+            &transaction_id,
+            expected_factory,
+            response.to_string().as_bytes(),
+        )
+        .unwrap_err()
+        .error;
+
+        assert!(
+            error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {error}"
+        );
+        assert!(
+            error.to_string().contains("transactionHash was invalid"),
+            "{label}: {error}"
         );
     }
 }
