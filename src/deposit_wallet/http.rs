@@ -75,7 +75,9 @@ use url::validate_relayer_contract_config;
 /// the same in-memory store, but separately constructed clients do not
 /// coordinate nonce leases or submit reservations. Production mutation permits
 /// remain unavailable in this PR; shared or durable owner state belongs with the
-/// later live-execution capability.
+/// later live-execution capability. Consumers should construct one client per
+/// relayer/auth/config tuple and clone it for repeated work instead of creating
+/// a fresh client per request.
 #[derive(Clone)]
 pub struct DepositWalletRelayerClient {
     http: Client,

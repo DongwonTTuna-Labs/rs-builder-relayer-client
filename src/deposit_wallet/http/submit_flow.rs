@@ -13,7 +13,8 @@ impl DepositWalletRelayerClient {
     /// Production clients created with [`DepositWalletRelayerUrl::parse`] cannot
     /// construct a public permit in this PR; live production submit requires a
     /// later durable owner-state capability. Test-loopback clients exercise the
-    /// request body and post-boundary reconciliation behavior.
+    /// request body and post-boundary reconciliation behavior. This method is
+    /// non-live for production until that capability is added.
     pub async fn submit_wallet_create(
         &self,
         owner: Address,
@@ -27,6 +28,13 @@ impl DepositWalletRelayerClient {
         self.submit_owner_body(owner, body).await
     }
 
+    /// Submits a signed `WALLET` batch using a nonce lease returned by
+    /// [`Self::get_wallet_nonce_with_lease`].
+    ///
+    /// This is a non-live test-loopback surface in this PR: production permit
+    /// construction is intentionally unavailable, and production mutation
+    /// submission remains blocked until durable owner state and the later
+    /// live-execution capability are added.
     pub async fn submit_signed_wallet_batch_with_nonce_lease(
         &self,
         signed: SignedDepositWalletBatch,
@@ -34,6 +42,7 @@ impl DepositWalletRelayerClient {
         nonce_lease: DepositWalletNonceLease,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
+        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
         if nonce_lease.owner() != owner {
             return Err(RelayerError::mutation_blocked(format!(
                 "signed WALLET batch owner {} did not match WALLET nonce lease owner {}",
@@ -49,7 +58,6 @@ impl DepositWalletRelayerClient {
         let now_unix_seconds = self.clock.now_unix_seconds()?;
         self.submit_signed_wallet_batch_inner(
             signed,
-            gate,
             nonce_lease.into_unexpired_reservation(now_unix_seconds)?,
         )
         .await
@@ -58,11 +66,8 @@ impl DepositWalletRelayerClient {
     async fn submit_signed_wallet_batch_inner(
         &self,
         signed: SignedDepositWalletBatch,
-        gate: DepositWalletMutationGate,
         nonce_reservation: OwnerNonceReadReservation,
     ) -> Result<DepositWalletTransactionReceipt> {
-        let owner = signed.owner();
-        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
         self.ensure_deadline_fresh(&signed)?;
         self.auth.headers()?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
@@ -108,8 +113,18 @@ impl DepositWalletRelayerClient {
         let owner = reservation.owner();
         let payload_hash = reservation.payload_hash().to_string();
         let url = self.base_url.endpoint(SUBMIT_PATH);
+        let headers = self.authenticated_headers(true)?;
         reservation.arm_ambiguous_on_drop();
-        match self.send(Method::POST, url, Some(body)).await {
+        match self
+            .send_with_headers_success_limit(
+                Method::POST,
+                url,
+                headers,
+                Some(body),
+                MAX_SUCCESS_BODY_BYTES,
+            )
+            .await
+        {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => {
                     let transaction_id = receipt.transaction_id.clone();

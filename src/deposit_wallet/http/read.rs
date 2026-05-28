@@ -88,9 +88,10 @@ impl DepositWalletRelayerClient {
     /// Fetches a WALLET nonce and returns the owner-scoped lease that must be
     /// consumed by [`Self::submit_signed_wallet_batch_with_nonce_lease`].
     ///
-    /// This PR does not expose a public production permit for this method.
-    /// Production signing needs a later crate-owned capability so consumers do
-    /// not replace the owner lease with an out-of-band nonce reader.
+    /// This is a non-live test-loopback surface in this PR: production permit
+    /// construction is intentionally unavailable. Production signing needs a
+    /// later crate-owned capability so consumers do not replace the owner lease
+    /// with an out-of-band nonce reader.
     pub async fn get_wallet_nonce_with_lease(
         &self,
         owner: Address,
