@@ -108,7 +108,10 @@ pub(super) fn validate_mock_loopback_url(url: &Url) -> Result<()> {
             "mock relayer URL must not include userinfo".to_string(),
         ));
     }
-    if !matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1" | "[::1]")) {
+    if !matches!(
+        url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("::1") | Some("[::1]")
+    ) {
         return Err(RelayerError::invalid_relayer_url(
             "mock relayer URL must be loopback-only".to_string(),
         ));

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -49,6 +49,20 @@ impl TestResponse {
             include_content_length: true,
             body: body.into(),
         }
+    }
+
+    fn json_without_content_length(status: &'static str, body: impl Into<String>) -> Self {
+        Self {
+            status,
+            headers: vec![("content-type".to_string(), "application/json".to_string())],
+            include_content_length: false,
+            body: body.into(),
+        }
+    }
+
+    fn with_header(mut self, name: &str, value: impl Into<String>) -> Self {
+        self.headers.push((name.to_string(), value.into()));
+        self
     }
 }
 
@@ -256,6 +270,11 @@ fn relayer_url_enforces_production_boundary() {
     assert!(DepositWalletRelayerUrl::parse("http://relayer-v2.polymarket.com").is_err());
     assert!(DepositWalletRelayerUrl::parse("https://example.com").is_err());
     assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com/path").is_err());
+    assert!(DepositWalletRelayerUrl::parse("https://user@relayer-v2.polymarket.com").is_err());
+    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com:8443").is_err());
+    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com?x=1").is_err());
+    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com/#frag").is_err());
+    assert!(DepositWalletRelayerUrl::loopback("http://[::1]/").is_ok());
 
     let production = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let amoy = deposit_wallet_contract_config(80002).unwrap();
@@ -301,6 +320,18 @@ async fn get_wallet_nonce_rejects_production_before_http() {
 
 #[test]
 fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
+    assert_eq!(
+        super::read::parse_wallet_nonce_response(br#"{"nonce":31}"#).unwrap(),
+        U256::from(31u64)
+    );
+    assert_eq!(
+        super::read::parse_wallet_nonce_response(
+            format!(r#"{{"nonce":"{}"}}"#, U256::MAX).as_bytes()
+        )
+        .unwrap(),
+        U256::MAX
+    );
+
     let fixture = fixture_value("wallet_nonce_response_cases.json");
     for case in fixture["rejected"].as_array().unwrap() {
         let raw_nonce = case["raw"].as_str().unwrap();
@@ -331,7 +362,10 @@ fn transaction_response_fixture_matches_official_owner_field() {
     assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
     assert_eq!(parsed.owner, Some(address(WALLET_OWNER)));
     assert_eq!(parsed.receipt.owner, Some(address(WALLET_OWNER)));
-    assert!(!format!("{:?}", parsed.receipt).contains(WALLET_OWNER));
+    let debug = format!("{:?}", parsed.receipt);
+    let owner_checksum = to_checksum(&address(WALLET_OWNER), None);
+    assert!(!debug.contains(&owner_checksum));
+    assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
 }
 
 #[tokio::test]
@@ -353,6 +387,52 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     assert_eq!(receipt.owner, Some(address(WALLET_OWNER)));
     let requests = handle.await.unwrap();
     assert_eq!(requests[0].path, "/transaction?id=tx-owner");
+}
+
+#[tokio::test]
+async fn get_transaction_for_owner_accepts_confirmed_without_hash() {
+    let mut response = transaction_response_value("tx-confirmed-no-hash", "STATE_CONFIRMED");
+    response["transactionHash"] = json!("");
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", response.to_string())]).await;
+    let client = test_client(url);
+
+    let receipt = client
+        .get_transaction_for_owner(address(WALLET_OWNER), "tx-confirmed-no-hash")
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+    assert_eq!(receipt.transaction_hash, None);
+    let _ = handle.await.unwrap();
+}
+
+async fn transaction_state_error(transaction_id: &str, state: &str) -> RelayerError {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, state).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+
+    let error = client
+        .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
+        .await
+        .unwrap_err();
+    let _ = handle.await.unwrap();
+    error
+}
+
+#[tokio::test]
+async fn get_transaction_for_owner_rejects_terminal_failure_and_unknown_states() {
+    let invalid = transaction_state_error("tx-invalid", "STATE_INVALID").await;
+    assert!(matches!(invalid, RelayerError::TransactionInvalid(_)));
+
+    let failed = transaction_state_error("tx-failed", "STATE_FAILED").await;
+    assert!(matches!(failed, RelayerError::TransactionFailed(_)));
+
+    let unknown = transaction_state_error("tx-unknown", "STATE_FUTURE").await;
+    assert!(unknown.is_deposit_wallet_reconciliation_required());
+    assert!(!unknown.to_string().contains("STATE_FUTURE"));
 }
 
 #[tokio::test]
@@ -415,7 +495,7 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
 }
 
 #[test]
-fn transaction_array_parser_uses_fixture_for_selection_and_missing_case() {
+fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     let fixture = fixture_value("transaction_array_response_cases.json");
     let target = fixture["target"].as_str().unwrap();
     let item = |transaction_id: String| transaction_response_value(&transaction_id, "STATE_CONFIRMED");
@@ -450,6 +530,165 @@ fn transaction_array_parser_uses_fixture_for_selection_and_missing_case() {
     .error;
     assert!(error.is_deposit_wallet_reconciliation_required());
     assert!(error.to_string().contains("did not include requested transaction id"));
+
+    for (fixture_key, expected_message) in [
+        ("duplicateIds", "duplicate requested transaction id hash"),
+        ("invalidIds", "invalid transactionID"),
+        ("oversizedIds", "included more than"),
+    ] {
+        let body = body_from_ids(&fixture[fixture_key]);
+        let error = parse_transaction_response(
+            target,
+            deposit_wallet_contract_config(137).unwrap().factory,
+            body.as_bytes(),
+        )
+        .unwrap_err()
+        .error;
+        assert!(error.is_deposit_wallet_reconciliation_required());
+        assert!(
+            error.to_string().contains(expected_message),
+            "{fixture_key} produced unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
+    let target = "tx-wire-evidence";
+    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let other_address = to_checksum(&address(OTHER_OWNER), None);
+    let mut missing_type = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_type.as_object_mut().unwrap().remove("type");
+    let mut wallet_create_type = transaction_response_value(target, "STATE_CONFIRMED");
+    wallet_create_type["type"] = json!(crate::deposit_wallet::WALLET_CREATE_TRANSACTION_TYPE);
+    let mut wrong_type = transaction_response_value(target, "STATE_CONFIRMED");
+    wrong_type["type"] = json!("SAFE");
+    let mut missing_owner = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_owner.as_object_mut().unwrap().remove("owner");
+    let mut owner_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    owner_mismatch["owner"] = json!(other_address);
+    let mut missing_from = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_from.as_object_mut().unwrap().remove("from");
+    let mut from_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    from_mismatch["from"] = json!(other_address);
+    let mut missing_to = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_to.as_object_mut().unwrap().remove("to");
+    let mut to_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    to_mismatch["to"] = json!(other_address);
+
+    for (label, response, expected_message) in [
+        (
+            "missing type",
+            missing_type,
+            "did not include deposit-wallet transaction type",
+        ),
+        ("WALLET-CREATE type", wallet_create_type, "type was not WALLET"),
+        ("wrong type", wrong_type, "type was not WALLET"),
+        (
+            "missing owner",
+            missing_owner,
+            "did not include owner evidence",
+        ),
+        (
+            "owner mismatch",
+            owner_mismatch,
+            "did not match owner evidence",
+        ),
+        ("missing from", missing_from, "did not include from address"),
+        ("from mismatch", from_mismatch, "did not match owner evidence"),
+        ("missing to", missing_to, "did not include to address"),
+        (
+            "to mismatch",
+            to_mismatch,
+            "did not match expected relayer target",
+        ),
+    ] {
+        let error =
+            parse_transaction_response(target, expected_factory, response.to_string().as_bytes())
+                .unwrap_err()
+                .error;
+        assert!(
+            error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {error}"
+        );
+        assert!(
+            error.to_string().contains(expected_message),
+            "{label} produced unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn retry_after_parser_accepts_seconds_and_http_date_boundaries() {
+    let now = UNIX_EPOCH + Duration::from_secs(10);
+    let mut headers = HeaderMap::new();
+    headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
+    assert_eq!(
+        super::transport::retry_after_duration_at(&headers, now),
+        Some(Duration::from_secs(7))
+    );
+
+    headers.insert(
+        RETRY_AFTER,
+        HeaderValue::from_str(&httpdate::fmt_http_date(UNIX_EPOCH + Duration::from_secs(42)))
+            .unwrap(),
+    );
+    assert_eq!(
+        super::transport::retry_after_duration_at(&headers, now),
+        Some(Duration::from_secs(32))
+    );
+}
+
+#[tokio::test]
+async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
+    let (url, handle) = spawn_server(vec![TestResponse::json("429 Too Many Requests", "{}")
+        .with_header("retry-after", "7")])
+    .await;
+    let client = test_client(url);
+    let error = client
+        .get_wallet_nonce(address(WALLET_OWNER))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RelayerError::Api { status: 429, ref message }
+            if message.contains("retry after 7s")
+    ));
+    let _ = handle.await.unwrap();
+
+    let content_length_too_large =
+        TestResponse::json_without_content_length("200 OK", "").with_header(
+            "content-length",
+            (MAX_SUCCESS_BODY_BYTES + 1).to_string(),
+        );
+    let (url, handle) = spawn_server(vec![content_length_too_large]).await;
+    let client = test_client(url);
+    let error = client
+        .get_wallet_nonce(address(WALLET_OWNER))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RelayerError::Other(ref message) if message.contains("maximum size")
+    ));
+    let _ = handle.await;
+
+    let oversized_body = "x".repeat(MAX_SUCCESS_BODY_BYTES + 1);
+    let (url, handle) = spawn_server(vec![TestResponse::json_without_content_length(
+        "200 OK",
+        oversized_body,
+    )])
+    .await;
+    let client = test_client(url);
+    let error = client
+        .get_wallet_nonce(address(WALLET_OWNER))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RelayerError::Other(ref message) if message.contains("maximum size")
+    ));
+    let _ = handle.await;
 }
 
 #[test]

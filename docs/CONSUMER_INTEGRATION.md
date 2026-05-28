@@ -68,12 +68,14 @@ This crate may expose:
 
 ```text
 DepositWalletRelayerClient
+DepositWalletRelayerUrl
 DepositWalletCall
 RelayerKeyAuth
 DepositWalletRequestContext
 SignedDepositWalletBatch
 RelayerSubmitResponse
 RelayerTransactionStatus
+DepositWalletTransactionReceipt
 ```
 
 The consumer app must map these into its own port types and must not leak this crate's DTOs into strategy, risk, actor state, or domain types.
@@ -92,6 +94,35 @@ keep the error handling inside the relayer adapter rather than domain or
 strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
 crate-root API; request DTO fields stay crate-private so submit bodies are
 produced through validated builders.
+
+### HTTP read surface
+
+The deposit-wallet HTTP client public surface exposes read-only construction and
+owner-bound transaction reads for adapter use:
+
+```text
+DepositWalletRelayerUrl::parse
+DepositWalletRelayerClient::new
+DepositWalletRelayerClient::get_transaction_for_owner
+DepositWalletRelayerClient::get_wallet_nonce
+```
+
+`get_transaction_for_owner` is the production-facing read API in this layer. It
+requires relayer wire evidence that the response is a `WALLET` transaction, that
+`owner` is present, and that `from == owner`. `WALLET-CREATE` responses are not
+treated as WALLET owner evidence by this parser because deployment identity and
+wallet mutation identity are reviewed separately.
+
+`get_wallet_nonce` is public only for diagnostics and local loopback tests in
+this layer. Production URLs reject WALLET nonce reads until the mutation-state
+stack owns a nonce lease from nonce fetch through signing and submit. Consumers
+must not treat this PR as live nonce, submit, or recovery capable.
+
+Migration path: consumer adapters may wrap the read-only client behind
+`RelayerPort` transaction status reads while keeping all mutation calls disabled.
+Rollback path: stop importing the HTTP read client and keep the existing
+fixture/signing-only integration; no consumer domain type should depend on the
+new HTTP DTOs.
 
 Consumer adapter migration status for PR #8:
 

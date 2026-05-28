@@ -87,13 +87,7 @@ fn validate_owner_transaction_receipt(
     }
 
     match &receipt.state {
-        RelayerTransactionState::Confirmed => {
-            if receipt.transaction_hash.is_none() {
-                return Err(RelayerError::reconciliation_required(format!(
-                    "confirmed deposit wallet transaction {transaction_id} did not include transactionHash; manual reconciliation required"
-                )));
-            }
-        }
+        RelayerTransactionState::Confirmed => {}
         RelayerTransactionState::Invalid => {
             return Err(RelayerError::TransactionInvalid(format!(
                 "deposit wallet transaction {transaction_id} invalid"

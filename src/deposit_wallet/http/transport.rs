@@ -62,7 +62,12 @@ impl DepositWalletRelayerClient {
             self.error_body_drain_limiter
                 .try_spawn_error_response_body_drain(response);
             if status == StatusCode::TOO_MANY_REQUESTS {
-                return Err(RelayerError::QuotaExhausted);
+                return Err(RelayerError::Api {
+                    status: status.as_u16(),
+                    message: format!(
+                        "deposit-wallet relayer request failed with HTTP {status}{retry_after_message}"
+                    ),
+                });
             }
             return Err(RelayerError::Api {
                 status: status.as_u16(),
@@ -114,7 +119,7 @@ pub(super) fn retry_after_duration(headers: &HeaderMap) -> Option<Duration> {
     retry_after_duration_at(headers, SystemTime::now())
 }
 
-fn retry_after_duration_at(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
+pub(super) fn retry_after_duration_at(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
     let value = headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())

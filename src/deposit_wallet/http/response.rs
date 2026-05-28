@@ -2,7 +2,7 @@ use super::redaction::{
     external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
 use super::*;
-use crate::deposit_wallet::{WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE};
+use crate::deposit_wallet::WALLET_TRANSACTION_TYPE;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct DepositWalletTransactionReceipt {
@@ -147,10 +147,10 @@ fn validate_transaction_wire_evidence(
                 .to_string(),
         ))
     })?;
-    if !matches!(tx_type, WALLET_CREATE_TRANSACTION_TYPE | WALLET_TRANSACTION_TYPE) {
+    if tx_type != WALLET_TRANSACTION_TYPE {
         return Err(TransactionParseError::new(
             RelayerError::reconciliation_required(
-                "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
+                "transaction response type was not WALLET; manual reconciliation required"
                     .to_string(),
             ),
         ));
