@@ -64,6 +64,12 @@ impl fmt::Debug for ReceiptStateDebug<'_> {
 pub(super) struct ParsedTransactionReceipt {
     pub(super) receipt: DepositWalletTransactionReceipt,
     pub(super) owner: Option<Address>,
+    pub(super) transaction_type: &'static str,
+}
+
+struct TransactionWireEvidence {
+    deposit_wallet: Address,
+    transaction_type: &'static str,
 }
 
 #[derive(Debug)]
@@ -203,31 +209,40 @@ fn parse_verified_transaction_response(
             )),
         ));
     }
-    let deposit_wallet = validate_transaction_wire_evidence(&response, config, owner)?;
-    let receipt = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
-        .map_err(TransactionParseError::new)?;
-    Ok(ParsedTransactionReceipt { receipt, owner })
+    let wire_evidence = validate_transaction_wire_evidence(&response, config, owner)?;
+    let receipt =
+        receipt_from_submit_response(response.response, owner, Some(wire_evidence.deposit_wallet))
+            .map_err(TransactionParseError::new)?;
+    Ok(ParsedTransactionReceipt {
+        receipt,
+        owner,
+        transaction_type: wire_evidence.transaction_type,
+    })
 }
 
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
     config: DepositWalletContractConfig,
     owner: Option<Address>,
-) -> std::result::Result<Address, TransactionParseError> {
+) -> std::result::Result<TransactionWireEvidence, TransactionParseError> {
     let tx_type = response.tx_type.as_deref().ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
             "transaction response did not include deposit-wallet transaction type; manual reconciliation required"
                 .to_string(),
         ))
     })?;
-    if !matches!(tx_type, WALLET_TRANSACTION_TYPE | WALLET_CREATE_TRANSACTION_TYPE) {
-        return Err(TransactionParseError::new(
-            RelayerError::reconciliation_required(
-                "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
-                    .to_string(),
-            ),
-        ));
-    }
+    let transaction_type = match tx_type {
+        WALLET_TRANSACTION_TYPE => WALLET_TRANSACTION_TYPE,
+        WALLET_CREATE_TRANSACTION_TYPE => WALLET_CREATE_TRANSACTION_TYPE,
+        _ => {
+            return Err(TransactionParseError::new(
+                RelayerError::reconciliation_required(
+                    "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
+                        .to_string(),
+                ),
+            ))
+        }
+    };
 
     let owner = owner.ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
@@ -251,20 +266,22 @@ fn validate_transaction_wire_evidence(
         ));
     }
 
-    let to = response.to.ok_or_else(|| {
-        TransactionParseError::new(RelayerError::reconciliation_required(
-            "transaction response did not include to address; manual reconciliation required"
-                .to_string(),
-        ))
-    })?;
-    if to != config.factory {
-        return Err(TransactionParseError::new(
-            RelayerError::reconciliation_required(format!(
-                "transaction response to address {} did not match configured factory {}; manual reconciliation required",
-                redacted_address(to),
-                redacted_address(config.factory)
-            )),
-        ));
+    if transaction_type == WALLET_CREATE_TRANSACTION_TYPE {
+        let to = response.to.ok_or_else(|| {
+            TransactionParseError::new(RelayerError::reconciliation_required(
+                "transaction response did not include to address; manual reconciliation required"
+                    .to_string(),
+            ))
+        })?;
+        if to != config.factory {
+            return Err(TransactionParseError::new(
+                RelayerError::reconciliation_required(format!(
+                    "transaction response to address {} did not match configured factory {}; manual reconciliation required",
+                    redacted_address(to),
+                    redacted_address(config.factory)
+                )),
+            ));
+        }
     }
     let proxy_address = response.proxy_address.ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
@@ -284,7 +301,10 @@ fn validate_transaction_wire_evidence(
         ));
     }
 
-    Ok(proxy_address)
+    Ok(TransactionWireEvidence {
+        deposit_wallet: proxy_address,
+        transaction_type,
+    })
 }
 
 fn select_transaction_response_from_array(

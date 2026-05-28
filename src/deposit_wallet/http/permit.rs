@@ -1,7 +1,7 @@
 use super::*;
-use super::redaction::{
-    display_payload_hash, payload_hash_summary, redacted_address, sanitized_external_token,
-};
+#[cfg(test)]
+use super::redaction::payload_hash_summary;
+use super::redaction::{display_payload_hash, redacted_address, sanitized_external_token};
 use super::response::{validate_transaction_hash, validate_transaction_id};
 use super::MAX_ERROR_TOKEN_LEN;
 
@@ -431,11 +431,12 @@ impl fmt::Debug for DepositWalletIdlessSubmitReconciliationEvidence {
 }
 
 impl DepositWalletOwnerSerializationEvidence {
-    /// Records caller-side proof that same-owner submit work is serialized.
+    /// Records crate-side proof that same-owner submit work is serialized.
     ///
     /// `lease_id` is hashed before storage so debug output and errors never
     /// expose raw lock keys, queue ids, or database lease identifiers.
-    pub fn new(
+    #[cfg(test)]
+    pub(super) fn new(
         owner: Address,
         scope: DepositWalletMutationScope,
         issuer: impl Into<String>,
