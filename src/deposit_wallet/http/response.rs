@@ -472,10 +472,7 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
 
 pub(super) fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
     if transaction_hash.len() == 66 {
-        if let Some(hex) = transaction_hash
-            .strip_prefix("0x")
-            .or_else(|| transaction_hash.strip_prefix("0X"))
-        {
+        if let Some(hex) = transaction_hash.strip_prefix("0x") {
             if hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Ok(format!("0x{}", hex.to_ascii_lowercase()));
             }

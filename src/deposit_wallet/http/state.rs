@@ -699,9 +699,26 @@ impl DepositWalletRelayerClient {
         owner: Address,
         receipt: &DepositWalletTransactionReceipt,
     ) -> Result<()> {
+        let mut state = self.mutation_state_for_owner(owner)?;
+        let Some(record) = state.transaction_owners.get(&receipt.transaction_id).cloned() else {
+            return Ok(());
+        };
+        if record.owner != owner {
+            return Err(RelayerError::reconciliation_required(format!(
+                "terminal observation transaction {} owner did not match local owner record",
+                sanitized_external_token(&receipt.transaction_id)
+            )));
+        }
+
         let observation = match receipt.state {
             RelayerTransactionState::Confirmed => {
                 let Some(transaction_hash) = receipt.transaction_hash.clone() else {
+                    transition_matching_inflight_to_ambiguous(
+                        &mut state,
+                        owner,
+                        &receipt.transaction_id,
+                        &record.payload_hash,
+                    )?;
                     return Err(RelayerError::reconciliation_required(format!(
                         "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
                         sanitized_external_token(&receipt.transaction_id)
@@ -720,32 +737,43 @@ impl DepositWalletRelayerClient {
                 observed_state: RelayerTransactionState::Failed,
                 transaction_hash: None,
             },
+            RelayerTransactionState::Unknown(_) => {
+                transition_matching_inflight_to_ambiguous(
+                    &mut state,
+                    owner,
+                    &receipt.transaction_id,
+                    &record.payload_hash,
+                )?;
+                return Ok(());
+            }
             RelayerTransactionState::New
             | RelayerTransactionState::Executed
-            | RelayerTransactionState::Mined
-            | RelayerTransactionState::Unknown(_) => return Ok(()),
+            | RelayerTransactionState::Mined => return Ok(()),
         };
 
-        let mut state = self.mutation_state_for_owner(owner)?;
-        let Some(record) = state.transaction_owners.get(&receipt.transaction_id).cloned() else {
-            return Ok(());
-        };
-        if record.owner != owner {
-            return Err(RelayerError::reconciliation_required(format!(
-                "terminal observation transaction {} owner did not match local owner record",
-                sanitized_external_token(&receipt.transaction_id)
-            )));
-        }
         match state.owner_blocks.get(&owner).cloned() {
             Some(OwnerMutationBlock::InFlight {
                 payload_hash,
                 transaction_id: Some(transaction_id),
-                ..
+                created_at_unix_seconds,
             }) if payload_hash == record.payload_hash && transaction_id == receipt.transaction_id =>
             {
-                state.owner_blocks.remove(&owner);
-                state.transaction_owners.remove(&receipt.transaction_id);
-                state.terminal_observations.remove(&receipt.transaction_id);
+                if receipt.state == RelayerTransactionState::Confirmed {
+                    state.owner_blocks.remove(&owner);
+                    state.transaction_owners.remove(&receipt.transaction_id);
+                    state.terminal_observations.remove(&receipt.transaction_id);
+                } else {
+                    state.owner_blocks.insert(
+                        owner,
+                        OwnerMutationBlock::Ambiguous {
+                            payload_hash,
+                            created_at_unix_seconds,
+                        },
+                    );
+                    state
+                        .terminal_observations
+                        .insert(receipt.transaction_id.clone(), observation);
+                }
             }
             Some(OwnerMutationBlock::Ambiguous { payload_hash, .. })
                 if payload_hash == record.payload_hash =>
@@ -857,6 +885,38 @@ pub(super) fn clear_owner_block_if_payload(
         .is_some_and(|block| block.payload_hash() == payload_hash)
     {
         state.owner_blocks.remove(&owner);
+    }
+}
+
+fn transition_matching_inflight_to_ambiguous(
+    state: &mut OwnerMutationState,
+    owner: Address,
+    transaction_id: &str,
+    payload_hash: &str,
+) -> Result<()> {
+    match state.owner_blocks.get(&owner).cloned() {
+        Some(OwnerMutationBlock::InFlight {
+            payload_hash: current_payload_hash,
+            transaction_id: Some(current_transaction_id),
+            created_at_unix_seconds,
+        }) if current_payload_hash == payload_hash && current_transaction_id == transaction_id => {
+            state.owner_blocks.insert(
+                owner,
+                OwnerMutationBlock::Ambiguous {
+                    payload_hash: current_payload_hash,
+                    created_at_unix_seconds,
+                },
+            );
+            Ok(())
+        }
+        Some(OwnerMutationBlock::Ambiguous {
+            payload_hash: current_payload_hash,
+            ..
+        }) if current_payload_hash == payload_hash => Ok(()),
+        _ => Err(RelayerError::reconciliation_required(format!(
+            "terminal observation transaction {} did not match current owner mutation state",
+            sanitized_external_token(transaction_id)
+        ))),
     }
 }
 
