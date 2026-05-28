@@ -16,10 +16,10 @@ pub(super) enum DepositWalletRelayerUrlKind {
 impl DepositWalletRelayerUrl {
     /// Builds a production relayer URL.
     ///
-    /// This validates the production host boundary only. PR #20 keeps
-    /// production WALLET polling and nonce reads blocked until official or
-    /// recorded deposit-wallet relayer response evidence is reviewed; live
-    /// submit approval also needs durable owner state and a trusted capability
+    /// Production URLs are allowlisted for public read-only transaction
+    /// polling. This PR intentionally does not expose public production
+    /// nonce-read, POST, owner-recovery, or manual-clear permit issuance; live
+    /// submit approval needs durable owner state and a trusted capability
     /// outside this URL type.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)
@@ -31,7 +31,6 @@ impl DepositWalletRelayerUrl {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn endpoint(&self, path: &str) -> Url {
         let mut url = self.base.clone();
         url.set_path(path);
@@ -41,6 +40,16 @@ impl DepositWalletRelayerUrl {
 
     pub(super) fn is_production_host(&self) -> bool {
         self.kind == DepositWalletRelayerUrlKind::Production
+    }
+
+    pub(super) fn mutation_environment(&self) -> DepositWalletMutationEnvironment {
+        match self.kind {
+            DepositWalletRelayerUrlKind::Production => DepositWalletMutationEnvironment::Production,
+            #[cfg(test)]
+            DepositWalletRelayerUrlKind::MockLoopback => {
+                DepositWalletMutationEnvironment::TestLoopback
+            }
+        }
     }
 
     #[cfg(test)]
