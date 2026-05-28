@@ -568,6 +568,14 @@ fn relayer_url_enforces_production_boundary() {
         "host is not allowlisted",
     );
     assert_url_error_contains(
+        DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com.evil.test"),
+        "host is not allowlisted",
+    );
+    assert_url_error_contains(
+        DepositWalletRelayerUrl::parse("https://evil-relayer-v2.polymarket.com"),
+        "host is not allowlisted",
+    );
+    assert_url_error_contains(
         DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com/path"),
         "must not include a path",
     );
@@ -933,6 +941,42 @@ async fn inflight_submit_without_response_blocks_same_owner_before_http() {
 }
 
 #[tokio::test]
+async fn aborted_submit_after_post_boundary_leaves_ambiguous_owner_block() {
+    let owner = address(WALLET_OWNER);
+    let (url, handle, accepted_rx, _release_tx) = spawn_delayed_response_server(
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-aborted", "state": "STATE_NEW"}).to_string(),
+        ),
+    )
+    .await;
+    let client = test_client(url);
+    let submit_client = client.clone();
+    let submit = tokio::spawn(async move {
+        submit_client
+            .submit_wallet_create(owner, wallet_create_permit_for(owner))
+            .await
+    });
+
+    accepted_rx.await.expect("submit should reach POST boundary");
+    submit.abort();
+    assert!(submit.await.unwrap_err().is_cancelled());
+
+    assert!(client.ambiguous_submit_block(owner).is_some());
+    let blocked_submit = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap_err();
+    assert!(blocked_submit.is_deposit_wallet_reconciliation_required());
+    let blocked_nonce = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap_err();
+    assert!(blocked_nonce.is_deposit_wallet_reconciliation_required());
+    handle.abort();
+}
+
+#[tokio::test]
 async fn submit_signed_wallet_batch_with_nonce_lease_sends_fixture_body() {
     let expected = fixture_value("wallet_signed_http_submit_request.json");
     let signed = signed_wallet_batch_fixture();
@@ -1103,13 +1147,44 @@ async fn nonce_lease_rejects_expired_owner_and_nonce_mismatch() {
 }
 
 #[tokio::test]
-async fn signed_wallet_batch_deadline_expiry_blocks_submit_before_post() {
+async fn nonce_lease_rejects_cross_client_promotion() {
     let signed = signed_wallet_batch_fixture();
     let owner = signed.owner();
     let (url, handle) = spawn_server(vec![TestResponse::json(
         "200 OK",
         json!({"nonce": "31"}).to_string(),
     )])
+    .await;
+    let lease_client = test_client(url.clone());
+    let submit_client = test_client(url);
+
+    let lease = lease_client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    let error = submit_client
+        .submit_signed_wallet_batch_with_nonce_lease(signed, wallet_batch_permit_for(owner), lease)
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.to_string().contains("different deposit-wallet client"));
+    lease_client.ensure_owner_unblocked(owner).unwrap();
+    submit_client.ensure_owner_unblocked(owner).unwrap();
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+}
+
+#[tokio::test]
+async fn signed_wallet_batch_deadline_expiry_blocks_submit_before_post() {
+    let signed = signed_wallet_batch_fixture();
+    let owner = signed.owner();
+    let signed_nonce = signed.nonce();
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+    ])
     .await;
     let (client, _clock) = test_client_with_clock(url, 1_760_000_001);
     let nonce_permit = mutation_permit_for_action_at(
@@ -1138,9 +1213,55 @@ async fn signed_wallet_batch_deadline_expiry_blocks_submit_before_post() {
     assert!(error.to_string().contains("deadline is expired"));
     assert!(client.ambiguous_submit_block(owner).is_none());
     client.ensure_owner_unblocked(owner).unwrap();
+    let next_lease = client
+        .get_wallet_nonce_with_lease(
+            owner,
+            mutation_permit_for_action_at(
+                owner,
+                DepositWalletMutationAction::WalletNonceRead,
+                1_760_000_000,
+                1_760_000_200,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(next_lease.nonce(), signed_nonce);
+    drop(next_lease);
     let requests = handle.await.unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.method == "GET"));
+}
+
+#[test]
+fn manual_reconciliation_observation_normalizes_non_confirmed_hashes() {
+    let owner = address(WALLET_OWNER);
+    let payload_hash =
+        "0x5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let transaction_hash =
+        "0x38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8";
+
+    for state in [
+        RelayerTransactionState::Failed,
+        RelayerTransactionState::Invalid,
+    ] {
+        let observation = DepositWalletSubmitReconciliationObservation::new(
+            format!("tx-{state:?}"),
+            state,
+            Some(transaction_hash),
+            "unit-test manual submit reconciliation",
+            1_700_000_001,
+        )
+        .unwrap();
+        let evidence = DepositWalletSubmitReconciliationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+            "unit-test owner serialization guard",
+            payload_hash,
+            observation,
+        )
+        .unwrap();
+        assert_eq!(evidence.transaction_hash(), None);
+    }
 }
 
 #[tokio::test]
@@ -2100,6 +2221,16 @@ fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
 
 #[test]
 fn submit_response_parser_covers_abnormal_wire_shapes_and_terminal_states() {
+    let alias_fixture = fixture_text("wallet_submit_response_alias.json");
+    let alias_receipt = parse_submit_response(alias_fixture.as_bytes()).unwrap();
+    assert_eq!(alias_receipt.transaction_id, "tx-alias-fixture");
+    assert_eq!(alias_receipt.state, RelayerTransactionState::New);
+    assert_eq!(alias_receipt.transaction_hash, None);
+    assert_eq!(
+        extract_submit_transaction_id(alias_fixture.as_bytes()),
+        Some("tx-alias-fixture".to_string())
+    );
+
     let array_body =
         json!([{"transactionID": "tx-array", "state": "STATE_NEW"}]).to_string();
     let error = parse_submit_response(array_body.as_bytes()).unwrap_err();

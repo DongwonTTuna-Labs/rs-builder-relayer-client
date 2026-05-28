@@ -208,6 +208,9 @@ impl OwnerSubmitReservation {
 
 impl Drop for OwnerSubmitReservation {
     fn drop(&mut self) {
+        if self.drop_action == OwnerSubmitReservationDropAction::Disarmed {
+            return;
+        }
         let Ok(mut state) = self.state.lock_owner(self.owner) else {
             return;
         };
@@ -255,6 +258,10 @@ impl Drop for OwnerSubmitReservation {
 impl OwnerNonceReadReservation {
     pub(super) fn owner(&self) -> Address {
         self.owner
+    }
+
+    pub(super) fn was_issued_by(&self, state: &Arc<OwnerMutationStore>) -> bool {
+        Arc::ptr_eq(&self.state, state)
     }
 
     pub(super) fn created_at_unix_seconds(&self) -> u64 {
@@ -543,6 +550,12 @@ impl DepositWalletRelayerClient {
         payload_hash: String,
     ) -> Result<OwnerSubmitReservation> {
         let owner = nonce_read.owner();
+        if !nonce_read.was_issued_by(&self.mutation_state) {
+            return Err(RelayerError::mutation_blocked(format!(
+                "owner {} WALLET nonce lease was issued by a different deposit-wallet client",
+                redacted_address(owner)
+            )));
+        }
         let nonce_read_created_at = nonce_read.created_at_unix_seconds();
         let mut state = self.mutation_state_for_owner(owner)?;
         if let Some(block) = state.owner_blocks.get(&owner) {

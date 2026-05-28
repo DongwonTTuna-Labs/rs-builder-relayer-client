@@ -450,12 +450,13 @@ fn receipt_from_submit_response(
     let transaction_id = validate_transaction_id(&response.transaction_id).map_err(|_| {
         RelayerError::Other("relayer response transactionID was invalid".to_string())
     })?;
-    let transaction_hash = response
-        .transaction_hash
-        .as_deref()
-        .map(str::trim)
-        .map(validate_transaction_hash)
-        .transpose()?;
+    let transaction_hash = match response.transaction_hash.as_deref().map(str::trim) {
+        Some("") if response.state == RelayerTransactionState::Confirmed => {
+            Some(validate_transaction_hash("")?)
+        }
+        Some("") | None => None,
+        Some(hash) => Some(validate_transaction_hash(hash)?),
+    };
 
     Ok(DepositWalletTransactionReceipt {
         transaction_id,
