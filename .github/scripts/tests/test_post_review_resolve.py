@@ -199,7 +199,14 @@ def review_thread(
 
 
 class CollectResolutionsTests(unittest.TestCase):
-    def collect(self, threads, *, head_sha="head-sha", workspace_text="fn one() {}\nfn two() {}\n"):
+    def collect(
+        self,
+        threads,
+        *,
+        head_sha="head-sha",
+        workspace_text="fn one() {}\nfn two() {}\n",
+        stale_batches=None,
+    ):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = root / "workspace"
@@ -207,6 +214,13 @@ class CollectResolutionsTests(unittest.TestCase):
             output_path = root / "github-output"
             (workspace / "src").mkdir(parents=True)
             (workspace / "src" / "lib.rs").write_text(workspace_text, encoding="utf-8")
+            if stale_batches:
+                batch_dir.mkdir(parents=True)
+                for name, payload in stale_batches.items():
+                    (batch_dir / name).write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8",
+                    )
             env = {
                 "GITHUB_REPOSITORY": "DongwonTTuna-Labs/rs-builder-relayer-client",
                 "PR_NUMBER": "12",
@@ -239,6 +253,30 @@ class CollectResolutionsTests(unittest.TestCase):
 
         self.assertIn("has_comments=true", outputs)
         self.assertIn("batch_indexes=[0]", outputs)
+        self.assertEqual(["resolve-batch-0.json"], list(batches))
+        self.assertEqual(3311706429, batches["resolve-batch-0.json"]["comments"][0]["comment_id"])
+
+    def test_collect_removes_stale_resolve_batches(self):
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    commit_oid="old-sha",
+                )
+            ],
+            stale_batches={
+                "resolve-batch-1.json": {
+                    "comments": [
+                        {
+                            "comment_id": 999,
+                            "thread_id": "stale-thread",
+                        }
+                    ]
+                },
+            },
+        )
+
+        self.assertIn("has_comments=true", outputs)
         self.assertEqual(["resolve-batch-0.json"], list(batches))
         self.assertEqual(3311706429, batches["resolve-batch-0.json"]["comments"][0]["comment_id"])
 
