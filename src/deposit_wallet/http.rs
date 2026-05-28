@@ -10,10 +10,8 @@ use ethers::utils::{keccak256, to_checksum};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
-#[cfg(test)]
 use serde::de::{self, SeqAccess, Visitor};
 use serde::Deserialize;
-#[cfg(test)]
 use serde::Deserializer;
 
 use crate::deposit_wallet::{
@@ -26,10 +24,8 @@ use crate::error::{RelayerError, Result};
 
 const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const SUBMIT_PATH: &str = "/submit";
-#[cfg(test)]
 const TRANSACTION_PATH: &str = "/transaction";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
-#[cfg(test)]
 const MAX_TRANSACTION_SUCCESS_BODY_BYTES: usize = 256 * 1024;
 const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
 #[cfg(not(test))]
@@ -39,13 +35,9 @@ const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BACKGROUND_ERROR_BODY_DRAINS: usize = 64;
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
-#[cfg(test)]
 const MAX_TRANSACTION_RESPONSE_ITEMS: usize = 32;
-#[cfg(test)]
 const TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR: &str = "transaction response item limit exceeded";
-#[cfg(test)]
 const TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR: &str = "transaction response duplicate id";
-#[cfg(test)]
 const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missing requested id";
 const MAX_ERROR_TOKEN_LEN: usize = 96;
 const MAX_OWNER_MUTATION_RECORDS: usize = 1024;

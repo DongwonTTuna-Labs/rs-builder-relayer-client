@@ -290,8 +290,6 @@ impl DepositWalletRelayerClient {
                                     && record.owner == owner
                                     && record.payload_hash == evidence.payload_hash()
                             });
-                        state.transaction_owners.remove(evidence.transaction_id());
-                        state.terminal_observations.remove(evidence.transaction_id());
                         if has_additional_payload_records {
                             return Err(RelayerError::reconciliation_required(format!(
                                 "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
@@ -299,6 +297,8 @@ impl DepositWalletRelayerClient {
                                 display_payload_hash(evidence.payload_hash())
                             )));
                         }
+                        state.transaction_owners.remove(evidence.transaction_id());
+                        state.terminal_observations.remove(evidence.transaction_id());
                     }
                     Some(_) => {
                         return Err(RelayerError::reconciliation_required(format!(
@@ -410,8 +410,7 @@ impl DepositWalletRelayerClient {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn ambiguous_submit_transaction_ids(&self, owner: Address) -> Vec<String> {
+    pub fn ambiguous_submit_transaction_ids(&self, owner: Address) -> Vec<String> {
         let Ok(state) = self.mutation_state.lock() else {
             return Vec::new();
         };
@@ -673,6 +672,54 @@ impl DepositWalletRelayerClient {
                 payload_hash,
             },
         );
+        Ok(())
+    }
+
+    pub(super) fn record_terminal_observation_from_receipt(
+        &self,
+        owner: Address,
+        receipt: &DepositWalletTransactionReceipt,
+    ) -> Result<()> {
+        let observation = match receipt.state {
+            RelayerTransactionState::Confirmed => {
+                let Some(transaction_hash) = receipt.transaction_hash.clone() else {
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
+                        sanitized_external_token(&receipt.transaction_id)
+                    )));
+                };
+                OwnerTransactionTerminalObservation {
+                    observed_state: RelayerTransactionState::Confirmed,
+                    transaction_hash: Some(transaction_hash),
+                }
+            }
+            RelayerTransactionState::Invalid => OwnerTransactionTerminalObservation {
+                observed_state: RelayerTransactionState::Invalid,
+                transaction_hash: None,
+            },
+            RelayerTransactionState::Failed => OwnerTransactionTerminalObservation {
+                observed_state: RelayerTransactionState::Failed,
+                transaction_hash: None,
+            },
+            RelayerTransactionState::New
+            | RelayerTransactionState::Executed
+            | RelayerTransactionState::Mined
+            | RelayerTransactionState::Unknown(_) => return Ok(()),
+        };
+
+        let mut state = self.mutation_state()?;
+        let Some(record) = state.transaction_owners.get(&receipt.transaction_id) else {
+            return Ok(());
+        };
+        if record.owner != owner {
+            return Err(RelayerError::reconciliation_required(format!(
+                "terminal observation transaction {} owner did not match local owner record",
+                sanitized_external_token(&receipt.transaction_id)
+            )));
+        }
+        state
+            .terminal_observations
+            .insert(receipt.transaction_id.clone(), observation);
         Ok(())
     }
 

@@ -67,7 +67,6 @@ impl RelayerError {
         ))
     }
 
-    #[cfg(test)]
     pub(crate) fn transaction_absent(message: impl Into<String>) -> Self {
         Self::Other(format!(
             "Deposit-wallet transaction temporarily absent: {}",
@@ -75,7 +74,6 @@ impl RelayerError {
         ))
     }
 
-    #[cfg(test)]
     pub(crate) fn read_blocked(message: impl Into<String>) -> Self {
         Self::Other(format!("Deposit-wallet read blocked: {}", message.into()))
     }
