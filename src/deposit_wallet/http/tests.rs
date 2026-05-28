@@ -132,6 +132,27 @@ async fn spawn_server(
     )
 }
 
+async fn spawn_optional_redirect_target(
+    response: TestResponse,
+) -> (String, JoinHandle<Vec<CapturedRequest>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let Ok(accepted) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept()).await
+        else {
+            return Vec::new();
+        };
+        let (mut stream, _) = accepted.expect("server should accept");
+        let request = read_request(&mut stream).await;
+        write_response(&mut stream, response).await;
+        vec![request]
+    });
+
+    (format!("http://{addr}/redirect-target"), handle)
+}
+
 async fn spawn_reset_server() -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -334,6 +355,38 @@ async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
 }
 
 #[tokio::test]
+async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
+    let (redirect_target, target_handle) =
+        spawn_optional_redirect_target(TestResponse::json("200 OK", r#"{"nonce":31}"#)).await;
+    let redirect = TestResponse {
+        status: "302 Found",
+        headers: vec![("location".to_string(), redirect_target)],
+        include_content_length: true,
+        body: String::new(),
+    };
+    let (url, redirect_handle) = spawn_server(vec![redirect]).await;
+    let client = DepositWalletRelayerClient::new(
+        url,
+        relayer_auth(),
+        deposit_wallet_contract_config(137).unwrap(),
+    )
+    .unwrap();
+
+    let error = client.get_wallet_nonce(address(WALLET_OWNER)).await.unwrap_err();
+
+    assert!(matches!(error, RelayerError::Api { status: 302, .. }));
+    let redirect_requests = redirect_handle.await.unwrap();
+    assert_eq!(redirect_requests.len(), 1);
+    assert_eq!(redirect_requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        redirect_requests[0].header("RELAYER_API_KEY_ADDRESS"),
+        Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+    );
+    let target_requests = target_handle.await.unwrap();
+    assert!(target_requests.is_empty());
+}
+
+#[tokio::test]
 async fn get_wallet_nonce_rejects_production_before_http() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let client = test_client(url);
@@ -400,7 +453,7 @@ fn transaction_response_fixture_preserves_proxy_address_evidence() {
     assert_eq!(parsed.owner, Some(address(WALLET_OWNER)));
     assert_eq!(
         parsed.receipt.deposit_wallet,
-        Some("0x6d8c4e9adf5748af82dabe2c6225207770d6b4fa".parse().unwrap())
+        Some("0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De".parse().unwrap())
     );
 }
 
@@ -923,8 +976,12 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     from_mismatch["from"] = json!(other_address);
     let mut missing_to = transaction_response_value(target, "STATE_CONFIRMED");
     missing_to.as_object_mut().unwrap().remove("to");
+    let mut to_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    to_mismatch["to"] = json!(other_address);
     let mut missing_proxy = transaction_response_value(target, "STATE_CONFIRMED");
     missing_proxy.as_object_mut().unwrap().remove("proxyAddress");
+    let mut proxy_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    proxy_mismatch["proxyAddress"] = json!(other_address);
 
     for (label, response, expected_message) in [
         (
@@ -947,10 +1004,16 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
         ("missing from", missing_from, "did not include from address"),
         ("from mismatch", from_mismatch, "did not match owner evidence"),
         ("missing to", missing_to, "did not include to address"),
+        ("to mismatch", to_mismatch, "did not match configured factory"),
         (
             "missing proxyAddress",
             missing_proxy,
             "did not include proxyAddress deposit wallet evidence",
+        ),
+        (
+            "proxyAddress mismatch",
+            proxy_mismatch,
+            "did not match derived deposit wallet",
         ),
     ] {
         let error =
@@ -964,6 +1027,24 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
         assert!(
             error.to_string().contains(expected_message),
             "{label} produced unexpected error: {error}"
+        );
+
+        let array_error = parse_transaction_response(
+            target,
+            config,
+            json!([transaction_response_value("other-tx", "STATE_CONFIRMED"), response])
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap_err()
+        .error;
+        assert!(
+            array_error.is_deposit_wallet_reconciliation_required(),
+            "{label} array: {array_error}"
+        );
+        assert!(
+            array_error.to_string().contains(expected_message),
+            "{label} array produced unexpected error: {array_error}"
         );
     }
 }

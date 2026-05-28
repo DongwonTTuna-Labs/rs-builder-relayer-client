@@ -113,8 +113,9 @@ without documenting the polling response shape. Until an official or recorded
 production deposit-wallet transaction polling compatibility. Local loopback and
 recorded fixture tests preserve relayer wire evidence that the response is a
 `WALLET` transaction, that `owner` is present, that `from == owner`, and that
-`proxyAddress` is available as deposit-wallet evidence. `WALLET-CREATE`
-responses are not treated as WALLET owner evidence by this parser because
+`to` matches the configured deposit-wallet factory, and that `proxyAddress`
+matches the deposit wallet derived from `owner` and the configured factory.
+`WALLET-CREATE` responses are not treated as WALLET owner evidence by this parser because
 deployment identity and wallet mutation identity are reviewed separately.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:

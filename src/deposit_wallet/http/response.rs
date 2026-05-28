@@ -2,7 +2,9 @@ use super::redaction::{
     external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
 use super::*;
-use crate::deposit_wallet::{DepositWalletContractConfig, WALLET_TRANSACTION_TYPE};
+use crate::deposit_wallet::{
+    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
+};
 use serde_json::Value;
 
 const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
@@ -164,7 +166,7 @@ fn parse_verified_transaction_response(
 
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
-    _config: DepositWalletContractConfig,
+    config: DepositWalletContractConfig,
     owner: Option<Address>,
 ) -> std::result::Result<Address, TransactionParseError> {
     let tx_type = response.tx_type.as_deref().ok_or_else(|| {
@@ -204,18 +206,38 @@ fn validate_transaction_wire_evidence(
         ));
     }
 
-    let _to = response.to.ok_or_else(|| {
+    let to = response.to.ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
             "transaction response did not include to address; manual reconciliation required"
                 .to_string(),
         ))
     })?;
+    if to != config.factory {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response to address {} did not match configured factory {}; manual reconciliation required",
+                redacted_address(to),
+                redacted_address(config.factory)
+            )),
+        ));
+    }
     let proxy_address = response.proxy_address.ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
             "transaction response did not include proxyAddress deposit wallet evidence; manual reconciliation required"
                 .to_string(),
         ))
     })?;
+    let expected_proxy_address = derive_deposit_wallet_address(owner, config)
+        .map_err(|error| TransactionParseError::new(RelayerError::Other(error.to_string())))?;
+    if proxy_address != expected_proxy_address {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response proxyAddress {} did not match derived deposit wallet {}; manual reconciliation required",
+                redacted_address(proxy_address),
+                redacted_address(expected_proxy_address)
+            )),
+        ));
+    }
 
     Ok(proxy_address)
 }
