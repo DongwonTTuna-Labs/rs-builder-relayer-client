@@ -111,13 +111,13 @@ pub(super) struct RelayerTransactionResponseWithOwner {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubmitTransactionIdOnly {
-    #[serde(rename = "transactionID", alias = "transactionId")]
+    #[serde(rename = "transactionID")]
     transaction_id: String,
 }
 
 #[derive(Deserialize)]
 struct TransactionIdProbe {
-    #[serde(default, rename = "transactionID", alias = "transactionId")]
+    #[serde(default, rename = "transactionID")]
     transaction_id: Option<Value>,
 }
 
