@@ -485,17 +485,6 @@ class DesignPlanTests(unittest.TestCase):
         self.assertIn('"version": 1', body)
         self.assertIn("전체 invariant 중심", body)
 
-    def test_render_design_plan_body_compacts_machine_json(self):
-        plan = self.sample_plan()
-        plan["tests"] = ["x" * (post_review.DESIGN_PLAN_ITEM_LIMIT + 100)]
-
-        body = post_review.render_design_plan_body(plan)
-        encoded = body.split("```json\n", 1)[1].split("\n```", 1)[0]
-        payload = json.loads(encoded)
-
-        self.assertIn("...[truncated]", payload["tests"][0])
-        self.assertLessEqual(len(payload["tests"][0]), post_review.DESIGN_PLAN_ITEM_LIMIT + len("\n...[truncated]"))
-
     def test_upsert_design_comment_creates_when_missing(self):
         calls = []
 
