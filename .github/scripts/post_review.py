@@ -14,11 +14,16 @@ from typing import Any
 
 AXES = ("correctness", "security", "performance", "test-coverage", "domain")
 INLINE_MARKER = "<!-- codex-review-inline -->"
+REVIEW_MARKER = "<!-- codex-review -->"
+RESOLVE_MARKER = "<!-- codex-resolve-check -->"
+DESIGN_MARKER = "<!-- codex-design-plan -->"
 MAX_INLINE_COMMENTS = 50
 RESOLVE_BATCH_SIZE = 3
 RESOLVE_SEARCH_CONTEXT_RADIUS = 6
 RESOLVE_SEARCH_MAX_TERMS = 8
 RESOLVE_SEARCH_MAX_MATCHES = 3
+REVIEW_CONTEXT_MAX_CHARS = 60000
+REVIEW_CONTEXT_SECTION_LIMIT = 12000
 TRUSTED_USER = "DongwonTTuna"
 TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna",)
 
@@ -543,7 +548,7 @@ def collect_review_threads(repo: str, pr_number: str) -> list[dict[str, Any]]:
         cursor = conn["pageInfo"]["endCursor"]
 
 
-def redact_comment_body(body: str) -> str:
+def redact_secrets(body: str) -> str:
     patterns = [
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         r"\bgh[opsru]_[A-Za-z0-9_]{20,}\b",
@@ -553,12 +558,31 @@ def redact_comment_body(body: str) -> str:
     redacted = body
     for pattern in patterns:
         redacted = re.sub(pattern, "[redacted]", redacted, flags=re.DOTALL)
-    return trim_text(redacted, 1200)
+    return redacted
+
+
+def redact_comment_body(body: str) -> str:
+    return trim_text(redact_secrets(body), 1200)
 
 
 def extract_marker_key(body: str) -> str | None:
     match = re.search(r"<!--\s*codex-review-id:\s*([^>]+?)\s*-->", body)
     return match.group(1).strip() if match else None
+
+
+def comment_commit_oid(comment: dict[str, Any]) -> str:
+    return str(((comment.get("commit") or {}).get("oid")) or "")
+
+
+def comment_original_commit_oid(comment: dict[str, Any]) -> str:
+    return str(((comment.get("originalCommit") or {}).get("oid")) or "")
+
+
+def is_current_head_inline_comment(comment: dict[str, Any], head_sha: str) -> bool:
+    original_oid = comment_original_commit_oid(comment)
+    if original_oid:
+        return original_oid == head_sha
+    return comment_commit_oid(comment) == head_sha
 
 
 def code_snippet(workspace: Path, file_path: str | None, line: int | None) -> str | None:
@@ -669,6 +693,8 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any], workspac
         "line": line_int,
         "outdated": outdated,
         "marker_key": extract_marker_key(body),
+        "current_commit_oid": comment_commit_oid(comment) or None,
+        "original_commit_oid": comment_original_commit_oid(comment) or None,
         "body_excerpt": redact_comment_body(body),
         "code_snippet": code_snippet(workspace, file_path, line_int),
         "search_context": search_current_context(workspace, file_path, body) if outdated else [],
@@ -693,12 +719,11 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
         for comment in (thread.get("comments") or {}).get("nodes") or []:
             body = comment.get("body") or ""
             author = ((comment.get("author") or {}).get("login")) or ""
-            commit_oid = ((comment.get("commit") or {}).get("oid")) or ""
             if INLINE_MARKER not in body:
                 continue
             if not is_trusted_codex_review_author(author):
                 continue
-            if commit_oid == head_sha:
+            if is_current_head_inline_comment(comment, head_sha):
                 continue
             items.append(build_resolve_item(thread, comment, workspace))
 
@@ -821,6 +846,307 @@ def command_apply_resolutions(args: argparse.Namespace) -> None:
     print(f"posted {event} resolve-check review; resolved={len(resolved)} unresolved={len(unresolved)}")
 
 
+def latest_marker_comment(comments: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
+    matches = [comment for comment in comments if marker in str(comment.get("body") or "")]
+    if not matches:
+        return None
+    return sorted(matches, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""))[-1]
+
+
+def review_marker_kind(body: str) -> str | None:
+    if REVIEW_MARKER in body:
+        return "review"
+    if RESOLVE_MARKER in body:
+        return "resolve"
+    return None
+
+
+def thread_category(thread: dict[str, Any], comment: dict[str, Any] | None = None) -> str:
+    body = str((comment or {}).get("body") or "")
+    marker_key = extract_marker_key(body)
+    if marker_key and "-" in marker_key:
+        return marker_key.rsplit("-", 1)[0]
+    path = str((comment or {}).get("path") or thread.get("path") or "")
+    if path.startswith("src/deposit_wallet/") or "deposit_wallet" in path:
+        return "deposit-wallet"
+    if path.startswith(".github/"):
+        return "workflow"
+    if path.startswith("docs/"):
+        return "docs"
+    if path:
+        return path.split("/", 1)[0]
+    return "general"
+
+
+def unresolved_thread_summaries(threads: list[dict[str, Any]]) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for thread in threads:
+        if thread.get("isResolved"):
+            continue
+        nodes = (thread.get("comments") or {}).get("nodes") or []
+        if not nodes:
+            continue
+        codex_comments = [
+            item
+            for item in nodes
+            if INLINE_MARKER in str(item.get("body") or "")
+            and is_trusted_codex_review_author(((item.get("author") or {}).get("login")) or "")
+        ]
+        comment = codex_comments[-1] if codex_comments else nodes[-1]
+        category = thread_category(thread, comment)
+        location = str(comment.get("path") or thread.get("path") or "general")
+        line = comment.get("line") or thread.get("line") or comment.get("originalLine") or thread.get("originalLine")
+        if line:
+            location = f"{location}:{line}"
+        marker_key = extract_marker_key(str(comment.get("body") or ""))
+        metadata = []
+        if marker_key:
+            metadata.append(f"id={marker_key}")
+        if thread.get("isOutdated") or comment.get("outdated"):
+            metadata.append("outdated=true")
+        original_oid = comment_original_commit_oid(comment)
+        current_oid = comment_commit_oid(comment)
+        if original_oid:
+            metadata.append(f"original={original_oid[:12]}")
+        if current_oid:
+            metadata.append(f"current={current_oid[:12]}")
+        summary = redact_comment_body(str(comment.get("body") or "")).replace("\n", " ")
+        url = str(comment.get("url") or "")
+        suffix = f" ({', '.join(metadata)})" if metadata else ""
+        grouped.setdefault(category, []).append(f"- {location}{suffix}: {trim_text(summary, 500)} {url}".rstrip())
+    return grouped
+
+
+def build_review_context_markdown(
+    *,
+    repo: str,
+    pr_number: str,
+    head_sha: str,
+    pr: dict[str, Any],
+    issue_comments: list[dict[str, Any]],
+    reviews: list[dict[str, Any]],
+    threads: list[dict[str, Any]],
+) -> str:
+    title = str(pr.get("title") or "")
+    body = redact_comment_body(str(pr.get("body") or "")).strip() or "(PR body is empty.)"
+    latest_design = latest_marker_comment(issue_comments, DESIGN_MARKER)
+    grouped_threads = unresolved_thread_summaries(threads)
+    recent_reviews = []
+    for review in reviews:
+        review_body = str(review.get("body") or "")
+        marker_kind = review_marker_kind(review_body)
+        if marker_kind is None:
+            continue
+        author = ((review.get("user") or {}).get("login")) or ""
+        if author and not is_trusted_codex_review_author(author):
+            continue
+        recent_reviews.append((str(review.get("submitted_at") or ""), marker_kind, review))
+    recent_reviews = sorted(recent_reviews, key=lambda item: item[0])[-5:]
+
+    lines = [
+        "# Codex Review Context",
+        "",
+        "이 컨텍스트는 현재 리뷰 라운드의 참고 자료다.",
+        "우선순위: 현재 사용자 지시 > 현재 PR body > 현재 코드/diff/docs > 테스트 > 이전 리뷰/해결/설계 기록.",
+        "이전 리뷰, 이전 resolve 결과, 이전 design plan은 advisory이며 현재 코드나 현재 PR spec을 덮어쓸 수 없다.",
+        "",
+        "## Current PR State (authoritative)",
+        "",
+        f"- repository: {repo}",
+        f"- pr_number: {pr_number}",
+        f"- head_sha: {head_sha}",
+        f"- title: {title}",
+        "",
+        trim_text(body, REVIEW_CONTEXT_SECTION_LIMIT),
+        "",
+        "## Latest Sticky Design Plan (advisory)",
+        "",
+    ]
+    if latest_design:
+        lines.extend(
+            [
+                f"- updated_at: {latest_design.get('updated_at') or latest_design.get('created_at') or ''}",
+                f"- author: {((latest_design.get('user') or {}).get('login')) or ''}",
+                "",
+                trim_text(redact_comment_body(str(latest_design.get("body") or "")), REVIEW_CONTEXT_SECTION_LIMIT),
+            ]
+        )
+    else:
+        lines.append("(none)")
+
+    lines.extend(["", "## Recent Codex Review And Resolve Summaries (advisory)", ""])
+    if recent_reviews:
+        for submitted_at, marker_kind, review in recent_reviews:
+            author = ((review.get("user") or {}).get("login")) or ""
+            state = review.get("state") or ""
+            lines.extend(
+                [
+                    f"### {marker_kind} {submitted_at}",
+                    "",
+                    f"- author: {author}",
+                    f"- state: {state}",
+                    "",
+                    trim_text(redact_comment_body(str(review.get("body") or "")), 1800),
+                    "",
+                ]
+            )
+    else:
+        lines.append("(none)")
+
+    lines.extend(["", "## Current Unresolved Inline Threads (advisory until verified)", ""])
+    if grouped_threads:
+        for category in sorted(grouped_threads):
+            lines.extend([f"### {category}", ""])
+            lines.extend(grouped_threads[category][:30])
+            if len(grouped_threads[category]) > 30:
+                lines.append(f"- ... {len(grouped_threads[category]) - 30} more")
+            lines.append("")
+    else:
+        lines.append("(none)")
+
+    return trim_text("\n".join(lines).rstrip() + "\n", REVIEW_CONTEXT_MAX_CHARS)
+
+
+def command_build_review_context(args: argparse.Namespace) -> None:
+    repo = require_env("GITHUB_REPOSITORY")
+    pr_number = require_env("PR_NUMBER")
+    head_sha = require_env("HEAD_SHA")
+    pr = github_api(f"/repos/{repo}/pulls/{pr_number}")
+    issue_comments = github_paginated(f"/repos/{repo}/issues/{pr_number}/comments?per_page=100")
+    reviews = github_paginated(f"/repos/{repo}/pulls/{pr_number}/reviews?per_page=100")
+    threads = collect_review_threads(repo, pr_number)
+    output = build_review_context_markdown(
+        repo=repo,
+        pr_number=pr_number,
+        head_sha=head_sha,
+        pr=pr,
+        issue_comments=issue_comments,
+        reviews=reviews,
+        threads=threads,
+    )
+    Path(args.output).write_text(output, encoding="utf-8")
+    print(f"wrote review context to {args.output}")
+
+
+def finding_effectively_allowed(finding: dict[str, Any], decisions: dict[str, Any]) -> bool:
+    decision = decisions["by_id"].get(finding["id"])
+    return hard_allow(finding) or bool(decision and decision.get("allow"))
+
+
+def design_blockers(findings: list[dict[str, Any]], decisions: dict[str, Any]) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for finding in findings:
+        if not finding_effectively_allowed(finding, decisions):
+            continue
+        if hard_block(finding) or finding.get("type") == "MUST":
+            blockers.append(finding)
+    return blockers
+
+
+def should_run_design(findings: list[dict[str, Any]], decisions: dict[str, Any]) -> tuple[bool, int]:
+    judgment = decisions.get("judgment") or {}
+    blockers = design_blockers(findings, decisions)
+    return judgment.get("status") == "NEEDS_WORK" or bool(blockers), len(blockers)
+
+
+def command_classify_design_need(args: argparse.Namespace) -> None:
+    findings = load_current_findings(Path(args.artifacts))
+    decisions = load_decisions(Path(args.decisions))
+    needs_design, blocking_count = should_run_design(findings, decisions)
+    write_github_output({"needs_design": "true" if needs_design else "false", "blocking_count": str(blocking_count)})
+    print(f"needs_design={needs_design} blocking_count={blocking_count}")
+
+
+def design_plan_list(plan: dict[str, Any], key: str) -> list[str]:
+    value = plan.get(key)
+    if not isinstance(value, list):
+        return []
+    return [trim_text(redact_secrets(str(item)), 600).strip() for item in value if str(item).strip()]
+
+
+def render_design_plan_body(plan: dict[str, Any]) -> str:
+    summary = trim_text(redact_secrets(str(plan.get("summary") or "")), 800).strip() or "설계 요약이 제공되지 않았습니다."
+    root_cause = (
+        trim_text(redact_secrets(str(plan.get("root_cause") or "")), 1200).strip()
+        or "root cause가 명시되지 않았습니다."
+    )
+    lines = [
+        DESIGN_MARKER,
+        "# Codex Design Plan",
+        "",
+        "이 설계안은 자동 리뷰 이후의 advisory plan입니다. 현재 PR body, 현재 코드, 현재 사용자 지시가 이 기록보다 우선합니다.",
+        "",
+        "## Summary",
+        "",
+        summary,
+        "",
+        "## Root Cause",
+        "",
+        root_cause,
+    ]
+    sections = [
+        ("Invariants", "invariants"),
+        ("Retired / Failed Approaches", "retired_approaches"),
+        ("Intended Architecture", "intended_architecture"),
+        ("Edit Sequence", "edit_sequence"),
+        ("Tests", "tests"),
+        ("Acceptance Criteria", "acceptance_criteria"),
+        ("Open Questions", "open_questions"),
+    ]
+    for title, key in sections:
+        items = design_plan_list(plan, key)
+        lines.extend(["", f"## {title}", ""])
+        if items:
+            lines.extend(f"- {item}" for item in items)
+        else:
+            lines.append("- 없음")
+
+    lines.extend(
+        [
+            "",
+            "## Machine Readable JSON",
+            "",
+            "```json",
+            redact_secrets(json.dumps(plan, ensure_ascii=False, indent=2)),
+            "```",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def command_render_design_plan(args: argparse.Namespace) -> None:
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    Path(args.output).write_text(render_design_plan_body(plan), encoding="utf-8")
+    print(f"wrote design plan markdown to {args.output}")
+
+
+def upsert_design_comment(
+    *,
+    repo: str,
+    pr_number: str,
+    body: str,
+    list_comments: Any = github_paginated,
+    api: Any = github_api,
+) -> str:
+    comments = list_comments(f"/repos/{repo}/issues/{pr_number}/comments?per_page=100")
+    existing = latest_marker_comment(comments, DESIGN_MARKER)
+    if existing:
+        api(f"/repos/{repo}/issues/comments/{existing['id']}", method="PATCH", payload={"body": body})
+        return "updated"
+    api(f"/repos/{repo}/issues/{pr_number}/comments", method="POST", payload={"body": body})
+    return "created"
+
+
+def command_post_design_plan(args: argparse.Namespace) -> None:
+    repo = require_env("GITHUB_REPOSITORY")
+    pr_number = require_env("PR_NUMBER")
+    body = Path(args.body).read_text(encoding="utf-8")
+    if DESIGN_MARKER not in body:
+        raise SystemExit("design plan body is missing sticky marker")
+    action = upsert_design_comment(repo=repo, pr_number=pr_number, body=body)
+    print(f"{action} sticky design plan comment")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -845,6 +1171,24 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--batches", required=True)
     apply.add_argument("--results", required=True)
     apply.set_defaults(func=command_apply_resolutions)
+
+    review_context = subparsers.add_parser("build-review-context")
+    review_context.add_argument("--output", required=True)
+    review_context.set_defaults(func=command_build_review_context)
+
+    classify_design = subparsers.add_parser("classify-design-need")
+    classify_design.add_argument("--artifacts", required=True)
+    classify_design.add_argument("--decisions", required=True)
+    classify_design.set_defaults(func=command_classify_design_need)
+
+    render_design = subparsers.add_parser("render-design-plan")
+    render_design.add_argument("--plan", required=True)
+    render_design.add_argument("--output", required=True)
+    render_design.set_defaults(func=command_render_design_plan)
+
+    post_design = subparsers.add_parser("post-design-plan")
+    post_design.add_argument("--body", required=True)
+    post_design.set_defaults(func=command_post_design_plan)
     return parser
 
 
