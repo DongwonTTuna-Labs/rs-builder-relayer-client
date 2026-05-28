@@ -296,6 +296,11 @@ fn relayer_key_auth_validates_redacts_and_marks_headers_sensitive() {
         .unwrap()
         .is_sensitive());
     assert!(!format!("{auth:?}").contains(API_KEY));
+
+    let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1/").unwrap());
+    let client_debug = format!("{client:?}");
+    assert!(!client_debug.contains(API_KEY));
+    assert!(!client_debug.contains(API_KEY_ADDRESS));
 }
 
 #[test]
@@ -722,6 +727,10 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
         .await
         .unwrap_err();
     assert!(matches!(error, RelayerError::Http(_)));
+    let error_message = error.to_string();
+    assert!(!error_message.contains("tx-reset"));
+    assert!(!error_message.contains("/transaction"));
+    assert!(!error_message.contains("127.0.0.1"));
     let _ = handle.await.unwrap();
 }
 

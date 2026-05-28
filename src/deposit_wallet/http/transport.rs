@@ -102,16 +102,17 @@ pub(super) async fn read_limited_response_body(
     mut response: reqwest::Response,
     limit: usize,
 ) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
+    let content_length = response.content_length();
+    if content_length.is_some_and(|length| length > limit as u64) {
         return Err(RelayerError::Other(
             RESPONSE_BODY_TOO_LARGE_MESSAGE.to_string(),
         ));
     }
 
-    let mut body = Vec::new();
+    let capacity = content_length
+        .map(|length| length.min(limit as u64) as usize)
+        .unwrap_or(0);
+    let mut body = Vec::with_capacity(capacity);
     while let Some(chunk) = response
         .chunk()
         .await
