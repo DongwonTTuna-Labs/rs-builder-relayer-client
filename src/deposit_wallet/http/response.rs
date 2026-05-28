@@ -4,7 +4,8 @@ use super::redaction::{
 use super::*;
 use super::redaction::external_token_hash;
 use crate::deposit_wallet::{
-    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
+    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_CREATE_TRANSACTION_TYPE,
+    WALLET_TRANSACTION_TYPE,
 };
 use serde_json::value::RawValue;
 use serde_json::Value;
@@ -219,10 +220,10 @@ fn validate_transaction_wire_evidence(
                 .to_string(),
         ))
     })?;
-    if tx_type != WALLET_TRANSACTION_TYPE {
+    if !matches!(tx_type, WALLET_TRANSACTION_TYPE | WALLET_CREATE_TRANSACTION_TYPE) {
         return Err(TransactionParseError::new(
             RelayerError::reconciliation_required(
-                "transaction response type was not WALLET; manual reconciliation required"
+                "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
                     .to_string(),
             ),
         ));

@@ -58,11 +58,27 @@ impl DepositWalletRelayerClient {
         body: Option<String>,
         success_body_limit: usize,
     ) -> Result<Vec<u8>> {
+        let headers = self.authenticated_headers(body.is_some())?;
+        self.send_with_headers_success_limit(method, url, headers, body, success_body_limit)
+            .await
+    }
+
+    pub(super) fn authenticated_headers(&self, has_body: bool) -> Result<HeaderMap> {
         let mut headers = self.auth.headers()?;
-        if body.is_some() {
+        if has_body {
             headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         }
+        Ok(headers)
+    }
 
+    pub(super) async fn send_with_headers_success_limit(
+        &self,
+        method: Method,
+        url: Url,
+        headers: HeaderMap,
+        body: Option<String>,
+        success_body_limit: usize,
+    ) -> Result<Vec<u8>> {
         let mut request = self.http.request(method, url).headers(headers);
         if let Some(body) = body {
             request = request.body(body);
