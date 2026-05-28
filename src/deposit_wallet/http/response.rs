@@ -6,6 +6,7 @@ use super::redaction::external_token_hash;
 use crate::deposit_wallet::{
     derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
 };
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
@@ -105,6 +106,12 @@ pub(super) struct RelayerTransactionResponseWithOwner {
 struct SubmitTransactionIdOnly {
     #[serde(rename = "transactionID", alias = "transactionId")]
     transaction_id: String,
+}
+
+#[derive(Deserialize)]
+struct TransactionIdProbe {
+    #[serde(default, rename = "transactionID", alias = "transactionId")]
+    transaction_id: Option<Value>,
 }
 
 pub(super) fn parse_submit_response(bytes: &[u8]) -> Result<DepositWalletTransactionReceipt> {
@@ -300,12 +307,18 @@ fn select_transaction_response_from_array(
         {
             let mut count = 0usize;
             let mut matching_response = None;
-            while let Some(response_value) = seq.next_element::<Value>()? {
+            while let Some(response_value) = seq.next_element::<&RawValue>()? {
                 count += 1;
                 if count > MAX_TRANSACTION_RESPONSE_ITEMS {
                     return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
                 }
-                let Some(response_transaction_id) = transaction_id_from_value(&response_value)
+                let Ok(probe) =
+                    serde_json::from_str::<TransactionIdProbe>(response_value.get())
+                else {
+                    continue;
+                };
+                let Some(response_transaction_id) =
+                    probe.transaction_id.as_ref().and_then(Value::as_str)
                 else {
                     continue;
                 };
@@ -321,6 +334,8 @@ fn select_transaction_response_from_array(
                         TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR,
                     ));
                 }
+                let response_value =
+                    serde_json::from_str::<Value>(response_value.get()).map_err(de::Error::custom)?;
                 validate_transaction_address_evidence_shape(&response_value)
                     .map_err(|error| de::Error::custom(error.error.to_string()))?;
                 let response =
@@ -375,10 +390,6 @@ fn select_transaction_response_from_array(
         ))
     })?;
     Ok(response)
-}
-
-fn transaction_id_from_value(value: &Value) -> Option<&str> {
-    value.as_object()?.get("transactionID")?.as_str()
 }
 
 fn reconciliation_reason_from_deserializer_error(message: &str) -> Option<String> {
@@ -442,7 +453,6 @@ fn receipt_from_submit_response(
         .transaction_hash
         .as_deref()
         .map(str::trim)
-        .filter(|hash| !hash.is_empty())
         .map(validate_transaction_hash)
         .transpose()?;
 

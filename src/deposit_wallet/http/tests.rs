@@ -809,6 +809,43 @@ async fn submit_wallet_create_sends_fixture_body_and_records_owner_state() {
 }
 
 #[tokio::test]
+async fn owner_scoped_submit_state_does_not_block_other_owner() {
+    let owner = address(WALLET_OWNER);
+    let other_owner = address(OTHER_OWNER);
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-owner", "state": "STATE_NEW"}).to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-other-owner", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let client = test_client(url);
+
+    let first = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap();
+    assert_eq!(first.transaction_id, "tx-owner");
+    let same_owner_blocked = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap_err();
+    assert!(same_owner_blocked.is_deposit_wallet_reconciliation_required());
+
+    let other = client
+        .submit_wallet_create(other_owner, wallet_create_permit_for(other_owner))
+        .await
+        .unwrap();
+    assert_eq!(other.transaction_id, "tx-other-owner");
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
 async fn inflight_submit_without_response_blocks_same_owner_before_http() {
     let owner = address(WALLET_OWNER);
     let (url, handle, accepted_rx, release_tx) = spawn_delayed_response_server(
@@ -1275,7 +1312,10 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
     let owner = address(WALLET_OWNER);
     let mut confirmed_without_hash =
         transaction_response_value("tx-reconcile-poll-confirmed-no-hash", "STATE_CONFIRMED");
-    confirmed_without_hash["transactionHash"] = json!("");
+    confirmed_without_hash
+        .as_object_mut()
+        .unwrap()
+        .remove("transactionHash");
     for (transaction_id, transaction_response) in [
         (
             "tx-reconcile-poll-unknown",
@@ -1364,6 +1404,26 @@ fn manual_reconciliation_rejects_additional_records_without_partial_delete() {
 }
 
 #[test]
+fn transaction_owner_mapping_rejects_payload_conflicts() {
+    let owner = address(WALLET_OWNER);
+    let payload_hash =
+        "0x5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
+    let other_payload_hash =
+        "0x6123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
+    let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1/").unwrap());
+
+    client
+        .record_transaction_owner("tx-conflict", owner, payload_hash)
+        .unwrap();
+    let error = client
+        .record_transaction_owner("tx-conflict", owner, other_payload_hash)
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("already associated"));
+}
+
+#[test]
 fn mutation_permit_rejects_owner_scope_and_freshness_failures() {
     let owner = address(WALLET_OWNER);
     let other_owner = address(OTHER_OWNER);
@@ -1430,6 +1490,28 @@ fn mutation_permit_rejects_owner_scope_and_freshness_failures() {
         .unwrap_err();
     assert!(future.is_deposit_wallet_mutation_blocked());
     assert!(future.to_string().contains("future"));
+
+    let stale_evidence = DepositWalletOwnerSerializationEvidence::new(
+        owner,
+        mutation_scope(DepositWalletMutationAction::WalletCreate),
+        "unit-test owner serialization guard",
+        "stale-lease",
+        1_699_999_699,
+        1_699_999_999,
+    )
+    .unwrap();
+    let stale_permit =
+        DepositWalletMutationPermit::from_owner_serialization_evidence("stale", stale_evidence)
+            .unwrap();
+    let stale = client
+        .ensure_permit_token_for_action(
+            &stale_permit,
+            owner,
+            DepositWalletMutationAction::WalletCreate,
+        )
+        .unwrap_err();
+    assert!(stale.is_deposit_wallet_mutation_blocked());
+    assert!(stale.to_string().contains("stale"));
 
     assert!(DepositWalletOwnerSerializationEvidence::new(
         owner,
@@ -1591,6 +1673,47 @@ async fn idless_manual_reconciliation_rejects_when_local_transaction_record_exis
     let _ = handle.await.unwrap();
 }
 
+#[tokio::test]
+async fn idless_manual_reconciliation_rejects_observed_transaction_id_owner_record_conflict() {
+    let owner = address(WALLET_OWNER);
+    let conflicting_payload_hash =
+        "0x7123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"transactionID": "tx-record-conflict", "state": "STATE_FAILED"}).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    client
+        .record_transaction_owner("tx-record-conflict", owner, conflicting_payload_hash)
+        .unwrap();
+
+    let submit_error = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap_err();
+    assert!(submit_error.is_deposit_wallet_reconciliation_required());
+    assert!(submit_error.to_string().contains("already associated"));
+    let payload_hash = client
+        .ambiguous_submit_block(owner)
+        .expect("ambiguous submit should keep the observed payload blocked");
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
+    let evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
+
+    let error = client
+        .clear_idless_ambiguous_submit_after_manual_reconciliation(
+            evidence,
+            manual_reconciliation_permit_token_for(owner),
+        )
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("observed a transaction id"));
+    assert!(client.ambiguous_submit_block(owner).is_some());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+}
+
 #[test]
 fn idless_manual_reconciliation_success_clears_recordless_ambiguous_block() {
     let owner = address(WALLET_OWNER);
@@ -1610,6 +1733,31 @@ fn idless_manual_reconciliation_success_clears_recordless_ambiguous_block() {
 
     assert!(client.ambiguous_submit_block(owner).is_none());
     assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
+}
+
+#[test]
+fn idless_manual_reconciliation_rejects_unrecorded_transaction_id_observation() {
+    let owner = address(WALLET_OWNER);
+    let payload_hash =
+        "0x4123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
+    let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1/").unwrap());
+
+    client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+    client
+        .record_unrecorded_transaction_id_observation(owner, &payload_hash)
+        .unwrap();
+    let evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
+
+    let error = client
+        .clear_idless_ambiguous_submit_after_manual_reconciliation(
+            evidence,
+            manual_reconciliation_permit_token_for(owner),
+        )
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("observed a transaction id"));
+    assert!(client.ambiguous_submit_block(owner).is_some());
 }
 
 #[test]
@@ -1943,7 +2091,7 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     );
     let requests = handle.await.unwrap();
     assert_eq!(requests[0].method, "GET");
-    assert_eq!(requests[0].path, "/transaction?id=tx-owner");
+    assert_eq!(requests[0].path, "/transaction?transactionID=tx-owner");
     assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
     assert_eq!(
         requests[0].header("RELAYER_API_KEY_ADDRESS"),
@@ -1955,7 +2103,7 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
 #[tokio::test]
 async fn get_transaction_for_owner_rejects_confirmed_without_hash() {
     let mut response = transaction_response_value("tx-confirmed-no-hash", "STATE_CONFIRMED");
-    response["transactionHash"] = json!("");
+    response.as_object_mut().unwrap().remove("transactionHash");
     let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", response.to_string())]).await;
     let client = test_client(url);
 
@@ -2053,7 +2201,10 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
         .unwrap_err();
     assert!(matches!(error, RelayerError::Api { status: 404, .. }));
     let requests = handle.await.unwrap();
-    assert_eq!(requests[0].path, "/transaction?id=tx-missing-http");
+    assert_eq!(
+        requests[0].path,
+        "/transaction?transactionID=tx-missing-http"
+    );
 
     let (url, handle) = spawn_server(vec![TestResponse::json(
         "200 OK",
@@ -2212,7 +2363,12 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 fn transaction_response_rejects_malformed_transaction_hashes() {
     let config = deposit_wallet_contract_config(137).unwrap();
     for (label, malformed_hash) in [
+        ("empty", ""),
         ("too-short", "0x1234"),
+        (
+            "too-long",
+            "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d800",
+        ),
         (
             "missing-prefix",
             "38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
