@@ -871,6 +871,43 @@ impl DepositWalletRelayerClient {
         Ok(())
     }
 
+    pub(super) fn transition_inflight_transaction_to_ambiguous_if_current(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+    ) -> Result<()> {
+        let mut state = self.mutation_state_for_owner(owner)?;
+        let Some(record) = state.transaction_owners.get(transaction_id).cloned() else {
+            return Ok(());
+        };
+        if record.owner != owner {
+            return Err(RelayerError::reconciliation_required(format!(
+                "transaction {} owner did not match local owner record",
+                sanitized_external_token(transaction_id)
+            )));
+        }
+        match state.owner_blocks.get(&owner).cloned() {
+            Some(OwnerMutationBlock::InFlight {
+                payload_hash,
+                transaction_id: Some(current_transaction_id),
+                created_at_unix_seconds,
+            }) if payload_hash == record.payload_hash && current_transaction_id == transaction_id =>
+            {
+                state.owner_blocks.insert(
+                    owner,
+                    OwnerMutationBlock::Ambiguous {
+                        payload_hash,
+                        created_at_unix_seconds,
+                        unrecorded_transaction_id_observed: false,
+                    },
+                );
+            }
+            Some(OwnerMutationBlock::Ambiguous { .. }) | None => {}
+            _ => {}
+        }
+        Ok(())
+    }
+
     pub(super) fn mutation_state_for_owner(
         &self,
         owner: Address,

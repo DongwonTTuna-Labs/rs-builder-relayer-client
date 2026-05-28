@@ -137,6 +137,21 @@ impl DepositWalletRelayerClient {
                             if error.is_deposit_wallet_ambiguous_submit()
                                 || error.is_deposit_wallet_reconciliation_required() =>
                         {
+                            if !self
+                                .ambiguous_submit_transaction_ids(owner)
+                                .iter()
+                                .any(|id| id == &transaction_id)
+                            {
+                                self.record_ambiguous_post_boundary(
+                                    &mut reservation,
+                                    owner,
+                                    payload_hash.clone(),
+                                )?;
+                                self.record_unrecorded_transaction_id_observation(
+                                    owner,
+                                    &payload_hash,
+                                )?;
+                            }
                             Err(error)
                         }
                         Err(_) => {
@@ -209,15 +224,6 @@ impl DepositWalletRelayerClient {
                 } else {
                     "transport"
                 };
-                if error.is_connect() {
-                    reservation.clear()?;
-                    return Err(RelayerError::Other(format!(
-                        "submit transport failed before POST boundary for owner {} payload {}; owner reservation released; transport category: {}",
-                        redacted_address(owner),
-                        display_payload_hash(&payload_hash),
-                        category
-                    )));
-                }
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit transport failed for owner {} payload {}; retry status is ambiguous; transport category: {}",

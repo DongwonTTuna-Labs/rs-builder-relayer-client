@@ -153,8 +153,28 @@ impl DepositWalletRelayerClient {
                     .to_string(),
             ));
         }
-        let parsed = self.fetch_transaction(transaction_id).await?;
-        let receipt = validate_owner_transaction_evidence(owner, parsed.receipt)?;
+        let parsed = match self.fetch_transaction(transaction_id).await {
+            Ok(parsed) => parsed,
+            Err(error) if error.is_deposit_wallet_reconciliation_required() => {
+                self.transition_inflight_transaction_to_ambiguous_if_current(
+                    owner,
+                    transaction_id,
+                )?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        let receipt = match validate_owner_transaction_evidence(owner, parsed.receipt) {
+            Ok(receipt) => receipt,
+            Err(error) if error.is_deposit_wallet_reconciliation_required() => {
+                self.transition_inflight_transaction_to_ambiguous_if_current(
+                    owner,
+                    transaction_id,
+                )?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         self.record_terminal_observation_from_receipt(owner, &receipt)?;
         classify_owner_transaction_receipt(receipt)
     }

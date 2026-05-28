@@ -109,10 +109,19 @@ fn fixture_value(name: &str) -> Value {
 
 fn assert_url_error_contains(result: Result<DepositWalletRelayerUrl>, expected: &str) {
     let error = result.expect_err("URL should be rejected");
-    assert!(
-        error.to_string().contains(expected),
-        "expected {expected:?} in {error}"
-    );
+    match error {
+        RelayerError::Other(message) => {
+            assert!(
+                message.starts_with("Invalid relayer URL:"),
+                "expected invalid relayer URL error, got {message}"
+            );
+            assert!(
+                message.contains(expected),
+                "expected {expected:?} in {message}"
+            );
+        }
+        other => panic!("expected invalid relayer URL error, got {other}"),
+    }
 }
 
 fn relayer_auth() -> RelayerKeyAuth {
@@ -293,25 +302,14 @@ async fn spawn_delayed_response_server(
     )
 }
 
-async fn spawn_optional_redirect_target(
-    response: TestResponse,
-) -> (String, JoinHandle<Vec<CapturedRequest>>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
+fn spawn_redirect_target_listener() -> (String, std::net::TcpListener) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("test server should bind");
+    listener
+        .set_nonblocking(true)
+        .expect("redirect target listener should be nonblocking");
     let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move {
-        let Ok(accepted) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept()).await
-        else {
-            return Vec::new();
-        };
-        let (mut stream, _) = accepted.expect("server should accept");
-        let request = read_request(&mut stream).await;
-        write_response(&mut stream, response).await;
-        vec![request]
-    });
-
-    (format!("http://{addr}/redirect-target"), handle)
+    (format!("http://{addr}/redirect-target"), listener)
 }
 
 async fn spawn_reset_server() -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
@@ -661,8 +659,7 @@ async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
 
 #[tokio::test]
 async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
-    let (redirect_target, target_handle) =
-        spawn_optional_redirect_target(TestResponse::json("200 OK", r#"{"nonce":31}"#)).await;
+    let (redirect_target, target_listener) = spawn_redirect_target_listener();
     let redirect = TestResponse {
         status: "302 Found",
         headers: vec![("location".to_string(), redirect_target)],
@@ -686,8 +683,11 @@ async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
         redirect_requests[0].header("RELAYER_API_KEY_ADDRESS"),
         Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
     );
-    let target_requests = target_handle.await.unwrap();
-    assert!(target_requests.is_empty());
+    match target_listener.accept() {
+        Ok((_stream, peer)) => panic!("redirect target unexpectedly accepted request from {peer}"),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) => panic!("redirect target accept failed: {error}"),
+    }
 }
 
 #[tokio::test]
@@ -1536,6 +1536,12 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
         .as_object_mut()
         .unwrap()
         .remove("transactionHash");
+    let mut missing_owner_evidence =
+        transaction_response_value("tx-reconcile-poll-missing-owner", "STATE_CONFIRMED");
+    missing_owner_evidence
+        .as_object_mut()
+        .unwrap()
+        .remove("owner");
     for (transaction_id, transaction_response) in [
         (
             "tx-reconcile-poll-unknown",
@@ -1545,6 +1551,7 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
             "tx-reconcile-poll-confirmed-no-hash",
             confirmed_without_hash,
         ),
+        ("tx-reconcile-poll-missing-owner", missing_owner_evidence),
     ] {
         let (url, handle) = spawn_server(vec![
             TestResponse::json(
@@ -1868,7 +1875,7 @@ async fn post_boundary_errors_leave_ambiguous_owner_block() {
 }
 
 #[tokio::test]
-async fn pre_boundary_connect_failure_releases_owner_reservation() {
+async fn connect_failure_keeps_owner_reservation_ambiguous() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener should bind");
@@ -1883,15 +1890,14 @@ async fn pre_boundary_connect_failure_releases_owner_reservation() {
         .await
         .unwrap_err();
 
-    assert!(!error.is_deposit_wallet_ambiguous_submit());
-    assert!(client.ambiguous_submit_block(owner).is_none());
-    client.ensure_owner_unblocked(owner).unwrap();
-    let retry = client
+    assert!(error.is_deposit_wallet_ambiguous_submit());
+    assert!(error.to_string().contains("transport category: connect"));
+    assert!(client.ambiguous_submit_block(owner).is_some());
+    let blocked = client
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
         .await
         .unwrap_err();
-    assert!(!retry.is_deposit_wallet_reconciliation_required());
-    assert!(client.ambiguous_submit_block(owner).is_none());
+    assert!(blocked.is_deposit_wallet_reconciliation_required());
 }
 
 #[tokio::test]
@@ -2028,6 +2034,51 @@ async fn idless_manual_reconciliation_rejects_observed_transaction_id_owner_reco
     let client = test_client(url);
     client
         .record_transaction_owner("tx-record-conflict", owner, conflicting_payload_hash)
+        .unwrap();
+
+    let submit_error = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap_err();
+    assert!(submit_error.is_deposit_wallet_reconciliation_required());
+    assert!(submit_error.to_string().contains("already associated"));
+    let payload_hash = client
+        .ambiguous_submit_block(owner)
+        .expect("ambiguous submit should keep the observed payload blocked");
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
+    let evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
+
+    let error = client
+        .clear_idless_ambiguous_submit_after_manual_reconciliation(
+            evidence,
+            manual_reconciliation_permit_token_for(owner),
+        )
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("observed a transaction id"));
+    assert!(client.ambiguous_submit_block(owner).is_some());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn idless_manual_reconciliation_rejects_observed_new_transaction_id_record_failure() {
+    let owner = address(WALLET_OWNER);
+    let conflicting_payload_hash =
+        "0x8123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"transactionID": "tx-new-record-conflict", "state": "STATE_NEW"}).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    client
+        .record_transaction_owner(
+            "tx-new-record-conflict",
+            owner,
+            conflicting_payload_hash,
+        )
         .unwrap();
 
     let submit_error = client
