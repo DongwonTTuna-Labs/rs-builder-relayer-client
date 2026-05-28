@@ -1,0 +1,499 @@
+use super::redaction::{
+    redacted_address, sanitized_external_token, unknown_state_error_summary,
+};
+use super::*;
+#[cfg(test)]
+use super::redaction::external_token_hash;
+#[cfg(test)]
+use crate::deposit_wallet::{
+    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
+};
+#[cfg(test)]
+use serde_json::Value;
+
+#[cfg(test)]
+const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
+    "Deposit-wallet reconciliation required: ";
+
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DepositWalletTransactionReceipt {
+    pub transaction_id: String,
+    pub state: RelayerTransactionState,
+    pub transaction_hash: Option<String>,
+    pub owner: Option<Address>,
+    pub deposit_wallet: Option<Address>,
+}
+
+impl fmt::Debug for DepositWalletTransactionReceipt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletTransactionReceipt")
+            .field("transaction_id", &sanitized_external_token(&self.transaction_id))
+            .field("state", &ReceiptStateDebug(&self.state))
+            .field(
+                "transaction_hash",
+                &self.transaction_hash.as_deref().map(sanitized_external_token),
+            )
+            .field("owner", &self.owner.map(redacted_address))
+            .field(
+                "deposit_wallet",
+                &self.deposit_wallet.map(redacted_address),
+            )
+            .finish()
+    }
+}
+
+struct ReceiptStateDebug<'a>(&'a RelayerTransactionState);
+
+impl fmt::Debug for ReceiptStateDebug<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            RelayerTransactionState::New => f.write_str("New"),
+            RelayerTransactionState::Executed => f.write_str("Executed"),
+            RelayerTransactionState::Mined => f.write_str("Mined"),
+            RelayerTransactionState::Confirmed => f.write_str("Confirmed"),
+            RelayerTransactionState::Invalid => f.write_str("Invalid"),
+            RelayerTransactionState::Failed => f.write_str("Failed"),
+            RelayerTransactionState::Unknown(raw) => f
+                .debug_tuple("Unknown")
+                .field(&unknown_state_error_summary(raw))
+                .finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ParsedTransactionReceipt {
+    pub(super) receipt: DepositWalletTransactionReceipt,
+    pub(super) owner: Option<Address>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+pub(super) struct TransactionParseError {
+    pub(super) error: RelayerError,
+}
+
+#[cfg(test)]
+impl TransactionParseError {
+    pub(super) fn new(error: RelayerError) -> Self {
+        Self { error }
+    }
+
+    pub(super) fn retryable_absence(error: RelayerError) -> Self {
+        Self { error }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RelayerTransactionResponseWithOwner {
+    #[serde(flatten)]
+    response: RelayerSubmitResponse,
+    #[serde(default, rename = "type")]
+    tx_type: Option<String>,
+    #[serde(default, rename = "from", deserialize_with = "deserialize_optional_address")]
+    from_address: Option<Address>,
+    #[serde(default, deserialize_with = "deserialize_optional_address")]
+    to: Option<Address>,
+    #[serde(default, deserialize_with = "deserialize_optional_address")]
+    owner: Option<Address>,
+    #[serde(
+        default,
+        rename = "proxyAddress",
+        deserialize_with = "deserialize_optional_address"
+    )]
+    proxy_address: Option<Address>,
+}
+
+#[cfg(test)]
+pub(super) fn parse_transaction_response(
+    expected_transaction_id: &str,
+    config: DepositWalletContractConfig,
+    bytes: &[u8],
+) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
+    match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
+        Some(b'{') => {
+            let value = serde_json::from_slice::<Value>(bytes)
+                .map_err(|_| {
+                    TransactionParseError::new(RelayerError::Other(
+                        "could not parse transaction response object".to_string(),
+                    ))
+                })?;
+            validate_transaction_address_evidence_shape(&value)?;
+            let response = serde_json::from_value::<RelayerTransactionResponseWithOwner>(value)
+                .map_err(|_| {
+                    TransactionParseError::new(RelayerError::Other(
+                        "could not parse transaction response object".to_string(),
+                    ))
+                })?;
+            return parse_verified_transaction_response(
+                expected_transaction_id,
+                config,
+                response,
+            );
+        }
+        Some(b'[') => {}
+        _ => {
+            return Err(TransactionParseError::new(RelayerError::Other(
+                "could not parse transaction response: expected JSON object or array".to_string(),
+            )))
+        }
+    }
+
+    let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
+    parse_verified_transaction_response(expected_transaction_id, config, response)
+}
+
+#[cfg(test)]
+fn parse_verified_transaction_response(
+    expected_transaction_id: &str,
+    config: DepositWalletContractConfig,
+    response: RelayerTransactionResponseWithOwner,
+) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
+    let owner = response.owner;
+    let response_transaction_id =
+        validate_transaction_id(&response.response.transaction_id).map_err(|_| {
+            TransactionParseError::new(RelayerError::Other(
+                "relayer response transactionID was invalid".to_string(),
+            ))
+        })?;
+    if response_transaction_id != expected_transaction_id {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response id hash {} did not match requested id hash {}",
+                external_token_hash(&response_transaction_id),
+                external_token_hash(expected_transaction_id)
+            )),
+        ));
+    }
+    let deposit_wallet = validate_transaction_wire_evidence(&response, config, owner)?;
+    let parsed = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
+        .map_err(TransactionParseError::new)?;
+    Ok(parsed)
+}
+
+#[cfg(test)]
+fn validate_transaction_wire_evidence(
+    response: &RelayerTransactionResponseWithOwner,
+    config: DepositWalletContractConfig,
+    owner: Option<Address>,
+) -> std::result::Result<Address, TransactionParseError> {
+    let tx_type = response.tx_type.as_deref().ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "transaction response did not include deposit-wallet transaction type; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    if tx_type != WALLET_TRANSACTION_TYPE {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(
+                "transaction response type was not WALLET; manual reconciliation required"
+                    .to_string(),
+            ),
+        ));
+    }
+
+    let owner = owner.ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "deposit wallet transaction response did not include owner evidence; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    let from_address = response.from_address.ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "transaction response did not include from address; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    if from_address != owner {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response from address {} did not match owner evidence {}; manual reconciliation required",
+                redacted_address(from_address),
+                redacted_address(owner)
+            )),
+        ));
+    }
+
+    let to = response.to.ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "transaction response did not include to address; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    if to != config.factory {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response to address {} did not match configured factory {}; manual reconciliation required",
+                redacted_address(to),
+                redacted_address(config.factory)
+            )),
+        ));
+    }
+    let proxy_address = response.proxy_address.ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "transaction response did not include proxyAddress deposit wallet evidence; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    let expected_proxy_address = derive_deposit_wallet_address(owner, config)
+        .map_err(|error| TransactionParseError::new(RelayerError::Other(error.to_string())))?;
+    if proxy_address != expected_proxy_address {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response proxyAddress {} did not match derived deposit wallet {}; manual reconciliation required",
+                redacted_address(proxy_address),
+                redacted_address(expected_proxy_address)
+            )),
+        ));
+    }
+
+    Ok(proxy_address)
+}
+
+#[cfg(test)]
+fn select_transaction_response_from_array(
+    expected_transaction_id: &str,
+    bytes: &[u8],
+) -> std::result::Result<RelayerTransactionResponseWithOwner, TransactionParseError> {
+    struct SelectTransactionVisitor<'a> {
+        expected_transaction_id: &'a str,
+    }
+
+    impl<'de> Visitor<'de> for SelectTransactionVisitor<'_> {
+        type Value = RelayerTransactionResponseWithOwner;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a transaction response array")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut count = 0usize;
+            let mut matching_response = None;
+            while let Some(response_value) = seq.next_element::<Value>()? {
+                count += 1;
+                if count > MAX_TRANSACTION_RESPONSE_ITEMS {
+                    return Err(de::Error::custom(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR));
+                }
+                let Some(response_transaction_id) = transaction_id_from_value(&response_value)
+                else {
+                    continue;
+                };
+                let Ok(response_transaction_id) = validate_transaction_id(response_transaction_id)
+                else {
+                    continue;
+                };
+                if response_transaction_id != self.expected_transaction_id {
+                    continue;
+                }
+                if matching_response.is_some() {
+                    return Err(de::Error::custom(
+                        TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR,
+                    ));
+                }
+                validate_transaction_address_evidence_shape(&response_value)
+                    .map_err(|error| de::Error::custom(error.error.to_string()))?;
+                let response =
+                    serde_json::from_value::<RelayerTransactionResponseWithOwner>(response_value)
+                        .map_err(de::Error::custom)?;
+                matching_response = Some(response);
+            }
+            if let Some(response) = matching_response {
+                Ok(response)
+            } else {
+                Err(de::Error::custom(TRANSACTION_RESPONSE_MISSING_ID_ERROR))
+            }
+        }
+    }
+
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let response = deserializer
+        .deserialize_seq(SelectTransactionVisitor {
+            expected_transaction_id,
+        })
+        .map_err(|error| {
+            let message = error.to_string();
+            if message.contains(TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR) {
+                TransactionParseError::new(RelayerError::reconciliation_required(format!(
+                    "transaction response included more than {MAX_TRANSACTION_RESPONSE_ITEMS} items"
+                )))
+            } else if message.contains(TRANSACTION_RESPONSE_MISSING_ID_ERROR) {
+                TransactionParseError::retryable_absence(
+                    RelayerError::transaction_absent(format!(
+                        "transaction response did not include requested transaction id hash {}",
+                        external_token_hash(expected_transaction_id)
+                    )),
+                )
+            } else if message.contains(TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR) {
+                TransactionParseError::new(RelayerError::reconciliation_required(format!(
+                    "transaction response included duplicate requested transaction id hash {}; manual reconciliation required",
+                    external_token_hash(expected_transaction_id)
+                )))
+            } else if let Some(reason) =
+                reconciliation_reason_from_deserializer_error(&message)
+            {
+                TransactionParseError::new(RelayerError::reconciliation_required(reason))
+            } else {
+                TransactionParseError::new(RelayerError::Other(
+                    "could not parse transaction response array".to_string(),
+                ))
+            }
+        })?;
+    deserializer.end().map_err(|_| {
+        TransactionParseError::new(RelayerError::Other(
+            "could not parse transaction response array".to_string(),
+        ))
+    })?;
+    Ok(response)
+}
+
+#[cfg(test)]
+fn transaction_id_from_value(value: &Value) -> Option<&str> {
+    value.as_object()?.get("transactionID")?.as_str()
+}
+
+#[cfg(test)]
+fn reconciliation_reason_from_deserializer_error(message: &str) -> Option<String> {
+    let start = message.find(DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX)?
+        + DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX.len();
+    Some(message[start..].to_string())
+}
+
+#[cfg(test)]
+fn validate_transaction_address_evidence_shape(
+    value: &Value,
+) -> std::result::Result<(), TransactionParseError> {
+    let Some(object) = value.as_object() else {
+        return Err(TransactionParseError::new(RelayerError::Other(
+            "could not parse transaction response object".to_string(),
+        )));
+    };
+    for field in ["from", "to", "owner", "proxyAddress"] {
+        validate_optional_address_evidence_value(object, field)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_optional_address_evidence_value(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> std::result::Result<(), TransactionParseError> {
+    let Some(value) = object.get(field) else {
+        return Ok(());
+    };
+
+    match value {
+        Value::Null => Ok(()),
+        Value::String(raw) if is_official_address_wire_format(raw) => Ok(()),
+        Value::String(_) => Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response {field} address evidence was malformed; manual reconciliation required"
+            )),
+        )),
+        _ => Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response {field} address evidence was not a string; manual reconciliation required"
+            )),
+        )),
+    }
+}
+
+#[cfg(test)]
+fn receipt_from_submit_response(
+    response: RelayerSubmitResponse,
+    owner: Option<Address>,
+    deposit_wallet: Option<Address>,
+) -> Result<ParsedTransactionReceipt> {
+    if response.transaction_id.trim().is_empty() {
+        return Err(RelayerError::Other(
+            "relayer response transactionID must not be empty".to_string(),
+        ));
+    }
+    let transaction_id = validate_transaction_id(&response.transaction_id).map_err(|_| {
+        RelayerError::Other("relayer response transactionID was invalid".to_string())
+    })?;
+    let transaction_hash = response
+        .transaction_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty())
+        .map(validate_transaction_hash)
+        .transpose()?;
+
+    Ok(ParsedTransactionReceipt {
+        receipt: DepositWalletTransactionReceipt {
+            transaction_id,
+            state: response.state,
+            transaction_hash,
+            owner,
+            deposit_wallet,
+        },
+        owner,
+    })
+}
+
+#[cfg(test)]
+pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
+    if transaction_id.is_empty()
+        || transaction_id.len() > MAX_TRANSACTION_ID_LEN
+        || transaction_id.trim() != transaction_id
+        || transaction_id.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(RelayerError::Other(
+            "transaction id must be 1-128 bytes without leading/trailing whitespace or control characters"
+                .to_string(),
+        ));
+    }
+
+    Ok(transaction_id.to_string())
+}
+
+#[cfg(test)]
+fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
+    if transaction_hash.len() == 66 {
+        if let Some(hex) = transaction_hash
+            .strip_prefix("0x")
+            .or_else(|| transaction_hash.strip_prefix("0X"))
+        {
+            if hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Ok(format!("0x{}", hex.to_ascii_lowercase()));
+            }
+        }
+    }
+
+    Err(RelayerError::reconciliation_required(
+        "relayer response transactionHash was invalid".to_string(),
+    ))
+}
+
+#[cfg(test)]
+fn is_official_address_wire_format(raw: &str) -> bool {
+    raw.len() == 42
+        && raw.starts_with("0x")
+        && raw[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+fn deserialize_optional_address<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Address>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let Some(raw) = Option::<String>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    if !is_official_address_wire_format(&raw) {
+        return Err(serde::de::Error::custom(
+            "address evidence must match ^0x[a-fA-F0-9]{40}$",
+        ));
+    }
+    raw.parse().map(Some).map_err(serde::de::Error::custom)
+}

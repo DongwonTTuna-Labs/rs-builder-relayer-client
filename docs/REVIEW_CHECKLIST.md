@@ -59,3 +59,4 @@
 - [ ] Official Rust CLOB SDK remains responsible for CLOB order path.
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
+- [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.

@@ -1,0 +1,64 @@
+{
+  "rejected": [
+    {
+      "label": "empty string",
+      "raw": "\"\""
+    },
+    {
+      "label": "non decimal string",
+      "raw": "\"not-decimal\""
+    },
+    {
+      "label": "hex string",
+      "raw": "\"0x1\""
+    },
+    {
+      "label": "leading space",
+      "raw": "\" 1\""
+    },
+    {
+      "label": "trailing space",
+      "raw": "\"1 \""
+    },
+    {
+      "label": "non ASCII digit",
+      "raw": "\"１\""
+    },
+    {
+      "label": "negative string",
+      "raw": "\"-1\""
+    },
+    {
+      "label": "negative number",
+      "raw": "-1"
+    },
+    {
+      "label": "decimal number",
+      "raw": "1.5"
+    },
+    {
+      "label": "exponent number",
+      "raw": "1e3"
+    },
+    {
+      "label": "79 digit string",
+      "raw": "\"0000000000000000000000000000000000000000000000000000000000000000000000000000000\""
+    },
+    {
+      "label": "78 digit U256 overflow string",
+      "raw": "\"115792089237316195423570985008687907853269984665640564039457584007913129639936\""
+    },
+    {
+      "label": "78 digit U256 overflow number",
+      "raw": "115792089237316195423570985008687907853269984665640564039457584007913129639936"
+    },
+    {
+      "label": "U256 overflow string",
+      "raw": "\"1157920892373161954235709850086879078532699846656405640394575840079131296399350\""
+    },
+    {
+      "label": "U256 overflow number",
+      "raw": "1157920892373161954235709850086879078532699846656405640394575840079131296399350"
+    }
+  ]
+}

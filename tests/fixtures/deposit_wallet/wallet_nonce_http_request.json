@@ -1,0 +1,10 @@
+{
+  "method": "GET",
+  "path": "/nonce",
+  "address": "0x358F5425D120ed6B3f143a6E2E85C0CD86698027",
+  "type": "WALLET",
+  "pathAndQuery": "/nonce?address=0x358F5425D120ed6B3f143a6E2E85C0CD86698027&type=WALLET",
+  "response": {
+    "nonce": "31"
+  }
+}

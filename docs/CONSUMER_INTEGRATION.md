@@ -68,12 +68,14 @@ This crate may expose:
 
 ```text
 DepositWalletRelayerClient
+DepositWalletRelayerUrl
 DepositWalletCall
 RelayerKeyAuth
 DepositWalletRequestContext
 SignedDepositWalletBatch
 RelayerSubmitResponse
 RelayerTransactionStatus
+DepositWalletTransactionReceipt
 ```
 
 The consumer app must map these into its own port types and must not leak this crate's DTOs into strategy, risk, actor state, or domain types.
@@ -92,6 +94,57 @@ keep the error handling inside the relayer adapter rather than domain or
 strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
 crate-root API; request DTO fields stay crate-private so submit bodies are
 produced through validated builders.
+
+### HTTP client surface
+
+The deposit-wallet HTTP client public surface in this PR exposes construction
+only:
+
+```text
+DepositWalletRelayerUrl::parse
+DepositWalletRelayerClient::new
+```
+
+Transaction and nonce read helpers remain crate-internal in this PR. The current
+official `GET /transaction` reference documents `SAFE`/`PROXY` transaction
+types, while the deposit-wallet docs describe `WALLET` submit/body construction
+without documenting the polling response shape. Until an official or recorded
+`WALLET` polling response fixture is reviewed, this crate must not claim
+production deposit-wallet transaction polling compatibility. Local loopback and
+recorded fixture tests preserve relayer wire evidence that the response is a
+`WALLET` transaction, that `owner` is present, that `from == owner`, and that
+`to` matches the configured deposit-wallet factory, and that `proxyAddress`
+matches the deposit wallet derived from `owner` and the configured factory.
+`WALLET-CREATE` responses are not treated as WALLET owner evidence by this parser because
+deployment identity and wallet mutation identity are reviewed separately.
+
+Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
+
+```text
+https://docs.polymarket.com/api-reference/relayer/get-a-transaction-by-id
+https://docs.polymarket.com/trading/gasless
+https://docs.polymarket.com/api-reference/relayer-api-keys/get-all-relayer-api-keys
+```
+
+Those docs name `RELAYER_API_KEY` and `RELAYER_API_KEY_ADDRESS` as the Relayer
+API key auth headers and define `RELAYER_API_KEY_ADDRESS` as the address that
+owns the key. This HTTP read client sends those headers on read requests as
+credential identity, while still treating transaction `owner`/`from` evidence
+as a separate owner-bound response contract. Consumers must not assume the
+relayer API key address, owner signer, deposit wallet, or funder are the same
+identity.
+
+WALLET nonce reads also remain crate-internal in this layer. Production URLs
+reject nonce reads until the mutation-state stack owns a nonce lease from nonce
+fetch through signing and submit. Consumers must not treat this PR as live
+nonce, submit, polling, or recovery capable.
+
+Migration path: consumer adapters may construct the client behind their adapter
+boundary, but must not expose transaction status or nonce reads until a later PR
+adds reviewed polling evidence and owner-scoped nonce lease semantics.
+Rollback path: stop importing the HTTP read client and keep the existing
+fixture/signing-only integration; no consumer domain type should depend on the
+new HTTP DTOs.
 
 Consumer adapter migration status for PR #8:
 

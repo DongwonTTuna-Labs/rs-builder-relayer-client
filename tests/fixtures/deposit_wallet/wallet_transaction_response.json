@@ -1,0 +1,18 @@
+[
+  {
+    "transactionID": "0190b317-a1d3-7bec-9b91-eeb6dcd3a620",
+    "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+    "from": "0x6e0c80c90ea6c15917308f820eac91ce2724b5b5",
+    "to": "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
+    "proxyAddress": "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De",
+    "data": "0x",
+    "nonce": "60",
+    "value": "",
+    "state": "STATE_CONFIRMED",
+    "type": "WALLET",
+    "owner": "0x6e0c80c90ea6c15917308f820eac91ce2724b5b5",
+    "metadata": "",
+    "createdAt": "2024-07-14T21:13:08.819782Z",
+    "updatedAt": "2024-07-14T21:13:46.576639Z"
+  }
+]
