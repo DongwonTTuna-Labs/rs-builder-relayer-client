@@ -16,6 +16,9 @@ AXES = ("correctness", "security", "performance", "test-coverage", "domain")
 INLINE_MARKER = "<!-- codex-review-inline -->"
 MAX_INLINE_COMMENTS = 50
 RESOLVE_BATCH_SIZE = 3
+RESOLVE_SEARCH_CONTEXT_RADIUS = 6
+RESOLVE_SEARCH_MAX_TERMS = 8
+RESOLVE_SEARCH_MAX_MATCHES = 3
 TRUSTED_USER = "DongwonTTuna"
 TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna",)
 
@@ -577,6 +580,78 @@ def code_snippet(workspace: Path, file_path: str | None, line: int | None) -> st
     return "\n".join(f"{idx:>{width}}: {lines[idx - 1]}" for idx in range(start, end + 1))
 
 
+def format_line_snippet(lines: list[str], line: int, radius: int) -> str:
+    start = max(1, line - radius)
+    end = min(len(lines), line + radius)
+    width = len(str(end))
+    return "\n".join(f"{idx:>{width}}: {lines[idx - 1]}" for idx in range(start, end + 1))
+
+
+def add_search_term(terms: list[str], seen: set[str], value: str) -> None:
+    term = value.strip()
+    if not (3 <= len(term) <= 120) or "\n" in term:
+        return
+    if not re.search(r"[A-Za-z0-9_]", term):
+        return
+    key = term.lower()
+    if key in seen:
+        return
+    terms.append(term)
+    seen.add(key)
+
+
+def resolve_search_terms(body: str) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    redacted = redact_comment_body(body)
+    for span in re.findall(r"`([^`\n]{3,120})`", redacted):
+        add_search_term(terms, seen, span)
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", span):
+            add_search_term(terms, seen, token)
+            if len(terms) >= RESOLVE_SEARCH_MAX_TERMS:
+                return terms
+        if len(terms) >= RESOLVE_SEARCH_MAX_TERMS:
+            return terms
+    return terms
+
+
+def search_current_context(workspace: Path, file_path: str | None, body: str) -> list[dict[str, Any]]:
+    if not file_path:
+        return []
+    path = (workspace / file_path).resolve()
+    try:
+        path.relative_to(workspace.resolve())
+    except ValueError:
+        return []
+    if not path.exists() or not path.is_file():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    contexts: list[dict[str, Any]] = []
+    seen_ranges: set[tuple[int, int]] = set()
+    for term in resolve_search_terms(body):
+        needle = term.lower()
+        for index, line in enumerate(lines, start=1):
+            if needle not in line.lower():
+                continue
+            start = max(1, index - RESOLVE_SEARCH_CONTEXT_RADIUS)
+            end = min(len(lines), index + RESOLVE_SEARCH_CONTEXT_RADIUS)
+            range_key = (start, end)
+            if range_key in seen_ranges:
+                continue
+            contexts.append(
+                {
+                    "term": term,
+                    "line": index,
+                    "snippet": format_line_snippet(lines, index, RESOLVE_SEARCH_CONTEXT_RADIUS),
+                }
+            )
+            seen_ranges.add(range_key)
+            if len(contexts) >= RESOLVE_SEARCH_MAX_MATCHES:
+                return contexts
+            break
+    return contexts
+
+
 def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any], workspace: Path) -> dict[str, Any]:
     line = comment.get("line") or thread.get("line") or comment.get("originalLine") or thread.get("originalLine")
     try:
@@ -584,16 +659,19 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any], workspac
     except (TypeError, ValueError):
         line_int = None
     file_path = comment.get("path") or thread.get("path")
+    body = comment.get("body") or ""
+    outdated = bool(thread.get("isOutdated") or comment.get("outdated"))
     return {
         "thread_id": thread["id"],
         "comment_node_id": comment["id"],
         "comment_id": int(comment["fullDatabaseId"]),
         "file": file_path,
         "line": line_int,
-        "outdated": bool(thread.get("isOutdated") or comment.get("outdated")),
-        "marker_key": extract_marker_key(comment.get("body") or ""),
-        "body_excerpt": redact_comment_body(comment.get("body") or ""),
+        "outdated": outdated,
+        "marker_key": extract_marker_key(body),
+        "body_excerpt": redact_comment_body(body),
         "code_snippet": code_snippet(workspace, file_path, line_int),
+        "search_context": search_current_context(workspace, file_path, body) if outdated else [],
         "url": comment.get("url"),
     }
 

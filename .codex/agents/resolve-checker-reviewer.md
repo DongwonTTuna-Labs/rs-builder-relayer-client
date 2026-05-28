@@ -26,7 +26,14 @@ Codex PR Review v2 의 **Stage 0** 게이트.
       "outdated": false,
       "marker_key": "abc123...",
       "body_excerpt": "<코멘트 본문 (markdown 그대로, secrets 는 사전에 redact 됨)>",
-      "code_snippet": "<해당 file:line 주변 ±15 줄 (없으면 null)>"
+      "code_snippet": "<해당 file:line 주변 ±15 줄 (없으면 null)>",
+      "search_context": [
+        {
+          "term": "quoted_or_identifier_term",
+          "line": 120,
+          "snippet": "<현재 파일에서 term 이 매칭된 주변 코드>"
+        }
+      ]
     },
     ...
   ]
@@ -34,8 +41,9 @@ Codex PR Review v2 의 **Stage 0** 게이트.
 ```
 
 - 한 배치에는 항상 **최대 3 개** 의 코멘트가 들어온다.
-- `code_snippet` 이 `null` 이면 파일이 삭제되었거나 본 PR diff 에서 해당 위치가 사라졌음을 의미한다.
-- `outdated: true` 는 GitHub 이 해당 코멘트를 "이미 변경된 라인" 으로 마킹했다는 뜻이다. `line` 은 원본(`original_line`) 값에서 채워온 위치이므로, 현재 PR head 의 동일 위치를 직접 보고 판정할 것. 위치가 사라졌더라도 의도된 수정이 명백하지 않으면 안전하게 `resolved: false`.
+- `code_snippet` 은 best-effort line context 이다. 특히 `outdated: true` 에서는 원본 라인을 현재 파일에 대입한 주변 코드일 수 있으므로 단독 근거로 삼지 말 것.
+- `search_context` 는 outdated comment 본문의 backtick/code term 을 현재 파일에서 검색한 보조 근거이다. 존재하면 `code_snippet` 보다 우선해서 현재 코드가 지적을 해소했는지 확인할 것.
+- `outdated: true` 는 GitHub 이 해당 코멘트를 "이미 변경된 라인" 으로 마킹했다는 뜻이다. `search_context` 가 비었거나 판단에 부족하면 `Read` / `Grep` 으로 현재 파일 또는 repo 를 직접 확인하라. 그래도 의도된 수정이 명백하지 않으면 안전하게 `resolved: false`.
 
 ## 출력 (필수)
 
