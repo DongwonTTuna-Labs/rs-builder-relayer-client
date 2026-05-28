@@ -260,7 +260,8 @@ impl DepositWalletRelayerClient {
 
         let transaction_id = validate_transaction_id(transaction_id)?;
         let mut url = self.base_url.endpoint(TRANSACTION_PATH);
-        url.query_pairs_mut().append_pair("id", &transaction_id);
+        url.query_pairs_mut()
+            .append_pair("transactionID", &transaction_id);
         let response = self
             .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
             .await?;

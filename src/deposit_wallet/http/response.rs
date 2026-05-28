@@ -137,8 +137,15 @@ pub(super) fn extract_submit_transaction_id(bytes: &[u8]) -> Option<String> {
 
 fn parse_submit_response_body(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
     match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
-        Some(b'{') => serde_json::from_slice::<RelayerSubmitResponse>(bytes).map_err(|_| {
-            RelayerError::Other("could not parse submit response object".to_string())
+        Some(b'{') => serde_json::from_slice::<RelayerSubmitResponse>(bytes).or_else(|_| {
+            let id_only = serde_json::from_slice::<SubmitTransactionIdOnly>(bytes).map_err(|_| {
+                RelayerError::Other("could not parse submit response object".to_string())
+            })?;
+            Ok(RelayerSubmitResponse {
+                transaction_id: id_only.transaction_id,
+                state: RelayerTransactionState::New,
+                transaction_hash: None,
+            })
         }),
         Some(b'[') => Err(RelayerError::reconciliation_required(
             "submit response arrays are not an official relayer wire format; manual reconciliation required"
