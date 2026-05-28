@@ -275,6 +275,11 @@ fn relayer_url_enforces_production_boundary() {
     assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com?x=1").is_err());
     assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com/#frag").is_err());
     assert!(DepositWalletRelayerUrl::loopback("http://[::1]/").is_ok());
+    assert!(DepositWalletRelayerUrl::loopback("http://user@127.0.0.1/").is_err());
+    assert!(DepositWalletRelayerUrl::loopback("http://127.0.0.1/?x=1").is_err());
+    assert!(DepositWalletRelayerUrl::loopback("http://127.0.0.1/#frag").is_err());
+    assert!(DepositWalletRelayerUrl::loopback("http://127.0.0.1/path").is_err());
+    assert!(DepositWalletRelayerUrl::loopback("http://192.0.2.1/").is_err());
 
     let production = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let amoy = deposit_wallet_contract_config(80002).unwrap();
@@ -626,6 +631,55 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
 }
 
 #[test]
+fn transaction_response_normalizes_valid_transaction_hashes() {
+    let transaction_id = "tx-normalized-hash";
+    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let mut response = transaction_response_value(transaction_id, "STATE_CONFIRMED");
+    response["transactionHash"] =
+        json!("0X38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8");
+
+    let parsed =
+        parse_transaction_response(transaction_id, expected_factory, response.to_string().as_bytes())
+            .unwrap();
+
+    assert_eq!(
+        parsed.receipt.transaction_hash.as_deref(),
+        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8")
+    );
+}
+
+#[test]
+fn transaction_response_rejects_malformed_address_evidence() {
+    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    for (label, field, value) in [
+        ("from-empty", "from", json!("")),
+        ("from-number", "from", json!(137)),
+        ("from-object", "from", json!({"address": WALLET_OWNER})),
+        ("to-empty", "to", json!("")),
+        ("to-number", "to", json!(137)),
+        ("owner-empty", "owner", json!("")),
+        ("owner-number", "owner", json!(137)),
+    ] {
+        let transaction_id = format!("tx-bad-address-{label}");
+        let mut response = transaction_response_value(&transaction_id, "STATE_CONFIRMED");
+        response[field] = value;
+
+        let error = parse_transaction_response(
+            &transaction_id,
+            expected_factory,
+            response.to_string().as_bytes(),
+        )
+        .unwrap_err()
+        .error;
+
+        assert!(
+            matches!(error, RelayerError::Other(ref message) if message == "could not parse transaction response object"),
+            "{label}: {error}"
+        );
+    }
+}
+
+#[test]
 fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     let target = "tx-wire-evidence";
     let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
@@ -709,6 +763,16 @@ fn retry_after_parser_accepts_seconds_and_http_date_boundaries() {
     assert_eq!(
         super::transport::retry_after_duration_at(&headers, now),
         Some(Duration::from_secs(32))
+    );
+
+    headers.insert(
+        RETRY_AFTER,
+        HeaderValue::from_str(&httpdate::fmt_http_date(UNIX_EPOCH + Duration::from_secs(1)))
+            .unwrap(),
+    );
+    assert_eq!(
+        super::transport::retry_after_duration_at(&headers, now),
+        Some(Duration::ZERO)
     );
 }
 
