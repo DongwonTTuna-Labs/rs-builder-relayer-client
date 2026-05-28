@@ -130,6 +130,15 @@ GET /transaction?transactionID=<id>
 
 `POST /submit` returns a `transactionID`. The on-chain transaction hash may be unavailable until polling succeeds.
 
+### Current owner-state boundary
+
+This PR keeps nonce leases, in-flight submits, and ambiguous submit recovery state
+inside each `DepositWalletRelayerClient` instance. The state is sharded by owner
+within a client, but it is not shared across separately constructed clients and
+is not durable across process restarts. Production submit and manual-clear
+permits remain non-public until a later PR adds durable crate-trusted owner
+state or an equivalent single-owner executor.
+
 ## Transaction state machine
 
 ```rust
