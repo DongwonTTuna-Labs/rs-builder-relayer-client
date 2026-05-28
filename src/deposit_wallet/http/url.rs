@@ -16,10 +16,10 @@ pub(super) enum DepositWalletRelayerUrlKind {
 impl DepositWalletRelayerUrl {
     /// Builds a production relayer URL.
     ///
-    /// Production URLs are allowlisted for public read-only transaction
-    /// polling. This PR intentionally does not expose public production
-    /// nonce-read, POST, owner-recovery, or manual-clear permit issuance; live
-    /// submit approval needs durable owner state and a trusted capability
+    /// This validates the production host boundary only. PR #20 keeps
+    /// production WALLET polling and nonce reads blocked until official or
+    /// recorded deposit-wallet relayer response evidence is reviewed; live
+    /// submit approval also needs durable owner state and a trusted capability
     /// outside this URL type.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)

@@ -5,7 +5,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
-use crate::deposit_wallet::{deposit_wallet_contract_config, WALLET_TRANSACTION_TYPE};
+use crate::deposit_wallet::{
+    deposit_wallet_contract_config, derive_deposit_wallet_address, WALLET_TRANSACTION_TYPE,
+};
 
 use super::response::{parse_transaction_response, validate_transaction_id};
 use super::*;
@@ -227,26 +229,19 @@ async fn write_response(stream: &mut TcpStream, response: TestResponse) {
         .expect("response should write");
 }
 
-async fn wait_for_available_permits(limiter: &ErrorBodyDrainLimiter, expected: usize) {
-    for _ in 0..50 {
-        if limiter.available_permits() == expected {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(limiter.available_permits(), expected);
-}
-
 fn transaction_response_value_for_owner(
     transaction_id: &str,
     state: &str,
     owner: &str,
 ) -> Value {
+    let config = deposit_wallet_contract_config(137).unwrap();
+    let deposit_wallet = derive_deposit_wallet_address(address(owner), config).unwrap();
     json!({
         "transactionID": transaction_id,
         "type": WALLET_TRANSACTION_TYPE,
         "from": owner,
-        "to": to_checksum(&deposit_wallet_contract_config(137).unwrap().factory, None),
+        "to": to_checksum(&config.factory, None),
+        "proxyAddress": to_checksum(&deposit_wallet, None),
         "state": state,
         "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
         "owner": owner
@@ -371,14 +366,34 @@ fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
 }
 
 #[test]
-fn transaction_response_fixture_matches_official_owner_field() {
+fn transaction_response_fixture_rejects_unverified_proxy_address() {
     let transaction_id = "0190b317-a1d3-7bec-9b91-eeb6dcd3a620";
     let fixture = fixture_text("wallet_transaction_response.json");
 
+    let error = parse_transaction_response(
+        transaction_id,
+        deposit_wallet_contract_config(137).unwrap(),
+        fixture.as_bytes(),
+    )
+    .unwrap_err()
+    .error;
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("proxyAddress"));
+    assert!(!error
+        .to_string()
+        .contains("0x6d8c4e9adf5748af82dabe2c6225207770d6b4fa"));
+}
+
+#[test]
+fn transaction_response_receipt_debug_redacts_owner_wallet_hash_and_id() {
+    let transaction_id = "tx-debug-redaction";
+    let response = transaction_response_value(transaction_id, "STATE_CONFIRMED");
+
     let parsed = parse_transaction_response(
         transaction_id,
-        deposit_wallet_contract_config(137).unwrap().factory,
-        fixture.as_bytes(),
+        deposit_wallet_contract_config(137).unwrap(),
+        response.to_string().as_bytes(),
     )
     .unwrap();
 
@@ -386,13 +401,27 @@ fn transaction_response_fixture_matches_official_owner_field() {
     assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
     assert_eq!(parsed.owner, Some(address(WALLET_OWNER)));
     assert_eq!(parsed.receipt.owner, Some(address(WALLET_OWNER)));
+    assert_eq!(
+        parsed.receipt.deposit_wallet,
+        Some(
+            derive_deposit_wallet_address(
+                address(WALLET_OWNER),
+                deposit_wallet_contract_config(137).unwrap()
+            )
+            .unwrap()
+        )
+    );
     let debug = format!("{:?}", parsed.receipt);
     let owner_checksum = to_checksum(&address(WALLET_OWNER), None);
+    let wallet_checksum =
+        to_checksum(&parsed.receipt.deposit_wallet.expect("wallet evidence"), None);
     let transaction_hash =
         "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8";
     assert!(!debug.contains(transaction_id));
     assert!(!debug.contains(&owner_checksum));
     assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
+    assert!(!debug.contains(&wallet_checksum));
+    assert!(!debug.contains(&wallet_checksum.to_ascii_lowercase()));
     assert!(!debug.contains(transaction_hash));
     assert!(!debug.contains(&transaction_hash.to_ascii_uppercase()));
 }
@@ -448,6 +477,16 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     assert_eq!(receipt.transaction_id, "tx-owner");
     assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
     assert_eq!(receipt.owner, Some(address(WALLET_OWNER)));
+    assert_eq!(
+        receipt.deposit_wallet,
+        Some(
+            derive_deposit_wallet_address(
+                address(WALLET_OWNER),
+                deposit_wallet_contract_config(137).unwrap()
+            )
+            .unwrap()
+        )
+    );
     let requests = handle.await.unwrap();
     assert_eq!(requests[0].method, "GET");
     assert_eq!(requests[0].path, "/transaction?id=tx-owner");
@@ -609,7 +648,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 
     let parsed = parse_transaction_response(
         target,
-        deposit_wallet_contract_config(137).unwrap().factory,
+        deposit_wallet_contract_config(137).unwrap(),
         matching.as_bytes(),
     )
     .unwrap();
@@ -624,7 +663,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     .to_string();
     let parsed = parse_transaction_response(
         target,
-        deposit_wallet_contract_config(137).unwrap().factory,
+        deposit_wallet_contract_config(137).unwrap(),
         body.as_bytes(),
     )
     .unwrap();
@@ -632,7 +671,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 
     let error = parse_transaction_response(
         target,
-        deposit_wallet_contract_config(137).unwrap().factory,
+        deposit_wallet_contract_config(137).unwrap(),
         missing.as_bytes(),
     )
     .unwrap_err()
@@ -643,7 +682,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     let object_mismatch = transaction_response_value("other-object-id", "STATE_CONFIRMED");
     let error = parse_transaction_response(
         target,
-        deposit_wallet_contract_config(137).unwrap().factory,
+        deposit_wallet_contract_config(137).unwrap(),
         object_mismatch.to_string().as_bytes(),
     )
     .unwrap_err()
@@ -660,7 +699,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
         let body = body_from_ids(&fixture[fixture_key]);
         let error = parse_transaction_response(
             target,
-            deposit_wallet_contract_config(137).unwrap().factory,
+            deposit_wallet_contract_config(137).unwrap(),
             body.as_bytes(),
         )
         .unwrap_err()
@@ -675,7 +714,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 
 #[test]
 fn transaction_response_rejects_malformed_transaction_hashes() {
-    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let config = deposit_wallet_contract_config(137).unwrap();
     for (label, malformed_hash) in [
         ("too-short", "0x1234"),
         (
@@ -693,7 +732,7 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
 
         let error = parse_transaction_response(
             &transaction_id,
-            expected_factory,
+            config,
             response.to_string().as_bytes(),
         )
         .unwrap_err()
@@ -713,7 +752,7 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
 #[test]
 fn transaction_response_rejects_partial_required_fields() {
     let target = "tx-partial";
-    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let config = deposit_wallet_contract_config(137).unwrap();
 
     let mut missing_transaction_id = transaction_response_value(target, "STATE_CONFIRMED");
     missing_transaction_id
@@ -734,7 +773,7 @@ fn transaction_response_rejects_partial_required_fields() {
         ("non-string state", non_string_state),
     ] {
         let object_error =
-            parse_transaction_response(target, expected_factory, response.to_string().as_bytes())
+            parse_transaction_response(target, config, response.to_string().as_bytes())
                 .unwrap_err()
                 .error;
         assert!(
@@ -745,7 +784,7 @@ fn transaction_response_rejects_partial_required_fields() {
 
         let array_error = parse_transaction_response(
             target,
-            expected_factory,
+            config,
             json!([response]).to_string().as_bytes(),
         )
         .unwrap_err()
@@ -761,13 +800,13 @@ fn transaction_response_rejects_partial_required_fields() {
 #[test]
 fn transaction_response_normalizes_valid_transaction_hashes() {
     let transaction_id = "tx-normalized-hash";
-    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let config = deposit_wallet_contract_config(137).unwrap();
     let mut response = transaction_response_value(transaction_id, "STATE_CONFIRMED");
     response["transactionHash"] =
         json!("0X38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8");
 
     let parsed =
-        parse_transaction_response(transaction_id, expected_factory, response.to_string().as_bytes())
+        parse_transaction_response(transaction_id, config, response.to_string().as_bytes())
             .unwrap();
 
     assert_eq!(
@@ -778,7 +817,7 @@ fn transaction_response_normalizes_valid_transaction_hashes() {
 
 #[test]
 fn transaction_response_rejects_malformed_address_evidence() {
-    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let config = deposit_wallet_contract_config(137).unwrap();
     for (label, field, value) in [
         ("from-empty", "from", json!("")),
         ("from-number", "from", json!(137)),
@@ -787,6 +826,8 @@ fn transaction_response_rejects_malformed_address_evidence() {
         ("to-number", "to", json!(137)),
         ("owner-empty", "owner", json!("")),
         ("owner-number", "owner", json!(137)),
+        ("proxy-empty", "proxyAddress", json!("")),
+        ("proxy-number", "proxyAddress", json!(137)),
     ] {
         let transaction_id = format!("tx-bad-address-{label}");
         let mut response = transaction_response_value(&transaction_id, "STATE_CONFIRMED");
@@ -794,7 +835,7 @@ fn transaction_response_rejects_malformed_address_evidence() {
 
         let object_error = parse_transaction_response(
             &transaction_id,
-            expected_factory,
+            config,
             response.to_string().as_bytes(),
         )
         .unwrap_err()
@@ -811,7 +852,7 @@ fn transaction_response_rejects_malformed_address_evidence() {
 
         let array_error = parse_transaction_response(
             &transaction_id,
-            expected_factory,
+            config,
             json!([transaction_response_value("other-tx", "STATE_CONFIRMED"), response])
                 .to_string()
                 .as_bytes(),
@@ -832,7 +873,7 @@ fn transaction_response_rejects_malformed_address_evidence() {
 #[test]
 fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     let target = "tx-wire-evidence";
-    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+    let config = deposit_wallet_contract_config(137).unwrap();
     let other_address = to_checksum(&address(OTHER_OWNER), None);
     let mut missing_type = transaction_response_value(target, "STATE_CONFIRMED");
     missing_type.as_object_mut().unwrap().remove("type");
@@ -852,6 +893,10 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     missing_to.as_object_mut().unwrap().remove("to");
     let mut to_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
     to_mismatch["to"] = json!(other_address);
+    let mut missing_proxy = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_proxy.as_object_mut().unwrap().remove("proxyAddress");
+    let mut proxy_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    proxy_mismatch["proxyAddress"] = json!(other_address);
 
     for (label, response, expected_message) in [
         (
@@ -879,9 +924,19 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
             to_mismatch,
             "did not match expected relayer target",
         ),
+        (
+            "missing proxyAddress",
+            missing_proxy,
+            "did not include proxyAddress deposit wallet evidence",
+        ),
+        (
+            "proxyAddress mismatch",
+            proxy_mismatch,
+            "did not match derived deposit wallet",
+        ),
     ] {
         let error =
-            parse_transaction_response(target, expected_factory, response.to_string().as_bytes())
+            parse_transaction_response(target, config, response.to_string().as_bytes())
                 .unwrap_err()
                 .error;
         assert!(
@@ -1033,8 +1088,11 @@ async fn error_body_drain_limiter_releases_permits_and_handles_exhaustion() {
         .unwrap();
     let limiter = ErrorBodyDrainLimiter::new(1);
 
-    limiter.try_spawn_error_response_body_drain(response);
-    wait_for_available_permits(&limiter, 1).await;
+    let drain = limiter
+        .try_spawn_error_response_body_drain_for_test(response)
+        .unwrap();
+    drain.await.unwrap();
+    assert_eq!(limiter.available_permits(), 1);
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);
 
@@ -1050,7 +1108,9 @@ async fn error_body_drain_limiter_releases_permits_and_handles_exhaustion() {
         .unwrap();
     let exhausted_limiter = ErrorBodyDrainLimiter::new(0);
 
-    exhausted_limiter.try_spawn_error_response_body_drain(response);
+    assert!(exhausted_limiter
+        .try_spawn_error_response_body_drain_for_test(response)
+        .is_none());
     assert_eq!(exhausted_limiter.available_permits(), 0);
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);

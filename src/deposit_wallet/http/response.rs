@@ -2,7 +2,9 @@ use super::redaction::{
     external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
 use super::*;
-use crate::deposit_wallet::WALLET_TRANSACTION_TYPE;
+use crate::deposit_wallet::{
+    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
+};
 use serde_json::Value;
 
 const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
@@ -15,6 +17,7 @@ pub struct DepositWalletTransactionReceipt {
     pub state: RelayerTransactionState,
     pub transaction_hash: Option<String>,
     pub owner: Option<Address>,
+    pub deposit_wallet: Option<Address>,
 }
 
 impl fmt::Debug for DepositWalletTransactionReceipt {
@@ -27,6 +30,10 @@ impl fmt::Debug for DepositWalletTransactionReceipt {
                 &self.transaction_hash.as_deref().map(sanitized_external_token),
             )
             .field("owner", &self.owner.map(redacted_address))
+            .field(
+                "deposit_wallet",
+                &self.deposit_wallet.map(redacted_address),
+            )
             .finish()
     }
 }
@@ -84,11 +91,17 @@ pub(super) struct RelayerTransactionResponseWithOwner {
     to: Option<Address>,
     #[serde(default, deserialize_with = "deserialize_optional_address")]
     owner: Option<Address>,
+    #[serde(
+        default,
+        rename = "proxyAddress",
+        deserialize_with = "deserialize_optional_address"
+    )]
+    proxy_address: Option<Address>,
 }
 
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
-    expected_factory: Address,
+    config: DepositWalletContractConfig,
     bytes: &[u8],
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     match bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace()) {
@@ -108,7 +121,7 @@ pub(super) fn parse_transaction_response(
                 })?;
             return parse_verified_transaction_response(
                 expected_transaction_id,
-                expected_factory,
+                config,
                 response,
             );
         }
@@ -121,12 +134,12 @@ pub(super) fn parse_transaction_response(
     }
 
     let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
-    parse_verified_transaction_response(expected_transaction_id, expected_factory, response)
+    parse_verified_transaction_response(expected_transaction_id, config, response)
 }
 
 fn parse_verified_transaction_response(
     expected_transaction_id: &str,
-    expected_factory: Address,
+    config: DepositWalletContractConfig,
     response: RelayerTransactionResponseWithOwner,
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
     let owner = response.owner;
@@ -145,17 +158,17 @@ fn parse_verified_transaction_response(
             )),
         ));
     }
-    validate_transaction_wire_evidence(&response, expected_factory, owner)?;
-    let parsed = receipt_from_submit_response(response.response, owner)
+    let deposit_wallet = validate_transaction_wire_evidence(&response, config, owner)?;
+    let parsed = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
         .map_err(TransactionParseError::new)?;
     Ok(parsed)
 }
 
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
-    expected_factory: Address,
+    config: DepositWalletContractConfig,
     owner: Option<Address>,
-) -> std::result::Result<(), TransactionParseError> {
+) -> std::result::Result<Address, TransactionParseError> {
     let tx_type = response.tx_type.as_deref().ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
             "transaction response did not include deposit-wallet transaction type; manual reconciliation required"
@@ -199,17 +212,39 @@ fn validate_transaction_wire_evidence(
                 .to_string(),
         ))
     })?;
-    if to != expected_factory {
+    if to != config.factory {
         return Err(TransactionParseError::new(
             RelayerError::reconciliation_required(format!(
                 "transaction response to address {} did not match expected relayer target {}; manual reconciliation required",
                 redacted_address(to),
-                redacted_address(expected_factory)
+                redacted_address(config.factory)
             )),
         ));
     }
 
-    Ok(())
+    let proxy_address = response.proxy_address.ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "transaction response did not include proxyAddress deposit wallet evidence; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    let expected_deposit_wallet =
+        derive_deposit_wallet_address(owner, config).map_err(|error| {
+            TransactionParseError::new(RelayerError::reconciliation_required(format!(
+                "could not derive deposit wallet evidence: {error}"
+            )))
+        })?;
+    if proxy_address != expected_deposit_wallet {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response proxyAddress {} did not match derived deposit wallet {}; manual reconciliation required",
+                redacted_address(proxy_address),
+                redacted_address(expected_deposit_wallet)
+            )),
+        ));
+    }
+
+    Ok(proxy_address)
 }
 
 fn select_transaction_response_from_array(
@@ -338,7 +373,7 @@ fn validate_transaction_address_evidence_shape(
             "could not parse transaction response object".to_string(),
         )));
     };
-    for field in ["from", "to", "owner"] {
+    for field in ["from", "to", "owner", "proxyAddress"] {
         validate_optional_address_evidence_value(object, field)?;
     }
     Ok(())
@@ -371,6 +406,7 @@ fn validate_optional_address_evidence_value(
 fn receipt_from_submit_response(
     response: RelayerSubmitResponse,
     owner: Option<Address>,
+    deposit_wallet: Option<Address>,
 ) -> Result<ParsedTransactionReceipt> {
     if response.transaction_id.trim().is_empty() {
         return Err(RelayerError::Other(
@@ -394,6 +430,7 @@ fn receipt_from_submit_response(
             state: response.state,
             transaction_hash,
             owner,
+            deposit_wallet,
         },
         owner,
     })

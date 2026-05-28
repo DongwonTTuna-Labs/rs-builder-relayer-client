@@ -23,6 +23,18 @@ impl ErrorBodyDrainLimiter {
     }
 
     #[cfg(test)]
+    pub(super) fn try_spawn_error_response_body_drain_for_test(
+        &self,
+        response: reqwest::Response,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        let permit = self.semaphore.clone().try_acquire_owned().ok()?;
+        Some(tokio::spawn(async move {
+            let _permit = permit;
+            drain_error_response_body(response).await;
+        }))
+    }
+
+    #[cfg(test)]
     pub(super) fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }

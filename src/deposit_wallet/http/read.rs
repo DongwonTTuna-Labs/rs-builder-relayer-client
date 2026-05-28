@@ -69,7 +69,7 @@ impl DepositWalletRelayerClient {
         let response = self
             .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
             .await?;
-        parse_transaction_response(&transaction_id, self.config.factory, &response)
+        parse_transaction_response(&transaction_id, self.config, &response)
             .map_err(|parse_error| parse_error.error)
     }
 }
