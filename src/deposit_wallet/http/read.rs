@@ -1,11 +1,9 @@
-use super::*;
-#[cfg(test)]
 use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
-#[cfg(test)]
 use super::response::{
     parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt,
 };
 use super::state::OwnerNonceReadReservation;
+use super::*;
 use serde_json::value::RawValue;
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
@@ -98,7 +96,11 @@ impl DepositWalletRelayerClient {
         owner: Address,
         gate: DepositWalletMutationGate,
     ) -> Result<DepositWalletNonceLease> {
-        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletNonceRead)?;
+        self.ensure_permitted_for_action(
+            &gate,
+            owner,
+            DepositWalletMutationAction::WalletNonceRead,
+        )?;
         if self.base_url.is_production_host() {
             return Err(RelayerError::mutation_blocked(
                 "production WALLET nonce lease reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
@@ -139,8 +141,7 @@ impl DepositWalletRelayerClient {
         parse_wallet_nonce_response(&response)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn get_transaction_for_owner(
+    pub async fn get_transaction_for_owner(
         &self,
         owner: Address,
         transaction_id: &str,
@@ -151,12 +152,12 @@ impl DepositWalletRelayerClient {
                     .to_string(),
             ));
         }
-        self.fetch_transaction(transaction_id)
-            .await
-            .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
+        let parsed = self.fetch_transaction(transaction_id).await?;
+        let receipt = validate_owner_transaction_evidence(owner, parsed.receipt)?;
+        self.record_terminal_observation_from_receipt(owner, &receipt)?;
+        classify_owner_transaction_receipt(receipt)
     }
 
-    #[cfg(test)]
     pub(super) async fn fetch_transaction(
         &self,
         transaction_id: &str,
@@ -178,8 +179,7 @@ impl DepositWalletRelayerClient {
     }
 }
 
-#[cfg(test)]
-fn validate_owner_transaction_receipt(
+fn validate_owner_transaction_evidence(
     expected_owner: Address,
     receipt: DepositWalletTransactionReceipt,
 ) -> Result<DepositWalletTransactionReceipt> {
@@ -196,6 +196,13 @@ fn validate_owner_transaction_receipt(
             redacted_address(expected_owner)
         )));
     }
+    Ok(receipt)
+}
+
+fn classify_owner_transaction_receipt(
+    receipt: DepositWalletTransactionReceipt,
+) -> Result<DepositWalletTransactionReceipt> {
+    let transaction_id = sanitized_external_token(&receipt.transaction_id);
     match &receipt.state {
         RelayerTransactionState::Confirmed => {
             if receipt.transaction_hash.is_none() {

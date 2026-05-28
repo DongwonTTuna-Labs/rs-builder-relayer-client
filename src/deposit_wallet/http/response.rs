@@ -2,16 +2,12 @@ use super::redaction::{
     redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
 use super::*;
-#[cfg(test)]
 use super::redaction::external_token_hash;
-#[cfg(test)]
 use crate::deposit_wallet::{
     derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
 };
-#[cfg(test)]
 use serde_json::Value;
 
-#[cfg(test)]
 const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
     "Deposit-wallet reconciliation required: ";
 
@@ -62,20 +58,17 @@ impl fmt::Debug for ReceiptStateDebug<'_> {
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ParsedTransactionReceipt {
     pub(super) receipt: DepositWalletTransactionReceipt,
     pub(super) owner: Option<Address>,
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct TransactionParseError {
     pub(super) error: RelayerError,
 }
 
-#[cfg(test)]
 impl TransactionParseError {
     pub(super) fn new(error: RelayerError) -> Self {
         Self { error }
@@ -86,7 +79,6 @@ impl TransactionParseError {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RelayerTransactionResponseWithOwner {
@@ -144,7 +136,6 @@ fn parse_submit_response_body(bytes: &[u8]) -> Result<RelayerSubmitResponse> {
     }
 }
 
-#[cfg(test)]
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
     config: DepositWalletContractConfig,
@@ -183,7 +174,6 @@ pub(super) fn parse_transaction_response(
     parse_verified_transaction_response(expected_transaction_id, config, response)
 }
 
-#[cfg(test)]
 fn parse_verified_transaction_response(
     expected_transaction_id: &str,
     config: DepositWalletContractConfig,
@@ -211,7 +201,6 @@ fn parse_verified_transaction_response(
     Ok(ParsedTransactionReceipt { receipt, owner })
 }
 
-#[cfg(test)]
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
     config: DepositWalletContractConfig,
@@ -290,7 +279,6 @@ fn validate_transaction_wire_evidence(
     Ok(proxy_address)
 }
 
-#[cfg(test)]
 fn select_transaction_response_from_array(
     expected_transaction_id: &str,
     bytes: &[u8],
@@ -389,19 +377,16 @@ fn select_transaction_response_from_array(
     Ok(response)
 }
 
-#[cfg(test)]
 fn transaction_id_from_value(value: &Value) -> Option<&str> {
     value.as_object()?.get("transactionID")?.as_str()
 }
 
-#[cfg(test)]
 fn reconciliation_reason_from_deserializer_error(message: &str) -> Option<String> {
     let start = message.find(DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX)?
         + DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX.len();
     Some(message[start..].to_string())
 }
 
-#[cfg(test)]
 fn validate_transaction_address_evidence_shape(
     value: &Value,
 ) -> std::result::Result<(), TransactionParseError> {
@@ -416,7 +401,6 @@ fn validate_transaction_address_evidence_shape(
     Ok(())
 }
 
-#[cfg(test)]
 fn validate_optional_address_evidence_value(
     object: &serde_json::Map<String, Value>,
     field: &str,
@@ -503,14 +487,12 @@ pub(super) fn validate_transaction_hash(transaction_hash: &str) -> Result<String
     ))
 }
 
-#[cfg(test)]
 fn is_official_address_wire_format(raw: &str) -> bool {
     raw.len() == 42
         && raw.starts_with("0x")
         && raw[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-#[cfg(test)]
 fn deserialize_optional_address<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Address>, D::Error>

@@ -27,26 +27,6 @@ impl DepositWalletRelayerClient {
         self.submit_owner_body(owner, body).await
     }
 
-    /// Submits a signed `WALLET` batch when the mutation gate permits it.
-    ///
-    /// As with [`Self::submit_wallet_create`], the public production API remains
-    /// default-deny in this PR. Production submit enablement is intentionally
-    /// reserved for a later live-submit change with durable owner state.
-    ///
-    /// This compatibility boundary does not add a second nonce GET because that
-    /// would serialize every WALLET submit behind an extra relayer roundtrip.
-    /// This PR does not expose a production-capable nonce lease API. A future
-    /// live-submit change should add a crate-owned lease capability so nonce
-    /// fetch, signing, and submit share one owner-scoped lease.
-    pub async fn submit_signed_wallet_batch(
-        &self,
-        signed: SignedDepositWalletBatch,
-        gate: DepositWalletMutationGate,
-    ) -> Result<DepositWalletTransactionReceipt> {
-        self.submit_signed_wallet_batch_inner(signed, gate, None)
-            .await
-    }
-
     pub async fn submit_signed_wallet_batch_with_nonce_lease(
         &self,
         signed: SignedDepositWalletBatch,
@@ -70,7 +50,7 @@ impl DepositWalletRelayerClient {
         self.submit_signed_wallet_batch_inner(
             signed,
             gate,
-            Some(nonce_lease.into_unexpired_reservation(now_unix_seconds)?),
+            nonce_lease.into_unexpired_reservation(now_unix_seconds)?,
         )
         .await
     }
@@ -79,21 +59,15 @@ impl DepositWalletRelayerClient {
         &self,
         signed: SignedDepositWalletBatch,
         gate: DepositWalletMutationGate,
-        nonce_reservation: Option<OwnerNonceReadReservation>,
+        nonce_reservation: OwnerNonceReadReservation,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
         self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
         self.ensure_deadline_fresh(&signed)?;
+        self.auth.headers()?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
-        let mut reservation = match nonce_reservation {
-            Some(nonce_reservation) => {
-                self.promote_owner_nonce_read_to_submit(nonce_reservation, preflight_hash)?
-            }
-            None => {
-                self.ensure_owner_unblocked(owner)?;
-                self.reserve_owner_submit(owner, preflight_hash)?
-            }
-        };
+        let mut reservation =
+            self.promote_owner_nonce_read_to_submit(nonce_reservation, preflight_hash)?;
 
         let request = match build_deposit_wallet_batch_request_from_signed(signed, self.config) {
             Ok(request) => request,
@@ -120,6 +94,7 @@ impl DepositWalletRelayerClient {
         owner: Address,
         body: String,
     ) -> Result<DepositWalletTransactionReceipt> {
+        self.auth.headers()?;
         let payload_hash = payload_hash_summary(body.as_bytes());
         let reservation = self.reserve_owner_submit(owner, payload_hash)?;
         self.submit_reserved_owner_body(reservation, body).await
@@ -224,10 +199,16 @@ impl DepositWalletRelayerClient {
                 )))
             }
             Err(RelayerError::AuthError(_)) => {
-                reservation.clear()?;
-                Err(RelayerError::AuthError(
-                    "submit authentication failed before POST".to_string(),
-                ))
+                self.record_ambiguous_post_boundary(
+                    &mut reservation,
+                    owner,
+                    payload_hash.clone(),
+                )?;
+                Err(RelayerError::ambiguous_submit(format!(
+                    "submit authentication failed after owner reservation for owner {} payload {}; manual reconciliation required",
+                    redacted_address(owner),
+                    display_payload_hash(&payload_hash)
+                )))
             }
             Err(_error) => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
