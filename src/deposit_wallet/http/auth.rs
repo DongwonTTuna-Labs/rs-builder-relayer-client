@@ -21,7 +21,6 @@ impl RelayerKeyAuth {
         self.api_key_address
     }
 
-    #[cfg(test)]
     pub(super) fn headers(&self) -> Result<HeaderMap> {
         let mut headers = HeaderMap::new();
         let mut api_key = HeaderValue::from_str(self.api_key.expose_secret())
@@ -81,13 +80,11 @@ impl fmt::Debug for RelayerKeyAuth {
     }
 }
 
-#[cfg(test)]
 pub(super) fn relayer_api_key_header() -> Result<HeaderName> {
     HeaderName::from_bytes(b"RELAYER_API_KEY")
         .map_err(|_| RelayerError::AuthError("invalid relayer API key header name".to_string()))
 }
 
-#[cfg(test)]
 pub(super) fn relayer_api_key_address_header() -> Result<HeaderName> {
     HeaderName::from_bytes(b"RELAYER_API_KEY_ADDRESS").map_err(|_| {
         RelayerError::AuthError("invalid relayer API key address header name".to_string())

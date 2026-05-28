@@ -52,12 +52,14 @@ impl RelayerError {
         Self::Other(format!("Invalid relayer URL: {}", message.into()))
     }
 
-    #[cfg(test)]
     pub(crate) fn mutation_blocked(message: impl Into<String>) -> Self {
         Self::Other(format!("Deposit-wallet mutation blocked: {}", message.into()))
     }
 
-    #[cfg(test)]
+    pub(crate) fn ambiguous_submit(message: impl Into<String>) -> Self {
+        Self::Other(format!("Ambiguous deposit-wallet submit: {}", message.into()))
+    }
+
     pub(crate) fn reconciliation_required(message: impl Into<String>) -> Self {
         Self::Other(format!(
             "Deposit-wallet reconciliation required: {}",
@@ -82,6 +84,10 @@ impl RelayerError {
         matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet mutation blocked:"))
     }
 
+    pub fn is_deposit_wallet_ambiguous_submit(&self) -> bool {
+        matches!(self, Self::Other(message) if message.starts_with("Ambiguous deposit-wallet submit:"))
+    }
+
     pub fn is_deposit_wallet_reconciliation_required(&self) -> bool {
         matches!(self, Self::Other(message) if message.starts_with("Deposit-wallet reconciliation required:"))
     }
@@ -102,10 +108,11 @@ mod tests {
     #[test]
     fn deposit_wallet_error_classifiers_do_not_require_consumer_prefix_parsing() {
         assert!(RelayerError::mutation_blocked("locked").is_deposit_wallet_mutation_blocked());
+        assert!(RelayerError::ambiguous_submit("unknown post result").is_deposit_wallet_ambiguous_submit());
         assert!(RelayerError::reconciliation_required("manual check").is_deposit_wallet_reconciliation_required());
         assert!(RelayerError::transaction_absent("not indexed").is_deposit_wallet_transaction_absent());
         assert!(RelayerError::read_blocked("no evidence").is_deposit_wallet_read_blocked());
-        assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_mutation_blocked());
+        assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_ambiguous_submit());
         assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_transaction_absent());
         assert!(!RelayerError::Other("other".to_string()).is_deposit_wallet_read_blocked());
     }
