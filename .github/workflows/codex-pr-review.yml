@@ -1167,8 +1167,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      pull-requests: read
       id-token: write
     timeout-minutes: 30
     steps:
@@ -1438,6 +1437,33 @@ jobs:
             artifacts/design-plan.json
             artifacts/design-plan.md
           retention-days: 7
+
+  design-post:
+    name: design-post
+    needs: [resolve, tech-lead, design-coordinate]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download design plan
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-plan
+          path: artifacts
 
       - name: Post sticky design plan
         env:
