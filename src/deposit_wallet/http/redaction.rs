@@ -23,6 +23,11 @@ pub(super) fn signed_digest_payload_hash(digest: H256) -> String {
     format!("signed-digest:0x{hex}")
 }
 
+pub(super) fn recovered_payload_hash(transaction_id: &str) -> String {
+    let hex = hex::encode(keccak256(transaction_id.as_bytes()));
+    format!("recovered:0x{hex}")
+}
+
 pub(super) fn display_payload_hash(payload_hash: &str) -> String {
     let Some((prefix, hex)) = payload_hash.rsplit_once("0x") else {
         return external_token_hash(payload_hash);

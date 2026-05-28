@@ -1,4 +1,7 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -8,6 +11,7 @@ use tokio::task::JoinHandle;
 
 use crate::deposit_wallet::{deposit_wallet_contract_config, WALLET_TRANSACTION_TYPE};
 
+use super::poll::{retry_after_poll_interval, transaction_poll_jitter};
 use super::response::{parse_transaction_response, validate_transaction_id};
 use super::*;
 
@@ -25,6 +29,24 @@ struct FixedClock {
 impl DepositWalletClock for FixedClock {
     fn now_unix_seconds(&self) -> Result<u64> {
         Ok(self.now)
+    }
+}
+
+#[derive(Default)]
+struct RecordingSleeper {
+    sleeps: Mutex<Vec<Duration>>,
+}
+
+impl RecordingSleeper {
+    fn sleeps(&self) -> Vec<Duration> {
+        self.sleeps.lock().unwrap().clone()
+    }
+}
+
+impl DepositWalletSleeper for RecordingSleeper {
+    fn sleep<'a>(&'a self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        self.sleeps.lock().unwrap().push(duration);
+        Box::pin(async {})
     }
 }
 
@@ -61,6 +83,11 @@ impl TestResponse {
             include_content_length: true,
             body: body.into(),
         }
+    }
+
+    fn with_header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.to_string(), value.to_string()));
+        self
     }
 }
 
@@ -155,6 +182,23 @@ fn test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient 
         relayer_auth(),
         deposit_wallet_contract_config(137).unwrap(),
         Arc::new(FixedClock { now: 1_700_000_000 }),
+        Arc::new(RecordingSleeper::default()),
+    )
+}
+
+fn test_client_with_sleeper(
+    base_url: DepositWalletRelayerUrl,
+    sleeper: Arc<RecordingSleeper>,
+) -> DepositWalletRelayerClient {
+    let clock: Arc<dyn DepositWalletClock> = Arc::new(FixedClock { now: 1_700_000_000 });
+    let sleeper_trait: Arc<dyn DepositWalletSleeper> = sleeper;
+    DepositWalletRelayerClient::from_parts(
+        reqwest_client(Duration::from_secs(2)),
+        base_url,
+        relayer_auth(),
+        deposit_wallet_contract_config(137).unwrap(),
+        clock,
+        sleeper_trait,
     )
 }
 
@@ -517,6 +561,129 @@ async fn idless_manual_reconciliation_rejects_when_local_transaction_record_exis
     let _ = handle.await.unwrap();
 }
 
+#[tokio::test]
+async fn poll_transaction_clears_owner_block_after_confirmed_local_submit() {
+    let owner = address(WALLET_OWNER);
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-poll-confirmed", "state": "STATE_NEW"}).to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value("tx-poll-confirmed", "STATE_CONFIRMED").to_string(),
+        ),
+    ])
+    .await;
+    let client = test_client(url);
+
+    let receipt = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap();
+    assert_eq!(receipt.transaction_id, "tx-poll-confirmed");
+    assert!(client.ensure_owner_unblocked(owner).is_err());
+
+    let confirmed = client
+        .poll_transaction(
+            "tx-poll-confirmed",
+            DepositWalletPollPolicy::new(2, Duration::from_millis(100)).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(confirmed.state, RelayerTransactionState::Confirmed);
+    assert_eq!(confirmed.owner, Some(owner));
+    client.ensure_owner_unblocked(owner).unwrap();
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].path, "/transaction?id=tx-poll-confirmed");
+}
+
+#[tokio::test]
+async fn poll_transaction_uses_retry_after_and_jitter_before_retrying() {
+    let owner = address(WALLET_OWNER);
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-retry-after-jitter-a", "state": "STATE_NEW"})
+                .to_string(),
+        ),
+        TestResponse::json("404 Not Found", "{}").with_header("retry-after", "1"),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value("tx-retry-after-jitter-a", "STATE_CONFIRMED").to_string(),
+        ),
+    ])
+    .await;
+    let sleeper = Arc::new(RecordingSleeper::default());
+    let client = test_client_with_sleeper(url, sleeper.clone());
+
+    client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
+        .unwrap();
+    let receipt = client
+        .poll_transaction(
+            "tx-retry-after-jitter-a",
+            DepositWalletPollPolicy::new(3, Duration::from_millis(100)).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+    assert_eq!(
+        sleeper.sleeps(),
+        vec![retry_after_poll_interval(
+            "tx-retry-after-jitter-a",
+            0,
+            Duration::from_millis(100),
+            Duration::from_secs(1)
+        )]
+    );
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 3);
+}
+
+#[test]
+fn poll_jitter_fixture_covers_zero_attempt_cap_and_interval_clamps() {
+    let fixture = fixture_value("poll_jitter_vectors.json");
+    for case in fixture["transactionPollJitter"].as_array().unwrap() {
+        let actual = transaction_poll_jitter(
+            case["transactionID"].as_str().unwrap(),
+            case["attempt"].as_u64().unwrap() as usize,
+            Duration::from_millis(case["baseMs"].as_u64().unwrap()),
+        );
+        assert_eq!(
+            actual,
+            Duration::from_millis(case["expectedMs"].as_u64().unwrap()),
+            "{case}"
+        );
+    }
+    for case in fixture["retryAfterPollInterval"].as_array().unwrap() {
+        let actual = retry_after_poll_interval(
+            case["transactionID"].as_str().unwrap(),
+            case["attempt"].as_u64().unwrap() as usize,
+            Duration::from_millis(case["policyIntervalMs"].as_u64().unwrap()),
+            Duration::from_millis(case["retryAfterMs"].as_u64().unwrap()),
+        );
+        assert_eq!(
+            actual,
+            Duration::from_millis(case["expectedMs"].as_u64().unwrap()),
+            "{case}"
+        );
+    }
+
+    assert_eq!(
+        transaction_poll_jitter("tx-zero-jitter", 0, Duration::from_millis(3)),
+        Duration::ZERO
+    );
+    let policy = DepositWalletPollPolicy::new(2, Duration::from_secs(5)).unwrap();
+    assert_eq!(policy.interval_for_attempt(4), MAX_POLL_INTERVAL);
+    assert_eq!(policy.interval_for_attempt(usize::MAX), MAX_POLL_INTERVAL);
+    assert!(DepositWalletPollPolicy::new(MAX_POLL_ATTEMPTS + 1, MIN_POLL_INTERVAL).is_err());
+}
+
 #[test]
 fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
     let fixture = fixture_value("wallet_nonce_response_cases.json");
@@ -633,7 +800,7 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
 }
 
 #[test]
-fn transaction_array_parser_uses_fixture_for_selection_and_missing_case() {
+fn transaction_array_parser_uses_fixture_for_selection_missing_and_duplicate_cases() {
     let fixture = fixture_value("transaction_array_response_cases.json");
     let target = fixture["target"].as_str().unwrap();
     let item = |transaction_id: String| transaction_response_value(&transaction_id, "STATE_CONFIRMED");
@@ -650,6 +817,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_missing_case() {
     };
     let matching = body_from_ids(&fixture["matchingIds"]);
     let missing = body_from_ids(&fixture["missingIds"]);
+    let duplicate = body_from_ids(&fixture["duplicateIds"]);
 
     let parsed = parse_transaction_response(
         target,
@@ -668,6 +836,19 @@ fn transaction_array_parser_uses_fixture_for_selection_and_missing_case() {
     .error;
     assert!(error.is_deposit_wallet_reconciliation_required());
     assert!(error.to_string().contains("did not include requested transaction id"));
+
+    let duplicate_error = parse_transaction_response(
+        target,
+        deposit_wallet_contract_config(137).unwrap().factory,
+        duplicate.as_bytes(),
+    )
+    .unwrap_err()
+    .error;
+    assert!(duplicate_error.is_deposit_wallet_reconciliation_required());
+    assert!(duplicate_error
+        .to_string()
+        .contains("duplicate requested transaction id hash"));
+    assert!(!duplicate_error.to_string().contains(target));
 }
 
 #[test]
