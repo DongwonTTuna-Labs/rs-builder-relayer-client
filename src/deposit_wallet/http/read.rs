@@ -24,6 +24,16 @@ pub struct DepositWalletNonceLease {
     _not_send_sync: PhantomData<Rc<()>>,
 }
 
+pub struct DepositWalletNonceLeaseSigningContext {
+    owner: Address,
+    nonce: U256,
+    nonce_owner: Address,
+    submit_from: Address,
+    deposit_wallet: Address,
+    chain_id: u64,
+    _not_send_sync: PhantomData<Rc<()>>,
+}
+
 impl DepositWalletNonceLease {
     pub fn owner(&self) -> Address {
         self.owner
@@ -51,11 +61,65 @@ impl DepositWalletNonceLease {
     }
 }
 
+impl DepositWalletNonceLeaseSigningContext {
+    pub(super) fn new(
+        owner: Address,
+        nonce: U256,
+        deposit_wallet: Address,
+        chain_id: u64,
+    ) -> Self {
+        Self {
+            owner,
+            nonce,
+            nonce_owner: owner,
+            submit_from: owner,
+            deposit_wallet,
+            chain_id,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub fn nonce_owner(&self) -> Address {
+        self.nonce_owner
+    }
+
+    pub fn submit_from(&self) -> Address {
+        self.submit_from
+    }
+
+    pub fn deposit_wallet(&self) -> Address {
+        self.deposit_wallet
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+}
+
 impl fmt::Debug for DepositWalletNonceLease {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DepositWalletNonceLease")
             .field("owner", &super::redaction::redacted_address(self.owner))
             .field("nonce", &self.nonce)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for DepositWalletNonceLeaseSigningContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletNonceLeaseSigningContext")
+            .field("owner", &super::redaction::redacted_address(self.owner))
+            .field("nonce", &self.nonce)
+            .field("deposit_wallet", &super::redaction::redacted_address(self.deposit_wallet))
+            .field("chain_id", &self.chain_id)
             .finish_non_exhaustive()
     }
 }
@@ -89,7 +153,7 @@ impl DepositWalletRelayerClient {
     }
 
     /// Fetches a WALLET nonce and returns the owner-scoped lease that must be
-    /// consumed by [`Self::submit_signed_wallet_batch_with_nonce_lease`].
+    /// consumed by [`Self::sign_and_submit_wallet_batch_with_nonce_lease`].
     ///
     /// This is a non-live test-loopback surface in this PR: production permit
     /// construction is intentionally unavailable. Production signing needs a

@@ -63,7 +63,7 @@ pub use permit::{
     DepositWalletMutationScope, DepositWalletOwnerSerializationEvidence,
     DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
 };
-pub use read::DepositWalletNonceLease;
+pub use read::{DepositWalletNonceLease, DepositWalletNonceLeaseSigningContext};
 pub use response::DepositWalletTransactionReceipt;
 pub use url::DepositWalletRelayerUrl;
 

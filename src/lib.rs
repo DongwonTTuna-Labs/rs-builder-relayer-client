@@ -19,10 +19,11 @@ pub use deposit_wallet::{
     DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
     DepositWalletIdlessSubmitReconciliationEvidence, DepositWalletMutationAction,
     DepositWalletMutationEnvironment, DepositWalletMutationGate, DepositWalletMutationPermit,
-    DepositWalletMutationScope, DepositWalletNonceLease, DepositWalletOwnerSerializationEvidence,
-    DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletRequestContext,
-    DepositWalletSubmitReconciliationEvidence, DepositWalletSubmitReconciliationObservation,
-    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerSubmitResponse,
+    DepositWalletMutationScope, DepositWalletNonceLease, DepositWalletNonceLeaseSigningContext,
+    DepositWalletOwnerSerializationEvidence, DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletRequestContext, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    RelayerSubmitResponse,
     RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};

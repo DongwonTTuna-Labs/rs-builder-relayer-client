@@ -3,7 +3,7 @@ use super::redaction::{
     display_payload_hash, external_token_hash, payload_hash_summary, redacted_address,
     signed_digest_payload_hash,
 };
-use super::read::DepositWalletNonceLease;
+use super::read::{DepositWalletNonceLease, DepositWalletNonceLeaseSigningContext};
 use super::response::{extract_submit_transaction_id, parse_submit_response};
 use super::state::{OwnerNonceReadReservation, OwnerSubmitReservation};
 
@@ -29,21 +29,54 @@ impl DepositWalletRelayerClient {
             .await
     }
 
-    /// Submits a signed `WALLET` batch using a nonce lease returned by
+    /// Signs and submits a `WALLET` batch using a nonce lease returned by
     /// [`Self::get_wallet_nonce_with_lease`].
     ///
     /// This is a non-live test-loopback surface in this PR: production permit
     /// construction is intentionally unavailable, and production mutation
     /// submission remains blocked until durable owner state and the later
     /// live-execution capability are added.
-    pub async fn submit_signed_wallet_batch_with_nonce_lease(
+    pub async fn sign_and_submit_wallet_batch_with_nonce_lease<F>(
+        &self,
+        nonce_lease: DepositWalletNonceLease,
+        gate: DepositWalletMutationGate,
+        sign: F,
+    ) -> Result<DepositWalletTransactionReceipt>
+    where
+        F: FnOnce(&DepositWalletNonceLeaseSigningContext) -> Result<SignedDepositWalletBatch>,
+    {
+        let lease_owner = nonce_lease.owner();
+        self.ensure_permitted_for_action(
+            &gate,
+            lease_owner,
+            DepositWalletMutationAction::WalletBatch,
+        )?;
+        let expected_chain_id = deposit_wallet_contract_chain_id(self.config)?;
+        let expected_deposit_wallet = derive_deposit_wallet_address(lease_owner, self.config)?;
+        let signing_context = DepositWalletNonceLeaseSigningContext::new(
+            lease_owner,
+            nonce_lease.nonce(),
+            expected_deposit_wallet,
+            expected_chain_id,
+        );
+        let signed = sign(&signing_context)?;
+        self.submit_signed_wallet_batch_with_validated_nonce_lease(
+            signed,
+            nonce_lease,
+            expected_chain_id,
+            expected_deposit_wallet,
+        )
+        .await
+    }
+
+    async fn submit_signed_wallet_batch_with_validated_nonce_lease(
         &self,
         signed: SignedDepositWalletBatch,
-        gate: DepositWalletMutationGate,
         nonce_lease: DepositWalletNonceLease,
+        expected_chain_id: u64,
+        expected_deposit_wallet: Address,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
-        self.ensure_permitted_for_action(&gate, owner, DepositWalletMutationAction::WalletBatch)?;
         if signed.nonce_owner() != owner {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch nonce owner does not match owner signer".to_string(),
@@ -54,13 +87,11 @@ impl DepositWalletRelayerClient {
                 "signed deposit wallet batch submit from does not match owner signer".to_string(),
             ));
         }
-        let expected_chain_id = deposit_wallet_contract_chain_id(self.config)?;
         if signed.chain_id() != expected_chain_id {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch chain id does not match client config".to_string(),
             ));
         }
-        let expected_deposit_wallet = derive_deposit_wallet_address(owner, self.config)?;
         if signed.deposit_wallet() != expected_deposit_wallet {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch wallet does not match owner/config derived wallet"
@@ -79,10 +110,12 @@ impl DepositWalletRelayerClient {
                 "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
             ));
         }
+        let headers = self.authenticated_headers(true)?;
         let now_unix_seconds = self.clock.now_unix_seconds()?;
         self.submit_signed_wallet_batch_inner(
             signed,
             nonce_lease.into_unexpired_reservation(now_unix_seconds)?,
+            headers,
         )
         .await
     }
@@ -91,6 +124,7 @@ impl DepositWalletRelayerClient {
         &self,
         signed: SignedDepositWalletBatch,
         nonce_reservation: OwnerNonceReadReservation,
+        headers: HeaderMap,
     ) -> Result<DepositWalletTransactionReceipt> {
         self.ensure_deadline_fresh(&signed)?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
@@ -114,7 +148,7 @@ impl DepositWalletRelayerClient {
             }
         };
         reservation.update_payload_hash(payload_hash_summary(body.as_bytes()))?;
-        self.submit_reserved_owner_body(reservation, body, WALLET_TRANSACTION_TYPE)
+        self.submit_reserved_owner_body(reservation, body, WALLET_TRANSACTION_TYPE, headers)
             .await
     }
 
@@ -124,9 +158,10 @@ impl DepositWalletRelayerClient {
         body: String,
         transaction_type: &'static str,
     ) -> Result<DepositWalletTransactionReceipt> {
+        let headers = self.authenticated_headers(true)?;
         let payload_hash = payload_hash_summary(body.as_bytes());
         let reservation = self.reserve_owner_submit(owner, payload_hash)?;
-        self.submit_reserved_owner_body(reservation, body, transaction_type)
+        self.submit_reserved_owner_body(reservation, body, transaction_type, headers)
             .await
     }
 
@@ -135,11 +170,11 @@ impl DepositWalletRelayerClient {
         mut reservation: OwnerSubmitReservation,
         body: String,
         transaction_type: &'static str,
+        headers: HeaderMap,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = reservation.owner();
         let payload_hash = reservation.payload_hash().to_string();
         let url = self.base_url.endpoint(SUBMIT_PATH);
-        let headers = self.authenticated_headers(true)?;
         reservation.arm_ambiguous_on_drop();
         match self
             .send_with_headers_success_limit(
@@ -273,10 +308,13 @@ impl DepositWalletRelayerClient {
                     category
                 )))
             }
-            Err(RelayerError::Api {
-                status,
-                message: _,
-            }) => {
+            Err(RelayerError::Api { status, message })
+                if matches!(status, 401 | 403 | 404) =>
+            {
+                reservation.clear()?;
+                Err(RelayerError::Api { status, message })
+            }
+            Err(RelayerError::Api { status, message: _ }) => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit returned HTTP status {} after POST for owner {} payload {}; manual reconciliation required",
@@ -310,16 +348,10 @@ impl DepositWalletRelayerClient {
                 )))
             }
             Err(RelayerError::AuthError(_)) => {
-                self.record_ambiguous_post_boundary(
-                    &mut reservation,
-                    owner,
-                    payload_hash.clone(),
-                )?;
-                Err(RelayerError::ambiguous_submit(format!(
-                    "submit authentication failed after owner reservation for owner {} payload {}; manual reconciliation required",
-                    redacted_address(owner),
-                    display_payload_hash(&payload_hash)
-                )))
+                reservation.clear()?;
+                Err(RelayerError::AuthError(
+                    "submit authentication failed before relayer accepted the request".to_string(),
+                ))
             }
             Err(_error) => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
