@@ -227,6 +227,16 @@ async fn write_response(stream: &mut TcpStream, response: TestResponse) {
         .expect("response should write");
 }
 
+async fn wait_for_available_permits(limiter: &ErrorBodyDrainLimiter, expected: usize) {
+    for _ in 0..50 {
+        if limiter.available_permits() == expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(limiter.available_permits(), expected);
+}
+
 fn transaction_response_value_for_owner(
     transaction_id: &str,
     state: &str,
@@ -439,7 +449,14 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
     assert_eq!(receipt.owner, Some(address(WALLET_OWNER)));
     let requests = handle.await.unwrap();
+    assert_eq!(requests[0].method, "GET");
     assert_eq!(requests[0].path, "/transaction?id=tx-owner");
+    assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        requests[0].header("RELAYER_API_KEY_ADDRESS"),
+        Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+    );
+    assert!(requests[0].body.is_empty());
 }
 
 #[tokio::test]
@@ -694,6 +711,54 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
 }
 
 #[test]
+fn transaction_response_rejects_partial_required_fields() {
+    let target = "tx-partial";
+    let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
+
+    let mut missing_transaction_id = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_transaction_id
+        .as_object_mut()
+        .unwrap()
+        .remove("transactionID");
+    let mut non_string_transaction_id = transaction_response_value(target, "STATE_CONFIRMED");
+    non_string_transaction_id["transactionID"] = json!(137);
+    let mut missing_state = transaction_response_value(target, "STATE_CONFIRMED");
+    missing_state.as_object_mut().unwrap().remove("state");
+    let mut non_string_state = transaction_response_value(target, "STATE_CONFIRMED");
+    non_string_state["state"] = json!(137);
+
+    for (label, response) in [
+        ("missing transactionID", missing_transaction_id),
+        ("non-string transactionID", non_string_transaction_id),
+        ("missing state", missing_state),
+        ("non-string state", non_string_state),
+    ] {
+        let object_error =
+            parse_transaction_response(target, expected_factory, response.to_string().as_bytes())
+                .unwrap_err()
+                .error;
+        assert!(
+            matches!(object_error, RelayerError::Other(_))
+                || object_error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {object_error}"
+        );
+
+        let array_error = parse_transaction_response(
+            target,
+            expected_factory,
+            json!([response]).to_string().as_bytes(),
+        )
+        .unwrap_err()
+        .error;
+        assert!(
+            matches!(array_error, RelayerError::Other(_))
+                || array_error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {array_error}"
+        );
+    }
+}
+
+#[test]
 fn transaction_response_normalizes_valid_transaction_hashes() {
     let transaction_id = "tx-normalized-hash";
     let expected_factory = deposit_wallet_contract_config(137).unwrap().factory;
@@ -911,6 +976,82 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
         error,
         RelayerError::Other(ref message) if message.contains("maximum size")
     ));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn transaction_read_uses_transaction_body_limit() {
+    let mut large_response =
+        transaction_response_value("tx-large-response", "STATE_CONFIRMED");
+    large_response["padding"] = json!("x".repeat(MAX_SUCCESS_BODY_BYTES + 1));
+    let (url, handle) =
+        spawn_server(vec![TestResponse::json("200 OK", large_response.to_string())]).await;
+    let client = test_client(url);
+
+    let receipt = client
+        .get_transaction_for_owner(address(WALLET_OWNER), "tx-large-response")
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.transaction_id, "tx-large-response");
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+
+    let content_length_too_large =
+        TestResponse::json_without_content_length("200 OK", "").with_header(
+            "content-length",
+            (MAX_TRANSACTION_SUCCESS_BODY_BYTES + 1).to_string(),
+        );
+    let (url, handle) = spawn_server(vec![content_length_too_large]).await;
+    let client = test_client(url);
+    let error = client
+        .get_transaction_for_owner(address(WALLET_OWNER), "tx-too-large-response")
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RelayerError::Other(ref message) if message.contains("maximum size")
+    ));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn error_body_drain_limiter_releases_permits_and_handles_exhaustion() {
+    let large_error_body = "x".repeat(MAX_ERROR_BODY_DRAIN_BYTES + 1024);
+    let (url, handle) = spawn_server(vec![TestResponse::json_without_content_length(
+        "500 Internal Server Error",
+        large_error_body.clone(),
+    )])
+    .await;
+    let response = reqwest_client(Duration::from_secs(2))
+        .get(url.endpoint("/error"))
+        .send()
+        .await
+        .unwrap();
+    let limiter = ErrorBodyDrainLimiter::new(1);
+
+    limiter.try_spawn_error_response_body_drain(response);
+    wait_for_available_permits(&limiter, 1).await;
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+
+    let (url, handle) = spawn_server(vec![TestResponse::json_without_content_length(
+        "500 Internal Server Error",
+        large_error_body,
+    )])
+    .await;
+    let response = reqwest_client(Duration::from_secs(2))
+        .get(url.endpoint("/error"))
+        .send()
+        .await
+        .unwrap();
+    let exhausted_limiter = ErrorBodyDrainLimiter::new(0);
+
+    exhausted_limiter.try_spawn_error_response_body_drain(response);
+    assert_eq!(exhausted_limiter.available_permits(), 0);
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);
 }

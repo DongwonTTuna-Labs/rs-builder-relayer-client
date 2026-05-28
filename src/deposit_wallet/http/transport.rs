@@ -21,6 +21,11 @@ impl ErrorBodyDrainLimiter {
             drain_error_response_body(response).await;
         });
     }
+
+    #[cfg(test)]
+    pub(super) fn available_permits(&self) -> usize {
+        self.semaphore.available_permits()
+    }
 }
 
 impl DepositWalletRelayerClient {
