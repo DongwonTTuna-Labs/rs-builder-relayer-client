@@ -1,3 +1,4 @@
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
@@ -261,6 +262,12 @@ fn test_client_with_clock(
 
 fn test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient {
     test_client_with_clock(base_url, 1_700_000_000).0
+}
+
+#[test]
+fn nonce_lease_types_remain_compile_time_thread_local() {
+    static_assertions::assert_not_impl_any!(DepositWalletNonceLease: Send, Sync);
+    static_assertions::assert_not_impl_any!(DepositWalletNonceLeaseSigningContext: Send, Sync);
 }
 
 async fn spawn_server(
@@ -734,6 +741,78 @@ async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
 }
 
 #[tokio::test]
+async fn relayer_client_new_validates_production_config_and_uses_real_http_client() {
+    let owner = address(WALLET_OWNER);
+    let production = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+    let client = DepositWalletRelayerClient::new(
+        production.clone(),
+        relayer_auth(),
+        deposit_wallet_contract_config(137).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        client
+            .mutation_scope(DepositWalletMutationAction::WalletNonceRead)
+            .unwrap()
+            .environment(),
+        DepositWalletMutationEnvironment::Production
+    );
+    client.ensure_owner_unblocked(owner).unwrap();
+
+    let error = DepositWalletRelayerClient::new(
+        production,
+        relayer_auth(),
+        deposit_wallet_contract_config(80002).unwrap(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("production deposit wallet relayer URL"));
+
+    let redirect = TestResponse {
+        status: "302 Found",
+        headers: vec![(
+            "location".to_string(),
+            "http://127.0.0.1:1/redirect-target".to_string(),
+        )],
+        include_content_length: true,
+        body: String::new(),
+    };
+    let (url, handle) = spawn_server(vec![redirect]).await;
+    let client = DepositWalletRelayerClient::new(
+        url,
+        relayer_auth(),
+        deposit_wallet_contract_config(137).unwrap(),
+    )
+    .unwrap();
+    let now = UNIX_EPOCH.elapsed().unwrap().as_secs();
+    let evidence = DepositWalletOwnerSerializationEvidence::new(
+        owner,
+        client
+            .mutation_scope(DepositWalletMutationAction::WalletNonceRead)
+            .unwrap(),
+        "unit-test public constructor owner serialization guard",
+        format!("unit-test-public-constructor-lease-{owner:?}"),
+        now,
+        now + 300,
+    )
+    .unwrap();
+    let permit = DepositWalletMutationGate::Permit(
+        DepositWalletMutationPermit::from_owner_serialization_evidence(
+            "public constructor loopback redirect check",
+            evidence,
+        )
+        .unwrap(),
+    );
+
+    let error = client.get_wallet_nonce(owner, permit).await.unwrap_err();
+
+    assert!(matches!(error, RelayerError::Api { status: 302, .. }));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+}
+
+#[tokio::test]
 async fn get_wallet_nonce_rejects_production_before_http() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let client = test_client(url);
@@ -881,6 +960,44 @@ fn reconciliation_payload_hash_rejects_non_canonical_inputs() {
         )
         .unwrap()
     };
+    let accepted_hashes = [
+        (
+            format!("0x{}", "A".repeat(64)),
+            format!("0x{}", "a".repeat(64)),
+        ),
+        (
+            format!("signed-digest:0x{}", "B".repeat(64)),
+            format!("signed-digest:0x{}", "b".repeat(64)),
+        ),
+        (
+            format!("recovered:0x{}", "C".repeat(64)),
+            format!("recovered:0x{}", "c".repeat(64)),
+        ),
+    ];
+
+    for (payload_hash, expected) in accepted_hashes {
+        let evidence = DepositWalletSubmitReconciliationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+            "unit-test owner serialization guard",
+            payload_hash.clone(),
+            observation(),
+        )
+        .unwrap();
+        assert_eq!(evidence.payload_hash(), expected);
+
+        let idless = DepositWalletIdlessSubmitReconciliationEvidence::new(
+            owner,
+            mutation_scope(DepositWalletMutationAction::ManualReconciliation),
+            "unit-test owner serialization guard",
+            payload_hash,
+            "unit-test relayer audit found no accepted transaction for the ambiguous payload",
+            1_700_000_001,
+        )
+        .unwrap();
+        assert_eq!(idless.payload_hash(), expected);
+    }
+
     let bad_hashes = [
         "sha256:0x0000000000000000000000000000000000000000000000000000000000000000",
         "0X0000000000000000000000000000000000000000000000000000000000000000",
@@ -1155,6 +1272,41 @@ async fn nonce_lease_blocks_same_owner_work_and_releases_after_fetch_failure() {
 }
 
 #[tokio::test]
+async fn sign_closure_failure_releases_nonce_reservation_before_retry() {
+    let owner = signed_wallet_batch_fixture().owner();
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+    ])
+    .await;
+    let client = test_client(url);
+
+    let lease = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    let error = client
+        .sign_and_submit_wallet_batch_with_nonce_lease(
+            lease,
+            wallet_batch_permit_for(owner),
+            |_| Err(RelayerError::Signing("unit-test signer failed".to_string())),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    let retry_lease = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    assert_eq!(retry_lease.nonce(), U256::from(31u64));
+    drop(retry_lease);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.method == "GET"));
+}
+
+#[tokio::test]
 async fn nonce_lease_rejects_expired_owner_and_nonce_mismatch() {
     let signed = signed_wallet_batch_fixture();
     let owner = signed.owner();
@@ -1350,7 +1502,7 @@ fn manual_reconciliation_observation_normalizes_non_confirmed_hashes() {
 }
 
 #[tokio::test]
-async fn terminal_poll_clears_ambiguous_owner_block() {
+async fn transaction_id_only_submit_response_records_inflight_owner_state() {
     let owner = address(WALLET_OWNER);
     let (url, handle) = spawn_server(vec![
         TestResponse::json(
@@ -1368,12 +1520,18 @@ async fn terminal_poll_clears_ambiguous_owner_block() {
     let submit = client
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
         .await
+        .unwrap();
+    assert_eq!(submit.transaction_id, "tx-ambiguous");
+    assert_eq!(submit.state, RelayerTransactionState::New);
+    assert_eq!(submit.owner, Some(owner));
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
+    let blocked = client
+        .submit_wallet_create(owner, wallet_create_permit_for(owner))
+        .await
         .unwrap_err();
-    assert!(submit.is_deposit_wallet_ambiguous_submit());
-    assert_eq!(
-        client.ambiguous_submit_transaction_ids(owner),
-        vec!["tx-ambiguous".to_string()]
-    );
+    assert!(blocked.is_deposit_wallet_reconciliation_required());
+
     let poll = client
         .get_transaction_for_owner(owner, "tx-ambiguous")
         .await
@@ -1792,6 +1950,23 @@ fn owner_mutation_capacity_rejects_new_records_but_allows_existing_records() {
 }
 
 #[test]
+fn poisoned_owner_mutation_state_returns_reconciliation_error() {
+    let owner = address(WALLET_OWNER);
+    let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1/").unwrap());
+
+    let poison = catch_unwind(AssertUnwindSafe(|| {
+        let _guard = client.mutation_state_for_owner(owner).unwrap();
+        panic!("unit-test owner mutation state poison");
+    }));
+    assert!(poison.is_err());
+
+    let error = client.ensure_owner_unblocked(owner).unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("state lock is poisoned"));
+    assert!(!error.to_string().contains(WALLET_OWNER));
+}
+
+#[test]
 fn mutation_permit_rejects_owner_scope_and_freshness_failures() {
     let owner = address(WALLET_OWNER);
     let other_owner = address(OTHER_OWNER);
@@ -2031,7 +2206,7 @@ async fn idless_manual_reconciliation_rejects_when_local_transaction_record_exis
     let owner = address(WALLET_OWNER);
     let (url, handle) = spawn_server(vec![TestResponse::json(
         "200 OK",
-        json!({"transactionID": "tx-ambiguous"}).to_string(),
+        json!({"transactionID": "tx-ambiguous", "state": "STATE_FAILED"}).to_string(),
     )])
     .await;
     let client = test_client(url);
@@ -2040,7 +2215,7 @@ async fn idless_manual_reconciliation_rejects_when_local_transaction_record_exis
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
         .await
         .unwrap_err();
-    assert!(submit_error.is_deposit_wallet_ambiguous_submit());
+    assert!(submit_error.is_deposit_wallet_reconciliation_required());
     let payload_hash = client
         .ambiguous_submit_block(owner)
         .expect("ambiguous submit should block owner");
@@ -2526,7 +2701,10 @@ fn submit_response_parser_covers_abnormal_wire_shapes_and_terminal_states() {
         extract_submit_transaction_id(id_only.as_bytes()),
         Some("tx-id-only".to_string())
     );
-    assert!(parse_submit_response(id_only.as_bytes()).is_err());
+    let id_only_receipt = parse_submit_response(id_only.as_bytes()).unwrap();
+    assert_eq!(id_only_receipt.transaction_id, "tx-id-only");
+    assert_eq!(id_only_receipt.state, RelayerTransactionState::New);
+    assert_eq!(id_only_receipt.transaction_hash, None);
     let id_only_alias = json!({"transactionId": "tx-id-only-alias"}).to_string();
     assert_eq!(extract_submit_transaction_id(id_only_alias.as_bytes()), None);
     assert!(parse_submit_response(id_only_alias.as_bytes()).is_err());
@@ -2732,7 +2910,7 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     );
     let requests = handle.await.unwrap();
     assert_eq!(requests[0].method, "GET");
-    assert_eq!(requests[0].path, "/transaction?id=tx-owner");
+    assert_eq!(requests[0].path, "/transaction?transactionID=tx-owner");
     assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
     assert_eq!(
         requests[0].header("RELAYER_API_KEY_ADDRESS"),
@@ -2844,7 +3022,7 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
     let requests = handle.await.unwrap();
     assert_eq!(
         requests[0].path,
-        "/transaction?id=tx-missing-http"
+        "/transaction?transactionID=tx-missing-http"
     );
 
     let (url, handle) = spawn_server(vec![TestResponse::json(
