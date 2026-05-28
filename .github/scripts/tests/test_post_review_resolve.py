@@ -151,31 +151,46 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
                 self.assertEqual(self.resolve(event, **overrides)["should_collect"], "false")
 
 
-def review_thread(*, author, commit_oid="old-sha", resolved=False):
+def review_thread(
+    *,
+    author,
+    body=None,
+    commit_oid="old-sha",
+    line=2,
+    original_line=None,
+    outdated=False,
+    resolved=False,
+):
+    if original_line is None:
+        original_line = line
+    comment_line = None if outdated else line
+    body = body or "\n".join(
+        [
+            post_review.INLINE_MARKER,
+            "<!-- codex-review-id: correctness-1 -->",
+            "review body",
+        ]
+    )
     return {
         "id": "thread-node-id",
         "isResolved": resolved,
-        "isOutdated": False,
+        "isOutdated": outdated,
         "path": "src/lib.rs",
-        "line": 2,
+        "line": comment_line,
+        "originalLine": original_line,
         "comments": {
             "nodes": [
                 {
                     "id": "comment-node-id",
                     "fullDatabaseId": "3311706429",
-                    "body": "\n".join(
-                        [
-                            post_review.INLINE_MARKER,
-                            "<!-- codex-review-id: correctness-1 -->",
-                            "review body",
-                        ]
-                    ),
+                    "body": body,
                     "author": {"login": author},
                     "commit": {"oid": commit_oid},
                     "originalCommit": {"oid": "old-sha"},
-                    "outdated": False,
+                    "outdated": outdated,
                     "path": "src/lib.rs",
-                    "line": 2,
+                    "line": comment_line,
+                    "originalLine": original_line,
                     "url": "https://github.example/review-comment",
                 }
             ]
@@ -184,14 +199,14 @@ def review_thread(*, author, commit_oid="old-sha", resolved=False):
 
 
 class CollectResolutionsTests(unittest.TestCase):
-    def collect(self, threads, *, head_sha="head-sha"):
+    def collect(self, threads, *, head_sha="head-sha", workspace_text="fn one() {}\nfn two() {}\n"):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = root / "workspace"
             batch_dir = root / "batches"
             output_path = root / "github-output"
             (workspace / "src").mkdir(parents=True)
-            (workspace / "src" / "lib.rs").write_text("fn one() {}\nfn two() {}\n", encoding="utf-8")
+            (workspace / "src" / "lib.rs").write_text(workspace_text, encoding="utf-8")
             env = {
                 "GITHUB_REPOSITORY": "DongwonTTuna-Labs/rs-builder-relayer-client",
                 "PR_NUMBER": "12",
@@ -232,6 +247,50 @@ class CollectResolutionsTests(unittest.TestCase):
 
         self.assertIn("has_comments=false", outputs)
         self.assertEqual({}, batches)
+
+    def test_outdated_comment_includes_current_search_context(self):
+        body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: test-coverage-7 -->",
+                "**[SUGGEST][test-coverage] redaction assertion misses lowercase leak**",
+                "",
+                "`contains(WALLET_OWNER)` misses lowercase address output.",
+            ]
+        )
+        workspace_text = "\n".join(
+            [
+                "fn unrelated_one() {}",
+                "fn stale_original_line() {}",
+                "fn unrelated_three() {}",
+                "fn unrelated_four() {}",
+                "fn redaction_test() {",
+                "    let owner_checksum = to_checksum(&address(WALLET_OWNER), None);",
+                "    assert!(!debug.contains(&owner_checksum));",
+                "    assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));",
+                "}",
+            ]
+        )
+
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    body=body,
+                    commit_oid="old-sha",
+                    original_line=2,
+                    outdated=True,
+                )
+            ],
+            workspace_text=workspace_text,
+        )
+
+        self.assertIn("has_comments=true", outputs)
+        comment = batches["resolve-batch-0.json"]["comments"][0]
+        self.assertIn("stale_original_line", comment["code_snippet"])
+        self.assertTrue(comment["search_context"])
+        search_text = "\n".join(context["snippet"] for context in comment["search_context"])
+        self.assertIn("owner_checksum.to_ascii_lowercase", search_text)
 
     def test_ignores_current_head_inline_comments(self):
         outputs, batches = self.collect(
