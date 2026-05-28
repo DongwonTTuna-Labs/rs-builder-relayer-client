@@ -65,7 +65,7 @@ pub use read::DepositWalletNonceLease;
 pub use response::DepositWalletTransactionReceipt;
 pub use url::DepositWalletRelayerUrl;
 
-use state::OwnerMutationState;
+use state::OwnerMutationStore;
 use transport::ErrorBodyDrainLimiter;
 use url::validate_relayer_contract_config;
 
@@ -75,7 +75,7 @@ pub struct DepositWalletRelayerClient {
     base_url: DepositWalletRelayerUrl,
     auth: RelayerKeyAuth,
     config: DepositWalletContractConfig,
-    mutation_state: Arc<Mutex<OwnerMutationState>>,
+    mutation_state: Arc<OwnerMutationStore>,
     error_body_drain_limiter: ErrorBodyDrainLimiter,
     clock: Arc<dyn DepositWalletClock>,
 }
@@ -107,7 +107,7 @@ impl DepositWalletRelayerClient {
             base_url,
             auth,
             config,
-            mutation_state: Arc::new(Mutex::new(OwnerMutationState::default())),
+            mutation_state: Arc::new(OwnerMutationStore::default()),
             error_body_drain_limiter: ErrorBodyDrainLimiter::new(MAX_BACKGROUND_ERROR_BODY_DRAINS),
             clock,
         }
