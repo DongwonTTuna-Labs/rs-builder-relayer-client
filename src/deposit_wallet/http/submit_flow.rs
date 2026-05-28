@@ -216,6 +216,7 @@ impl DepositWalletRelayerClient {
                                 self.record_unrecorded_transaction_id_observation(
                                     owner,
                                     &payload_hash,
+                                    &transaction_id,
                                 )?;
                             }
                             Err(error)
@@ -229,6 +230,7 @@ impl DepositWalletRelayerClient {
                             self.record_unrecorded_transaction_id_observation(
                                 owner,
                                 &payload_hash,
+                                &transaction_id,
                             )?;
                             Err(RelayerError::ambiguous_submit(format!(
                                 "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",
@@ -258,6 +260,7 @@ impl DepositWalletRelayerClient {
                             self.record_unrecorded_transaction_id_observation(
                                 owner,
                                 &payload_hash,
+                                &transaction_id,
                             )?;
                             return Err(RelayerError::ambiguous_submit(format!(
                                 "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",
@@ -307,12 +310,6 @@ impl DepositWalletRelayerClient {
                     display_payload_hash(&payload_hash),
                     category
                 )))
-            }
-            Err(RelayerError::Api { status, message })
-                if matches!(status, 401 | 403 | 404) =>
-            {
-                reservation.clear()?;
-                Err(RelayerError::Api { status, message })
             }
             Err(RelayerError::Api { status, message: _ }) => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
