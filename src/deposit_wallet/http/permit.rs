@@ -204,7 +204,7 @@ impl DepositWalletSubmitReconciliationObservation {
                 "submit reconciliation evidence transaction id is invalid".to_string(),
             )
         })?;
-        let transaction_hash = transaction_hash
+        let mut transaction_hash = transaction_hash
             .map(|hash| {
                 validate_transaction_hash(hash.as_ref()).map_err(|_| {
                     RelayerError::mutation_blocked(
@@ -222,7 +222,9 @@ impl DepositWalletSubmitReconciliationObservation {
                     ));
                 }
             }
-            RelayerTransactionState::Invalid | RelayerTransactionState::Failed => {}
+            RelayerTransactionState::Invalid | RelayerTransactionState::Failed => {
+                transaction_hash = None;
+            }
             RelayerTransactionState::New
             | RelayerTransactionState::Executed
             | RelayerTransactionState::Mined
