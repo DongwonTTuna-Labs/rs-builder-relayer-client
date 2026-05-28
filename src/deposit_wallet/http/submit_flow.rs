@@ -130,6 +130,10 @@ impl DepositWalletRelayerClient {
                                 owner,
                                 payload_hash.clone(),
                             )?;
+                            self.record_unrecorded_transaction_id_observation(
+                                owner,
+                                &payload_hash,
+                            )?;
                             Err(RelayerError::ambiguous_submit(format!(
                                 "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",
                                 external_token_hash(&transaction_id),
@@ -149,6 +153,10 @@ impl DepositWalletRelayerClient {
                                 &mut reservation,
                                 owner,
                                 payload_hash.clone(),
+                            )?;
+                            self.record_unrecorded_transaction_id_observation(
+                                owner,
+                                &payload_hash,
                             )?;
                             return Err(RelayerError::ambiguous_submit(format!(
                                 "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",

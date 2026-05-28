@@ -6,6 +6,7 @@ use super::permit::{
 use super::redaction::{
     display_payload_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
+use std::collections::BTreeSet;
 
 const OWNER_MUTATION_STATE_SHARDS: usize = 64;
 
@@ -14,7 +15,23 @@ pub(super) struct OwnerMutationState {
     pub(super) owner_blocks: HashMap<Address, OwnerMutationBlock>,
     pub(super) nonce_reads: HashMap<Address, u64>,
     pub(super) transaction_owners: HashMap<String, OwnerTransactionRecord>,
+    transaction_ids_by_owner_payload: HashMap<OwnerPayloadKey, BTreeSet<String>>,
     pub(super) terminal_observations: HashMap<String, OwnerTransactionTerminalObservation>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct OwnerPayloadKey {
+    owner: Address,
+    payload_hash: String,
+}
+
+impl OwnerPayloadKey {
+    fn new(owner: Address, payload_hash: &str) -> Self {
+        Self {
+            owner,
+            payload_hash: payload_hash.to_string(),
+        }
+    }
 }
 
 pub(super) struct OwnerMutationStore {
@@ -76,6 +93,7 @@ pub(super) enum OwnerMutationBlock {
     Ambiguous {
         payload_hash: String,
         created_at_unix_seconds: u64,
+        unrecorded_transaction_id_observed: bool,
     },
 }
 
@@ -206,17 +224,26 @@ impl Drop for OwnerSubmitReservation {
                 clear_owner_block_if_payload(&mut state, self.owner, &self.payload_hash);
             }
             OwnerSubmitReservationDropAction::Ambiguous => {
-                let created_at_unix_seconds = state
+                let existing_block = state
                     .owner_blocks
                     .get(&self.owner)
-                    .filter(|block| block.payload_hash() == self.payload_hash)
+                    .filter(|block| block.payload_hash() == self.payload_hash);
+                let created_at_unix_seconds = existing_block
                     .map(OwnerMutationBlock::created_at_unix_seconds)
                     .unwrap_or(self.created_at_unix_seconds);
+                let unrecorded_transaction_id_observed = matches!(
+                    existing_block,
+                    Some(OwnerMutationBlock::Ambiguous {
+                        unrecorded_transaction_id_observed: true,
+                        ..
+                    })
+                );
                 state.owner_blocks.insert(
                     self.owner,
                     OwnerMutationBlock::Ambiguous {
                         payload_hash: self.payload_hash.clone(),
                         created_at_unix_seconds,
+                        unrecorded_transaction_id_observed,
                     },
                 );
             }
@@ -268,6 +295,7 @@ impl DepositWalletRelayerClient {
             Some(OwnerMutationBlock::Ambiguous {
                 payload_hash,
                 created_at_unix_seconds,
+                ..
             })
                 if payload_hash == evidence.payload_hash() =>
             {
@@ -278,10 +306,8 @@ impl DepositWalletRelayerClient {
                     created_at_unix_seconds,
                     self.clock.now_unix_seconds()?,
                 )?;
-                let has_payload_records = state
-                    .transaction_owners
-                    .values()
-                    .any(|record| record.owner == owner && record.payload_hash == evidence.payload_hash());
+                let payload_record_count =
+                    owner_payload_transaction_count(&state, owner, evidence.payload_hash());
                 match state.transaction_owners.get(evidence.transaction_id()) {
                     Some(record)
                         if record.owner == owner
@@ -301,22 +327,14 @@ impl DepositWalletRelayerClient {
                                 sanitized_external_token(evidence.transaction_id())
                             )));
                         }
-                        let has_additional_payload_records = state
-                            .transaction_owners
-                            .iter()
-                            .any(|(transaction_id, record)| {
-                                transaction_id.as_str() != evidence.transaction_id()
-                                    && record.owner == owner
-                                    && record.payload_hash == evidence.payload_hash()
-                            });
-                        if has_additional_payload_records {
+                        if payload_record_count > 1 {
                             return Err(RelayerError::reconciliation_required(format!(
                                 "owner {} has additional ambiguous transactions for payload {}; reconcile each transaction before clearing the owner block",
                                 redacted_address(owner),
                                 display_payload_hash(evidence.payload_hash())
                             )));
                         }
-                        state.transaction_owners.remove(evidence.transaction_id());
+                        remove_transaction_owner_record(&mut state, evidence.transaction_id());
                         state.terminal_observations.remove(evidence.transaction_id());
                     }
                     Some(_) => {
@@ -325,7 +343,7 @@ impl DepositWalletRelayerClient {
                             sanitized_external_token(evidence.transaction_id())
                         )));
                     }
-                    None if has_payload_records => {
+                    None if payload_record_count > 0 => {
                         return Err(RelayerError::reconciliation_required(format!(
                             "manual reconciliation transaction {} did not match current owner payload",
                             sanitized_external_token(evidence.transaction_id())
@@ -387,14 +405,18 @@ impl DepositWalletRelayerClient {
             Some(OwnerMutationBlock::Ambiguous {
                 payload_hash,
                 created_at_unix_seconds,
+                unrecorded_transaction_id_observed,
             }) if payload_hash == evidence.payload_hash() => {
-                let has_payload_records = state
-                    .transaction_owners
-                    .values()
-                    .any(|record| record.owner == owner && record.payload_hash == evidence.payload_hash());
-                if has_payload_records {
+                if owner_payload_transaction_count(&state, owner, evidence.payload_hash()) > 0 {
                     return Err(RelayerError::reconciliation_required(format!(
                         "id-less manual reconciliation payload {} for owner {} still has local transaction records; reconcile those transactions before clearing",
+                        display_payload_hash(evidence.payload_hash()),
+                        redacted_address(owner)
+                    )));
+                }
+                if unrecorded_transaction_id_observed {
+                    return Err(RelayerError::reconciliation_required(format!(
+                        "id-less manual reconciliation payload {} for owner {} observed a transaction id that could not be recorded; transaction-id reconciliation required",
                         display_payload_hash(evidence.payload_hash()),
                         redacted_address(owner)
                     )));
@@ -438,19 +460,7 @@ impl DepositWalletRelayerClient {
         else {
             return Vec::new();
         };
-        let mut transaction_ids = state
-            .transaction_owners
-            .iter()
-            .filter_map(|(transaction_id, record)| {
-                if record.owner == owner && record.payload_hash == *payload_hash {
-                    Some(transaction_id.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        transaction_ids.sort();
-        transaction_ids
+        owner_payload_transaction_ids(&state, owner, payload_hash)
     }
 
     pub(super) fn ensure_owner_unblocked(&self, owner: Address) -> Result<()> {
@@ -579,8 +589,11 @@ impl DepositWalletRelayerClient {
     ) -> Result<DepositWalletTransactionReceipt> {
         match &receipt.state {
             RelayerTransactionState::Unknown(raw) => {
-                self.record_ambiguous(owner, payload_hash.clone())?;
-                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                self.record_ambiguous_transaction_owner(
+                    owner,
+                    payload_hash,
+                    &receipt.transaction_id,
+                )?;
                 Err(RelayerError::reconciliation_required(format!(
                     "submit response for owner {} transaction {} reached unknown state {}; owner-scoped poll or manual reconciliation required",
                     redacted_address(owner),
@@ -589,24 +602,33 @@ impl DepositWalletRelayerClient {
                 )))
             }
             RelayerTransactionState::Invalid => {
-                self.record_ambiguous(owner, payload_hash.clone())?;
-                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                self.record_ambiguous_transaction_owner(
+                    owner,
+                    payload_hash,
+                    &receipt.transaction_id,
+                )?;
                 Err(RelayerError::reconciliation_required(format!(
                     "deposit wallet submit transaction {} returned invalid before transaction polling; owner-scoped poll or manual reconciliation required",
                     sanitized_external_token(&receipt.transaction_id)
                 )))
             }
             RelayerTransactionState::Failed => {
-                self.record_ambiguous(owner, payload_hash.clone())?;
-                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                self.record_ambiguous_transaction_owner(
+                    owner,
+                    payload_hash,
+                    &receipt.transaction_id,
+                )?;
                 Err(RelayerError::reconciliation_required(format!(
                     "deposit wallet submit transaction {} returned failed before transaction polling; owner-scoped poll or manual reconciliation required",
                     sanitized_external_token(&receipt.transaction_id)
                 )))
             }
             RelayerTransactionState::Confirmed => {
-                self.record_ambiguous(owner, payload_hash.clone())?;
-                self.record_transaction_owner(&receipt.transaction_id, owner, payload_hash)?;
+                self.record_ambiguous_transaction_owner(
+                    owner,
+                    payload_hash,
+                    &receipt.transaction_id,
+                )?;
                 Err(RelayerError::reconciliation_required(format!(
                     "deposit wallet submit transaction {} returned terminal state before transaction polling; manual reconciliation required",
                     sanitized_external_token(&receipt.transaction_id)
@@ -626,23 +648,78 @@ impl DepositWalletRelayerClient {
         }
     }
 
+    fn record_ambiguous_transaction_owner(
+        &self,
+        owner: Address,
+        payload_hash: String,
+        transaction_id: &str,
+    ) -> Result<()> {
+        self.record_ambiguous(owner, payload_hash.clone())?;
+        if let Err(error) = self.record_transaction_owner(transaction_id, owner, payload_hash.clone())
+        {
+            self.record_unrecorded_transaction_id_observation(owner, &payload_hash)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(super) fn record_ambiguous(&self, owner: Address, payload_hash: String) -> Result<()> {
         let mut state = self.mutation_state_for_owner(owner)?;
-        let created_at_unix_seconds = if let Some(created_at_unix_seconds) = state
+        let existing_block = state
             .owner_blocks
             .get(&owner)
-            .filter(|block| block.payload_hash() == payload_hash)
-            .map(OwnerMutationBlock::created_at_unix_seconds)
-        {
-            created_at_unix_seconds
-        } else {
-            self.clock.now_unix_seconds()?
+            .filter(|block| block.payload_hash() == payload_hash);
+        let created_at_unix_seconds = match existing_block {
+            Some(block) => block.created_at_unix_seconds(),
+            None => self.clock.now_unix_seconds()?,
         };
+        let unrecorded_transaction_id_observed = matches!(
+            existing_block,
+            Some(OwnerMutationBlock::Ambiguous {
+                unrecorded_transaction_id_observed: true,
+                ..
+            })
+        );
         state.owner_blocks.insert(
             owner,
             OwnerMutationBlock::Ambiguous {
                 payload_hash,
                 created_at_unix_seconds,
+                unrecorded_transaction_id_observed,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn record_unrecorded_transaction_id_observation(
+        &self,
+        owner: Address,
+        payload_hash: &str,
+    ) -> Result<()> {
+        let mut state = self.mutation_state_for_owner(owner)?;
+        let Some(OwnerMutationBlock::Ambiguous {
+            payload_hash: current_payload_hash,
+            created_at_unix_seconds,
+            ..
+        }) = state.owner_blocks.get(&owner).cloned()
+        else {
+            return Err(RelayerError::reconciliation_required(format!(
+                "owner {} did not have an ambiguous submit block for observed transaction id reconciliation",
+                redacted_address(owner)
+            )));
+        };
+        if current_payload_hash != payload_hash {
+            return Err(RelayerError::reconciliation_required(format!(
+                "owner {} ambiguous submit payload changed before observed transaction id reconciliation",
+                redacted_address(owner)
+            )));
+        }
+        state.owner_blocks.insert(
+            owner,
+            OwnerMutationBlock::Ambiguous {
+                payload_hash: current_payload_hash,
+                created_at_unix_seconds,
+                unrecorded_transaction_id_observed: true,
             },
         );
         Ok(())
@@ -665,13 +742,7 @@ impl DepositWalletRelayerClient {
                 created_at_unix_seconds: self.clock.now_unix_seconds()?,
             },
         );
-        state.transaction_owners.insert(
-            transaction_id,
-            OwnerTransactionRecord {
-                owner,
-                payload_hash,
-            },
-        );
+        insert_transaction_owner_record(&mut state, transaction_id, owner, payload_hash);
         Ok(())
     }
 
@@ -684,13 +755,7 @@ impl DepositWalletRelayerClient {
         let mut state = self.mutation_state_for_owner(owner)?;
         ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
-        state.transaction_owners.insert(
-            transaction_id.to_string(),
-            OwnerTransactionRecord {
-                owner,
-                payload_hash,
-            },
-        );
+        insert_transaction_owner_record(&mut state, transaction_id.to_string(), owner, payload_hash);
         Ok(())
     }
 
@@ -760,7 +825,7 @@ impl DepositWalletRelayerClient {
             {
                 if receipt.state == RelayerTransactionState::Confirmed {
                     state.owner_blocks.remove(&owner);
-                    state.transaction_owners.remove(&receipt.transaction_id);
+                    remove_transaction_owner_record(&mut state, &receipt.transaction_id);
                     state.terminal_observations.remove(&receipt.transaction_id);
                 } else {
                     state.owner_blocks.insert(
@@ -768,6 +833,7 @@ impl DepositWalletRelayerClient {
                         OwnerMutationBlock::Ambiguous {
                             payload_hash,
                             created_at_unix_seconds,
+                            unrecorded_transaction_id_observed: false,
                         },
                     );
                     state
@@ -905,6 +971,7 @@ fn transition_matching_inflight_to_ambiguous(
                 OwnerMutationBlock::Ambiguous {
                     payload_hash: current_payload_hash,
                     created_at_unix_seconds,
+                    unrecorded_transaction_id_observed: false,
                 },
             );
             Ok(())
@@ -918,6 +985,64 @@ fn transition_matching_inflight_to_ambiguous(
             sanitized_external_token(transaction_id)
         ))),
     }
+}
+
+fn insert_transaction_owner_record(
+    state: &mut OwnerMutationState,
+    transaction_id: String,
+    owner: Address,
+    payload_hash: String,
+) {
+    state
+        .transaction_ids_by_owner_payload
+        .entry(OwnerPayloadKey::new(owner, &payload_hash))
+        .or_default()
+        .insert(transaction_id.clone());
+    state.transaction_owners.insert(
+        transaction_id,
+        OwnerTransactionRecord {
+            owner,
+            payload_hash,
+        },
+    );
+}
+
+fn remove_transaction_owner_record(
+    state: &mut OwnerMutationState,
+    transaction_id: &str,
+) -> Option<OwnerTransactionRecord> {
+    let record = state.transaction_owners.remove(transaction_id)?;
+    let key = OwnerPayloadKey::new(record.owner, &record.payload_hash);
+    if let Some(ids) = state.transaction_ids_by_owner_payload.get_mut(&key) {
+        ids.remove(transaction_id);
+        if ids.is_empty() {
+            state.transaction_ids_by_owner_payload.remove(&key);
+        }
+    }
+    Some(record)
+}
+
+fn owner_payload_transaction_count(
+    state: &OwnerMutationState,
+    owner: Address,
+    payload_hash: &str,
+) -> usize {
+    state
+        .transaction_ids_by_owner_payload
+        .get(&OwnerPayloadKey::new(owner, payload_hash))
+        .map_or(0, BTreeSet::len)
+}
+
+fn owner_payload_transaction_ids(
+    state: &OwnerMutationState,
+    owner: Address,
+    payload_hash: &str,
+) -> Vec<String> {
+    state
+        .transaction_ids_by_owner_payload
+        .get(&OwnerPayloadKey::new(owner, payload_hash))
+        .map(|ids| ids.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 pub(super) fn ensure_owner_mutation_capacity(
@@ -962,5 +1087,6 @@ pub(super) fn ensure_transaction_owner_mapping_available(
 }
 
 fn owner_mutation_shard(owner: Address) -> usize {
-    usize::from(owner.as_bytes()[19]) % OWNER_MUTATION_STATE_SHARDS
+    let hash = keccak256(owner.as_bytes());
+    usize::from(hash[31]) % OWNER_MUTATION_STATE_SHARDS
 }
