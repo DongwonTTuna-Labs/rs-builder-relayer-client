@@ -1168,7 +1168,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
       id-token: write
     timeout-minutes: 30
     steps:
@@ -1430,13 +1430,6 @@ jobs:
             --plan artifacts/design-plan.json \
             --output artifacts/design-plan.md
 
-      - name: Post sticky design plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-        run: python3 trusted/.github/scripts/post_review.py post-design-plan --body artifacts/design-plan.md
-
       - name: Upload design plan
         uses: actions/upload-artifact@v7
         with:
@@ -1445,6 +1438,13 @@ jobs:
             artifacts/design-plan.json
             artifacts/design-plan.md
           retention-days: 7
+
+      - name: Post sticky design plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        run: python3 trusted/.github/scripts/post_review.py post-design-plan --body artifacts/design-plan.md
 
   post:
     name: post
