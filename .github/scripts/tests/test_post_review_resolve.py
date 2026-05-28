@@ -156,6 +156,7 @@ def review_thread(
     author,
     body=None,
     commit_oid="old-sha",
+    original_commit_oid="old-sha",
     line=2,
     original_line=None,
     outdated=False,
@@ -186,7 +187,7 @@ def review_thread(
                     "body": body,
                     "author": {"login": author},
                     "commit": {"oid": commit_oid},
-                    "originalCommit": {"oid": "old-sha"},
+                    "originalCommit": {"oid": original_commit_oid} if original_commit_oid is not None else None,
                     "outdated": outdated,
                     "path": "src/lib.rs",
                     "line": comment_line,
@@ -280,6 +281,22 @@ class CollectResolutionsTests(unittest.TestCase):
         self.assertEqual(["resolve-batch-0.json"], list(batches))
         self.assertEqual(3311706429, batches["resolve-batch-0.json"]["comments"][0]["comment_id"])
 
+    def test_collects_reanchored_old_comment_using_original_commit(self):
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    commit_oid="head-sha",
+                    original_commit_oid="old-sha",
+                )
+            ]
+        )
+
+        self.assertIn("has_comments=true", outputs)
+        comment = batches["resolve-batch-0.json"]["comments"][0]
+        self.assertEqual("head-sha", comment["current_commit_oid"])
+        self.assertEqual("old-sha", comment["original_commit_oid"])
+
     def test_ignores_human_authored_inline_marker_comments(self):
         outputs, batches = self.collect([review_thread(author="DongwonTTuna", commit_oid="old-sha")])
 
@@ -336,12 +353,232 @@ class CollectResolutionsTests(unittest.TestCase):
                 review_thread(
                     author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
                     commit_oid="head-sha",
+                    original_commit_oid="head-sha",
                 )
             ]
         )
 
         self.assertIn("has_comments=false", outputs)
         self.assertEqual({}, batches)
+
+    def test_missing_original_commit_falls_back_to_current_commit(self):
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    commit_oid="head-sha",
+                    original_commit_oid=None,
+                )
+            ]
+        )
+
+        self.assertIn("has_comments=false", outputs)
+        self.assertEqual({}, batches)
+
+    def test_missing_original_commit_collects_non_head_commit(self):
+        outputs, batches = self.collect(
+            [
+                review_thread(
+                    author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                    commit_oid="old-sha",
+                    original_commit_oid=None,
+                )
+            ]
+        )
+
+        self.assertIn("has_comments=true", outputs)
+        self.assertEqual(3311706429, batches["resolve-batch-0.json"]["comments"][0]["comment_id"])
+
+
+class ReviewContextTests(unittest.TestCase):
+    def test_build_review_context_includes_authoritative_and_advisory_sections(self):
+        pr = {"title": "Deposit wallet state", "body": "Current PR state is authoritative."}
+        issue_comments = [
+            {
+                "id": 1,
+                "body": post_review.DESIGN_MARKER + "\nold design",
+                "updated_at": "2026-05-27T00:00:00Z",
+                "user": {"login": "codex-reviewer-for-dongwonttuna"},
+            }
+        ]
+        reviews = [
+            {
+                "body": post_review.REVIEW_MARKER + "\nreview summary",
+                "submitted_at": "2026-05-27T01:00:00Z",
+                "state": "CHANGES_REQUESTED",
+                "user": {"login": "codex-reviewer-for-dongwonttuna"},
+            }
+        ]
+        threads = [
+            review_thread(
+                author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                body="\n".join(
+                    [
+                        post_review.INLINE_MARKER,
+                        "<!-- codex-review-id: domain-1 -->",
+                        "nonce invariant is not preserved",
+                    ]
+                ),
+            )
+        ]
+
+        context = post_review.build_review_context_markdown(
+            repo="DongwonTTuna-Labs/rs-builder-relayer-client",
+            pr_number="21",
+            head_sha="head-sha",
+            pr=pr,
+            issue_comments=issue_comments,
+            reviews=reviews,
+            threads=threads,
+        )
+
+        self.assertIn("Current PR State (authoritative)", context)
+        self.assertIn("Current PR state is authoritative.", context)
+        self.assertIn("Latest Sticky Design Plan (advisory)", context)
+        self.assertIn("old design", context)
+        self.assertIn("Recent Codex Review And Resolve Summaries", context)
+        self.assertIn("review summary", context)
+        self.assertIn("Current Unresolved Inline Threads", context)
+        self.assertIn("domain", context)
+        self.assertIn("현재 코드", context)
+
+    def test_build_review_context_truncates_large_sections(self):
+        old_limit = post_review.REVIEW_CONTEXT_MAX_CHARS
+        try:
+            post_review.REVIEW_CONTEXT_MAX_CHARS = 2000
+            context = post_review.build_review_context_markdown(
+                repo="repo/name",
+                pr_number="1",
+                head_sha="head",
+                pr={"title": "title", "body": "x" * 5000},
+                issue_comments=[],
+                reviews=[],
+                threads=[],
+            )
+        finally:
+            post_review.REVIEW_CONTEXT_MAX_CHARS = old_limit
+
+        self.assertLessEqual(len(context), 2015)
+        self.assertIn("...[truncated]", context)
+
+
+class DesignPlanTests(unittest.TestCase):
+    def sample_plan(self):
+        return {
+            "version": 1,
+            "summary": "전체 invariant 중심으로 수정한다.",
+            "root_cause": "댓글 단위 대응으로 상태 계약이 분산됐다.",
+            "invariants": ["PR body가 현재 spec이다."],
+            "retired_approaches": ["코멘트 하나마다 별도 상태를 추가하지 않는다."],
+            "intended_architecture": ["상태 전이를 한 곳에서 관리한다."],
+            "edit_sequence": ["상태 타입을 먼저 정리한다."],
+            "tests": ["상태 전이 회귀 테스트를 추가한다."],
+            "acceptance_criteria": ["MUST finding이 같은 root cause로 재발하지 않는다."],
+            "open_questions": [],
+        }
+
+    def test_render_design_plan_body_contains_marker_and_machine_json(self):
+        body = post_review.render_design_plan_body(self.sample_plan())
+
+        self.assertIn(post_review.DESIGN_MARKER, body)
+        self.assertIn("Machine Readable JSON", body)
+        self.assertIn('"version": 1', body)
+        self.assertIn("전체 invariant 중심", body)
+
+    def test_upsert_design_comment_creates_when_missing(self):
+        calls = []
+
+        def list_comments(path):
+            self.assertEqual(path, "/repos/repo/name/issues/21/comments?per_page=100")
+            return []
+
+        def api(path, *, method="GET", payload=None):
+            calls.append((path, method, payload))
+
+        result = post_review.upsert_design_comment(
+            repo="repo/name",
+            pr_number="21",
+            body=post_review.DESIGN_MARKER + "\nbody",
+            list_comments=list_comments,
+            api=api,
+        )
+
+        self.assertEqual("created", result)
+        self.assertEqual(("/repos/repo/name/issues/21/comments", "POST", {"body": post_review.DESIGN_MARKER + "\nbody"}), calls[0])
+
+    def test_upsert_design_comment_updates_latest_marker_comment(self):
+        calls = []
+
+        def list_comments(path):
+            return [
+                {"id": 1, "body": post_review.DESIGN_MARKER, "updated_at": "2026-05-26T00:00:00Z"},
+                {"id": 2, "body": post_review.DESIGN_MARKER, "updated_at": "2026-05-27T00:00:00Z"},
+            ]
+
+        def api(path, *, method="GET", payload=None):
+            calls.append((path, method, payload))
+
+        result = post_review.upsert_design_comment(
+            repo="repo/name",
+            pr_number="21",
+            body=post_review.DESIGN_MARKER + "\nnew",
+            list_comments=list_comments,
+            api=api,
+        )
+
+        self.assertEqual("updated", result)
+        self.assertEqual(("/repos/repo/name/issues/comments/2", "PATCH", {"body": post_review.DESIGN_MARKER + "\nnew"}), calls[0])
+
+
+class DesignNeedTests(unittest.TestCase):
+    def test_needs_design_for_needs_work_judgment(self):
+        needs_design, blocking_count = post_review.should_run_design(
+            [],
+            {"by_id": {}, "judgment": {"status": "NEEDS_WORK"}, "merge_notes": []},
+        )
+
+        self.assertTrue(needs_design)
+        self.assertEqual(0, blocking_count)
+
+    def test_needs_design_for_allowed_must_finding(self):
+        findings = [
+            {
+                "id": "correctness-1",
+                "agent": "correctness",
+                "type": "MUST",
+                "rule_ref": None,
+            }
+        ]
+        decisions = {
+            "by_id": {"correctness-1": {"allow": True, "reason": "real blocker"}},
+            "judgment": {"status": "LGTM"},
+            "merge_notes": [],
+        }
+
+        needs_design, blocking_count = post_review.should_run_design(findings, decisions)
+
+        self.assertTrue(needs_design)
+        self.assertEqual(1, blocking_count)
+
+    def test_skips_design_for_lgtm_without_blockers(self):
+        findings = [
+            {
+                "id": "performance-1",
+                "agent": "performance",
+                "type": "NITS",
+                "rule_ref": None,
+            }
+        ]
+        decisions = {
+            "by_id": {"performance-1": {"allow": True, "reason": "minor"}},
+            "judgment": {"status": "LGTM"},
+            "merge_notes": [],
+        }
+
+        needs_design, blocking_count = post_review.should_run_design(findings, decisions)
+
+        self.assertFalse(needs_design)
+        self.assertEqual(0, blocking_count)
 
 
 if __name__ == "__main__":

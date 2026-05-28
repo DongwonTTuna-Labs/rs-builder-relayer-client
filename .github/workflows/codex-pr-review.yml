@@ -62,6 +62,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
+      issues: read
       pull-requests: read
       id-token: write
     timeout-minutes: 30
@@ -78,6 +79,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Build reviewer prompt
         env:
           AXIS: ${{ matrix.axis }}
@@ -85,15 +94,18 @@ jobs:
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           TRIGGER: ${{ needs.resolve.outputs.trigger }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           agent_file="workspace/.codex/agents/${AXIS}-reviewer.md"
           prompt_file="${RUNNER_TEMP}/prompt-${AXIS}.md"
+          review_context="${RUNNER_TEMP}/review-context-${AXIS}.md"
           changed_files="${RUNNER_TEMP}/changed-files-${AXIS}.txt"
           diff_file="${RUNNER_TEMP}/diff-${AXIS}.patch"
 
           test -f "$agent_file" || { echo "missing reviewer agent: $agent_file" >&2; exit 1; }
+          python3 trusted/.github/scripts/post_review.py build-review-context --output "$review_context"
           git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
           git -C workspace diff --unified=80 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
           if [ "$(wc -c < "$diff_file")" -gt 180000 ]; then
@@ -127,6 +139,11 @@ jobs:
           - base_sha: ${BASE_SHA}
           - head_sha: ${HEAD_SHA}
           - trigger: ${TRIGGER}
+
+          Review context:
+          EOF
+            cat "$review_context"
+            cat <<'EOF'
 
           Changed files:
           EOF
@@ -296,9 +313,13 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
+      issues: read
       pull-requests: read
       id-token: write
     timeout-minutes: 30
+    outputs:
+      needs_design: ${{ steps.design_need.outputs.needs_design }}
+      blocking_count: ${{ steps.design_need.outputs.blocking_count }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v6
@@ -306,6 +327,14 @@ jobs:
           ref: ${{ needs.resolve.outputs.head_sha }}
           path: workspace
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Download reviewer findings
@@ -346,16 +375,20 @@ jobs:
         env:
           BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           agent_file="workspace/.codex/agents/tech-lead-reviewer.md"
           combined_file="artifacts/combined-findings.json"
           diff_file="${RUNNER_TEMP}/diff-tech-lead.patch"
+          review_context="artifacts/review-context.md"
           prompt_file="${RUNNER_TEMP}/prompt-tech-lead.md"
 
           test -f "$agent_file" || { echo "missing tech-lead agent: $agent_file" >&2; exit 1; }
           test -f "$combined_file" || { echo "missing combined findings: $combined_file" >&2; exit 1; }
+          python3 trusted/.github/scripts/post_review.py build-review-context --output "$review_context"
           git -C workspace diff --unified=60 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
           if [ "$(wc -c < "$diff_file")" -gt 120000 ]; then
             head -c 120000 "$diff_file" > "${diff_file}.tmp"
@@ -381,6 +414,11 @@ jobs:
             cat "$combined_file"
             cat <<'EOF'
           ```
+
+          Review context:
+          EOF
+            cat "$review_context"
+            cat <<'EOF'
 
           PR diff excerpt:
           ```diff
@@ -516,11 +554,896 @@ jobs:
           out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
 
+      - name: Classify design need
+        id: design_need
+        run: >-
+          python3 trusted/.github/scripts/post_review.py classify-design-need
+          --artifacts artifacts
+          --decisions artifacts/decisions-tech-lead.json
+
       - name: Upload tech-lead decisions
         uses: actions/upload-artifact@v7
         with:
           name: codex-review-tech-lead-decisions
-          path: artifacts/decisions-tech-lead.json
+          path: |
+            artifacts/decisions-tech-lead.json
+            artifacts/combined-findings.json
+            artifacts/review-context.md
+          retention-days: 7
+
+  design-normalize:
+    name: design-normalize
+    needs: [resolve, tech-lead]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 25
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download tech-lead inputs
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Build normalizer prompt
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/design-finding-normalizer.md"
+          skill_file="workspace/.codex/skills/review-design-finding-normalizer/SKILL.md"
+          combined_file="artifacts/combined-findings.json"
+          decisions_file="artifacts/decisions-tech-lead.json"
+          context_file="artifacts/review-context.md"
+          diff_file="${RUNNER_TEMP}/diff-design-normalize.patch"
+          prompt_file="${RUNNER_TEMP}/prompt-design-normalize.md"
+
+          test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
+          test -f "$skill_file" || { echo "missing required design skill: $skill_file" >&2; exit 1; }
+          test -f "$combined_file" || { echo "missing combined findings: $combined_file" >&2; exit 1; }
+          test -f "$decisions_file" || { echo "missing tech-lead decisions: $decisions_file" >&2; exit 1; }
+          test -f "$context_file" || { echo "missing review context: $context_file" >&2; exit 1; }
+          git -C workspace diff --unified=40 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
+          if [ "$(wc -c < "$diff_file")" -gt 90000 ]; then
+            head -c 90000 "$diff_file" > "${diff_file}.tmp"
+            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
+            mv "${diff_file}.tmp" "$diff_file"
+          fi
+
+          {
+            cat "$skill_file"
+            printf '\n---\n\n'
+            cat "$agent_file"
+            cat <<'EOF'
+
+          ---
+
+          Return only JSON matching the inline output schema supplied to openai/codex-action.
+          Write human-readable fields in Korean.
+          This stage is summary-only. Do not design the fix.
+
+          Combined findings:
+          ```json
+          EOF
+            cat "$combined_file"
+            cat <<'EOF'
+          ```
+
+          Tech-lead decisions:
+          ```json
+          EOF
+            cat "$decisions_file"
+            cat <<'EOF'
+          ```
+
+          Review context:
+          EOF
+            cat "$context_file"
+            cat <<'EOF'
+
+          Diff excerpt:
+          ```diff
+          EOF
+            cat "$diff_file"
+            cat <<'EOF'
+          ```
+          EOF
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-design-normalize
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run design normalizer
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-design-normalize.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["items", "global_notes"],
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "maxItems": 80,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["source_id", "source_type", "summary", "invariant", "surface", "stale_risk", "advisory", "conflict_keys"],
+                    "properties": {
+                      "source_id": { "type": "string", "minLength": 1, "maxLength": 120 },
+                      "source_type": { "type": "string", "enum": ["finding", "thread", "review-history", "design-history"] },
+                      "summary": { "type": "string", "minLength": 1, "maxLength": 600 },
+                      "invariant": { "type": "string", "minLength": 1, "maxLength": 200 },
+                      "surface": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+                      },
+                      "stale_risk": { "type": "string", "enum": ["none", "low", "medium", "high"] },
+                      "advisory": { "type": "boolean" },
+                      "conflict_keys": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+                      }
+                    }
+                  }
+                },
+                "global_notes": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 400 }
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/normalized-inventory.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-design-normalize
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Validate normalized inventory
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["RUNNER_TEMP"]) / "normalized-inventory.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          if not isinstance(data.get("items"), list):
+              raise SystemExit("items must be an array")
+          out = Path("artifacts") / "normalized-inventory.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload normalized inventory
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-normalized
+          path: artifacts/normalized-inventory.json
+          retention-days: 7
+
+  design-cluster:
+    name: design-cluster
+    needs: [resolve, tech-lead, design-normalize]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 25
+    outputs:
+      batch_indexes: ${{ steps.batch.outputs.batch_indexes }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download design inputs
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Download normalized inventory
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-normalized
+          path: artifacts
+
+      - name: Build cluster prompt
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/design-invariant-clusterer.md"
+          skill_file="workspace/.codex/skills/review-design-invariant-clusterer/SKILL.md"
+          inventory_file="artifacts/normalized-inventory.json"
+          context_file="artifacts/review-context.md"
+          prompt_file="${RUNNER_TEMP}/prompt-design-cluster.md"
+
+          test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
+          test -f "$skill_file" || { echo "missing required design skill: $skill_file" >&2; exit 1; }
+          test -f "$inventory_file" || { echo "missing normalized inventory: $inventory_file" >&2; exit 1; }
+          test -f "$context_file" || { echo "missing review context: $context_file" >&2; exit 1; }
+
+          {
+            cat "$skill_file"
+            printf '\n---\n\n'
+            cat "$agent_file"
+            cat <<'EOF'
+
+          ---
+
+          Return only JSON matching the inline output schema supplied to openai/codex-action.
+          Write human-readable fields in Korean.
+          This stage clusters by invariant only. Do not design final edits.
+
+          Normalized inventory:
+          ```json
+          EOF
+            cat "$inventory_file"
+            cat <<'EOF'
+          ```
+
+          Review context:
+          EOF
+            cat "$context_file"
+            printf '\n'
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-design-cluster
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run design clusterer
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-design-cluster.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["clusters", "cross_cluster_conflicts"],
+              "properties": {
+                "clusters": {
+                  "type": "array",
+                  "maxItems": 30,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "title", "invariant", "summary", "source_ids", "conflict_keys"],
+                    "properties": {
+                      "id": { "type": "string", "pattern": "^cluster-[0-9]+$" },
+                      "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+                      "invariant": { "type": "string", "minLength": 1, "maxLength": 240 },
+                      "summary": { "type": "string", "minLength": 1, "maxLength": 700 },
+                      "source_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+                      },
+                      "conflict_keys": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+                      }
+                    }
+                  }
+                },
+                "cross_cluster_conflicts": {
+                  "type": "array",
+                  "maxItems": 15,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 400 }
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/clusters.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-design-cluster
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Validate and batch clusters
+        id: batch
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["RUNNER_TEMP"]) / "clusters.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          clusters = data.get("clusters")
+          if not isinstance(clusters, list):
+              raise SystemExit("clusters must be an array")
+          artifacts = Path("artifacts")
+          batch_dir = artifacts / "cluster-batches"
+          batch_dir.mkdir(parents=True, exist_ok=True)
+          (artifacts / "clusters.json").write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          if not clusters:
+              batches = [{"clusters": []}]
+          else:
+              batches = [{"clusters": clusters[index:index + 3]} for index in range(0, len(clusters), 3)]
+          batch_indexes = []
+          for index, batch in enumerate(batches):
+              (batch_dir / f"cluster-batch-{index}.json").write_text(
+                  json.dumps(batch, ensure_ascii=False, indent=2) + "\n",
+                  encoding="utf-8",
+              )
+              batch_indexes.append(index)
+          output_path = os.environ.get("GITHUB_OUTPUT")
+          if output_path:
+              with open(output_path, "a", encoding="utf-8") as output:
+                  output.write("batch_indexes=" + json.dumps(batch_indexes) + "\n")
+          PY
+
+      - name: Upload design clusters
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-clusters
+          path: |
+            artifacts/clusters.json
+            artifacts/cluster-batches/*.json
+          retention-days: 7
+
+  design-analyze:
+    name: design-analyze-${{ matrix.batch }}
+    needs: [resolve, tech-lead, design-cluster]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.design-cluster.outputs.batch_indexes) }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download tech-lead inputs
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Download design clusters
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-clusters
+          path: artifacts
+
+      - name: Build cluster analysis prompt
+        env:
+          BATCH: ${{ matrix.batch }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/design-cluster-analyst.md"
+          skill_file="workspace/.codex/skills/review-design-cluster-analyst/SKILL.md"
+          batch_file="artifacts/cluster-batches/cluster-batch-${BATCH}.json"
+          context_file="artifacts/review-context.md"
+          diff_file="${RUNNER_TEMP}/diff-design-analyze-${BATCH}.patch"
+          prompt_file="${RUNNER_TEMP}/prompt-design-analyze-${BATCH}.md"
+
+          test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
+          test -f "$skill_file" || { echo "missing required design skill: $skill_file" >&2; exit 1; }
+          test -f "$batch_file" || { echo "missing cluster batch: $batch_file" >&2; exit 1; }
+          test -f "$context_file" || { echo "missing review context: $context_file" >&2; exit 1; }
+          git -C workspace diff --unified=50 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
+          if [ "$(wc -c < "$diff_file")" -gt 100000 ]; then
+            head -c 100000 "$diff_file" > "${diff_file}.tmp"
+            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
+            mv "${diff_file}.tmp" "$diff_file"
+          fi
+
+          {
+            cat "$skill_file"
+            printf '\n---\n\n'
+            cat "$agent_file"
+            cat <<EOF
+
+          ---
+
+          Return only JSON matching the inline output schema supplied to openai/codex-action.
+          Write human-readable fields in Korean.
+          Analyze batch ${BATCH} only. Do not finalize global architecture or edit sequence.
+
+          Cluster batch:
+          \`\`\`json
+          EOF
+            cat "$batch_file"
+            cat <<'EOF'
+          ```
+
+          Review context:
+          EOF
+            cat "$context_file"
+            cat <<'EOF'
+
+          Diff excerpt:
+          ```diff
+          EOF
+            cat "$diff_file"
+            cat <<'EOF'
+          ```
+          EOF
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-design-analyze-${{ matrix.batch }}
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run design cluster analyst
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-design-analyze-${{ matrix.batch }}.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["batch", "cluster_analyses", "batch_notes"],
+              "properties": {
+                "batch": { "type": "integer", "minimum": 0 },
+                "cluster_analyses": {
+                  "type": "array",
+                  "maxItems": 3,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["cluster_id", "root_cause", "affected_surface", "invariants", "retired_approaches", "conflict_candidates", "test_needs"],
+                    "properties": {
+                      "cluster_id": { "type": "string", "pattern": "^cluster-[0-9]+$" },
+                      "root_cause": { "type": "string", "minLength": 1, "maxLength": 900 },
+                      "affected_surface": {
+                        "type": "array",
+                        "maxItems": 12,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 180 }
+                      },
+                      "invariants": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+                      },
+                      "retired_approaches": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+                      },
+                      "conflict_candidates": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+                      },
+                      "test_needs": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+                      }
+                    }
+                  }
+                },
+                "batch_notes": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 300 }
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/cluster-analysis-${{ matrix.batch }}.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-design-analyze-${{ matrix.batch }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Validate cluster analysis
+        env:
+          BATCH: ${{ matrix.batch }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          batch = int(os.environ["BATCH"])
+          source = Path(os.environ["RUNNER_TEMP"]) / f"cluster-analysis-{batch}.json"
+          data = json.loads(source.read_text(encoding="utf-8"))
+          if data.get("batch") != batch:
+              raise SystemExit(f"batch mismatch: {data.get('batch')} != {batch}")
+          out = Path("artifacts") / f"cluster-analysis-{batch}.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload cluster analysis
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-cluster-analysis-${{ matrix.batch }}
+          path: artifacts/cluster-analysis-${{ matrix.batch }}.json
+          retention-days: 7
+
+  design-coordinate:
+    name: design-coordinate
+    needs: [resolve, tech-lead, design-normalize, design-cluster, design-analyze]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-analyze.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download tech-lead inputs
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Download normalized inventory
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-normalized
+          path: artifacts
+
+      - name: Download design clusters
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-clusters
+          path: artifacts
+
+      - name: Download cluster analyses
+        uses: actions/download-artifact@v8
+        with:
+          pattern: codex-design-cluster-analysis-*
+          path: artifacts/cluster-analyses
+          merge-multiple: true
+
+      - name: Build coordinator prompt
+        env:
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/design-coordinator.md"
+          skill_file="workspace/.codex/skills/review-design-coordinator/SKILL.md"
+          docs_file="${RUNNER_TEMP}/design-docs.md"
+          diff_file="${RUNNER_TEMP}/diff-design-coordinate.patch"
+          analyses_file="${RUNNER_TEMP}/cluster-analyses.json"
+          prompt_file="${RUNNER_TEMP}/prompt-design-coordinate.md"
+
+          test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
+          test -f "$skill_file" || { echo "missing required design skill: $skill_file" >&2; exit 1; }
+          git -C workspace diff --unified=80 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
+          if [ "$(wc -c < "$diff_file")" -gt 130000 ]; then
+            head -c 130000 "$diff_file" > "${diff_file}.tmp"
+            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
+            mv "${diff_file}.tmp" "$diff_file"
+          fi
+
+          {
+            for file in \
+              AGENTS.md \
+              docs/FORKED_RELAYER_CRATE.md \
+              docs/DEPOSIT_WALLET_RELAYER_DESIGN.md \
+              docs/TESTING.md \
+              docs/REVIEW_CHECKLIST.md
+            do
+              if [ -f "workspace/$file" ]; then
+                printf '## %s\n\n' "$file"
+                sed -n '1,220p' "workspace/$file"
+                printf '\n\n'
+              fi
+            done
+          } > "$docs_file"
+          if [ "$(wc -c < "$docs_file")" -gt 80000 ]; then
+            head -c 80000 "$docs_file" > "${docs_file}.tmp"
+            printf '\n...[truncated]\n' >> "${docs_file}.tmp"
+            mv "${docs_file}.tmp" "$docs_file"
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          items = []
+          for path in sorted(Path("artifacts/cluster-analyses").glob("cluster-analysis-*.json")):
+              items.append(json.loads(path.read_text(encoding="utf-8")))
+          Path(os.environ["RUNNER_TEMP"], "cluster-analyses.json").write_text(
+              json.dumps(items, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          {
+            cat "$skill_file"
+            printf '\n---\n\n'
+            cat "$agent_file"
+            cat <<'EOF'
+
+          ---
+
+          Return only JSON matching the inline output schema supplied to openai/codex-action.
+          Write human-readable fields in Korean.
+          You are the only final design authority in this stage.
+
+          Review context:
+          EOF
+            cat artifacts/review-context.md
+            cat <<'EOF'
+
+          Combined findings:
+          ```json
+          EOF
+            cat artifacts/combined-findings.json
+            cat <<'EOF'
+          ```
+
+          Tech-lead decisions:
+          ```json
+          EOF
+            cat artifacts/decisions-tech-lead.json
+            cat <<'EOF'
+          ```
+
+          Normalized inventory:
+          ```json
+          EOF
+            cat artifacts/normalized-inventory.json
+            cat <<'EOF'
+          ```
+
+          Clusters:
+          ```json
+          EOF
+            cat artifacts/clusters.json
+            cat <<'EOF'
+          ```
+
+          Cluster analyses:
+          ```json
+          EOF
+            cat "$analyses_file"
+            cat <<'EOF'
+          ```
+
+          Relevant docs:
+          EOF
+            cat "$docs_file"
+            cat <<'EOF'
+
+          Diff excerpt:
+          ```diff
+          EOF
+            cat "$diff_file"
+            cat <<'EOF'
+          ```
+          EOF
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-design-coordinate
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run design coordinator
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-design-coordinate.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "summary", "root_cause", "invariants", "retired_approaches", "intended_architecture", "edit_sequence", "tests", "acceptance_criteria", "open_questions"],
+              "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "summary": { "type": "string", "minLength": 1, "maxLength": 1000 },
+                "root_cause": { "type": "string", "minLength": 1, "maxLength": 1400 },
+                "invariants": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 12,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 400 }
+                },
+                "retired_approaches": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 400 }
+                },
+                "intended_architecture": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 12,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+                },
+                "edit_sequence": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 14,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+                },
+                "tests": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 14,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+                },
+                "acceptance_criteria": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 14,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+                },
+                "open_questions": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 500 }
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/design-plan.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-design-coordinate
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Render design plan
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          cp "${RUNNER_TEMP}/design-plan.json" artifacts/design-plan.json
+          python3 trusted/.github/scripts/post_review.py render-design-plan \
+            --plan artifacts/design-plan.json \
+            --output artifacts/design-plan.md
+
+      - name: Post sticky design plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        run: python3 trusted/.github/scripts/post_review.py post-design-plan --body artifacts/design-plan.md
+
+      - name: Upload design plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-plan
+          path: |
+            artifacts/design-plan.json
+            artifacts/design-plan.md
           retention-days: 7
 
   post:
