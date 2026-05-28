@@ -6,6 +6,7 @@ use super::response::{validate_transaction_hash, validate_transaction_id};
 use super::MAX_ERROR_TOKEN_LEN;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DepositWalletMutationEnvironment {
     Production,
     /// Crate-local mock relayer environment used by unit tests.
@@ -17,6 +18,7 @@ pub enum DepositWalletMutationEnvironment {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DepositWalletMutationAction {
     WalletNonceRead,
     WalletCreate,
@@ -548,7 +550,7 @@ pub(super) fn validate_permit_fresh(
         ));
     }
     let acquired_at = permit.owner_serialization_evidence.acquired_at_unix_seconds;
-    if acquired_at > now_unix_seconds.saturating_add(MAX_EVIDENCE_CLOCK_SKEW_SECONDS) {
+    if acquired_at > now_unix_seconds {
         return Err(RelayerError::mutation_blocked(
             "owner serialization evidence acquisition is in the future".to_string(),
         ));

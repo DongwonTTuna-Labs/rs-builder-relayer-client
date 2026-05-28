@@ -342,15 +342,23 @@ impl DepositWalletRelayerClient {
                                 display_payload_hash(evidence.payload_hash())
                             )));
                         }
+                        remove_transaction_owner_record(&mut state, evidence.transaction_id());
+                        state.terminal_observations.remove(evidence.transaction_id());
                         if unrecorded_transaction_id_observed {
+                            state.owner_blocks.insert(
+                                owner,
+                                OwnerMutationBlock::Ambiguous {
+                                    payload_hash,
+                                    created_at_unix_seconds,
+                                    unrecorded_transaction_id_observed: true,
+                                },
+                            );
                             return Err(RelayerError::reconciliation_required(format!(
-                                "manual reconciliation payload {} for owner {} observed a transaction id that could not be recorded; reconcile every observed transaction id before clearing",
+                                "manual reconciliation payload {} for owner {} still has an observed transaction id that could not be recorded; complete id-less reconciliation after recorded transactions are cleared",
                                 display_payload_hash(evidence.payload_hash()),
                                 redacted_address(owner)
                             )));
                         }
-                        remove_transaction_owner_record(&mut state, evidence.transaction_id());
-                        state.terminal_observations.remove(evidence.transaction_id());
                     }
                     Some(_) => {
                         return Err(RelayerError::reconciliation_required(format!(
@@ -420,18 +428,11 @@ impl DepositWalletRelayerClient {
             Some(OwnerMutationBlock::Ambiguous {
                 payload_hash,
                 created_at_unix_seconds,
-                unrecorded_transaction_id_observed,
+                unrecorded_transaction_id_observed: _,
             }) if payload_hash == evidence.payload_hash() => {
                 if owner_payload_transaction_count(&state, owner, evidence.payload_hash()) > 0 {
                     return Err(RelayerError::reconciliation_required(format!(
                         "id-less manual reconciliation payload {} for owner {} still has local transaction records; reconcile those transactions before clearing",
-                        display_payload_hash(evidence.payload_hash()),
-                        redacted_address(owner)
-                    )));
-                }
-                if unrecorded_transaction_id_observed {
-                    return Err(RelayerError::reconciliation_required(format!(
-                        "id-less manual reconciliation payload {} for owner {} observed a transaction id that could not be recorded; transaction-id reconciliation required",
                         display_payload_hash(evidence.payload_hash()),
                         redacted_address(owner)
                     )));
@@ -833,9 +834,9 @@ impl DepositWalletRelayerClient {
             )));
         }
 
-        let observation = match receipt.state {
+        match receipt.state {
             RelayerTransactionState::Confirmed => {
-                let Some(transaction_hash) = receipt.transaction_hash.clone() else {
+                if receipt.transaction_hash.is_none() {
                     transition_matching_inflight_to_ambiguous(
                         &mut state,
                         owner,
@@ -846,20 +847,9 @@ impl DepositWalletRelayerClient {
                         "confirmed deposit wallet transaction {} did not include transactionHash; manual reconciliation required",
                         sanitized_external_token(&receipt.transaction_id)
                     )));
-                };
-                OwnerTransactionTerminalObservation {
-                    observed_state: RelayerTransactionState::Confirmed,
-                    transaction_hash: Some(transaction_hash),
                 }
             }
-            RelayerTransactionState::Invalid => OwnerTransactionTerminalObservation {
-                observed_state: RelayerTransactionState::Invalid,
-                transaction_hash: None,
-            },
-            RelayerTransactionState::Failed => OwnerTransactionTerminalObservation {
-                observed_state: RelayerTransactionState::Failed,
-                transaction_hash: None,
-            },
+            RelayerTransactionState::Invalid | RelayerTransactionState::Failed => {}
             RelayerTransactionState::Unknown(_) => {
                 transition_matching_inflight_to_ambiguous(
                     &mut state,
@@ -872,33 +862,32 @@ impl DepositWalletRelayerClient {
             RelayerTransactionState::New
             | RelayerTransactionState::Executed
             | RelayerTransactionState::Mined => return Ok(()),
-        };
+        }
 
         match state.owner_blocks.get(&owner).cloned() {
             Some(OwnerMutationBlock::InFlight {
                 payload_hash,
                 transaction_id: Some(transaction_id),
-                created_at_unix_seconds,
+                created_at_unix_seconds: _,
             }) if payload_hash == record.payload_hash && transaction_id == receipt.transaction_id =>
             {
-                state.owner_blocks.insert(
-                    owner,
-                    OwnerMutationBlock::Ambiguous {
-                        payload_hash,
-                        created_at_unix_seconds,
-                        unrecorded_transaction_id_observed: false,
-                    },
-                );
-                state
-                    .terminal_observations
-                    .insert(receipt.transaction_id.clone(), observation);
+                remove_transaction_owner_record(&mut state, &receipt.transaction_id);
+                if owner_payload_transaction_count(&state, owner, &payload_hash) == 0 {
+                    clear_owner_block_if_payload(&mut state, owner, &payload_hash);
+                }
             }
-            Some(OwnerMutationBlock::Ambiguous { payload_hash, .. })
-                if payload_hash == record.payload_hash =>
+            Some(OwnerMutationBlock::Ambiguous {
+                payload_hash,
+                unrecorded_transaction_id_observed,
+                ..
+            }) if payload_hash == record.payload_hash =>
             {
-                state
-                    .terminal_observations
-                    .insert(receipt.transaction_id.clone(), observation);
+                remove_transaction_owner_record(&mut state, &receipt.transaction_id);
+                if !unrecorded_transaction_id_observed
+                    && owner_payload_transaction_count(&state, owner, &payload_hash) == 0
+                {
+                    clear_owner_block_if_payload(&mut state, owner, &payload_hash);
+                }
             }
             _ => {
                 return Err(RelayerError::reconciliation_required(format!(

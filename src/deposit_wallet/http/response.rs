@@ -266,22 +266,20 @@ fn validate_transaction_wire_evidence(
         ));
     }
 
-    if transaction_type == WALLET_CREATE_TRANSACTION_TYPE {
-        let to = response.to.ok_or_else(|| {
-            TransactionParseError::new(RelayerError::reconciliation_required(
-                "transaction response did not include to address; manual reconciliation required"
-                    .to_string(),
-            ))
-        })?;
-        if to != config.factory {
-            return Err(TransactionParseError::new(
-                RelayerError::reconciliation_required(format!(
-                    "transaction response to address {} did not match configured factory {}; manual reconciliation required",
-                    redacted_address(to),
-                    redacted_address(config.factory)
-                )),
-            ));
-        }
+    let to = response.to.ok_or_else(|| {
+        TransactionParseError::new(RelayerError::reconciliation_required(
+            "transaction response did not include to address; manual reconciliation required"
+                .to_string(),
+        ))
+    })?;
+    if to != config.factory {
+        return Err(TransactionParseError::new(
+            RelayerError::reconciliation_required(format!(
+                "transaction response to address {} did not match configured factory {}; manual reconciliation required",
+                redacted_address(to),
+                redacted_address(config.factory)
+            )),
+        ));
     }
     let proxy_address = response.proxy_address.ok_or_else(|| {
         TransactionParseError::new(RelayerError::reconciliation_required(
@@ -471,9 +469,6 @@ fn receipt_from_submit_response(
         RelayerError::Other("relayer response transactionID was invalid".to_string())
     })?;
     let transaction_hash = match response.transaction_hash.as_deref().map(str::trim) {
-        Some("") if response.state == RelayerTransactionState::Confirmed => {
-            Some(validate_transaction_hash("")?)
-        }
         Some("") | None => None,
         Some(hash) => Some(validate_transaction_hash(hash)?),
     };
@@ -504,7 +499,10 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
 
 pub(super) fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
     if transaction_hash.len() == 66 {
-        if let Some(hex) = transaction_hash.strip_prefix("0x") {
+        if let Some(hex) = transaction_hash
+            .strip_prefix("0x")
+            .or_else(|| transaction_hash.strip_prefix("0X"))
+        {
             if hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Ok(format!("0x{}", hex.to_ascii_lowercase()));
             }

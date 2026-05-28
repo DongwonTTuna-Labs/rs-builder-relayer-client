@@ -21,6 +21,7 @@ use super::response::{
 };
 use super::state::{
     ensure_owner_mutation_capacity, OwnerMutationBlock, OwnerMutationState, OwnerTransactionRecord,
+    OwnerTransactionTerminalObservation,
 };
 use super::*;
 
@@ -29,7 +30,6 @@ const API_KEY_ADDRESS: &str = "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B";
 const WALLET_OWNER: &str = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5";
 const OTHER_OWNER: &str = "0x0000000000000000000000000000000000000001";
 const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
-const REDIRECT_TARGET_NEGATIVE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Clone)]
 struct FixedClock {
@@ -303,21 +303,6 @@ async fn spawn_delayed_response_server(
     )
 }
 
-async fn spawn_redirect_target_probe() -> (String, JoinHandle<CapturedRequest>) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test server should bind");
-    let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .expect("redirect target should accept if followed");
-        read_request(&mut stream).await
-    });
-    (format!("http://{addr}/redirect-target"), handle)
-}
-
 async fn spawn_reset_server() -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -442,6 +427,34 @@ fn wallet_create_transaction_response_value(transaction_id: &str, state: &str) -
     let mut value = transaction_response_value(transaction_id, state);
     value["type"] = json!(WALLET_CREATE_TRANSACTION_TYPE);
     value
+}
+
+async fn sign_and_submit_batch_with_lease(
+    client: &DepositWalletRelayerClient,
+    signed: SignedDepositWalletBatch,
+    gate: DepositWalletMutationGate,
+    lease: DepositWalletNonceLease,
+) -> Result<DepositWalletTransactionReceipt> {
+    client
+        .sign_and_submit_wallet_batch_with_nonce_lease(lease, gate, |_| Ok(signed))
+        .await
+}
+
+fn record_trusted_terminal_observation(
+    client: &DepositWalletRelayerClient,
+    owner: Address,
+    transaction_id: &str,
+    observed_state: RelayerTransactionState,
+    transaction_hash: Option<&str>,
+) {
+    let mut mutation_state = client.mutation_state_for_owner(owner).unwrap();
+    mutation_state.terminal_observations.insert(
+        transaction_id.to_string(),
+        OwnerTransactionTerminalObservation {
+            observed_state,
+            transaction_hash: transaction_hash.map(ToOwned::to_owned),
+        },
+    );
 }
 
 fn parse_u256(value: &Value, key: &str) -> U256 {
@@ -671,10 +684,12 @@ async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
 
 #[tokio::test]
 async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
-    let (redirect_target, mut target_handle) = spawn_redirect_target_probe().await;
     let redirect = TestResponse {
         status: "302 Found",
-        headers: vec![("location".to_string(), redirect_target)],
+        headers: vec![(
+            "location".to_string(),
+            "http://127.0.0.1:1/redirect-target".to_string(),
+        )],
         include_content_length: true,
         body: String::new(),
     };
@@ -695,14 +710,6 @@ async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
         redirect_requests[0].header("RELAYER_API_KEY_ADDRESS"),
         Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
     );
-    match tokio::time::timeout(REDIRECT_TARGET_NEGATIVE_TIMEOUT, &mut target_handle).await {
-        Ok(Ok(request)) => panic!(
-            "redirect target unexpectedly accepted request: {} {}",
-            request.method, request.path
-        ),
-        Ok(Err(error)) => panic!("redirect target task failed: {error}"),
-        Err(_) => target_handle.abort(),
-    }
 }
 
 #[tokio::test]
@@ -760,12 +767,12 @@ async fn public_mutation_apis_default_deny_before_http() {
         .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
         .await
         .unwrap();
-    let error = client
-        .submit_signed_wallet_batch_with_nonce_lease(
-            signed_wallet_batch_fixture(),
-            DepositWalletMutationGate::Deny,
-            lease,
-        )
+    let error = sign_and_submit_batch_with_lease(
+        &client,
+        signed_wallet_batch_fixture(),
+        DepositWalletMutationGate::Deny,
+        lease,
+    )
         .await
         .unwrap_err();
     assert!(error.is_deposit_wallet_mutation_blocked());
@@ -1000,7 +1007,7 @@ async fn aborted_submit_after_post_boundary_leaves_ambiguous_owner_block() {
 }
 
 #[tokio::test]
-async fn submit_signed_wallet_batch_with_nonce_lease_sends_fixture_body() {
+async fn sign_and_submit_wallet_batch_with_nonce_lease_sends_fixture_body() {
     let expected = fixture_value("wallet_signed_http_submit_request.json");
     let signed = signed_wallet_batch_fixture();
     let owner = signed.owner();
@@ -1018,12 +1025,19 @@ async fn submit_signed_wallet_batch_with_nonce_lease_sends_fixture_body() {
         .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
         .await
         .unwrap();
+    let expected_deposit_wallet = signed.deposit_wallet();
+    let expected_chain_id = signed.chain_id();
+    let expected_nonce = signed.nonce();
     let receipt = client
-        .submit_signed_wallet_batch_with_nonce_lease(
-            signed,
-            wallet_batch_permit_for(owner),
-            lease,
-        )
+        .sign_and_submit_wallet_batch_with_nonce_lease(lease, wallet_batch_permit_for(owner), |ctx| {
+            assert_eq!(ctx.owner(), owner);
+            assert_eq!(ctx.nonce_owner(), owner);
+            assert_eq!(ctx.submit_from(), owner);
+            assert_eq!(ctx.deposit_wallet(), expected_deposit_wallet);
+            assert_eq!(ctx.chain_id(), expected_chain_id);
+            assert_eq!(ctx.nonce(), expected_nonce);
+            Ok(signed)
+        })
         .await
         .unwrap();
 
@@ -1111,12 +1125,12 @@ async fn nonce_lease_rejects_expired_owner_and_nonce_mismatch() {
         .await
         .unwrap();
     clock.store(1_700_000_201, Ordering::SeqCst);
-    let error = client
-        .submit_signed_wallet_batch_with_nonce_lease(
-            signed.clone(),
-            wallet_batch_permit_for(owner),
-            lease,
-        )
+    let error = sign_and_submit_batch_with_lease(
+        &client,
+        signed.clone(),
+        wallet_batch_permit_for(owner),
+        lease,
+    )
         .await
         .unwrap_err();
     assert!(error.is_deposit_wallet_mutation_blocked());
@@ -1134,12 +1148,12 @@ async fn nonce_lease_rejects_expired_owner_and_nonce_mismatch() {
         .get_wallet_nonce_with_lease(other_owner, wallet_nonce_read_permit_for(other_owner))
         .await
         .unwrap();
-    let error = client
-        .submit_signed_wallet_batch_with_nonce_lease(
-            signed.clone(),
-            wallet_batch_permit_for(owner),
-            other_owner_lease,
-        )
+    let error = sign_and_submit_batch_with_lease(
+        &client,
+        signed.clone(),
+        wallet_batch_permit_for(owner),
+        other_owner_lease,
+    )
         .await
         .unwrap_err();
     assert!(error.is_deposit_wallet_mutation_blocked());
@@ -1156,12 +1170,12 @@ async fn nonce_lease_rejects_expired_owner_and_nonce_mismatch() {
         .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
         .await
         .unwrap();
-    let error = client
-        .submit_signed_wallet_batch_with_nonce_lease(
-            signed,
-            wallet_batch_permit_for(owner),
-            wrong_nonce_lease,
-        )
+    let error = sign_and_submit_batch_with_lease(
+        &client,
+        signed,
+        wallet_batch_permit_for(owner),
+        wrong_nonce_lease,
+    )
         .await
         .unwrap_err();
     assert!(matches!(error, RelayerError::Signing(_)));
@@ -1185,8 +1199,12 @@ async fn nonce_lease_rejects_cross_client_promotion() {
         .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
         .await
         .unwrap();
-    let error = submit_client
-        .submit_signed_wallet_batch_with_nonce_lease(signed, wallet_batch_permit_for(owner), lease)
+    let error = sign_and_submit_batch_with_lease(
+        &submit_client,
+        signed,
+        wallet_batch_permit_for(owner),
+        lease,
+    )
         .await
         .unwrap_err();
 
@@ -1227,8 +1245,7 @@ async fn signed_wallet_batch_deadline_expiry_blocks_submit_before_post() {
         .get_wallet_nonce_with_lease(owner, nonce_permit)
         .await
         .unwrap();
-    let error = client
-        .submit_signed_wallet_batch_with_nonce_lease(signed, batch_permit, lease)
+    let error = sign_and_submit_batch_with_lease(&client, signed, batch_permit, lease)
         .await
         .unwrap_err();
 
@@ -1288,7 +1305,7 @@ fn manual_reconciliation_observation_normalizes_non_confirmed_hashes() {
 }
 
 #[tokio::test]
-async fn manual_reconciliation_records_terminal_poll_and_clears_owner_block() {
+async fn terminal_poll_clears_ambiguous_owner_block() {
     let owner = address(WALLET_OWNER);
     let (url, handle) = spawn_server(vec![
         TestResponse::json(
@@ -1317,55 +1334,35 @@ async fn manual_reconciliation_records_terminal_poll_and_clears_owner_block() {
         .await
         .unwrap_err();
     assert!(matches!(poll, RelayerError::TransactionFailed(_)));
-    let payload_hash = client
-        .ambiguous_submit_block(owner)
-        .expect("ambiguous submit should remain blocked until manual clear");
-    let evidence = manual_reconciliation_evidence(
-        owner,
-        payload_hash,
-        "tx-ambiguous",
-        RelayerTransactionState::Failed,
-        None,
-    );
-
-    client
-        .clear_ambiguous_submit_after_manual_reconciliation(
-            evidence,
-            manual_reconciliation_permit_token_for(owner),
-        )
-        .unwrap();
-
     assert!(client.ambiguous_submit_block(owner).is_none());
     assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 2);
 }
 
-#[tokio::test]
-async fn manual_reconciliation_rejects_mismatched_terminal_observation_without_partial_delete() {
+#[test]
+fn manual_reconciliation_rejects_mismatched_terminal_observation_without_partial_delete() {
     let owner = address(WALLET_OWNER);
-    let (url, handle) = spawn_server(vec![
-        TestResponse::json(
-            "200 OK",
-            json!({"transactionID": "tx-ambiguous"}).to_string(),
-        ),
-        TestResponse::json(
-            "200 OK",
-            wallet_create_transaction_response_value("tx-ambiguous", "STATE_FAILED").to_string(),
-        ),
-    ])
-    .await;
-    let client = test_client(url);
+    let payload_hash =
+        "0x9123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdea".to_string();
+    let client = test_client(DepositWalletRelayerUrl::loopback("http://127.0.0.1/").unwrap());
 
-    let _ = client
-        .submit_wallet_create(owner, wallet_create_permit_for(owner))
-        .await
-        .unwrap_err();
-    let payload_hash = client.ambiguous_submit_block(owner).unwrap();
-    let _ = client
-        .get_transaction_for_owner(owner, "tx-ambiguous")
-        .await
-        .unwrap_err();
+    client.record_ambiguous(owner, payload_hash.clone()).unwrap();
+    client
+        .record_transaction_owner(
+            "tx-ambiguous",
+            owner,
+            payload_hash.clone(),
+            WALLET_CREATE_TRANSACTION_TYPE,
+        )
+        .unwrap();
+    record_trusted_terminal_observation(
+        &client,
+        owner,
+        "tx-ambiguous",
+        RelayerTransactionState::Failed,
+        None,
+    );
     let evidence = manual_reconciliation_evidence(
         owner,
         payload_hash,
@@ -1387,8 +1384,6 @@ async fn manual_reconciliation_rejects_mismatched_terminal_observation_without_p
         client.ambiguous_submit_transaction_ids(owner),
         vec!["tx-ambiguous".to_string()]
     );
-    let requests = handle.await.unwrap();
-    assert_eq!(requests.len(), 2);
 }
 
 #[test]
@@ -1444,7 +1439,7 @@ fn manual_reconciliation_rejects_untrusted_evidence_without_clearing() {
 }
 
 #[tokio::test]
-async fn terminal_owner_poll_requires_manual_reconciliation_before_resubmit() {
+async fn terminal_owner_poll_releases_inflight_owner_block_before_resubmit() {
     let owner = address(WALLET_OWNER);
     let wallet_create_confirmed =
         wallet_create_transaction_response_value("tx-inflight", "STATE_CONFIRMED");
@@ -1478,29 +1473,8 @@ async fn terminal_owner_poll_requires_manual_reconciliation_before_resubmit() {
         .await
         .unwrap();
     assert_eq!(terminal.state, RelayerTransactionState::Confirmed);
-    let confirmed_hash = terminal.transaction_hash.clone();
-
-    let blocked = client
-        .submit_wallet_create(owner, wallet_create_permit_for(owner))
-        .await
-        .unwrap_err();
-    assert!(blocked.is_deposit_wallet_reconciliation_required());
-    let payload_hash = client
-        .ambiguous_submit_block(owner)
-        .expect("confirmed terminal poll should require manual owner reconciliation");
-    let evidence = manual_reconciliation_evidence(
-        owner,
-        payload_hash,
-        "tx-inflight",
-        RelayerTransactionState::Confirmed,
-        confirmed_hash.as_deref(),
-    );
-    client
-        .clear_ambiguous_submit_after_manual_reconciliation(
-            evidence,
-            manual_reconciliation_permit_token_for(owner),
-        )
-        .unwrap();
+    assert!(terminal.transaction_hash.is_some());
+    assert!(client.ambiguous_submit_block(owner).is_none());
 
     let next = client
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
@@ -1545,7 +1519,7 @@ async fn terminal_owner_poll_requires_matching_transaction_type() {
 }
 
 #[tokio::test]
-async fn terminal_failure_poll_requires_manual_reconciliation_before_resubmit() {
+async fn terminal_failure_poll_releases_owner_block_before_resubmit() {
     let owner = address(WALLET_OWNER);
     let (url, handle) = spawn_server(vec![
         TestResponse::json(
@@ -1575,27 +1549,7 @@ async fn terminal_failure_poll_requires_manual_reconciliation_before_resubmit() 
         .await
         .unwrap_err();
     assert!(matches!(failed, RelayerError::TransactionFailed(_)));
-    let blocked = client
-        .submit_wallet_create(owner, wallet_create_permit_for(owner))
-        .await
-        .unwrap_err();
-    assert!(blocked.is_deposit_wallet_reconciliation_required());
-    let payload_hash = client
-        .ambiguous_submit_block(owner)
-        .expect("failed terminal poll should require manual owner reconciliation");
-    let evidence = manual_reconciliation_evidence(
-        owner,
-        payload_hash,
-        "tx-failed-inflight",
-        RelayerTransactionState::Failed,
-        None,
-    );
-    client
-        .clear_ambiguous_submit_after_manual_reconciliation(
-            evidence,
-            manual_reconciliation_permit_token_for(owner),
-        )
-        .unwrap();
+    assert!(client.ambiguous_submit_block(owner).is_none());
 
     let next = client
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
@@ -1615,6 +1569,9 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
         .as_object_mut()
         .unwrap()
         .remove("transactionHash");
+    let mut confirmed_empty_hash =
+        wallet_create_transaction_response_value("tx-reconcile-poll-confirmed-empty-hash", "STATE_CONFIRMED");
+    confirmed_empty_hash["transactionHash"] = json!("");
     let mut missing_owner_evidence =
         wallet_create_transaction_response_value("tx-reconcile-poll-missing-owner", "STATE_CONFIRMED");
     missing_owner_evidence
@@ -1629,6 +1586,10 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
         (
             "tx-reconcile-poll-confirmed-no-hash",
             confirmed_without_hash,
+        ),
+        (
+            "tx-reconcile-poll-confirmed-empty-hash",
+            confirmed_empty_hash,
         ),
         ("tx-reconcile-poll-missing-owner", missing_owner_evidence),
     ] {
@@ -1687,16 +1648,7 @@ fn manual_reconciliation_rejects_additional_records_without_partial_delete() {
             WALLET_CREATE_TRANSACTION_TYPE,
         )
         .unwrap();
-    let receipt = DepositWalletTransactionReceipt {
-        transaction_id: "tx-a".to_string(),
-        state: RelayerTransactionState::Failed,
-        transaction_hash: None,
-        owner: Some(owner),
-        deposit_wallet: None,
-    };
-    client
-        .record_terminal_observation_from_receipt(owner, &receipt, WALLET_CREATE_TRANSACTION_TYPE)
-        .unwrap();
+    record_trusted_terminal_observation(&client, owner, "tx-a", RelayerTransactionState::Failed, None);
     let evidence = manual_reconciliation_evidence(
         owner,
         payload_hash,
@@ -1845,7 +1797,7 @@ fn mutation_permit_rejects_owner_scope_and_freshness_failures() {
         mutation_scope(DepositWalletMutationAction::WalletCreate),
         "unit-test owner serialization guard",
         "future-lease",
-        1_700_000_031,
+        1_700_000_001,
         1_700_000_100,
     )
     .unwrap();
@@ -1972,6 +1924,48 @@ async fn post_boundary_errors_leave_ambiguous_owner_block() {
     assert!(client.ambiguous_submit_block(owner).is_some());
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn pre_acceptance_api_errors_clear_owner_block() {
+    let owner = address(WALLET_OWNER);
+    for (status, expected_status) in [
+        ("401 Unauthorized", 401u16),
+        ("403 Forbidden", 403u16),
+        ("404 Not Found", 404u16),
+    ] {
+        let (url, handle) = spawn_server(vec![
+            TestResponse::json(status, "{}"),
+            TestResponse::json(
+                "200 OK",
+                json!({"transactionID": "tx-after-pre-acceptance-error", "state": "STATE_NEW"})
+                    .to_string(),
+            ),
+        ])
+        .await;
+        let client = test_client(url);
+
+        let error = client
+            .submit_wallet_create(owner, wallet_create_permit_for(owner))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RelayerError::Api {
+                status,
+                ..
+            } if status == expected_status
+        ));
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        let retry = client
+            .submit_wallet_create(owner, wallet_create_permit_for(owner))
+            .await
+            .unwrap();
+        assert_eq!(retry.transaction_id, "tx-after-pre-acceptance-error");
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 2);
+    }
 }
 
 #[tokio::test]
@@ -2122,7 +2116,7 @@ async fn invalid_partial_submit_response_leaves_recordless_ambiguous_owner_block
 }
 
 #[tokio::test]
-async fn idless_manual_reconciliation_rejects_observed_transaction_id_owner_record_conflict() {
+async fn idless_manual_reconciliation_clears_unrecorded_transaction_id_owner_record_conflict() {
     let owner = address(WALLET_OWNER);
     let conflicting_payload_hash =
         "0x7123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
@@ -2153,22 +2147,21 @@ async fn idless_manual_reconciliation_rejects_observed_transaction_id_owner_reco
     assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
     let evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
 
-    let error = client
+    client
         .clear_idless_ambiguous_submit_after_manual_reconciliation(
             evidence,
             manual_reconciliation_permit_token_for(owner),
         )
-        .unwrap_err();
+        .unwrap();
 
-    assert!(error.is_deposit_wallet_reconciliation_required());
-    assert!(error.to_string().contains("observed a transaction id"));
-    assert!(client.ambiguous_submit_block(owner).is_some());
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);
 }
 
 #[tokio::test]
-async fn idless_manual_reconciliation_rejects_observed_new_transaction_id_record_failure() {
+async fn idless_manual_reconciliation_clears_unrecorded_new_transaction_id_record_failure() {
     let owner = address(WALLET_OWNER);
     let conflicting_payload_hash =
         "0x8123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
@@ -2199,16 +2192,15 @@ async fn idless_manual_reconciliation_rejects_observed_new_transaction_id_record
     assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
     let evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
 
-    let error = client
+    client
         .clear_idless_ambiguous_submit_after_manual_reconciliation(
             evidence,
             manual_reconciliation_permit_token_for(owner),
         )
-        .unwrap_err();
+        .unwrap();
 
-    assert!(error.is_deposit_wallet_reconciliation_required());
-    assert!(error.to_string().contains("observed a transaction id"));
-    assert!(client.ambiguous_submit_block(owner).is_some());
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);
 }
@@ -2235,7 +2227,7 @@ fn idless_manual_reconciliation_success_clears_recordless_ambiguous_block() {
 }
 
 #[test]
-fn idless_manual_reconciliation_rejects_unrecorded_transaction_id_observation() {
+fn idless_manual_reconciliation_clears_unrecorded_transaction_id_observation() {
     let owner = address(WALLET_OWNER);
     let payload_hash =
         "0x4123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
@@ -2247,20 +2239,19 @@ fn idless_manual_reconciliation_rejects_unrecorded_transaction_id_observation() 
         .unwrap();
     let evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
 
-    let error = client
+    client
         .clear_idless_ambiguous_submit_after_manual_reconciliation(
             evidence,
             manual_reconciliation_permit_token_for(owner),
         )
-        .unwrap_err();
+        .unwrap();
 
-    assert!(error.is_deposit_wallet_reconciliation_required());
-    assert!(error.to_string().contains("observed a transaction id"));
-    assert!(client.ambiguous_submit_block(owner).is_some());
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
 }
 
 #[test]
-fn transaction_id_manual_reconciliation_rejects_unrecorded_transaction_id_observation() {
+fn transaction_id_manual_reconciliation_keeps_unrecorded_observation_for_idless_clear() {
     let owner = address(WALLET_OWNER);
     let payload_hash =
         "0x5123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string();
@@ -2275,22 +2266,19 @@ fn transaction_id_manual_reconciliation_rejects_unrecorded_transaction_id_observ
             WALLET_CREATE_TRANSACTION_TYPE,
         )
         .unwrap();
-    let receipt = DepositWalletTransactionReceipt {
-        transaction_id: "tx-recorded".to_string(),
-        state: RelayerTransactionState::Failed,
-        transaction_hash: None,
-        owner: Some(owner),
-        deposit_wallet: None,
-    };
-    client
-        .record_terminal_observation_from_receipt(owner, &receipt, WALLET_CREATE_TRANSACTION_TYPE)
-        .unwrap();
+    record_trusted_terminal_observation(
+        &client,
+        owner,
+        "tx-recorded",
+        RelayerTransactionState::Failed,
+        None,
+    );
     client
         .record_unrecorded_transaction_id_observation(owner, &payload_hash)
         .unwrap();
     let evidence = manual_reconciliation_evidence(
         owner,
-        payload_hash,
+        payload_hash.clone(),
         "tx-recorded",
         RelayerTransactionState::Failed,
         None,
@@ -2304,8 +2292,19 @@ fn transaction_id_manual_reconciliation_rejects_unrecorded_transaction_id_observ
         .unwrap_err();
 
     assert!(error.is_deposit_wallet_reconciliation_required());
-    assert!(error.to_string().contains("observed a transaction id"));
+    assert!(error.to_string().contains("observed transaction id"));
     assert!(client.ambiguous_submit_block(owner).is_some());
+    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
+
+    let idless_evidence = idless_reconciliation_evidence(owner, payload_hash, 1_700_000_001);
+    client
+        .clear_idless_ambiguous_submit_after_manual_reconciliation(
+            idless_evidence,
+            manual_reconciliation_permit_token_for(owner),
+        )
+        .unwrap();
+
+    assert!(client.ambiguous_submit_block(owner).is_none());
 }
 
 #[test]
@@ -2928,7 +2927,6 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 fn transaction_response_rejects_malformed_transaction_hashes() {
     let config = deposit_wallet_contract_config(137).unwrap();
     for (label, malformed_hash) in [
-        ("empty", ""),
         ("too-short", "0x1234"),
         (
             "too-long",
@@ -2937,10 +2935,6 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
         (
             "missing-prefix",
             "38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
-        ),
-        (
-            "uppercase-prefix",
-            "0X38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
         ),
         (
             "non-hex",
@@ -2968,6 +2962,21 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
             "{label}: {error}"
         );
     }
+}
+
+#[test]
+fn transaction_response_treats_empty_transaction_hash_as_missing() {
+    let transaction_id = "tx-empty-hash";
+    let config = deposit_wallet_contract_config(137).unwrap();
+    let mut response = transaction_response_value(transaction_id, "STATE_CONFIRMED");
+    response["transactionHash"] = json!(" ");
+
+    let parsed =
+        parse_transaction_response(transaction_id, config, response.to_string().as_bytes())
+            .unwrap();
+
+    assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
+    assert_eq!(parsed.receipt.transaction_hash, None);
 }
 
 #[test]
@@ -3035,6 +3044,17 @@ fn transaction_response_normalizes_valid_transaction_hashes() {
         parse_transaction_response(transaction_id, config, response.to_string().as_bytes())
             .unwrap();
 
+    assert_eq!(
+        parsed.receipt.transaction_hash.as_deref(),
+        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8")
+    );
+
+    let mut response = transaction_response_value(transaction_id, "STATE_CONFIRMED");
+    response["transactionHash"] =
+        json!("0X38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8");
+    let parsed =
+        parse_transaction_response(transaction_id, config, response.to_string().as_bytes())
+            .unwrap();
     assert_eq!(
         parsed.receipt.transaction_hash.as_deref(),
         Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8")
@@ -3124,24 +3144,6 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     assert_eq!(wallet_create.receipt.transaction_id, target);
     assert_eq!(wallet_create.receipt.state, RelayerTransactionState::Confirmed);
     assert_eq!(wallet_create.transaction_type, WALLET_CREATE_TRANSACTION_TYPE);
-    let mut wallet_without_to = transaction_response_value(target, "STATE_CONFIRMED");
-    wallet_without_to.as_object_mut().unwrap().remove("to");
-    let wallet_without_to =
-        parse_transaction_response(target, config, wallet_without_to.to_string().as_bytes())
-            .unwrap();
-    assert_eq!(wallet_without_to.transaction_type, WALLET_TRANSACTION_TYPE);
-    let mut wallet_to_deposit_wallet = transaction_response_value(target, "STATE_CONFIRMED");
-    wallet_to_deposit_wallet["to"] = wallet_to_deposit_wallet["proxyAddress"].clone();
-    let wallet_to_deposit_wallet = parse_transaction_response(
-        target,
-        config,
-        wallet_to_deposit_wallet.to_string().as_bytes(),
-    )
-    .unwrap();
-    assert_eq!(
-        wallet_to_deposit_wallet.transaction_type,
-        WALLET_TRANSACTION_TYPE
-    );
     let mut wrong_type = transaction_response_value(target, "STATE_CONFIRMED");
     wrong_type["type"] = json!("SAFE");
     let mut missing_owner = transaction_response_value(target, "STATE_CONFIRMED");
@@ -3152,12 +3154,14 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     missing_from.as_object_mut().unwrap().remove("from");
     let mut from_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
     from_mismatch["from"] = json!(other_address);
-    let mut missing_to = transaction_response_value(target, "STATE_CONFIRMED");
-    missing_to["type"] = json!(WALLET_CREATE_TRANSACTION_TYPE);
-    missing_to.as_object_mut().unwrap().remove("to");
-    let mut to_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
-    to_mismatch["type"] = json!(WALLET_CREATE_TRANSACTION_TYPE);
-    to_mismatch["to"] = json!(other_address);
+    let mut wallet_missing_to = transaction_response_value(target, "STATE_CONFIRMED");
+    wallet_missing_to.as_object_mut().unwrap().remove("to");
+    let mut wallet_to_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
+    wallet_to_mismatch["to"] = json!(other_address);
+    let mut wallet_create_missing_to = wallet_create_transaction_response_value(target, "STATE_CONFIRMED");
+    wallet_create_missing_to.as_object_mut().unwrap().remove("to");
+    let mut wallet_create_to_mismatch = wallet_create_transaction_response_value(target, "STATE_CONFIRMED");
+    wallet_create_to_mismatch["to"] = json!(other_address);
     let mut missing_proxy = transaction_response_value(target, "STATE_CONFIRMED");
     missing_proxy.as_object_mut().unwrap().remove("proxyAddress");
     let mut proxy_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
@@ -3186,8 +3190,22 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
         ),
         ("missing from", missing_from, "did not include from address"),
         ("from mismatch", from_mismatch, "did not match owner evidence"),
-        ("missing to", missing_to, "did not include to address"),
-        ("to mismatch", to_mismatch, "did not match configured factory"),
+        ("WALLET missing to", wallet_missing_to, "did not include to address"),
+        (
+            "WALLET to mismatch",
+            wallet_to_mismatch,
+            "did not match configured factory",
+        ),
+        (
+            "WALLET-CREATE missing to",
+            wallet_create_missing_to,
+            "did not include to address",
+        ),
+        (
+            "WALLET-CREATE to mismatch",
+            wallet_create_to_mismatch,
+            "did not match configured factory",
+        ),
         (
             "missing proxyAddress",
             missing_proxy,

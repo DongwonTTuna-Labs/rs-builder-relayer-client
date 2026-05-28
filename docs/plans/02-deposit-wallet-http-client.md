@@ -41,10 +41,10 @@ without touching live relayer endpoints.
 - `get_wallet_nonce_with_lease(owner, mutation_gate)`: fetches a fresh
   `type=WALLET` nonce and keeps the owner-scoped lease alive for the matching
   signed submit.
-- `submit_signed_wallet_batch_with_nonce_lease(batch, mutation_gate,
-  nonce_lease)`: submits a previously signed `WALLET` request only when an
-  explicit mutation gate permits relayer mutation and the crate-owned nonce
-  lease matches the owner and nonce.
+- `sign_and_submit_wallet_batch_with_nonce_lease(nonce_lease, mutation_gate,
+  sign)`: gives the caller a lease-bound signing context, then submits the
+  signed `WALLET` request only when an explicit mutation gate permits relayer
+  mutation and the crate-owned nonce lease matches the signed owner and nonce.
 - `poll_transaction(transaction_id, poll_policy)`: polls under a bounded policy
   until terminal success or terminal failure, preserving unknown states.
 
@@ -75,8 +75,8 @@ APIs must not be removed or silently changed.
   credential-derived strings through `Debug`, `Display`, error conversion,
   logs, snapshots, or fixture output.
 - Mutation gate tests must prove both `submit_wallet_create` and
-  `submit_signed_wallet_batch_with_nonce_lease` are denied by default before any
-  HTTP request or auth header construction, return a stable blocked-mutation
+  `sign_and_submit_wallet_batch_with_nonce_lease` are denied by default before
+  any HTTP request or auth header construction, return a stable blocked-mutation
   error, and proceed only when an explicit permit and matching crate-owned nonce
   lease are supplied.
 - Mocked `POST /submit` must assert exact JSON body for both `WALLET-CREATE`
