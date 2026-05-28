@@ -1,3 +1,8 @@
+// PR #20 keeps transaction and nonce reads crate-internal until WALLET polling
+// evidence and nonce lease semantics land in later stack PRs. The internal HTTP
+// harness is still compiled for tests and downstream stack branches.
+#![cfg_attr(not(test), allow(dead_code))]
+
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

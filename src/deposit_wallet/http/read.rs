@@ -17,7 +17,7 @@ impl DepositWalletRelayerClient {
     /// Production WALLET nonce reads remain disabled in this stack layer
     /// because a later mutation-state PR must hold an owner-scoped nonce lease
     /// through signing and submit.
-    pub async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
+    pub(crate) async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
         if self.base_url.is_production_host() {
             return Err(RelayerError::mutation_blocked(
                 "production WALLET nonce reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
@@ -37,7 +37,7 @@ impl DepositWalletRelayerClient {
         parse_wallet_nonce_response(&response)
     }
 
-    pub async fn get_transaction_for_owner(
+    pub(crate) async fn get_transaction_for_owner(
         &self,
         owner: Address,
         transaction_id: &str,

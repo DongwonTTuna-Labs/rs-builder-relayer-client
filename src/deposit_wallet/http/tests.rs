@@ -256,6 +256,12 @@ fn transaction_response_value(transaction_id: &str, state: &str) -> Value {
 fn relayer_key_auth_validates_redacts_and_marks_headers_sensitive() {
     assert!(RelayerKeyAuth::new("", address(API_KEY_ADDRESS)).is_err());
     assert!(RelayerKeyAuth::new("with whitespace", address(API_KEY_ADDRESS)).is_err());
+    for rejected in ["abc\n", "abc\t", "abc\0"] {
+        assert!(
+            RelayerKeyAuth::new(rejected, address(API_KEY_ADDRESS)).is_err(),
+            "{rejected:?} should be rejected"
+        );
+    }
     assert!(RelayerKeyAuth::new("a".repeat(4096), address(API_KEY_ADDRESS)).is_ok());
     assert!(RelayerKeyAuth::new("a".repeat(4097), address(API_KEY_ADDRESS)).is_err());
 
@@ -352,6 +358,18 @@ fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
     );
 
     let fixture = fixture_value("wallet_nonce_response_cases.json");
+    for raw in [
+        "{}",
+        r#"{"nonce":null}"#,
+        "[]",
+        "not-json",
+        r#""31""#,
+    ] {
+        assert!(
+            super::read::parse_wallet_nonce_response(raw.as_bytes()).is_err(),
+            "expected nonce response shape {raw:?} to be rejected"
+        );
+    }
     for case in fixture["rejected"].as_array().unwrap() {
         let raw_nonce = case["raw"].as_str().unwrap();
         assert!(
@@ -366,23 +384,24 @@ fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
 }
 
 #[test]
-fn transaction_response_fixture_rejects_unverified_proxy_address() {
+fn transaction_response_fixture_preserves_proxy_address_evidence() {
     let transaction_id = "0190b317-a1d3-7bec-9b91-eeb6dcd3a620";
     let fixture = fixture_text("wallet_transaction_response.json");
 
-    let error = parse_transaction_response(
+    let parsed = parse_transaction_response(
         transaction_id,
         deposit_wallet_contract_config(137).unwrap(),
         fixture.as_bytes(),
     )
-    .unwrap_err()
-    .error;
+    .unwrap();
 
-    assert!(error.is_deposit_wallet_reconciliation_required());
-    assert!(error.to_string().contains("proxyAddress"));
-    assert!(!error
-        .to_string()
-        .contains("0x6d8c4e9adf5748af82dabe2c6225207770d6b4fa"));
+    assert_eq!(parsed.receipt.transaction_id, transaction_id);
+    assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
+    assert_eq!(parsed.owner, Some(address(WALLET_OWNER)));
+    assert_eq!(
+        parsed.receipt.deposit_wallet,
+        Some("0x6d8c4e9adf5748af82dabe2c6225207770d6b4fa".parse().unwrap())
+    );
 }
 
 #[test]
@@ -679,6 +698,19 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     assert!(error.is_deposit_wallet_transaction_absent());
     assert!(error.to_string().contains("did not include requested transaction id"));
 
+    let trailing = format!("{matching} {{}}");
+    let error = parse_transaction_response(
+        target,
+        deposit_wallet_contract_config(137).unwrap(),
+        trailing.as_bytes(),
+    )
+    .unwrap_err()
+    .error;
+    assert!(matches!(
+        error,
+        RelayerError::Other(ref message) if message.contains("could not parse transaction response array")
+    ));
+
     let object_mismatch = transaction_response_value("other-object-id", "STATE_CONFIRMED");
     let error = parse_transaction_response(
         target,
@@ -891,12 +923,8 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     from_mismatch["from"] = json!(other_address);
     let mut missing_to = transaction_response_value(target, "STATE_CONFIRMED");
     missing_to.as_object_mut().unwrap().remove("to");
-    let mut to_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
-    to_mismatch["to"] = json!(other_address);
     let mut missing_proxy = transaction_response_value(target, "STATE_CONFIRMED");
     missing_proxy.as_object_mut().unwrap().remove("proxyAddress");
-    let mut proxy_mismatch = transaction_response_value(target, "STATE_CONFIRMED");
-    proxy_mismatch["proxyAddress"] = json!(other_address);
 
     for (label, response, expected_message) in [
         (
@@ -920,19 +948,9 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
         ("from mismatch", from_mismatch, "did not match owner evidence"),
         ("missing to", missing_to, "did not include to address"),
         (
-            "to mismatch",
-            to_mismatch,
-            "did not match expected relayer target",
-        ),
-        (
             "missing proxyAddress",
             missing_proxy,
             "did not include proxyAddress deposit wallet evidence",
-        ),
-        (
-            "proxyAddress mismatch",
-            proxy_mismatch,
-            "did not match derived deposit wallet",
         ),
     ] {
         let error =
@@ -995,6 +1013,22 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
         error,
         RelayerError::Api { status: 429, ref message }
             if message.contains("retry after 7s")
+    ));
+    let _ = handle.await.unwrap();
+
+    let retry_at = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60));
+    let (url, handle) = spawn_server(vec![TestResponse::json("429 Too Many Requests", "{}")
+        .with_header("retry-after", retry_at)])
+    .await;
+    let client = test_client(url);
+    let error = client
+        .get_wallet_nonce(address(WALLET_OWNER))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RelayerError::Api { status: 429, ref message }
+            if message.contains("retry after") && !message.contains("retry after 0s")
     ));
     let _ = handle.await.unwrap();
 

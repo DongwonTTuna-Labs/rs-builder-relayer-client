@@ -95,33 +95,27 @@ strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
 crate-root API; request DTO fields stay crate-private so submit bodies are
 produced through validated builders.
 
-### HTTP read surface
+### HTTP client surface
 
-The deposit-wallet HTTP client public surface exposes read-only construction and
-owner-bound transaction reads for adapter use:
+The deposit-wallet HTTP client public surface in this PR exposes construction
+only:
 
 ```text
 DepositWalletRelayerUrl::parse
 DepositWalletRelayerClient::new
-DepositWalletRelayerClient::get_transaction_for_owner
-DepositWalletRelayerClient::get_wallet_nonce
 ```
 
-`get_transaction_for_owner` is the owner-bound transaction read API in this
-layer, but production URLs reject it in this PR. The current official
-`GET /transaction` reference documents `SAFE`/`PROXY` transaction types, while
-the deposit-wallet docs describe `WALLET` submit/body construction without
-documenting the polling response shape. Until an official or recorded `WALLET`
-polling response fixture is reviewed, this crate must not claim production
-deposit-wallet transaction polling compatibility. Local loopback and recorded
-fixture tests still require relayer wire evidence that the response is a
+Transaction and nonce read helpers remain crate-internal in this PR. The current
+official `GET /transaction` reference documents `SAFE`/`PROXY` transaction
+types, while the deposit-wallet docs describe `WALLET` submit/body construction
+without documenting the polling response shape. Until an official or recorded
+`WALLET` polling response fixture is reviewed, this crate must not claim
+production deposit-wallet transaction polling compatibility. Local loopback and
+recorded fixture tests preserve relayer wire evidence that the response is a
 `WALLET` transaction, that `owner` is present, that `from == owner`, and that
-`proxyAddress` matches the deposit wallet address derived from the response
-owner and reviewed contract config. `WALLET-CREATE` responses are not treated as
-WALLET owner evidence by this parser because deployment identity and wallet
-mutation identity are reviewed separately. Recorded transaction fixtures whose
-`proxyAddress` cannot be derived from the owner remain reconciliation-required
-instead of production compatibility evidence.
+`proxyAddress` is available as deposit-wallet evidence. `WALLET-CREATE`
+responses are not treated as WALLET owner evidence by this parser because
+deployment identity and wallet mutation identity are reviewed separately.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -139,13 +133,14 @@ as a separate owner-bound response contract. Consumers must not assume the
 relayer API key address, owner signer, deposit wallet, or funder are the same
 identity.
 
-`get_wallet_nonce` is public only for diagnostics and local loopback tests in
-this layer. Production URLs reject WALLET nonce reads until the mutation-state
-stack owns a nonce lease from nonce fetch through signing and submit. Consumers
-must not treat this PR as live nonce, submit, or recovery capable.
+WALLET nonce reads also remain crate-internal in this layer. Production URLs
+reject nonce reads until the mutation-state stack owns a nonce lease from nonce
+fetch through signing and submit. Consumers must not treat this PR as live
+nonce, submit, polling, or recovery capable.
 
-Migration path: consumer adapters may wrap the read-only client behind
-`RelayerPort` transaction status reads while keeping all mutation calls disabled.
+Migration path: consumer adapters may construct the client behind their adapter
+boundary, but must not expose transaction status or nonce reads until a later PR
+adds reviewed polling evidence and owner-scoped nonce lease semantics.
 Rollback path: stop importing the HTTP read client and keep the existing
 fixture/signing-only integration; no consumer domain type should depend on the
 new HTTP DTOs.
