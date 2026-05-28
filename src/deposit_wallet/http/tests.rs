@@ -1502,7 +1502,7 @@ fn manual_reconciliation_observation_normalizes_non_confirmed_hashes() {
 }
 
 #[tokio::test]
-async fn transaction_id_only_submit_response_records_inflight_owner_state() {
+async fn transaction_id_only_submit_response_leaves_ambiguous_owner_state() {
     let owner = address(WALLET_OWNER);
     let (url, handle) = spawn_server(vec![
         TestResponse::json(
@@ -1520,12 +1520,15 @@ async fn transaction_id_only_submit_response_records_inflight_owner_state() {
     let submit = client
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
         .await
-        .unwrap();
-    assert_eq!(submit.transaction_id, "tx-ambiguous");
-    assert_eq!(submit.state, RelayerTransactionState::New);
-    assert_eq!(submit.owner, Some(owner));
-    assert!(client.ambiguous_submit_block(owner).is_none());
-    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
+        .unwrap_err();
+    assert!(submit.is_deposit_wallet_ambiguous_submit());
+    let payload_hash = client
+        .ambiguous_submit_block(owner)
+        .expect("id-only submit response should require reconciliation");
+    assert_eq!(
+        client.ambiguous_submit_transaction_ids(owner),
+        vec!["tx-ambiguous".to_string()]
+    );
     let blocked = client
         .submit_wallet_create(owner, wallet_create_permit_for(owner))
         .await
@@ -1537,8 +1540,21 @@ async fn transaction_id_only_submit_response_records_inflight_owner_state() {
         .await
         .unwrap_err();
     assert!(matches!(poll, RelayerError::TransactionFailed(_)));
+    assert_eq!(client.ambiguous_submit_block(owner), Some(payload_hash.clone()));
+    let evidence = manual_reconciliation_evidence(
+        owner,
+        payload_hash,
+        "tx-ambiguous",
+        RelayerTransactionState::Failed,
+        None,
+    );
+    client
+        .clear_ambiguous_submit_after_manual_reconciliation(
+            evidence,
+            manual_reconciliation_permit_token_for(owner),
+        )
+        .unwrap();
     assert!(client.ambiguous_submit_block(owner).is_none());
-    assert!(client.ambiguous_submit_transaction_ids(owner).is_empty());
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 2);
 }
@@ -1776,7 +1792,7 @@ async fn pending_owner_poll_keeps_submit_block_before_resubmit() {
     let (url, handle) = spawn_server(vec![
         TestResponse::json(
             "200 OK",
-            json!({"transactionID": "tx-pending-inflight"}).to_string(),
+            json!({"transactionID": "tx-pending-inflight", "state": "STATE_NEW"}).to_string(),
         ),
         TestResponse::json("200 OK", pending.to_string()),
     ])
@@ -2855,6 +2871,7 @@ fn wallet_nonce_parser_uses_fixture_for_invalid_boundaries() {
 fn submit_response_parser_covers_abnormal_wire_shapes_and_terminal_states() {
     let array_body =
         json!([{"transactionID": "tx-array", "state": "STATE_NEW"}]).to_string();
+    assert_eq!(extract_submit_transaction_id(array_body.as_bytes()), None);
     let error = parse_submit_response(array_body.as_bytes()).unwrap_err();
     assert!(error.is_deposit_wallet_reconciliation_required());
 
@@ -2863,10 +2880,7 @@ fn submit_response_parser_covers_abnormal_wire_shapes_and_terminal_states() {
         extract_submit_transaction_id(id_only.as_bytes()),
         Some("tx-id-only".to_string())
     );
-    let id_only_receipt = parse_submit_response(id_only.as_bytes()).unwrap();
-    assert_eq!(id_only_receipt.transaction_id, "tx-id-only");
-    assert_eq!(id_only_receipt.state, RelayerTransactionState::New);
-    assert_eq!(id_only_receipt.transaction_hash, None);
+    assert!(parse_submit_response(id_only.as_bytes()).is_err());
     let malformed_id_with_state = json!({"transactionID": "tx-id-with-bad-state", "state": 7})
         .to_string();
     assert_eq!(
