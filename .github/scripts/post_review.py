@@ -683,6 +683,8 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
     workspace = Path(args.workspace)
     batch_dir = Path(args.batch_dir)
     batch_dir.mkdir(parents=True, exist_ok=True)
+    for stale_batch in batch_dir.glob("resolve-batch-*.json"):
+        stale_batch.unlink()
 
     items: list[dict[str, Any]] = []
     for thread in collect_review_threads(repo, pr_number):

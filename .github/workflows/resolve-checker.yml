@@ -66,6 +66,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Prepare resolve batch directory
+        if: steps.resolve.outputs.should_collect == 'true'
+        run: |
+          rm -rf artifacts/resolve-batches
+          mkdir -p artifacts/resolve-batches
+
       - name: Collect previous Codex comments
         if: steps.resolve.outputs.should_collect == 'true'
         id: collect
@@ -111,6 +117,11 @@ jobs:
           path: workspace
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Prepare resolve-check artifacts
+        run: |
+          rm -rf artifacts/resolve-batches artifacts/resolutions-*.json
+          mkdir -p artifacts/resolve-batches artifacts
 
       - name: Download resolve batches
         uses: actions/download-artifact@v8
@@ -268,6 +279,11 @@ jobs:
           path: trusted
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Prepare apply artifacts
+        run: |
+          rm -rf artifacts/resolve-batches artifacts/resolutions artifacts/resolutions-*.json
+          mkdir -p artifacts/resolve-batches artifacts/resolutions
 
       - name: Download resolve batches
         uses: actions/download-artifact@v8
