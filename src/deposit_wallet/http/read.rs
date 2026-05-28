@@ -229,7 +229,11 @@ fn classify_owner_transaction_receipt(
         }
         RelayerTransactionState::New
         | RelayerTransactionState::Executed
-        | RelayerTransactionState::Mined => {}
+        | RelayerTransactionState::Mined => {
+            return Err(RelayerError::transaction_absent(format!(
+                "deposit wallet transaction {transaction_id} is not terminal yet"
+            )));
+        }
     }
     Ok(receipt)
 }

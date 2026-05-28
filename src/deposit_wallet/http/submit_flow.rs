@@ -112,19 +112,51 @@ impl DepositWalletRelayerClient {
         match self.send(Method::POST, url, Some(body)).await {
             Ok(response) => match parse_submit_response(&response) {
                 Ok(receipt) => {
-                    let result = self.handle_submit_receipt(owner, payload_hash, receipt);
-                    if result.is_ok() {
-                        reservation.disarm();
+                    let transaction_id = receipt.transaction_id.clone();
+                    match self.handle_submit_receipt(owner, payload_hash.clone(), receipt) {
+                        Ok(receipt) => {
+                            reservation.disarm();
+                            Ok(receipt)
+                        }
+                        Err(error)
+                            if error.is_deposit_wallet_ambiguous_submit()
+                                || error.is_deposit_wallet_reconciliation_required() =>
+                        {
+                            Err(error)
+                        }
+                        Err(_) => {
+                            self.record_ambiguous_post_boundary(
+                                &mut reservation,
+                                owner,
+                                payload_hash.clone(),
+                            )?;
+                            Err(RelayerError::ambiguous_submit(format!(
+                                "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",
+                                external_token_hash(&transaction_id),
+                                redacted_address(owner),
+                                display_payload_hash(&payload_hash)
+                            )))
+                        }
                     }
-                    result
                 }
                 Err(_error) => {
                     if let Some(transaction_id) = extract_submit_transaction_id(&response) {
-                        self.record_transaction_owner(
-                            &transaction_id,
-                            owner,
-                            payload_hash.clone(),
-                        )?;
+                        if self
+                            .record_transaction_owner(&transaction_id, owner, payload_hash.clone())
+                            .is_err()
+                        {
+                            self.record_ambiguous_post_boundary(
+                                &mut reservation,
+                                owner,
+                                payload_hash.clone(),
+                            )?;
+                            return Err(RelayerError::ambiguous_submit(format!(
+                                "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",
+                                external_token_hash(&transaction_id),
+                                redacted_address(owner),
+                                display_payload_hash(&payload_hash)
+                            )));
+                        }
                         return Err(RelayerError::ambiguous_submit(format!(
                             "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required",
                             external_token_hash(&transaction_id),
@@ -141,7 +173,6 @@ impl DepositWalletRelayerClient {
                 }
             },
             Err(RelayerError::Http(error)) => {
-                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 let category = if error.is_timeout() {
                     "timeout"
                 } else if error.is_connect() {
@@ -155,6 +186,16 @@ impl DepositWalletRelayerClient {
                 } else {
                     "transport"
                 };
+                if error.is_connect() {
+                    reservation.clear()?;
+                    return Err(RelayerError::Other(format!(
+                        "submit transport failed before POST boundary for owner {} payload {}; owner reservation released; transport category: {}",
+                        redacted_address(owner),
+                        display_payload_hash(&payload_hash),
+                        category
+                    )));
+                }
+                self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
                 Err(RelayerError::ambiguous_submit(format!(
                     "submit transport failed for owner {} payload {}; retry status is ambiguous; transport category: {}",
                     redacted_address(owner),

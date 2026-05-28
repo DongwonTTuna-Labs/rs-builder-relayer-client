@@ -7,12 +7,41 @@ use super::redaction::{
     display_payload_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
 
+const OWNER_MUTATION_STATE_SHARDS: usize = 64;
+
 #[derive(Default)]
 pub(super) struct OwnerMutationState {
     pub(super) owner_blocks: HashMap<Address, OwnerMutationBlock>,
     pub(super) nonce_reads: HashMap<Address, u64>,
     pub(super) transaction_owners: HashMap<String, OwnerTransactionRecord>,
     pub(super) terminal_observations: HashMap<String, OwnerTransactionTerminalObservation>,
+}
+
+pub(super) struct OwnerMutationStore {
+    shards: Box<[Mutex<OwnerMutationState>]>,
+}
+
+impl Default for OwnerMutationStore {
+    fn default() -> Self {
+        let shards = (0..OWNER_MUTATION_STATE_SHARDS)
+            .map(|_| Mutex::new(OwnerMutationState::default()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self { shards }
+    }
+}
+
+impl OwnerMutationStore {
+    fn lock_owner(&self, owner: Address) -> Result<MutexGuard<'_, OwnerMutationState>> {
+        self.shards[owner_mutation_shard(owner)]
+            .lock()
+            .map_err(|_| {
+                RelayerError::reconciliation_required(
+                    "deposit wallet owner mutation state lock is poisoned; manual reconciliation required"
+                        .to_string(),
+                )
+            })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -74,7 +103,7 @@ impl OwnerMutationBlock {
 }
 
 pub(super) struct OwnerSubmitReservation {
-    state: Arc<Mutex<OwnerMutationState>>,
+    state: Arc<OwnerMutationStore>,
     owner: Address,
     payload_hash: String,
     created_at_unix_seconds: u64,
@@ -82,7 +111,7 @@ pub(super) struct OwnerSubmitReservation {
 }
 
 pub(super) struct OwnerNonceReadReservation {
-    state: Arc<Mutex<OwnerMutationState>>,
+    state: Arc<OwnerMutationStore>,
     owner: Address,
     created_at_unix_seconds: u64,
 }
@@ -96,7 +125,7 @@ pub(super) enum OwnerSubmitReservationDropAction {
 
 impl OwnerSubmitReservation {
     pub(super) fn new(
-        state: Arc<Mutex<OwnerMutationState>>,
+        state: Arc<OwnerMutationStore>,
         owner: Address,
         payload_hash: String,
         created_at_unix_seconds: u64,
@@ -119,12 +148,7 @@ impl OwnerSubmitReservation {
     }
 
     pub(super) fn update_payload_hash(&mut self, payload_hash: String) -> Result<()> {
-        let mut state = self.state.lock().map_err(|_| {
-            RelayerError::reconciliation_required(
-                "deposit wallet owner mutation state lock is poisoned; manual reconciliation required"
-                    .to_string(),
-            )
-        })?;
+        let mut state = self.state.lock_owner(self.owner)?;
         if state
             .owner_blocks
             .get(&self.owner)
@@ -149,12 +173,7 @@ impl OwnerSubmitReservation {
     }
 
     pub(super) fn clear(&mut self) -> Result<()> {
-        let mut state = self.state.lock().map_err(|_| {
-            RelayerError::reconciliation_required(
-                "deposit wallet owner mutation state lock is poisoned; manual reconciliation required"
-                    .to_string(),
-            )
-        })?;
+        let mut state = self.state.lock_owner(self.owner)?;
         clear_owner_block_if_payload(&mut state, self.owner, &self.payload_hash);
         self.drop_action = OwnerSubmitReservationDropAction::Disarmed;
         Ok(())
@@ -171,7 +190,7 @@ impl OwnerSubmitReservation {
 
 impl Drop for OwnerSubmitReservation {
     fn drop(&mut self) {
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut state) = self.state.lock_owner(self.owner) else {
             return;
         };
         if state
@@ -218,7 +237,7 @@ impl OwnerNonceReadReservation {
 
 impl Drop for OwnerNonceReadReservation {
     fn drop(&mut self) {
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut state) = self.state.lock_owner(self.owner) else {
             return;
         };
         if state
@@ -244,7 +263,7 @@ impl DepositWalletRelayerClient {
             DepositWalletMutationAction::ManualReconciliation,
         )?;
 
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         match state.owner_blocks.get(&owner).cloned() {
             Some(OwnerMutationBlock::Ambiguous {
                 payload_hash,
@@ -362,7 +381,7 @@ impl DepositWalletRelayerClient {
             DepositWalletMutationAction::ManualReconciliation,
         )?;
 
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         match state.owner_blocks.get(&owner).cloned() {
             None => Ok(()),
             Some(OwnerMutationBlock::Ambiguous {
@@ -403,7 +422,7 @@ impl DepositWalletRelayerClient {
     }
 
     pub fn ambiguous_submit_block(&self, owner: Address) -> Option<String> {
-        let state = self.mutation_state.lock().ok()?;
+        let state = self.mutation_state.lock_owner(owner).ok()?;
         match state.owner_blocks.get(&owner) {
             Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) => Some(payload_hash.clone()),
             _ => None,
@@ -411,7 +430,7 @@ impl DepositWalletRelayerClient {
     }
 
     pub fn ambiguous_submit_transaction_ids(&self, owner: Address) -> Vec<String> {
-        let Ok(state) = self.mutation_state.lock() else {
+        let Ok(state) = self.mutation_state.lock_owner(owner) else {
             return Vec::new();
         };
         let Some(OwnerMutationBlock::Ambiguous { payload_hash, .. }) =
@@ -435,7 +454,7 @@ impl DepositWalletRelayerClient {
     }
 
     pub(super) fn ensure_owner_unblocked(&self, owner: Address) -> Result<()> {
-        let state = self.mutation_state()?;
+        let state = self.mutation_state_for_owner(owner)?;
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
         }
@@ -449,7 +468,7 @@ impl DepositWalletRelayerClient {
         &self,
         owner: Address,
     ) -> Result<OwnerNonceReadReservation> {
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
         }
@@ -476,7 +495,7 @@ impl DepositWalletRelayerClient {
         owner: Address,
         payload_hash: String,
     ) -> Result<OwnerSubmitReservation> {
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
         }
@@ -515,7 +534,7 @@ impl DepositWalletRelayerClient {
     ) -> Result<OwnerSubmitReservation> {
         let owner = nonce_read.owner();
         let nonce_read_created_at = nonce_read.created_at_unix_seconds();
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         if let Some(block) = state.owner_blocks.get(&owner) {
             return Err(owner_block_error(owner, block));
         }
@@ -608,7 +627,7 @@ impl DepositWalletRelayerClient {
     }
 
     pub(super) fn record_ambiguous(&self, owner: Address, payload_hash: String) -> Result<()> {
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         let created_at_unix_seconds = if let Some(created_at_unix_seconds) = state
             .owner_blocks
             .get(&owner)
@@ -635,7 +654,7 @@ impl DepositWalletRelayerClient {
         payload_hash: String,
         transaction_id: String,
     ) -> Result<()> {
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         ensure_owner_mutation_capacity(&state, owner, Some(&transaction_id))?;
         ensure_transaction_owner_mapping_available(&state, &transaction_id, owner, &payload_hash)?;
         state.owner_blocks.insert(
@@ -662,7 +681,7 @@ impl DepositWalletRelayerClient {
         owner: Address,
         payload_hash: String,
     ) -> Result<()> {
-        let mut state = self.mutation_state()?;
+        let mut state = self.mutation_state_for_owner(owner)?;
         ensure_owner_mutation_capacity(&state, owner, Some(transaction_id))?;
         ensure_transaction_owner_mapping_available(&state, transaction_id, owner, &payload_hash)?;
         state.transaction_owners.insert(
@@ -707,8 +726,8 @@ impl DepositWalletRelayerClient {
             | RelayerTransactionState::Unknown(_) => return Ok(()),
         };
 
-        let mut state = self.mutation_state()?;
-        let Some(record) = state.transaction_owners.get(&receipt.transaction_id) else {
+        let mut state = self.mutation_state_for_owner(owner)?;
+        let Some(record) = state.transaction_owners.get(&receipt.transaction_id).cloned() else {
             return Ok(());
         };
         if record.owner != owner {
@@ -717,19 +736,39 @@ impl DepositWalletRelayerClient {
                 sanitized_external_token(&receipt.transaction_id)
             )));
         }
-        state
-            .terminal_observations
-            .insert(receipt.transaction_id.clone(), observation);
+        match state.owner_blocks.get(&owner).cloned() {
+            Some(OwnerMutationBlock::InFlight {
+                payload_hash,
+                transaction_id: Some(transaction_id),
+                ..
+            }) if payload_hash == record.payload_hash && transaction_id == receipt.transaction_id =>
+            {
+                state.owner_blocks.remove(&owner);
+                state.transaction_owners.remove(&receipt.transaction_id);
+                state.terminal_observations.remove(&receipt.transaction_id);
+            }
+            Some(OwnerMutationBlock::Ambiguous { payload_hash, .. })
+                if payload_hash == record.payload_hash =>
+            {
+                state
+                    .terminal_observations
+                    .insert(receipt.transaction_id.clone(), observation);
+            }
+            _ => {
+                return Err(RelayerError::reconciliation_required(format!(
+                    "terminal observation transaction {} did not match current owner mutation state",
+                    sanitized_external_token(&receipt.transaction_id)
+                )));
+            }
+        }
         Ok(())
     }
 
-    pub(super) fn mutation_state(&self) -> Result<MutexGuard<'_, OwnerMutationState>> {
-        self.mutation_state.lock().map_err(|_| {
-            RelayerError::reconciliation_required(
-                "deposit wallet owner mutation state lock is poisoned; manual reconciliation required"
-                    .to_string(),
-            )
-        })
+    pub(super) fn mutation_state_for_owner(
+        &self,
+        owner: Address,
+    ) -> Result<MutexGuard<'_, OwnerMutationState>> {
+        self.mutation_state.lock_owner(owner)
     }
 
     pub(super) fn ensure_permitted_for_action(
@@ -860,4 +899,8 @@ pub(super) fn ensure_transaction_owner_mapping_available(
         }
     }
     Ok(())
+}
+
+fn owner_mutation_shard(owner: Address) -> usize {
+    usize::from(owner.as_bytes()[19]) % OWNER_MUTATION_STATE_SHARDS
 }
