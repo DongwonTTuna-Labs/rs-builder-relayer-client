@@ -1134,6 +1134,52 @@ def root_cause_key_for_comment(item: dict[str, Any]) -> str:
     return thread_area(file_path)
 
 
+def aggregate_thread_root_cause_metadata(
+    comments: list[dict[str, Any]],
+    thread: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    first = comments[0]
+    first_file_path = first.get("file") or thread.get("path")
+    metadata = {
+        "file": first_file_path,
+        "area": str(first.get("root_cause_area") or thread_area(str(first_file_path) if first_file_path else None)),
+        "root_cause_key": root_cause_key_for_comment(first),
+        "root_cause_key_source": str(first.get("root_cause_key_source") or "legacy-codex-review-id"),
+    }
+    if first.get("root_cause_failure_kind"):
+        metadata["root_cause_failure_kind"] = str(first["root_cause_failure_kind"])
+
+    needs_human_hints: list[str] = []
+    valid_metadata: list[tuple[str, str, str]] = []
+    has_missing_marker = False
+    has_invalid_marker = False
+    for comment in comments:
+        source = str(comment.get("root_cause_key_source") or "legacy-codex-review-id")
+        if source == "codex-root-cause-key":
+            file_path = comment.get("file") or thread.get("path")
+            area = str(comment.get("root_cause_area") or thread_area(str(file_path) if file_path else None))
+            failure_kind = str(comment.get("root_cause_failure_kind") or "unknown")
+            valid_metadata.append((str(comment["root_cause_key"]), area, failure_kind))
+        elif source == "invalid-codex-root-cause-key":
+            has_invalid_marker = True
+        else:
+            has_missing_marker = True
+
+    if valid_metadata:
+        root_cause_key, area, failure_kind = valid_metadata[0]
+        metadata["root_cause_key"] = root_cause_key
+        metadata["area"] = area
+        metadata["root_cause_key_source"] = "codex-root-cause-key"
+        metadata["root_cause_failure_kind"] = failure_kind
+        if len(set(valid_metadata)) > 1:
+            needs_human_hints.append("conflicting root-cause metadata; deferred issue handoff requires human review")
+    if has_invalid_marker:
+        needs_human_hints.append("invalid root-cause metadata; deferred issue handoff requires human review")
+    if has_missing_marker:
+        needs_human_hints.append("missing trusted root-cause metadata; deferred issue handoff requires human review")
+    return metadata, needs_human_hints
+
+
 def thread_area(path: str | None) -> str:
     if not path:
         return "general"
@@ -1179,26 +1225,17 @@ def build_thread_lifecycle_inventory(threads: list[dict[str, Any]], *, head_sha:
         if not comments:
             continue
         comments.sort(key=lambda item: int(item["comment_id"]))
-        first = comments[0]
-        file_path = first.get("file") or thread.get("path")
-        area = str(first.get("root_cause_area") or thread_area(str(file_path) if file_path else None))
-        root_cause_key = root_cause_key_for_comment(first)
-        root_cause_key_source = str(first.get("root_cause_key_source") or "legacy-codex-review-id")
+        metadata, needs_human_hints = aggregate_thread_root_cause_metadata(comments, thread)
         item = {
             "thread_id": str(thread["id"]),
-            "file": file_path,
-            "area": area,
-            "root_cause_key": root_cause_key,
-            "root_cause_key_source": root_cause_key_source,
+            "file": metadata["file"],
+            "area": metadata["area"],
+            "root_cause_key": metadata["root_cause_key"],
+            "root_cause_key_source": metadata["root_cause_key_source"],
             "comments": comments,
         }
-        if first.get("root_cause_failure_kind"):
-            item["root_cause_failure_kind"] = first["root_cause_failure_kind"]
-        needs_human_hints: list[str] = []
-        if root_cause_key_source == "invalid-codex-root-cause-key":
-            needs_human_hints.append("invalid root-cause metadata; deferred issue handoff requires human review")
-        elif root_cause_key_source != "codex-root-cause-key":
-            needs_human_hints.append("missing trusted root-cause metadata; deferred issue handoff requires human review")
+        if metadata.get("root_cause_failure_kind"):
+            item["root_cause_failure_kind"] = metadata["root_cause_failure_kind"]
         if comments_connection_has_more_than_limit(thread):
             needs_human_hints.append("thread has more than 50 comments; GitHub comments connection may be incomplete")
         if needs_human_hints:
@@ -1512,7 +1549,7 @@ def is_codex_deferred_issue(issue: dict[str, Any]) -> bool:
 
 
 def extract_issue_source_threads(body: str) -> list[str]:
-    marker_index = body.find("## Machine-readable")
+    marker_index = body.rfind("## Machine-readable")
     if marker_index < 0:
         return []
     match = re.search(r"```json\s*(\{.*?\})\s*```", body[marker_index:], flags=re.DOTALL)

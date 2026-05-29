@@ -393,6 +393,23 @@ def review_thread(
     }
 
 
+def append_review_comment(thread, *, body, comment_id="3311706431", line=4):
+    thread["comments"]["nodes"].append(
+        {
+            "id": f"comment-node-id-{comment_id}",
+            "fullDatabaseId": comment_id,
+            "body": body,
+            "author": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]},
+            "commit": {"oid": "old-sha"},
+            "originalCommit": {"oid": "old-sha"},
+            "path": "src/lib.rs",
+            "line": line,
+            "originalLine": line,
+            "url": f"https://github.example/review-comment-{comment_id}",
+        }
+    )
+
+
 class CollectResolutionsTests(unittest.TestCase):
     def collect(
         self,
@@ -852,6 +869,136 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
 
         self.assertEqual("needs_human", inventory[0]["forced_state"])
         self.assertIn("root-cause metadata", inventory[0]["needs_human_hint"])
+
+    def test_thread_inventory_forces_needs_human_when_later_comment_missing_root_marker(self):
+        valid_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-1 -->",
+                "<!-- codex-root-cause-key: submit-state -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        legacy_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-2 -->",
+                "legacy review body",
+            ]
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=valid_body,
+            commit_oid="old-sha",
+        )
+        append_review_comment(thread, body=legacy_body)
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("missing trusted root-cause metadata", inventory[0]["needs_human_hint"])
+
+    def test_thread_inventory_forces_needs_human_when_later_comment_has_finding_id_root_marker(self):
+        valid_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-1 -->",
+                "<!-- codex-root-cause-key: submit-state -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        invalid_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-2 -->",
+                "<!-- codex-root-cause-key: correctness-2 -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "legacy review body",
+            ]
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=valid_body,
+            commit_oid="old-sha",
+        )
+        append_review_comment(thread, body=invalid_body)
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("invalid root-cause metadata", inventory[0]["needs_human_hint"])
+
+    def test_thread_inventory_forces_needs_human_when_thread_has_multiple_root_cause_keys(self):
+        first_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-1 -->",
+                "<!-- codex-root-cause-key: submit-state -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        second_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-2 -->",
+                "<!-- codex-root-cause-key: nonce-state -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=first_body,
+            commit_oid="old-sha",
+        )
+        append_review_comment(thread, body=second_body)
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("conflicting root-cause metadata", inventory[0]["needs_human_hint"])
+
+    def test_thread_inventory_allows_handoff_when_all_comments_have_same_valid_root_metadata(self):
+        first_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-1 -->",
+                "<!-- codex-root-cause-key: submit-state -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        second_body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-2 -->",
+                "<!-- codex-root-cause-key: submit-state -->",
+                "<!-- codex-root-cause-area: workflow -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=first_body,
+            commit_oid="old-sha",
+        )
+        append_review_comment(thread, body=second_body)
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("submit-state", inventory[0]["root_cause_key"])
+        self.assertEqual("codex-root-cause-key", inventory[0]["root_cause_key_source"])
+        self.assertNotIn("forced_state", inventory[0])
 
     def test_batch_planner_uses_thread_batches_not_three_comment_batches(self):
         threads = []
@@ -1620,6 +1767,24 @@ index 0000000..1111111 100644
 ```json
 {"source_threads": ["wrong-thread"]}
 ```
+
+## Machine-readable
+```json
+{"source_threads": ["thread-a", "thread-b"]}
+```
+"""
+
+        self.assertEqual(["thread-a", "thread-b"], post_review.extract_issue_source_threads(body))
+
+    def test_extract_issue_source_threads_uses_last_machine_readable_block(self):
+        body = """Model-authored section:
+
+## Machine-readable
+```json
+{"source_threads": ["wrong-thread"]}
+```
+
+Trusted appended section:
 
 ## Machine-readable
 ```json
