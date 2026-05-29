@@ -67,9 +67,9 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             "needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success' && github.triggering_actor == 'DongwonTTuna'",
             job["if"],
         )
-        self.assertEqual("write", permissions["issues"])
+        self.assertEqual("write", permissions["pull-requests"])
         self.assertEqual("read", permissions["contents"])
-        self.assertNotIn("pull-requests", permissions)
+        self.assertNotIn("issues", permissions)
         self.assertNotIn("id-token", permissions)
         self.assertNotIn("Checkout PR head", step_names)
         self.assertEqual([checkout], checkouts)
@@ -91,8 +91,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertEqual("actions/create-github-app-token@v3", app_token["uses"])
         self.assertEqual("${{ secrets.CODEX_APP_ID }}", app_token["with"]["app-id"])
         self.assertEqual("${{ secrets.CODEX_APP_PRIVATE_KEY }}", app_token["with"]["private-key"])
-        self.assertEqual("write", app_token["with"]["permission-issues"])
-        self.assertNotIn("permission-pull-requests", app_token["with"])
+        self.assertEqual("write", app_token["with"]["permission-pull-requests"])
+        self.assertNotIn("permission-issues", app_token["with"])
         self.assertNotIn("permission-contents", app_token["with"])
         self.assertEqual("${{ steps.app-token.outputs.token }}", post["env"]["GH_TOKEN"])
         self.assertIn("trusted/.github/scripts/post_review.py post-design-plan", post["run"])

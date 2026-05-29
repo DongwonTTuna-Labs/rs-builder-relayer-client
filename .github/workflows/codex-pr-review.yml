@@ -1447,7 +1447,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
-      issues: write
+      pull-requests: write
     timeout-minutes: 10
     steps:
       - name: Checkout trusted PR scripts
@@ -1470,7 +1470,7 @@ jobs:
         with:
           app-id: ${{ secrets.CODEX_APP_ID }}
           private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-          permission-issues: write
+          permission-pull-requests: write
 
       - name: Post sticky design plan
         env:
