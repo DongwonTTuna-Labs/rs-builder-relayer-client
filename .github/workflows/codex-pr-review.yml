@@ -34,6 +34,7 @@ jobs:
       should_run: ${{ steps.resolve.outputs.should_run }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       head_sha: ${{ steps.resolve.outputs.head_sha }}
+      head_ref: ${{ steps.resolve.outputs.head_ref }}
       base_ref: ${{ steps.resolve.outputs.base_ref }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
       trigger: ${{ steps.resolve.outputs.trigger }}
@@ -98,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/${AXIS}-reviewer.md"
+          agent_file="trusted/.codex/agents/${AXIS}-reviewer.md"
           prompt_file="${RUNNER_TEMP}/prompt-${AXIS}.md"
           review_context="${RUNNER_TEMP}/review-context-${AXIS}.md"
           changed_files="${RUNNER_TEMP}/changed-files-${AXIS}.txt"
@@ -120,6 +121,9 @@ jobs:
           Rules:
           - Use agent "${AXIS}" exactly.
           - Return at most 13 findings.
+          - Use the same root_cause_key for findings that should become one representative inline comment or one deferred issue.
+          - Mark scope as current_pr, deferred, or needs_human.
+          - Set public_api_risk=true when an exported Rust API, serde-visible DTO, feature flag, or public module boundary may change.
           - Use line numbers from the RIGHT side of the diff only. Use null file/line for cross-cutting findings.
           - Write every human-readable review string in Korean: title, reason, positive notes, and impact summary fields.
           - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
@@ -187,7 +191,7 @@ jobs:
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["id", "type", "file", "line", "title", "reason", "rule_ref", "cross_cutting"],
+                    "required": ["id", "type", "file", "line", "title", "reason", "rule_ref", "cross_cutting", "root_cause_key", "scope", "public_api_risk", "autofix_eligible_hint"],
                     "properties": {
                       "id": {
                         "type": "string",
@@ -219,6 +223,20 @@ jobs:
                         "maxLength": 200
                       },
                       "cross_cutting": {
+                        "type": "boolean"
+                      },
+                      "root_cause_key": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
+                      "scope": {
+                        "type": "string",
+                        "enum": ["current_pr", "deferred", "needs_human"]
+                      },
+                      "public_api_risk": {
+                        "type": "boolean"
+                      },
+                      "autofix_eligible_hint": {
                         "type": "boolean"
                       }
                     }
@@ -369,7 +387,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/tech-lead-reviewer.md"
+          agent_file="trusted/.codex/agents/tech-lead-reviewer.md"
           combined_file="artifacts/combined-findings.json"
           changed_files="${RUNNER_TEMP}/changed-files-tech-lead.txt"
           review_context="artifacts/review-context.md"
@@ -391,6 +409,10 @@ jobs:
           Language rules:
           - Write every human-readable decision string in Korean: decision reasons, judgment headline, and merge note reasons.
           - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
+          - For each decision, choose action explicitly:
+            publish_and_fix_now, summary_only_fix_now, defer_to_issue, deny_false_positive, or needs_human.
+          - Use publish_and_fix_now only for one representative finding per root cause.
+          - Use needs_human for public API risk, security ambiguity, wire format/signing/nonce ambiguity, or live-capable behavior.
 
           Repository inspection:
           - Inspect the checked-out PR head workspace directly.
@@ -452,13 +474,20 @@ jobs:
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["id", "allow", "reason"],
+                    "required": ["id", "action", "reason"],
                     "properties": {
                       "id": {
                         "type": "string",
                         "pattern": "^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
                       },
-                      "allow": { "type": "boolean" },
+                      "action": {
+                        "type": "string",
+                        "enum": ["publish_and_fix_now", "summary_only_fix_now", "defer_to_issue", "deny_false_positive", "needs_human"]
+                      },
+                      "primary_root_cause_key": {
+                        "type": "string",
+                        "maxLength": 120
+                      },
                       "reason": {
                         "type": "string",
                         "minLength": 1,
@@ -538,6 +567,11 @@ jobs:
           data = json.loads(source.read_text(encoding="utf-8"))
           if not isinstance(data.get("decisions"), list):
               raise SystemExit("decisions must be an array")
+          combined = json.loads(Path("artifacts/combined-findings.json").read_text(encoding="utf-8"))
+          expected = {str(item["id"]) for item in combined}
+          actual = {str(item.get("id") or "") for item in data["decisions"]}
+          if actual != expected:
+              raise SystemExit(f"decision ids mismatch: missing={sorted(expected - actual)} extra={sorted(actual - expected)}")
           out = Path("artifacts") / "decisions-tech-lead.json"
           out.parent.mkdir(parents=True, exist_ok=True)
           out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -560,10 +594,10 @@ jobs:
             artifacts/review-context.md
           retention-days: 7
 
-  design-stale-collect:
-    name: design-stale-collect
-    needs: [resolve, tech-lead]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+  autofix-plan:
+    name: autofix-plan
+    needs: [resolve, review, tech-lead]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -572,8 +606,8 @@ jobs:
       pull-requests: read
     timeout-minutes: 10
     outputs:
-      has_comments: ${{ steps.collect.outputs.has_comments }}
-      batch_indexes: ${{ steps.collect.outputs.batch_indexes || '[]' }}
+      should_run: ${{ steps.plan.outputs.should_run }}
+      eligible_count: ${{ steps.plan.outputs.eligible_count }}
     steps:
       - name: Checkout trusted PR scripts
         uses: actions/checkout@v6
@@ -583,34 +617,38 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Prepare stale cleanup batches
-        run: |
-          rm -rf artifacts/design-stale-batches
-          mkdir -p artifacts/design-stale-batches
+      - name: Download reviewer findings
+        uses: actions/download-artifact@v8
+        with:
+          pattern: codex-review-*-findings
+          path: artifacts
+          merge-multiple: true
 
-      - name: Collect stale Codex inline comments
-        id: collect
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+      - name: Download tech-lead decisions
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Plan bounded autofix
+        id: plan
         run: >-
-          python3 trusted/.github/scripts/post_review.py collect-resolutions
-          --batch-dir artifacts/design-stale-batches
+          python3 trusted/.github/scripts/post_review.py plan-autofix
+          --artifacts artifacts
+          --decisions artifacts/decisions-tech-lead.json
+          --output artifacts/autofix-manifest.json
 
-      - name: Upload stale cleanup batches
-        if: steps.collect.outputs.has_comments == 'true'
+      - name: Upload autofix manifest
         uses: actions/upload-artifact@v7
         with:
-          name: codex-design-stale-batches
-          path: artifacts/design-stale-batches/*.json
+          name: codex-autofix-manifest
+          path: artifacts/autofix-manifest.json
           retention-days: 7
 
-  design-stale-check:
-    name: design-stale-check-${{ matrix.batch }}
-    needs: [resolve, tech-lead, design-stale-collect]
-    if: needs.design-stale-collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
+  autofix-patch:
+    name: autofix-patch
+    needs: [resolve, tech-lead, autofix-plan]
+    if: needs.resolve.outputs.should_run == 'true' && needs.autofix-plan.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -618,11 +656,7 @@ jobs:
       contents: read
       pull-requests: read
       id-token: write
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        batch: ${{ fromJson(needs.design-stale-collect.outputs.batch_indexes) }}
+    timeout-minutes: 30
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v6
@@ -632,76 +666,75 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Prepare stale cleanup artifacts
-        run: |
-          rm -rf artifacts/design-stale-batches artifacts/design-stale-results-*.json
-          mkdir -p artifacts/design-stale-batches artifacts
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
 
-      - name: Download stale cleanup batches
+      - name: Download autofix manifest
         uses: actions/download-artifact@v8
         with:
-          name: codex-design-stale-batches
-          path: artifacts/design-stale-batches
+          name: codex-autofix-manifest
+          path: artifacts
 
-      - name: Build stale cleanup prompt
+      - name: Build autofix prompt
         env:
-          BATCH: ${{ matrix.batch }}
           BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/resolve-checker-reviewer.md"
-          batch_file="artifacts/design-stale-batches/resolve-batch-${BATCH}.json"
-          prompt_file="${RUNNER_TEMP}/prompt-design-stale-${BATCH}.md"
+          agent_file="trusted/.codex/agents/bounded-autofix-planner.md"
+          manifest_file="artifacts/autofix-manifest.json"
+          changed_files="${RUNNER_TEMP}/changed-files-autofix.txt"
+          prompt_file="${RUNNER_TEMP}/prompt-autofix.md"
 
-          test -f "$agent_file" || { echo "missing resolve-checker agent: $agent_file" >&2; exit 1; }
-          test -f "$batch_file" || { echo "missing stale cleanup batch: $batch_file" >&2; exit 1; }
+          test -f "$agent_file" || { echo "missing bounded autofix agent: $agent_file" >&2; exit 1; }
+          test -f "$manifest_file" || { echo "missing autofix manifest: $manifest_file" >&2; exit 1; }
+          git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+
           {
             cat "$agent_file"
             cat <<EOF
 
           ---
 
-          Return only JSON matching the inline output schema supplied to openai/codex-action.
+          Current GitHub workflow contract supersedes legacy Forgejo path references above.
 
-          Language rules:
-          - Write every human-readable resolution reason in Korean.
-          - Keep schema field names, boolean values, comment ids, thread ids, file paths, code identifiers, and quoted code in their original language.
-
-          Repository inspection:
-          - The current working directory is the PR head checkout.
-          - Use the files in this workspace as the source of truth for the current implementation.
-          - When useful, compare against a review thread commit, original commit, or base/head range.
-          - Use commands such as git show, git diff, git log, grep, sed, and find as needed.
-          - BASE_SHA=${BASE_SHA} and HEAD_SHA=${HEAD_SHA} are available, but the full PR diff is not the only relevant evidence.
-          - Treat the batch JSON only as a list of review threads to verify, not as complete evidence.
+          Modify files only in the current working directory. Do not commit, push, post comments, create issues, or merge PRs.
+          If a safe bounded patch is not possible, leave the workspace unchanged.
+          Use current files as the source of truth.
+          BASE_SHA=${BASE_SHA} and HEAD_SHA=${HEAD_SHA} are available for comparison.
 
           Pull request:
-          EOF
-            cat <<EOF
           - repository: ${GITHUB_REPOSITORY}
           - pr_number: ${PR_NUMBER}
           - base_sha: ${BASE_SHA}
           - head_sha: ${HEAD_SHA}
+
+          Autofix manifest:
           EOF
             cat <<'EOF'
-
-          Resolve-check input:
           ```json
           EOF
-            cat "$batch_file"
+            cat "$manifest_file"
             cat <<'EOF'
           ```
+
+          Changed files:
           EOF
+            cat "$changed_files"
           } > "$prompt_file"
 
       - name: Setup Codex relay
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-design-stale-${{ matrix.batch }}
+          codex-home: ${{ runner.temp }}/codex-home-autofix
 
       - name: Validate Codex relay args
         env:
@@ -713,88 +746,50 @@ jobs:
           actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
           test "$actual" = "$expected"
 
-      - name: Run stale cleanup checker
+      - name: Run bounded autofix
         uses: openai/codex-action@v1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
-          prompt-file: ${{ runner.temp }}/prompt-design-stale-${{ matrix.batch }}.md
-          output-schema: |
-            {
-              "$schema": "http://json-schema.org/draft-07/schema#",
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["resolutions"],
-              "properties": {
-                "resolutions": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["comment_id", "resolved", "reason"],
-                    "properties": {
-                      "comment_id": { "type": "integer", "minimum": 1 },
-                      "resolved": { "type": "boolean" },
-                      "reason": { "type": "string", "minLength": 1, "maxLength": 300 }
-                    }
-                  }
-                }
-              }
-            }
-          output-file: ${{ runner.temp }}/design-stale-results-${{ matrix.batch }}.json
+          prompt-file: ${{ runner.temp }}/prompt-autofix.md
           working-directory: ${{ github.workspace }}/workspace
-          codex-home: ${{ runner.temp }}/codex-home-design-stale-${{ matrix.batch }}
-          sandbox: read-only
-          safety-strategy: read-only
+          codex-home: ${{ runner.temp }}/codex-home-autofix
+          sandbox: workspace-write
+          safety-strategy: workspace-write
           codex-version: latest
           model: gpt-5.5
           effort: xhigh
           codex-args: ${{ steps.relay-token.outputs.codex_args }}
 
-      - name: Validate stale cleanup output
-        env:
-          BATCH: ${{ matrix.batch }}
+      - name: Build and validate autofix patch
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
+          set -euo pipefail
+          mkdir -p artifacts
+          git -C workspace diff --binary > artifacts/autofix.patch
+          git -C workspace diff --stat > artifacts/autofix.diffstat
+          python3 trusted/.github/scripts/post_review.py validate-autofix-patch \
+            --manifest artifacts/autofix-manifest.json \
+            --patch artifacts/autofix.patch
 
-          batch = str(os.environ["BATCH"])
-          batch_file = Path("artifacts") / "design-stale-batches" / f"resolve-batch-{batch}.json"
-          expected = {
-              int(comment["comment_id"])
-              for comment in json.loads(batch_file.read_text(encoding="utf-8"))["comments"]
-          }
-          source = Path(os.environ["RUNNER_TEMP"]) / f"design-stale-results-{batch}.json"
-          payload = json.loads(source.read_text(encoding="utf-8"))
-          actual = {int(item["comment_id"]) for item in payload.get("resolutions", [])}
-          if actual != expected:
-              raise SystemExit(f"resolution ids mismatch: expected {sorted(expected)}, got {sorted(actual)}")
-          out = Path("artifacts") / f"design-stale-results-{batch}.json"
-          out.parent.mkdir(parents=True, exist_ok=True)
-          out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-          PY
-
-      - name: Upload stale cleanup result
+      - name: Upload autofix patch
         uses: actions/upload-artifact@v7
         with:
-          name: codex-design-stale-${{ matrix.batch }}-result
-          path: artifacts/design-stale-results-${{ matrix.batch }}.json
+          name: codex-autofix-patch
+          path: |
+            artifacts/autofix.patch
+            artifacts/autofix.diffstat
           retention-days: 7
 
-  design-stale-apply:
-    name: design-stale-apply
-    needs: [resolve, tech-lead, design-stale-collect, design-stale-check]
-    if: always() && !cancelled() && needs.design-stale-collect.outputs.has_comments == 'true' && needs.design-stale-check.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+  autofix-apply:
+    name: autofix-apply
+    needs: [resolve, autofix-patch]
+    if: needs.resolve.outputs.should_run == 'true' && needs.autofix-patch.result == 'success' && needs.resolve.outputs.head_ref != '' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
     permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    timeout-minutes: 10
+      contents: write
+    timeout-minutes: 30
     steps:
       - name: Checkout trusted PR scripts
         uses: actions/checkout@v6
@@ -804,47 +799,73 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Prepare stale cleanup apply artifacts
-        run: |
-          rm -rf artifacts/design-stale-batches artifacts/design-stale-results artifacts/design-stale-results-*.json
-          mkdir -p artifacts/design-stale-batches artifacts/design-stale-results
-
-      - name: Download stale cleanup batches
-        uses: actions/download-artifact@v8
-        with:
-          name: codex-design-stale-batches
-          path: artifacts/design-stale-batches
-
-      - name: Download stale cleanup results
-        uses: actions/download-artifact@v8
-        with:
-          pattern: codex-design-stale-*-result
-          path: artifacts/design-stale-results
-          merge-multiple: true
-
       - name: Generate App installation token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.CODEX_APP_ID }}
           private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-          permission-issues: write
-          permission-pull-requests: write
+          permission-contents: write
 
-      - name: Apply stale cleanup decisions
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_ref }}
+          path: workspace
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true
+
+      - name: Download autofix manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-autofix-manifest
+          path: artifacts
+
+      - name: Download autofix patch
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-autofix-patch
+          path: artifacts
+
+      - name: Apply patch with stop rules
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
-        run: >-
-          python3 trusted/.github/scripts/post_review.py apply-resolutions
-          --batches artifacts/design-stale-batches
-          --results artifacts/design-stale-results
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          EXPECTED_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REF: ${{ needs.resolve.outputs.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_head="$(git -C workspace rev-parse HEAD)"
+          if [ "$actual_head" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "PR branch moved before bounded autofix apply: expected $EXPECTED_HEAD_SHA got $actual_head"
+            exit 1
+          fi
+          count="$(git -C workspace log --format=%s "${BASE_SHA}..HEAD" | grep -c '^fix(codex-review): apply bounded autofix$' || true)"
+          if [ "$count" -ge 2 ]; then
+            echo "bounded autofix commit cap reached: $count"
+            exit 0
+          fi
+          python3 trusted/.github/scripts/post_review.py validate-autofix-patch \
+            --manifest artifacts/autofix-manifest.json \
+            --patch artifacts/autofix.patch
+          git -C workspace apply --check ../artifacts/autofix.patch
+          git -C workspace apply ../artifacts/autofix.patch
+          git -C workspace diff --check
+          if git -C workspace diff --quiet; then
+            echo "bounded autofix produced no changes after validation"
+            exit 0
+          fi
+          git -C workspace config user.name "codex-reviewer-for-dongwonttuna[bot]"
+          git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"
+          git -C workspace add -A
+          git -C workspace commit -m "fix(codex-review): apply bounded autofix"
+          git -C workspace push origin "HEAD:${HEAD_REF}"
 
   design-context:
     name: design-context
-    needs: [resolve, tech-lead, design-stale-apply]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && (needs.design-stale-apply.result == 'success' || needs.design-stale-apply.result == 'skipped') && github.triggering_actor == 'DongwonTTuna'
+    needs: [resolve, tech-lead]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -900,6 +921,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download tech-lead inputs
         uses: actions/download-artifact@v8
         with:
@@ -919,8 +948,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/design-finding-normalizer.md"
-          skill_file="workspace/.codex/skills/review-design-finding-normalizer/SKILL.md"
+          agent_file="trusted/.codex/agents/design-finding-normalizer.md"
+          skill_file="trusted/.codex/skills/review-design-finding-normalizer/SKILL.md"
           combined_file="artifacts/combined-findings.json"
           decisions_file="artifacts/decisions-tech-lead.json"
           context_file="artifacts/review-context.md"
@@ -1092,6 +1121,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download design inputs
         uses: actions/download-artifact@v8
         with:
@@ -1114,8 +1151,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/design-invariant-clusterer.md"
-          skill_file="workspace/.codex/skills/review-design-invariant-clusterer/SKILL.md"
+          agent_file="trusted/.codex/agents/design-invariant-clusterer.md"
+          skill_file="trusted/.codex/skills/review-design-invariant-clusterer/SKILL.md"
           inventory_file="artifacts/normalized-inventory.json"
           context_file="artifacts/review-context.md"
           prompt_file="${RUNNER_TEMP}/prompt-design-cluster.md"
@@ -1290,6 +1327,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Download tech-lead inputs
         uses: actions/download-artifact@v8
         with:
@@ -1316,8 +1361,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/design-cluster-analyst.md"
-          skill_file="workspace/.codex/skills/review-design-cluster-analyst/SKILL.md"
+          agent_file="trusted/.codex/agents/design-cluster-analyst.md"
+          skill_file="trusted/.codex/skills/review-design-cluster-analyst/SKILL.md"
           batch_file="artifacts/cluster-batches/cluster-batch-${BATCH}.json"
           context_file="artifacts/review-context.md"
           changed_files="${RUNNER_TEMP}/changed-files-design-analyze-${BATCH}.txt"
@@ -1537,8 +1582,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          agent_file="workspace/.codex/agents/design-coordinator.md"
-          skill_file="workspace/.codex/skills/review-design-coordinator/SKILL.md"
+          agent_file="trusted/.codex/agents/design-coordinator.md"
+          skill_file="trusted/.codex/skills/review-design-coordinator/SKILL.md"
           docs_file="${RUNNER_TEMP}/design-docs.md"
           changed_files="${RUNNER_TEMP}/changed-files-design-coordinate.txt"
           analyses_file="${RUNNER_TEMP}/cluster-analyses.json"

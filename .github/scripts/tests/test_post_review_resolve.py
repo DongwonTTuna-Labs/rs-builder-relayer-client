@@ -138,6 +138,58 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
         self.assertEqual(result["pr_number"], "54")
         self.assertEqual(result["base_sha"], "base-sha")
 
+    def test_trusted_workflow_dispatch_collects_requested_pr(self):
+        def fetch_pr(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/pulls/54")
+            return pr_payload()["pull_request"]
+
+        result = self.resolve(
+            {"inputs": {"pr_number": "54"}},
+            event_name="workflow_dispatch",
+            fetch_pr=fetch_pr,
+        )
+
+        self.assertEqual(result["should_collect"], "true")
+        self.assertEqual(result["pr_number"], "54")
+        self.assertEqual(result["head_sha"], "head-sha")
+
+    def test_trusted_workflow_run_collects_after_codex_pr_review(self):
+        def fetch_pr(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/pulls/54")
+            return pr_payload()["pull_request"]
+
+        result = self.resolve(
+            {
+                "workflow_run": {
+                    "name": "Codex PR Review",
+                    "event": "pull_request_target",
+                    "conclusion": "success",
+                    "pull_requests": [{"number": 54}],
+                }
+            },
+            event_name="workflow_run",
+            fetch_pr=fetch_pr,
+        )
+
+        self.assertEqual(result["should_collect"], "true")
+        self.assertEqual(result["pr_number"], "54")
+
+    def test_workflow_run_skips_non_review_or_missing_pr(self):
+        cases = [
+            {"workflow_run": {"name": "CI", "event": "pull_request_target", "pull_requests": [{"number": 54}]}},
+            {"workflow_run": {"name": "Codex PR Review", "event": "issue_comment", "pull_requests": [{"number": 54}]}},
+            {"workflow_run": {"name": "Codex PR Review", "event": "pull_request_target", "conclusion": "cancelled", "pull_requests": [{"number": 54}]}},
+            {"workflow_run": {"name": "Codex PR Review", "event": "pull_request_target", "conclusion": "success", "pull_requests": []}},
+        ]
+        for event in cases:
+            with self.subTest(event=event):
+                result = self.resolve(
+                    event,
+                    event_name="workflow_run",
+                    fetch_pr=lambda path: self.fail(f"unexpected fetch: {path}"),
+                )
+                self.assertEqual(result["should_collect"], "false")
+
     def test_skips_untrusted_draft_fork_and_non_main(self):
         cases = [
             (pr_payload(), {"triggering_actor": "somebody-else"}),
@@ -374,6 +426,277 @@ class CollectResolutionsTests(unittest.TestCase):
         self.assertEqual(3311706429, batches["resolve-batch-0.json"]["comments"][0]["comment_id"])
 
 
+class ThreadLifecycleV3Tests(unittest.TestCase):
+    def test_trusted_author_check_rejects_generic_bot_logins(self):
+        self.assertTrue(post_review.is_trusted_codex_review_author(post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]))
+        self.assertFalse(post_review.is_trusted_codex_review_author("random-reviewer[bot]"))
+
+    def test_thread_inventory_skips_existing_terminal_lifecycle_marker(self):
+        thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
+        thread["comments"]["nodes"].append(
+            {
+                "id": "lifecycle-comment",
+                "fullDatabaseId": "3311706430",
+                "body": '<!-- codex-thread-lifecycle:v3 {"state":"defer_to_issue","issue_url":"https://github.example/issues/9","resolved":true,"resolved_at":"2026-05-29T00:00:00Z"} -->',
+                "author": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]},
+                "commit": {"oid": "old-sha"},
+                "originalCommit": {"oid": "old-sha"},
+                "path": "src/lib.rs",
+                "line": 2,
+                "originalLine": 2,
+                "url": "https://github.example/lifecycle",
+            }
+        )
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual([], inventory)
+
+    def test_thread_inventory_does_not_skip_unresolved_or_untrusted_lifecycle_marker(self):
+        for author, marker_payload in (
+            (
+                post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                '{"state":"false_positive","resolved":false}',
+            ),
+            (
+                "random-reviewer[bot]",
+                '{"state":"false_positive","resolved":true,"resolved_at":"2026-05-29T00:00:00Z"}',
+            ),
+        ):
+            with self.subTest(author=author, marker_payload=marker_payload):
+                thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
+                thread["comments"]["nodes"].append(
+                    {
+                        "id": "lifecycle-comment",
+                        "fullDatabaseId": "3311706430",
+                        "body": f"<!-- codex-thread-lifecycle:v3 {marker_payload} -->",
+                        "author": {"login": author},
+                        "commit": {"oid": "old-sha"},
+                        "originalCommit": {"oid": "old-sha"},
+                        "path": "src/lib.rs",
+                        "line": 2,
+                        "originalLine": 2,
+                        "url": "https://github.example/lifecycle",
+                    }
+                )
+
+                inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+                self.assertEqual(1, len(inventory))
+
+    def test_thread_inventory_groups_comments_by_thread(self):
+        thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
+        thread["comments"]["nodes"].append(
+            {
+                "id": "comment-node-id-2",
+                "fullDatabaseId": "3311706431",
+                "body": "\n".join(
+                    [
+                        post_review.INLINE_MARKER,
+                        "<!-- codex-review-id: correctness-2 -->",
+                        "second review body",
+                    ]
+                ),
+                "author": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]},
+                "commit": {"oid": "old-sha"},
+                "originalCommit": {"oid": "old-sha"},
+                "path": "src/lib.rs",
+                "line": 4,
+                "originalLine": 4,
+                "url": "https://github.example/review-comment-2",
+            }
+        )
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual(1, len(inventory))
+        self.assertEqual("thread-node-id", inventory[0]["thread_id"])
+        self.assertEqual([3311706429, 3311706431], [item["comment_id"] for item in inventory[0]["comments"]])
+
+    def test_batch_planner_uses_thread_batches_not_three_comment_batches(self):
+        threads = []
+        for index in range(13):
+            thread = review_thread(
+                author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                commit_oid="old-sha",
+                line=index + 1,
+            )
+            thread["id"] = f"thread-{index}"
+            thread["comments"]["nodes"][0]["id"] = f"comment-{index}"
+            thread["comments"]["nodes"][0]["fullDatabaseId"] = str(1000 + index)
+            threads.append(thread)
+
+        inventory = post_review.build_thread_lifecycle_inventory(threads, head_sha="head-sha")
+        batches = post_review.plan_thread_lifecycle_batches(inventory)
+
+        self.assertEqual([12, 1], [len(batch["threads"]) for batch in batches])
+        self.assertEqual("codex.thread_lifecycle_batch.v3", batches[0]["schema_version"])
+
+    def test_thread_inventory_forces_needs_human_for_large_thread_connection(self):
+        thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
+        thread["comments"]["totalCount"] = 51
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("more than 50 comments", inventory[0]["needs_human_hint"])
+
+    def test_lifecycle_result_rejects_defer_without_issue_key(self):
+        payload = {
+            "schema_version": "codex.thread_lifecycle_result.v3",
+            "threads": [
+                {
+                    "thread_id": "thread-a",
+                    "state": "defer_to_issue",
+                    "reason": "PR scope 밖이므로 이슈로 이관",
+                    "evidence": "현재 PR 변경 범위와 직접 관련 없음",
+                }
+            ],
+        }
+
+        with self.assertRaises(SystemExit):
+            post_review.normalize_lifecycle_outputs([payload], {"thread-a"})
+
+    def test_apply_lifecycle_replies_before_resolving_deferred_thread(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches = root / "batches"
+            results = root / "results"
+            batches.mkdir()
+            results.mkdir()
+            (batches / "resolve-batch-0.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "codex.thread_lifecycle_batch.v3",
+                        "threads": [
+                            {
+                                "thread_id": "thread-a",
+                                "root_cause_key": "deposit-wallet-submit-state",
+                                "area": "deposit-wallet",
+                                "file": "src/deposit_wallet/http/submit_flow.rs",
+                                "comments": [
+                                    {
+                                        "comment_id": 1,
+                                        "thread_id": "thread-a",
+                                        "file": "src/deposit_wallet/http/submit_flow.rs",
+                                        "line": 7,
+                                        "url": "https://github.example/comment",
+                                        "body_excerpt": "state invariant",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (results / "lifecycle-0.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "codex.thread_lifecycle_result.v3",
+                        "threads": [
+                            {
+                                "thread_id": "thread-a",
+                                "state": "defer_to_issue",
+                                "reason": "별도 PR에서 다룰 root cause",
+                                "evidence": "현재 PR scope 밖",
+                                "issue": {
+                                    "key": "abc123",
+                                    "title": "[codex][deferred][deposit-wallet] submit state invariant",
+                                    "body": "## Summary\nsubmit state invariant",
+                                    "labels": ["codex/deferred", "area/deposit-wallet"],
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def fake_issue(*, repo, request):
+                calls.append(("issue", request["key"]))
+                return {"html_url": "https://github.example/issues/9", "state": "open", "number": 9}
+
+            def fake_reply(thread_id, body):
+                calls.append(("reply", thread_id, body))
+
+            def fake_resolve(thread_id):
+                calls.append(("resolve", thread_id))
+
+            def fake_reply(thread_id, body):
+                calls.append(("reply", thread_id, body))
+
+            def fake_upsert(**kwargs):
+                calls.append(("upsert", kwargs["marker"], kwargs["body"]))
+                return "updated"
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "create_or_update_deferred_issue", side_effect=fake_issue
+            ), patch.object(
+                post_review, "reply_to_review_thread", side_effect=fake_reply
+            ), patch.object(
+                post_review, "resolve_thread", side_effect=fake_resolve
+            ), patch.object(
+                post_review, "apply_write_token_preflight", return_value=None
+            ), patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
+                post_review.command_apply_resolutions(args)
+
+        self.assertEqual("issue", calls[0][0])
+        self.assertNotEqual("abc123", calls[0][1])
+        self.assertEqual("reply", calls[1][0])
+        self.assertIn("https://github.example/issues/9", calls[1][2])
+        self.assertIn('"resolved": false', calls[1][2])
+        self.assertEqual(("resolve", "thread-a"), calls[2])
+
+    def test_apply_lifecycle_forced_needs_human_overrides_model_terminal_state(self):
+        calls = []
+
+        def fake_reply(thread_id, body):
+            calls.append(("reply", thread_id, body))
+
+        def fake_resolve(thread_id):
+            calls.append(("resolve", thread_id))
+
+        def fake_upsert(**kwargs):
+            calls.append(("upsert", kwargs["marker"], kwargs["body"]))
+            return "updated"
+
+        with patch.object(
+            post_review, "reply_to_review_thread", side_effect=fake_reply
+        ), patch.object(
+            post_review, "resolve_thread", side_effect=fake_resolve
+        ), patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
+            post_review.apply_lifecycle_resolutions(
+                repo="repo/name",
+                pr_number="21",
+                threads={
+                    "thread-a": {
+                        "thread_id": "thread-a",
+                        "file": "src/lib.rs",
+                        "forced_state": "needs_human",
+                        "needs_human_hint": "thread has more than 50 comments",
+                    }
+                },
+                decisions={
+                    "thread-a": {
+                        "thread_id": "thread-a",
+                        "state": "false_positive",
+                        "reason": "모델은 terminal이라고 판단",
+                        "evidence": "하지만 collector context가 불완전",
+                    }
+                },
+            )
+
+        self.assertNotIn(("resolve", "thread-a"), calls)
+        self.assertFalse(any(call[0] == "reply" for call in calls))
+        self.assertIn("more than 50 comments", calls[0][2])
+
+
 class ReviewContextTests(unittest.TestCase):
     def test_build_review_context_includes_authoritative_and_advisory_sections(self):
         pr = {"title": "Deposit wallet state", "body": "Current PR state is authoritative."}
@@ -581,6 +904,9 @@ class StickySummaryTests(unittest.TestCase):
             def fake_resolve(thread_id):
                 calls.append(("resolve", thread_id))
 
+            def fake_reply(thread_id, body):
+                calls.append(("reply", thread_id, body))
+
             def fake_upsert(**kwargs):
                 calls.append(("upsert", kwargs["marker"], kwargs["body"]))
                 return "updated"
@@ -589,14 +915,147 @@ class StickySummaryTests(unittest.TestCase):
             args = argparse.Namespace(batches=str(batches), results=str(results))
             with patch.dict(os.environ, env, clear=False), patch.object(
                 post_review, "resolve_thread", side_effect=fake_resolve
+            ), patch.object(
+                post_review, "reply_to_review_thread", side_effect=fake_reply
+            ), patch.object(
+                post_review, "apply_write_token_preflight", return_value=None
             ), patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
                 post_review.command_apply_resolutions(args)
 
+        self.assertIn("codex-thread-lifecycle:v3", calls[0][2])
         self.assertIn(("resolve", "thread-a"), calls)
         upserts = [call for call in calls if call[0] == "upsert"]
         self.assertEqual(1, len(upserts))
         self.assertEqual(post_review.RESOLVE_MARKER, upserts[0][1])
         self.assertIn("아직 미해결", upserts[0][2])
+
+    def test_apply_resolutions_preflight_failure_only_posts_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches = root / "batches"
+            results = root / "results"
+            batches.mkdir()
+            results.mkdir()
+            calls = []
+
+            def fake_upsert(**kwargs):
+                calls.append(("upsert", kwargs["marker"], kwargs["body"]))
+                return "updated"
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "apply_write_token_preflight", return_value="viewerPermission=READ"
+            ), patch.object(
+                post_review, "resolve_thread"
+            ) as resolve, patch.object(
+                post_review, "reply_to_review_thread"
+            ) as reply, patch.object(
+                post_review, "upsert_marker_comment", side_effect=fake_upsert
+            ):
+                post_review.command_apply_resolutions(args)
+
+        resolve.assert_not_called()
+        reply.assert_not_called()
+        self.assertEqual(1, len(calls))
+        self.assertEqual(post_review.RESOLVE_MARKER, calls[0][1])
+        self.assertIn("token preflight 실패", calls[0][2])
+
+
+class BoundedAutofixTests(unittest.TestCase):
+    def finding(self, finding_id, **overrides):
+        item = {
+            "id": finding_id,
+            "agent": "correctness",
+            "type": "MUST",
+            "file": "src/lib.rs",
+            "line": 7,
+            "title": "counter edge case",
+            "reason": "The current branch misses a local edge case.",
+            "rule_ref": None,
+            "cross_cutting": False,
+            "root_cause_key": "counter-edge",
+            "scope": "current_pr",
+            "public_api_risk": False,
+            "autofix_eligible_hint": True,
+        }
+        item.update(overrides)
+        return item
+
+    def test_autofix_manifest_selects_one_safe_representative(self):
+        findings = [
+            self.finding("correctness-1"),
+            self.finding("correctness-2", line=9),
+            self.finding(
+                "correctness-3",
+                root_cause_key="public-api",
+                public_api_risk=True,
+                title="public API shape changes",
+            ),
+        ]
+        decisions = {
+            "by_id": {
+                "correctness-1": {"action": "publish_and_fix_now", "reason": "safe local fix"},
+                "correctness-2": {"action": "publish_and_fix_now", "reason": "duplicate root"},
+                "correctness-3": {"action": "publish_and_fix_now", "reason": "needs guard"},
+            },
+            "judgment": {},
+            "merge_notes": [],
+        }
+
+        manifest = post_review.build_autofix_manifest(findings, decisions)
+
+        self.assertEqual(post_review.AUTOFIX_MANIFEST_SCHEMA, manifest["schema_version"])
+        self.assertEqual(["correctness-1"], [item["id"] for item in manifest["eligible"]])
+        self.assertEqual(["correctness-2", "correctness-3"], [item["id"] for item in manifest["blocked"]])
+
+    def test_validate_autofix_patch_blocks_public_api_surface(self):
+        manifest = {
+            "schema_version": post_review.AUTOFIX_MANIFEST_SCHEMA,
+            "eligible": [{"id": "correctness-1", "file": "src/lib.rs"}],
+        }
+        patch = """diff --git a/src/lib.rs b/src/lib.rs
+index 0000000..1111111 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,3 @@
++pub fn new_exported_api() {}
+ fn existing() {}
+"""
+
+        with self.assertRaises(SystemExit):
+            post_review.validate_autofix_patch_text(patch, manifest)
+
+    def test_validate_autofix_patch_blocks_file_outside_manifest(self):
+        manifest = {
+            "schema_version": post_review.AUTOFIX_MANIFEST_SCHEMA,
+            "eligible": [{"id": "correctness-1", "file": "src/lib.rs"}],
+        }
+        patch = """diff --git a/src/other.rs b/src/other.rs
+index 0000000..1111111 100644
+--- a/src/other.rs
++++ b/src/other.rs
+@@ -1,2 +1,2 @@
+-fn existing() {}
++fn changed() {}
+"""
+
+        with self.assertRaises(SystemExit):
+            post_review.validate_autofix_patch_text(patch, manifest)
+
+    def test_validate_autofix_patch_blocks_binary_patch(self):
+        manifest = {
+            "schema_version": post_review.AUTOFIX_MANIFEST_SCHEMA,
+            "eligible": [{"id": "correctness-1", "file": "src/lib.rs"}],
+        }
+        patch = """diff --git a/src/lib.rs b/src/lib.rs
+index 0000000..1111111 100644
+GIT binary patch
+literal 0
+"""
+
+        with self.assertRaises(SystemExit):
+            post_review.validate_autofix_patch_text(patch, manifest)
 
 
 class DesignPlanTests(unittest.TestCase):
@@ -677,7 +1136,7 @@ class DesignNeedTests(unittest.TestCase):
         self.assertTrue(needs_design)
         self.assertEqual(0, blocking_count)
 
-    def test_needs_design_for_allowed_must_finding(self):
+    def test_needs_design_for_publish_and_fix_now_finding(self):
         findings = [
             {
                 "id": "correctness-1",
@@ -687,7 +1146,7 @@ class DesignNeedTests(unittest.TestCase):
             }
         ]
         decisions = {
-            "by_id": {"correctness-1": {"allow": True, "reason": "real blocker"}},
+            "by_id": {"correctness-1": {"action": "publish_and_fix_now", "reason": "real blocker"}},
             "judgment": {"status": "LGTM"},
             "merge_notes": [],
         }
@@ -707,7 +1166,7 @@ class DesignNeedTests(unittest.TestCase):
             }
         ]
         decisions = {
-            "by_id": {"performance-1": {"allow": True, "reason": "minor"}},
+            "by_id": {"performance-1": {"action": "deny_false_positive", "reason": "minor"}},
             "judgment": {"status": "LGTM"},
             "merge_notes": [],
         }

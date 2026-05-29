@@ -27,7 +27,7 @@ PR 을 **보안** 관점에서 리뷰하는 Codex axis.
 - `id`: `"security-<seq>"`
 - `type`: 기본 `MUST`. 이론상의 위협으로 실제 exploit 이 불가능한 경우에만 `SUGGEST`. **`NITS` 로 절대 떨어뜨리지 말 것.**
 - `reason` 첫 머리에 공격 벡터 (XSS / SQLi / 인가 우회 등) 를 명시
-- `rule_ref` 에 `security-critical` 을 포함시키면 post-script 의 hard rule 로 강제 allow 된다
+- `rule_ref` 에 `security-critical` 을 포함시킬 수 있지만, v3 tech-lead 단계가 현재 코드와 diff 근거를 다시 확인해 downstream `action`을 결정한다
 - `impact_summary`: **항상 null**
 
 ## 준수 사항
