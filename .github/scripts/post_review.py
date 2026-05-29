@@ -13,6 +13,7 @@ from typing import Any
 
 
 AXES = ("correctness", "security", "performance", "test-coverage", "domain")
+FINDING_ID_PATTERN = r"^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
 INLINE_MARKER = "<!-- codex-review-inline -->"
 REVIEW_MARKER = "<!-- codex-review -->"
 REVIEW_SUMMARY_MARKER = "<!-- codex-review-summary -->"
@@ -100,7 +101,7 @@ def trim_text(value: Any, limit: int) -> str:
 
 
 def marker_value(value: Any, *, limit: int = 120) -> str:
-    text = trim_text(redact_secrets(value), limit).replace("\r", " ").replace("\n", " ").strip()
+    text = trim_text(redact_secrets("" if value is None else str(value)), limit).replace("\r", " ").replace("\n", " ").strip()
     text = text.replace("-->", "").replace("--", "-")
     return text
 
@@ -108,6 +109,19 @@ def marker_value(value: Any, *, limit: int = 120) -> str:
 def slug_key(value: Any, *, fallback: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", marker_value(value).lower()).strip("-")
     return slug or fallback
+
+
+def is_finding_id_key(value: Any) -> bool:
+    return bool(re.fullmatch(FINDING_ID_PATTERN, str(value or "").strip()))
+
+
+def normalize_root_cause_key(value: Any, *, context: str) -> str:
+    normalized = slug_key(value, fallback="")
+    if not normalized:
+        raise SystemExit(f"{context} root_cause_key is required")
+    if is_finding_id_key(normalized):
+        raise SystemExit(f"{context} root_cause_key must not be a finding id: {normalized}")
+    return normalized
 
 
 def is_trusted_codex_review_author(author: str) -> bool:
@@ -527,7 +541,7 @@ def normalize_finding(axis: str, item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         raise SystemExit(f"{axis} finding must be an object")
     finding_id = str(item.get("id") or "").strip()
-    if not re.match(r"^(correctness|security|performance|test-coverage|domain)-[0-9]+$", finding_id):
+    if not re.fullmatch(FINDING_ID_PATTERN, finding_id):
         raise SystemExit(f"{axis} finding has invalid id: {finding_id}")
     finding_type = str(item.get("type") or "SUGGEST").upper()
     if finding_type not in {"MUST", "SUGGEST", "IMO", "NITS", "ASK"}:
@@ -542,7 +556,7 @@ def normalize_finding(axis: str, item: Any) -> dict[str, Any]:
             line = None
     file_path = item.get("file")
     rule_ref = item.get("rule_ref")
-    root_cause_key = str(item.get("root_cause_key") or "").strip() or finding_id
+    root_cause_key = normalize_root_cause_key(item.get("root_cause_key"), context=finding_id)
     return {
         "id": finding_id,
         "agent": axis,
@@ -571,10 +585,12 @@ def load_decisions(path: Path) -> dict[str, Any]:
             continue
         decision_id = str(decision.get("id") or "")
         if decision_id:
+            raw_primary_root = trim_text(decision.get("primary_root_cause_key"), 120).strip()
             by_id[decision_id] = {
                 "action": normalize_tech_lead_action(decision),
                 "reason": trim_text(decision.get("reason"), 300).strip() or "No decision reason provided.",
-                "primary_root_cause_key": trim_text(decision.get("primary_root_cause_key"), 120).strip(),
+                "primary_root_cause_key": raw_primary_root,
+                "primary_root_cause_key_present": "primary_root_cause_key" in decision,
             }
     judgment = payload.get("judgment") if isinstance(payload.get("judgment"), dict) else None
     merge_notes = payload.get("merge_notes") if isinstance(payload.get("merge_notes"), list) else []
@@ -593,6 +609,18 @@ def validate_decision_coverage(findings: list[dict[str, Any]], decisions: dict[s
         if extra:
             detail.append("extra=" + ",".join(extra))
         raise SystemExit("tech-lead decisions do not exactly cover findings: " + "; ".join(detail))
+    known_roots = {finding["root_cause_key"] for finding in findings}
+    for finding in findings:
+        decision = decisions["by_id"].get(finding["id"]) or {}
+        raw_primary = str(decision.get("primary_root_cause_key") or "").strip()
+        if decision.get("primary_root_cause_key_present") and not raw_primary:
+            raise SystemExit(f"{finding['id']} primary_root_cause_key must not be empty when present")
+        if not raw_primary:
+            continue
+        primary = normalize_root_cause_key(raw_primary, context=f"{finding['id']} primary_root_cause_key")
+        if primary not in known_roots:
+            raise SystemExit(f"{finding['id']} primary_root_cause_key does not match any known root cause: {primary}")
+        decision["primary_root_cause_key"] = primary
 
 
 def normalize_tech_lead_action(decision: dict[str, Any]) -> str:
@@ -639,7 +667,7 @@ def build_autofix_manifest(findings: list[dict[str, Any]], decisions: dict[str, 
         decision = decisions["by_id"].get(finding["id"])
         action = action_for_finding(finding, decision)
         reason = autofix_block_reason(finding, action)
-        root = str(finding.get("root_cause_key") or finding["id"])
+        root = normalize_root_cause_key(finding.get("root_cause_key"), context=finding["id"])
         if reason is None and root in seen_roots:
             reason = f"root cause already represented by an earlier eligible finding: {root}"
         if reason:
@@ -759,9 +787,14 @@ def command_validate_autofix_patch(args: argparse.Namespace) -> None:
 
 
 def root_cause_marker_key(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
-    fallback = str(finding.get("id") or "finding")
-    raw = (decision or {}).get("primary_root_cause_key") or finding.get("root_cause_key") or fallback
-    return slug_key(raw, fallback=fallback)
+    fallback = normalize_root_cause_key(finding.get("root_cause_key"), context=str(finding.get("id") or "finding"))
+    raw = (decision or {}).get("primary_root_cause_key")
+    if not raw:
+        return fallback
+    try:
+        return normalize_root_cause_key(raw, context=f"{finding.get('id')} primary_root_cause_key")
+    except SystemExit:
+        return fallback
 
 
 def render_current_inline(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
@@ -989,7 +1022,7 @@ def redact_comment_body(body: str) -> str:
 
 
 def extract_html_marker_value(body: str, name: str) -> str | None:
-    match = re.search(rf"<!--\s*{re.escape(name)}:\s*([^>]+?)\s*-->", body)
+    match = re.search(rf"<!--\s*{re.escape(name)}:\s*([^>]*?)\s*-->", body)
     return match.group(1).strip() if match else None
 
 
@@ -1000,11 +1033,16 @@ def extract_marker_key(body: str) -> str | None:
 def extract_root_cause_metadata(body: str) -> dict[str, str]:
     metadata: dict[str, str] = {}
     key = extract_html_marker_value(body, "codex-root-cause-key")
-    if key:
-        normalized_key = slug_key(key, fallback="")
-        if normalized_key:
-            metadata["root_cause_key"] = normalized_key
+    if key is not None:
+        try:
+            metadata["root_cause_key"] = normalize_root_cause_key(key, context="codex-root-cause-key marker")
             metadata["root_cause_key_source"] = "codex-root-cause-key"
+        except SystemExit as exc:
+            normalized_key = slug_key(key, fallback="")
+            if normalized_key:
+                metadata["root_cause_key"] = normalized_key
+            metadata["root_cause_key_source"] = "invalid-codex-root-cause-key"
+            metadata["root_cause_key_invalid_reason"] = str(exc)
     area = extract_html_marker_value(body, "codex-root-cause-area")
     if area:
         metadata["root_cause_area"] = slug_key(area, fallback="general")
@@ -1157,7 +1195,9 @@ def build_thread_lifecycle_inventory(threads: list[dict[str, Any]], *, head_sha:
         if first.get("root_cause_failure_kind"):
             item["root_cause_failure_kind"] = first["root_cause_failure_kind"]
         needs_human_hints: list[str] = []
-        if root_cause_key_source != "codex-root-cause-key":
+        if root_cause_key_source == "invalid-codex-root-cause-key":
+            needs_human_hints.append("invalid root-cause metadata; deferred issue handoff requires human review")
+        elif root_cause_key_source != "codex-root-cause-key":
             needs_human_hints.append("missing trusted root-cause metadata; deferred issue handoff requires human review")
         if comments_connection_has_more_than_limit(thread):
             needs_human_hints.append("thread has more than 50 comments; GitHub comments connection may be incomplete")
@@ -1411,11 +1451,13 @@ def trusted_issue_key_for_thread(repo: str, thread: dict[str, Any]) -> str:
     root = re.sub(r"[^a-z0-9-]+", "-", str(thread.get("root_cause_key") or "thread").lower()).strip("-")
     if not root:
         root = "thread"
+    failure_kind = str(thread.get("root_cause_failure_kind") or "")
     seed = "|".join(
         [
             "codex-v3",
             repo,
             str(thread.get("area") or ""),
+            failure_kind,
             root,
         ]
     )
@@ -1430,6 +1472,7 @@ def trusted_deferred_issue_request(repo: str, thread: dict[str, Any], request: d
     trusted["root_cause"] = {
         "key": thread.get("root_cause_key"),
         "area": thread.get("area"),
+        "failure_kind": thread.get("root_cause_failure_kind"),
         "file": thread.get("file"),
     }
     labels = [str(label) for label in (request.get("labels") or []) if str(label).strip()]
@@ -1469,7 +1512,10 @@ def is_codex_deferred_issue(issue: dict[str, Any]) -> bool:
 
 
 def extract_issue_source_threads(body: str) -> list[str]:
-    match = re.search(r"```json\s*(\{.*?\})\s*```", body, flags=re.DOTALL)
+    marker_index = body.find("## Machine-readable")
+    if marker_index < 0:
+        return []
+    match = re.search(r"```json\s*(\{.*?\})\s*```", body[marker_index:], flags=re.DOTALL)
     if not match:
         return []
     try:

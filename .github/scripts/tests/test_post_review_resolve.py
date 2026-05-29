@@ -573,6 +573,51 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertTrue(post_review.is_trusted_codex_review_author(post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]))
         self.assertFalse(post_review.is_trusted_codex_review_author("random-reviewer[bot]"))
 
+    def test_normalize_finding_rejects_empty_root_cause_key(self):
+        with self.assertRaises(SystemExit):
+            post_review.normalize_finding(
+                "correctness",
+                {
+                    "id": "correctness-1",
+                    "type": "MUST",
+                    "file": "src/lib.rs",
+                    "line": 7,
+                    "title": "title",
+                    "reason": "reason",
+                    "root_cause_key": "",
+                },
+            )
+
+    def test_normalize_finding_rejects_finding_id_root_cause_key(self):
+        with self.assertRaises(SystemExit):
+            post_review.normalize_finding(
+                "correctness",
+                {
+                    "id": "correctness-1",
+                    "type": "MUST",
+                    "file": "src/lib.rs",
+                    "line": 7,
+                    "title": "title",
+                    "reason": "reason",
+                    "root_cause_key": "correctness-1",
+                },
+            )
+
+    def test_tech_lead_primary_root_cause_key_must_match_known_root_cause(self):
+        findings = [{"id": "correctness-1", "root_cause_key": "deposit-wallet-submit-state"}]
+        decisions = {
+            "by_id": {
+                "correctness-1": {
+                    "action": "publish_and_fix_now",
+                    "reason": "publish representative",
+                    "primary_root_cause_key": "correctness-1",
+                }
+            }
+        }
+
+        with self.assertRaises(SystemExit):
+            post_review.validate_decision_coverage(findings, decisions)
+
     def test_thread_inventory_skips_existing_terminal_lifecycle_marker(self):
         thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
         thread["comments"]["nodes"].append(
@@ -675,6 +720,24 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertIn("<!-- codex-root-cause-area: deposit-wallet -->", body)
         self.assertIn("<!-- codex-root-cause-failure-kind: correctness -->", body)
 
+    def test_render_current_inline_does_not_persist_finding_id_as_root_cause_key(self):
+        body = post_review.render_current_inline(
+            {
+                "id": "correctness-1",
+                "agent": "correctness",
+                "type": "MUST",
+                "file": "src/deposit_wallet/http/submit_flow.rs",
+                "line": 7,
+                "title": "submit state invariant",
+                "reason": "state must stay observable",
+                "root_cause_key": "deposit-wallet-submit-state",
+            },
+            {"primary_root_cause_key": "correctness-1", "reason": "invalid override"},
+        )
+
+        self.assertIn("<!-- codex-root-cause-key: deposit-wallet-submit-state -->", body)
+        self.assertNotIn("<!-- codex-root-cause-key: correctness-1 -->", body)
+
     def test_thread_inventory_extracts_root_cause_key_not_finding_id(self):
         body = post_review.render_current_inline(
             {
@@ -744,6 +807,52 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertEqual("needs_human", inventory[0]["forced_state"])
         self.assertIn("root-cause metadata", inventory[0]["needs_human_hint"])
 
+    def test_thread_inventory_forces_needs_human_when_root_marker_is_finding_id(self):
+        body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-1 -->",
+                "<!-- codex-root-cause-key: correctness-1 -->",
+                "<!-- codex-root-cause-area: deposit-wallet -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=body,
+            commit_oid="old-sha",
+        )
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("correctness-1", inventory[0]["root_cause_key"])
+        self.assertEqual("invalid-codex-root-cause-key", inventory[0]["root_cause_key_source"])
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("invalid root-cause metadata", inventory[0]["needs_human_hint"])
+
+    def test_thread_inventory_forces_needs_human_when_root_marker_is_empty(self):
+        body = "\n".join(
+            [
+                post_review.INLINE_MARKER,
+                "<!-- codex-review-id: correctness-1 -->",
+                "<!-- codex-root-cause-key: -->",
+                "<!-- codex-root-cause-area: deposit-wallet -->",
+                "<!-- codex-root-cause-failure-kind: correctness -->",
+                "review body",
+            ]
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=body,
+            commit_oid="old-sha",
+        )
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("root-cause metadata", inventory[0]["needs_human_hint"])
+
     def test_batch_planner_uses_thread_batches_not_three_comment_batches(self):
         threads = []
         for index in range(13):
@@ -800,6 +909,21 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertEqual(
             post_review.trusted_issue_key_for_thread("repo/name", first),
             post_review.trusted_issue_key_for_thread("repo/name", second),
+        )
+
+    def test_trusted_deferred_issue_key_differs_by_failure_kind(self):
+        base = {
+            "root_cause_key": "deposit-wallet-submit-state",
+            "area": "deposit-wallet",
+            "file": "src/deposit_wallet/http/submit_flow.rs",
+            "thread_id": "thread-a",
+        }
+        correctness = {**base, "root_cause_failure_kind": "correctness"}
+        security = {**base, "root_cause_failure_kind": "security"}
+
+        self.assertNotEqual(
+            post_review.trusted_issue_key_for_thread("repo/name", correctness),
+            post_review.trusted_issue_key_for_thread("repo/name", security),
         )
 
     def test_root_cause_key_uses_full_marker_id_not_axis_collapse(self):
@@ -1182,6 +1306,7 @@ class StickySummaryTests(unittest.TestCase):
                 "agent": "correctness",
                 "title": f"leaks {token}",
                 "reason": f"reason includes {token}",
+                "root_cause_key": "secret-redaction",
             },
             {"reason": f"decision includes {token}"},
         )
@@ -1488,6 +1613,21 @@ index 0000000..1111111 100644
 
         with self.assertRaises(SystemExit):
             post_review.validate_autofix_patch_text(patch, manifest)
+
+    def test_extract_issue_source_threads_reads_machine_readable_block_only(self):
+        body = """Intro with model-authored JSON:
+
+```json
+{"source_threads": ["wrong-thread"]}
+```
+
+## Machine-readable
+```json
+{"source_threads": ["thread-a", "thread-b"]}
+```
+"""
+
+        self.assertEqual(["thread-a", "thread-b"], post_review.extract_issue_source_threads(body))
 
 
 class DesignPlanTests(unittest.TestCase):

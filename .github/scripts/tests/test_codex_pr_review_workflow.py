@@ -284,6 +284,21 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             self.resolve_workflow_text,
         )
 
+    def test_codex_action_is_sha_pinned(self):
+        pinned = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
+
+        self.assertNotIn("openai/codex-action@v1", self.workflow_text)
+        self.assertNotIn("openai/codex-action@v1", self.resolve_workflow_text)
+        self.assertIn(pinned, self.workflow_text)
+        self.assertIn(pinned, self.resolve_workflow_text)
+
+    def test_root_cause_schemas_require_non_empty_values(self):
+        self.assertIn('"root_cause_key": {\n                        "type": "string",\n                        "minLength": 1', self.workflow_text)
+        self.assertIn(
+            '"primary_root_cause_key": {\n                        "type": "string",\n                        "minLength": 1',
+            self.workflow_text,
+        )
+
     def test_reviewer_and_tech_lead_prompts_use_trusted_agents(self):
         reviewer_prompt = self.step("review", "Build reviewer prompt")["run"]
         tech_lead_prompt = self.step("tech-lead", "Build tech-lead prompt")["run"]

@@ -215,7 +215,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run resolve checker
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:

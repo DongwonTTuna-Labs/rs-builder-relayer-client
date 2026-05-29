@@ -170,7 +170,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run Codex reviewer
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -228,6 +228,7 @@ jobs:
                       },
                       "root_cause_key": {
                         "type": "string",
+                        "minLength": 1,
                         "maxLength": 120
                       },
                       "scope": {
@@ -458,7 +459,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run tech-lead gate
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -487,6 +488,7 @@ jobs:
                       },
                       "primary_root_cause_key": {
                         "type": "string",
+                        "minLength": 1,
                         "maxLength": 120
                       },
                       "reason": {
@@ -748,7 +750,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run bounded autofix
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -1020,7 +1022,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run design normalizer
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -1205,7 +1207,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run design clusterer
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -1422,7 +1424,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run design cluster analyst
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -1709,7 +1711,7 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Run design coordinator
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
