@@ -53,18 +53,27 @@ impl DepositWalletRelayerClient {
         )?;
         let expected_chain_id = deposit_wallet_contract_chain_id(self.config)?;
         let expected_deposit_wallet = derive_deposit_wallet_address(lease_owner, self.config)?;
+        let expected_nonce_lease_binding =
+            nonce_lease.signing_binding(expected_deposit_wallet, expected_chain_id)?;
         let signing_context = DepositWalletNonceLeaseSigningContext::new(
             lease_owner,
             nonce_lease.nonce(),
             expected_deposit_wallet,
             expected_chain_id,
+            expected_nonce_lease_binding,
         );
         let signed = sign(&signing_context)?;
+        self.ensure_permitted_for_action(
+            &gate,
+            lease_owner,
+            DepositWalletMutationAction::WalletBatch,
+        )?;
         self.submit_signed_wallet_batch_with_validated_nonce_lease(
             signed,
             nonce_lease,
             expected_chain_id,
             expected_deposit_wallet,
+            expected_nonce_lease_binding,
         )
         .await
     }
@@ -75,8 +84,15 @@ impl DepositWalletRelayerClient {
         nonce_lease: DepositWalletNonceLease,
         expected_chain_id: u64,
         expected_deposit_wallet: Address,
+        expected_nonce_lease_binding: H256,
     ) -> Result<DepositWalletTransactionReceipt> {
         let owner = signed.owner();
+        if signed.nonce_lease_binding() != Some(expected_nonce_lease_binding) {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch was not produced by the current WALLET nonce lease signing context"
+                    .to_string(),
+            ));
+        }
         if signed.nonce_owner() != owner {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch nonce owner does not match owner signer".to_string(),
@@ -110,12 +126,10 @@ impl DepositWalletRelayerClient {
                 "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
             ));
         }
-        let headers = self.authenticated_headers(true)?;
         let now_unix_seconds = self.clock.now_unix_seconds()?;
         self.submit_signed_wallet_batch_inner(
             signed,
             nonce_lease.into_unexpired_reservation(now_unix_seconds)?,
-            headers,
         )
         .await
     }
@@ -124,7 +138,6 @@ impl DepositWalletRelayerClient {
         &self,
         signed: SignedDepositWalletBatch,
         nonce_reservation: OwnerNonceReadReservation,
-        headers: HeaderMap,
     ) -> Result<DepositWalletTransactionReceipt> {
         self.ensure_deadline_fresh(&signed)?;
         let preflight_hash = signed_digest_payload_hash(signed.digest());
@@ -148,6 +161,13 @@ impl DepositWalletRelayerClient {
             }
         };
         reservation.update_payload_hash(payload_hash_summary(body.as_bytes()))?;
+        let headers = match self.authenticated_headers(true) {
+            Ok(headers) => headers,
+            Err(error) => {
+                reservation.clear()?;
+                return Err(error);
+            }
+        };
         self.submit_reserved_owner_body(reservation, body, WALLET_TRANSACTION_TYPE, headers)
             .await
     }
@@ -158,9 +178,15 @@ impl DepositWalletRelayerClient {
         body: String,
         transaction_type: &'static str,
     ) -> Result<DepositWalletTransactionReceipt> {
-        let headers = self.authenticated_headers(true)?;
         let payload_hash = payload_hash_summary(body.as_bytes());
-        let reservation = self.reserve_owner_submit(owner, payload_hash)?;
+        let mut reservation = self.reserve_owner_submit(owner, payload_hash)?;
+        let headers = match self.authenticated_headers(true) {
+            Ok(headers) => headers,
+            Err(error) => {
+                reservation.clear()?;
+                return Err(error);
+            }
+        };
         self.submit_reserved_owner_body(reservation, body, transaction_type, headers)
             .await
     }
@@ -208,28 +234,20 @@ impl DepositWalletRelayerClient {
                                 .iter()
                                 .any(|id| id == &transaction_id)
                             {
-                                self.record_ambiguous_post_boundary(
+                                self.record_ambiguous_post_boundary_with_transaction_id(
                                     &mut reservation,
                                     owner,
                                     payload_hash.clone(),
-                                )?;
-                                self.record_unrecorded_transaction_id_observation(
-                                    owner,
-                                    &payload_hash,
                                     &transaction_id,
                                 )?;
                             }
                             Err(error)
                         }
                         Err(_) => {
-                            self.record_ambiguous_post_boundary(
+                            self.record_ambiguous_post_boundary_with_transaction_id(
                                 &mut reservation,
                                 owner,
                                 payload_hash.clone(),
-                            )?;
-                            self.record_unrecorded_transaction_id_observation(
-                                owner,
-                                &payload_hash,
                                 &transaction_id,
                             )?;
                             Err(RelayerError::ambiguous_submit(format!(
@@ -243,36 +261,11 @@ impl DepositWalletRelayerClient {
                 }
                 Err(_error) => {
                     if let Some(transaction_id) = extract_submit_transaction_id(&response) {
-                        if self
-                            .record_transaction_owner(
-                                &transaction_id,
-                                owner,
-                                payload_hash.clone(),
-                                transaction_type,
-                            )
-                            .is_err()
-                        {
-                            self.record_ambiguous_post_boundary(
-                                &mut reservation,
-                                owner,
-                                payload_hash.clone(),
-                            )?;
-                            self.record_unrecorded_transaction_id_observation(
-                                owner,
-                                &payload_hash,
-                                &transaction_id,
-                            )?;
-                            return Err(RelayerError::ambiguous_submit(format!(
-                                "submit response included transaction id hash {} for owner {} payload {} but local owner state could not record it; owner-scoped reconciliation required",
-                                external_token_hash(&transaction_id),
-                                redacted_address(owner),
-                                display_payload_hash(&payload_hash)
-                            )));
-                        }
-                        self.record_ambiguous_post_boundary(
+                        self.record_ambiguous_post_boundary_with_transaction_id(
                             &mut reservation,
                             owner,
                             payload_hash.clone(),
+                            &transaction_id,
                         )?;
                         return Err(RelayerError::ambiguous_submit(format!(
                             "submit response included transaction id hash {} for owner {} payload {} but was otherwise unusable; owner-scoped poll required",
@@ -310,6 +303,10 @@ impl DepositWalletRelayerClient {
                     display_payload_hash(&payload_hash),
                     category
                 )))
+            }
+            Err(RelayerError::Api { status, message }) if matches!(status, 401 | 403 | 404) => {
+                reservation.clear()?;
+                Err(RelayerError::Api { status, message })
             }
             Err(RelayerError::Api { status, message: _ }) => {
                 self.record_ambiguous_post_boundary(&mut reservation, owner, payload_hash.clone())?;
@@ -368,6 +365,18 @@ impl DepositWalletRelayerClient {
         payload_hash: String,
     ) -> Result<()> {
         self.record_ambiguous(owner, payload_hash)?;
+        reservation.disarm();
+        Ok(())
+    }
+
+    fn record_ambiguous_post_boundary_with_transaction_id(
+        &self,
+        reservation: &mut OwnerSubmitReservation,
+        owner: Address,
+        payload_hash: String,
+        transaction_id: &str,
+    ) -> Result<()> {
+        self.record_ambiguous_unrecorded_transaction_id(owner, &payload_hash, transaction_id)?;
         reservation.disarm();
         Ok(())
     }

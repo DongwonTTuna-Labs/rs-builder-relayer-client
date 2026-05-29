@@ -464,7 +464,9 @@ async fn sign_and_submit_batch_with_lease(
     lease: DepositWalletNonceLease,
 ) -> Result<DepositWalletTransactionReceipt> {
     client
-        .sign_and_submit_wallet_batch_with_nonce_lease(lease, gate, |_| Ok(signed))
+        .sign_and_submit_wallet_batch_with_nonce_lease(lease, gate, |ctx| {
+            ctx.validate_signed_batch(signed)
+        })
         .await
 }
 
@@ -1198,7 +1200,7 @@ async fn sign_and_submit_wallet_batch_with_nonce_lease_sends_fixture_body() {
             assert_eq!(ctx.deposit_wallet(), expected_deposit_wallet);
             assert_eq!(ctx.chain_id(), expected_chain_id);
             assert_eq!(ctx.nonce(), expected_nonce);
-            Ok(signed)
+            ctx.validate_signed_batch(signed)
         })
         .await
         .unwrap();
@@ -1218,6 +1220,93 @@ async fn sign_and_submit_wallet_batch_with_nonce_lease_sends_fixture_body() {
         serde_json::from_str::<Value>(&requests[1].body).unwrap(),
         expected["body"]
     );
+}
+
+#[tokio::test]
+async fn unbound_same_nonce_signed_batch_is_rejected_before_auth_or_post() {
+    let signed = signed_wallet_batch_fixture();
+    let owner = signed.owner();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+
+    let lease = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    let error = client
+        .sign_and_submit_wallet_batch_with_nonce_lease(
+            lease,
+            wallet_batch_permit_for(owner),
+            |_| Ok(signed),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(error.to_string().contains("current WALLET nonce lease"));
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    client.ensure_owner_unblocked(owner).unwrap();
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+}
+
+#[tokio::test]
+async fn stale_bound_same_nonce_signed_batch_is_rejected_before_auth_or_post() {
+    let signed = signed_wallet_batch_fixture();
+    let owner = signed.owner();
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+    ])
+    .await;
+    let client = test_client(url);
+
+    let first_lease = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    let mut stale_signed = None;
+    let first_error = client
+        .sign_and_submit_wallet_batch_with_nonce_lease(
+            first_lease,
+            wallet_batch_permit_for(owner),
+            |ctx| {
+                stale_signed = Some(ctx.validate_signed_batch(signed.clone())?);
+                Err(RelayerError::Signing(
+                    "unit-test stops after binding stale signed batch".to_string(),
+                ))
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(first_error, RelayerError::Signing(_)));
+    let stale_signed = stale_signed.expect("test should capture stale bound signed batch");
+
+    let second_lease = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    let error = client
+        .sign_and_submit_wallet_batch_with_nonce_lease(
+            second_lease,
+            wallet_batch_permit_for(owner),
+            |_| Ok(stale_signed),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(error.to_string().contains("current WALLET nonce lease"));
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    client.ensure_owner_unblocked(owner).unwrap();
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.method == "GET"));
 }
 
 #[tokio::test]
@@ -2274,7 +2363,7 @@ async fn post_boundary_errors_leave_ambiguous_owner_block() {
 }
 
 #[tokio::test]
-async fn post_boundary_api_errors_leave_owner_block_ambiguous() {
+async fn pre_acceptance_api_errors_release_owner_block() {
     let owner = address(WALLET_OWNER);
     for (status, expected_status) in [
         ("401 Unauthorized", 401u16),
@@ -2289,14 +2378,10 @@ async fn post_boundary_api_errors_leave_owner_block_ambiguous() {
             .await
             .unwrap_err();
 
-        assert!(error.is_deposit_wallet_ambiguous_submit());
+        assert!(matches!(error, RelayerError::Api { status, .. } if status == expected_status));
         assert!(error.to_string().contains(&expected_status.to_string()));
-        assert!(client.ambiguous_submit_block(owner).is_some());
-        let blocked = client
-            .submit_wallet_create(owner, wallet_create_permit_for(owner))
-            .await
-            .unwrap_err();
-        assert!(blocked.is_deposit_wallet_reconciliation_required());
+        assert!(client.ambiguous_submit_block(owner).is_none());
+        client.ensure_owner_unblocked(owner).unwrap();
         let requests = handle.await.unwrap();
         assert_eq!(requests.len(), 1);
     }
@@ -3093,7 +3178,7 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     );
     let requests = handle.await.unwrap();
     assert_eq!(requests[0].method, "GET");
-    assert_eq!(requests[0].path, "/transaction?transactionID=tx-owner");
+    assert_eq!(requests[0].path, "/transaction?id=tx-owner");
     assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
     assert_eq!(
         requests[0].header("RELAYER_API_KEY_ADDRESS"),
@@ -3205,7 +3290,7 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
     let requests = handle.await.unwrap();
     assert_eq!(
         requests[0].path,
-        "/transaction?transactionID=tx-missing-http"
+        "/transaction?id=tx-missing-http"
     );
 
     let (url, handle) = spawn_server(vec![TestResponse::json(
