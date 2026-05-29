@@ -102,17 +102,10 @@ jobs:
           prompt_file="${RUNNER_TEMP}/prompt-${AXIS}.md"
           review_context="${RUNNER_TEMP}/review-context-${AXIS}.md"
           changed_files="${RUNNER_TEMP}/changed-files-${AXIS}.txt"
-          diff_file="${RUNNER_TEMP}/diff-${AXIS}.patch"
 
           test -f "$agent_file" || { echo "missing reviewer agent: $agent_file" >&2; exit 1; }
           python3 trusted/.github/scripts/post_review.py build-review-context --output "$review_context"
           git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
-          git -C workspace diff --unified=80 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
-          if [ "$(wc -c < "$diff_file")" -gt 180000 ]; then
-            head -c 180000 "$diff_file" > "${diff_file}.tmp"
-            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
-            mv "${diff_file}.tmp" "$diff_file"
-          fi
 
           {
             cat "$agent_file"
@@ -132,6 +125,11 @@ jobs:
           - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
           - Do not include secrets, tokens, or private keys.
           - Do not modify files or post comments.
+          - Inspect the checked-out PR head workspace directly.
+          - Use current files as the source of truth.
+          - When useful, compare against a review thread commit, original commit, or base/head range.
+          - Use commands such as git show, git diff, git log, grep, sed, and find as needed.
+          - BASE_SHA=${BASE_SHA} and HEAD_SHA=${HEAD_SHA} are available, but the full PR diff is not the only relevant evidence.
 
           Pull request:
           - repository: ${GITHUB_REPOSITORY}
@@ -148,15 +146,6 @@ jobs:
           Changed files:
           EOF
             cat "$changed_files"
-            cat <<'EOF'
-
-          Diff:
-          ```diff
-          EOF
-            cat "$diff_file"
-            cat <<'EOF'
-          ```
-          EOF
           } > "$prompt_file"
 
       - name: Setup Codex relay
@@ -382,23 +371,18 @@ jobs:
           set -euo pipefail
           agent_file="workspace/.codex/agents/tech-lead-reviewer.md"
           combined_file="artifacts/combined-findings.json"
-          diff_file="${RUNNER_TEMP}/diff-tech-lead.patch"
+          changed_files="${RUNNER_TEMP}/changed-files-tech-lead.txt"
           review_context="artifacts/review-context.md"
           prompt_file="${RUNNER_TEMP}/prompt-tech-lead.md"
 
           test -f "$agent_file" || { echo "missing tech-lead agent: $agent_file" >&2; exit 1; }
           test -f "$combined_file" || { echo "missing combined findings: $combined_file" >&2; exit 1; }
           python3 trusted/.github/scripts/post_review.py build-review-context --output "$review_context"
-          git -C workspace diff --unified=60 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
-          if [ "$(wc -c < "$diff_file")" -gt 120000 ]; then
-            head -c 120000 "$diff_file" > "${diff_file}.tmp"
-            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
-            mv "${diff_file}.tmp" "$diff_file"
-          fi
+          git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
 
           {
             cat "$agent_file"
-            cat <<'EOF'
+            cat <<EOF
 
           ---
 
@@ -408,7 +392,16 @@ jobs:
           - Write every human-readable decision string in Korean: decision reasons, judgment headline, and merge note reasons.
           - Keep schema field names, enum values, finding ids, file paths, code identifiers, and quoted code in their original language.
 
+          Repository inspection:
+          - Inspect the checked-out PR head workspace directly.
+          - Use current files as the source of truth.
+          - When useful, compare against a review thread commit, original commit, or base/head range.
+          - Use commands such as git show, git diff, git log, grep, sed, and find as needed.
+          - BASE_SHA=${BASE_SHA} and HEAD_SHA=${HEAD_SHA} are available, but the full PR diff is not the only relevant evidence.
+
           Combined findings:
+          EOF
+            cat <<'EOF'
           ```json
           EOF
             cat "$combined_file"
@@ -420,13 +413,9 @@ jobs:
             cat "$review_context"
             cat <<'EOF'
 
-          PR diff excerpt:
-          ```diff
+          Changed files:
           EOF
-            cat "$diff_file"
-            cat <<'EOF'
-          ```
-          EOF
+            cat "$changed_files"
           } > "$prompt_file"
 
       - name: Setup Codex relay
@@ -571,10 +560,329 @@ jobs:
             artifacts/review-context.md
           retention-days: 7
 
-  design-normalize:
-    name: design-normalize
+  design-stale-collect:
+    name: design-stale-collect
     needs: [resolve, tech-lead]
     if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 10
+    outputs:
+      has_comments: ${{ steps.collect.outputs.has_comments }}
+      batch_indexes: ${{ steps.collect.outputs.batch_indexes || '[]' }}
+    steps:
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare stale cleanup batches
+        run: |
+          rm -rf artifacts/design-stale-batches
+          mkdir -p artifacts/design-stale-batches
+
+      - name: Collect stale Codex inline comments
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: >-
+          python3 trusted/.github/scripts/post_review.py collect-resolutions
+          --batch-dir artifacts/design-stale-batches
+
+      - name: Upload stale cleanup batches
+        if: steps.collect.outputs.has_comments == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-stale-batches
+          path: artifacts/design-stale-batches/*.json
+          retention-days: 7
+
+  design-stale-check:
+    name: design-stale-check-${{ matrix.batch }}
+    needs: [resolve, tech-lead, design-stale-collect]
+    if: needs.design-stale-collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.design-stale-collect.outputs.batch_indexes) }}
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: workspace
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare stale cleanup artifacts
+        run: |
+          rm -rf artifacts/design-stale-batches artifacts/design-stale-results-*.json
+          mkdir -p artifacts/design-stale-batches artifacts
+
+      - name: Download stale cleanup batches
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-stale-batches
+          path: artifacts/design-stale-batches
+
+      - name: Build stale cleanup prompt
+        env:
+          BATCH: ${{ matrix.batch }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent_file="workspace/.codex/agents/resolve-checker-reviewer.md"
+          batch_file="artifacts/design-stale-batches/resolve-batch-${BATCH}.json"
+          prompt_file="${RUNNER_TEMP}/prompt-design-stale-${BATCH}.md"
+
+          test -f "$agent_file" || { echo "missing resolve-checker agent: $agent_file" >&2; exit 1; }
+          test -f "$batch_file" || { echo "missing stale cleanup batch: $batch_file" >&2; exit 1; }
+          {
+            cat "$agent_file"
+            cat <<EOF
+
+          ---
+
+          Return only JSON matching the inline output schema supplied to openai/codex-action.
+
+          Language rules:
+          - Write every human-readable resolution reason in Korean.
+          - Keep schema field names, boolean values, comment ids, thread ids, file paths, code identifiers, and quoted code in their original language.
+
+          Repository inspection:
+          - The current working directory is the PR head checkout.
+          - Use the files in this workspace as the source of truth for the current implementation.
+          - When useful, compare against a review thread commit, original commit, or base/head range.
+          - Use commands such as git show, git diff, git log, grep, sed, and find as needed.
+          - BASE_SHA=${BASE_SHA} and HEAD_SHA=${HEAD_SHA} are available, but the full PR diff is not the only relevant evidence.
+          - Treat the batch JSON only as a list of review threads to verify, not as complete evidence.
+
+          Pull request:
+          EOF
+            cat <<EOF
+          - repository: ${GITHUB_REPOSITORY}
+          - pr_number: ${PR_NUMBER}
+          - base_sha: ${BASE_SHA}
+          - head_sha: ${HEAD_SHA}
+          EOF
+            cat <<'EOF'
+
+          Resolve-check input:
+          ```json
+          EOF
+            cat "$batch_file"
+            cat <<'EOF'
+          ```
+          EOF
+          } > "$prompt_file"
+
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-design-stale-${{ matrix.batch }}
+
+      - name: Validate Codex relay args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+      - name: Run stale cleanup checker
+        uses: openai/codex-action@v1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ runner.temp }}/prompt-design-stale-${{ matrix.batch }}.md
+          output-schema: |
+            {
+              "$schema": "http://json-schema.org/draft-07/schema#",
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["resolutions"],
+              "properties": {
+                "resolutions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["comment_id", "resolved", "reason"],
+                    "properties": {
+                      "comment_id": { "type": "integer", "minimum": 1 },
+                      "resolved": { "type": "boolean" },
+                      "reason": { "type": "string", "minLength": 1, "maxLength": 300 }
+                    }
+                  }
+                }
+              }
+            }
+          output-file: ${{ runner.temp }}/design-stale-results-${{ matrix.batch }}.json
+          working-directory: ${{ github.workspace }}/workspace
+          codex-home: ${{ runner.temp }}/codex-home-design-stale-${{ matrix.batch }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-version: latest
+          model: gpt-5.5
+          effort: xhigh
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+
+      - name: Validate stale cleanup output
+        env:
+          BATCH: ${{ matrix.batch }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          batch = str(os.environ["BATCH"])
+          batch_file = Path("artifacts") / "design-stale-batches" / f"resolve-batch-{batch}.json"
+          expected = {
+              int(comment["comment_id"])
+              for comment in json.loads(batch_file.read_text(encoding="utf-8"))["comments"]
+          }
+          source = Path(os.environ["RUNNER_TEMP"]) / f"design-stale-results-{batch}.json"
+          payload = json.loads(source.read_text(encoding="utf-8"))
+          actual = {int(item["comment_id"]) for item in payload.get("resolutions", [])}
+          if actual != expected:
+              raise SystemExit(f"resolution ids mismatch: expected {sorted(expected)}, got {sorted(actual)}")
+          out = Path("artifacts") / f"design-stale-results-{batch}.json"
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload stale cleanup result
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-stale-${{ matrix.batch }}-result
+          path: artifacts/design-stale-results-${{ matrix.batch }}.json
+          retention-days: 7
+
+  design-stale-apply:
+    name: design-stale-apply
+    needs: [resolve, tech-lead, design-stale-collect, design-stale-check]
+    if: always() && !cancelled() && needs.design-stale-collect.outputs.has_comments == 'true' && needs.design-stale-check.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare stale cleanup apply artifacts
+        run: |
+          rm -rf artifacts/design-stale-batches artifacts/design-stale-results artifacts/design-stale-results-*.json
+          mkdir -p artifacts/design-stale-batches artifacts/design-stale-results
+
+      - name: Download stale cleanup batches
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-stale-batches
+          path: artifacts/design-stale-batches
+
+      - name: Download stale cleanup results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: codex-design-stale-*-result
+          path: artifacts/design-stale-results
+          merge-multiple: true
+
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Apply stale cleanup decisions
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        run: >-
+          python3 trusted/.github/scripts/post_review.py apply-resolutions
+          --batches artifacts/design-stale-batches
+          --results artifacts/design-stale-results
+
+  design-context:
+    name: design-context
+    needs: [resolve, tech-lead, design-stale-apply]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && (needs.design-stale-apply.result == 'success' || needs.design-stale-apply.result == 'skipped') && github.triggering_actor == 'DongwonTTuna'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted PR scripts
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: trusted
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build refreshed design review context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          mkdir -p artifacts
+          python3 trusted/.github/scripts/post_review.py build-review-context --output artifacts/review-context.md
+
+      - name: Upload refreshed design review context
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-design-review-context
+          path: artifacts/review-context.md
+          retention-days: 7
+
+  design-normalize:
+    name: design-normalize
+    needs: [resolve, tech-lead, design-context]
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-context.result == 'success' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -598,6 +906,12 @@ jobs:
           name: codex-review-tech-lead-decisions
           path: artifacts
 
+      - name: Download refreshed review context
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-review-context
+          path: artifacts
+
       - name: Build normalizer prompt
         env:
           BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
@@ -610,7 +924,7 @@ jobs:
           combined_file="artifacts/combined-findings.json"
           decisions_file="artifacts/decisions-tech-lead.json"
           context_file="artifacts/review-context.md"
-          diff_file="${RUNNER_TEMP}/diff-design-normalize.patch"
+          changed_files="${RUNNER_TEMP}/changed-files-design-normalize.txt"
           prompt_file="${RUNNER_TEMP}/prompt-design-normalize.md"
 
           test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
@@ -618,26 +932,24 @@ jobs:
           test -f "$combined_file" || { echo "missing combined findings: $combined_file" >&2; exit 1; }
           test -f "$decisions_file" || { echo "missing tech-lead decisions: $decisions_file" >&2; exit 1; }
           test -f "$context_file" || { echo "missing review context: $context_file" >&2; exit 1; }
-          git -C workspace diff --unified=40 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
-          if [ "$(wc -c < "$diff_file")" -gt 90000 ]; then
-            head -c 90000 "$diff_file" > "${diff_file}.tmp"
-            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
-            mv "${diff_file}.tmp" "$diff_file"
-          fi
+          git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
 
           {
             cat "$skill_file"
             printf '\n---\n\n'
             cat "$agent_file"
-            cat <<'EOF'
+            cat <<EOF
 
           ---
 
           Return only JSON matching the inline output schema supplied to openai/codex-action.
           Write human-readable fields in Korean.
           This stage is summary-only. Do not design the fix.
+          Inspect the checked-out workspace directly. Use current files as the source of truth. When useful, compare against a review thread commit, original commit, or BASE_SHA=${BASE_SHA} / HEAD_SHA=${HEAD_SHA}.
 
           Combined findings:
+          EOF
+            cat <<'EOF'
           ```json
           EOF
             cat "$combined_file"
@@ -656,13 +968,9 @@ jobs:
             cat "$context_file"
             cat <<'EOF'
 
-          Diff excerpt:
-          ```diff
+          Changed files:
           EOF
-            cat "$diff_file"
-            cat <<'EOF'
-          ```
-          EOF
+            cat "$changed_files"
           } > "$prompt_file"
 
       - name: Setup Codex relay
@@ -788,6 +1096,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: codex-review-tech-lead-decisions
+          path: artifacts
+
+      - name: Download refreshed review context
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-review-context
           path: artifacts
 
       - name: Download normalized inventory
@@ -982,6 +1296,12 @@ jobs:
           name: codex-review-tech-lead-decisions
           path: artifacts
 
+      - name: Download refreshed review context
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-review-context
+          path: artifacts
+
       - name: Download design clusters
         uses: actions/download-artifact@v8
         with:
@@ -1000,19 +1320,14 @@ jobs:
           skill_file="workspace/.codex/skills/review-design-cluster-analyst/SKILL.md"
           batch_file="artifacts/cluster-batches/cluster-batch-${BATCH}.json"
           context_file="artifacts/review-context.md"
-          diff_file="${RUNNER_TEMP}/diff-design-analyze-${BATCH}.patch"
+          changed_files="${RUNNER_TEMP}/changed-files-design-analyze-${BATCH}.txt"
           prompt_file="${RUNNER_TEMP}/prompt-design-analyze-${BATCH}.md"
 
           test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
           test -f "$skill_file" || { echo "missing required design skill: $skill_file" >&2; exit 1; }
           test -f "$batch_file" || { echo "missing cluster batch: $batch_file" >&2; exit 1; }
           test -f "$context_file" || { echo "missing review context: $context_file" >&2; exit 1; }
-          git -C workspace diff --unified=50 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
-          if [ "$(wc -c < "$diff_file")" -gt 100000 ]; then
-            head -c 100000 "$diff_file" > "${diff_file}.tmp"
-            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
-            mv "${diff_file}.tmp" "$diff_file"
-          fi
+          git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
 
           {
             cat "$skill_file"
@@ -1025,6 +1340,7 @@ jobs:
           Return only JSON matching the inline output schema supplied to openai/codex-action.
           Write human-readable fields in Korean.
           Analyze batch ${BATCH} only. Do not finalize global architecture or edit sequence.
+          Inspect the checked-out workspace directly. Use current files as the source of truth. When useful, compare against a review thread commit, original commit, or BASE_SHA=${BASE_SHA} / HEAD_SHA=${HEAD_SHA}.
 
           Cluster batch:
           \`\`\`json
@@ -1038,13 +1354,9 @@ jobs:
             cat "$context_file"
             cat <<'EOF'
 
-          Diff excerpt:
-          ```diff
+          Changed files:
           EOF
-            cat "$diff_file"
-            cat <<'EOF'
-          ```
-          EOF
+            cat "$changed_files"
           } > "$prompt_file"
 
       - name: Setup Codex relay
@@ -1193,6 +1505,12 @@ jobs:
           name: codex-review-tech-lead-decisions
           path: artifacts
 
+      - name: Download refreshed review context
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-design-review-context
+          path: artifacts
+
       - name: Download normalized inventory
         uses: actions/download-artifact@v8
         with:
@@ -1222,18 +1540,13 @@ jobs:
           agent_file="workspace/.codex/agents/design-coordinator.md"
           skill_file="workspace/.codex/skills/review-design-coordinator/SKILL.md"
           docs_file="${RUNNER_TEMP}/design-docs.md"
-          diff_file="${RUNNER_TEMP}/diff-design-coordinate.patch"
+          changed_files="${RUNNER_TEMP}/changed-files-design-coordinate.txt"
           analyses_file="${RUNNER_TEMP}/cluster-analyses.json"
           prompt_file="${RUNNER_TEMP}/prompt-design-coordinate.md"
 
           test -f "$agent_file" || { echo "missing design agent: $agent_file" >&2; exit 1; }
           test -f "$skill_file" || { echo "missing required design skill: $skill_file" >&2; exit 1; }
-          git -C workspace diff --unified=80 --no-ext-diff "$BASE_SHA" "$HEAD_SHA" > "$diff_file"
-          if [ "$(wc -c < "$diff_file")" -gt 130000 ]; then
-            head -c 130000 "$diff_file" > "${diff_file}.tmp"
-            printf '\n...[truncated]\n' >> "${diff_file}.tmp"
-            mv "${diff_file}.tmp" "$diff_file"
-          fi
+          git -C workspace diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
 
           {
             for file in \
@@ -1274,13 +1587,14 @@ jobs:
             cat "$skill_file"
             printf '\n---\n\n'
             cat "$agent_file"
-            cat <<'EOF'
+            cat <<EOF
 
           ---
 
           Return only JSON matching the inline output schema supplied to openai/codex-action.
           Write human-readable fields in Korean.
           You are the only final design authority in this stage.
+          Inspect the checked-out workspace directly. Use current files as the source of truth. When useful, compare against a review thread commit, original commit, or BASE_SHA=${BASE_SHA} / HEAD_SHA=${HEAD_SHA}.
 
           Review context:
           EOF
@@ -1327,13 +1641,9 @@ jobs:
             cat "$docs_file"
             cat <<'EOF'
 
-          Diff excerpt:
-          ```diff
+          Changed files:
           EOF
-            cat "$diff_file"
-            cat <<'EOF'
-          ```
-          EOF
+            cat "$changed_files"
           } > "$prompt_file"
 
       - name: Setup Codex relay
@@ -1447,6 +1757,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     timeout-minutes: 10
     steps:
@@ -1470,6 +1781,7 @@ jobs:
         with:
           app-id: ${{ secrets.CODEX_APP_ID }}
           private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          permission-issues: write
           permission-pull-requests: write
 
       - name: Post sticky design plan
@@ -1488,6 +1800,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
+      issues: write
       pull-requests: write
     timeout-minutes: 10
     steps:
@@ -1518,6 +1831,8 @@ jobs:
         with:
           app-id: ${{ secrets.CODEX_APP_ID }}
           private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: write
 
       - name: Post PR review
         env:
