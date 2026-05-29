@@ -1470,6 +1470,7 @@ jobs:
         with:
           app-id: ${{ secrets.CODEX_APP_ID }}
           private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          permission-issues: write
 
       - name: Post sticky design plan
         env:
