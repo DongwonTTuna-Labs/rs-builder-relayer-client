@@ -125,7 +125,7 @@ Used for approvals, transfers, and pUSD-native CTF operations.
 ### Transaction polling
 
 ```text
-GET /transaction?transactionID=<id>
+GET /transaction?id=<id>
 ```
 
 `POST /submit` returns a `transactionID`. The on-chain transaction hash may be unavailable until polling succeeds.
