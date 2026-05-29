@@ -5,7 +5,6 @@ import argparse
 import json
 import os
 import re
-import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -15,13 +14,11 @@ from typing import Any
 AXES = ("correctness", "security", "performance", "test-coverage", "domain")
 INLINE_MARKER = "<!-- codex-review-inline -->"
 REVIEW_MARKER = "<!-- codex-review -->"
+REVIEW_SUMMARY_MARKER = "<!-- codex-review-summary -->"
 RESOLVE_MARKER = "<!-- codex-resolve-check -->"
 DESIGN_MARKER = "<!-- codex-design-plan -->"
 MAX_INLINE_COMMENTS = 50
 RESOLVE_BATCH_SIZE = 3
-RESOLVE_SEARCH_CONTEXT_RADIUS = 6
-RESOLVE_SEARCH_MAX_TERMS = 8
-RESOLVE_SEARCH_MAX_MATCHES = 3
 REVIEW_CONTEXT_MAX_CHARS = 60000
 REVIEW_CONTEXT_SECTION_LIMIT = 12000
 TRUSTED_USER = "DongwonTTuna"
@@ -402,7 +399,7 @@ def render_current_body(
 ) -> str:
     judgment = decisions.get("judgment") or {}
     lines = [
-        "<!-- codex-review -->",
+        REVIEW_SUMMARY_MARKER,
         "Codex 리뷰가 완료되었습니다.",
         "",
         f"- 이벤트: {event}",
@@ -436,6 +433,18 @@ def render_current_body(
                 f"{note.get('reason', '')}"
             )
     return "\n".join(lines)
+
+
+def render_current_review_body(event: str) -> str:
+    return "\n".join(
+        [
+            REVIEW_MARKER,
+            "Codex 리뷰 inline 결과가 게시되었습니다.",
+            "",
+            f"- 이벤트: {event}",
+            "- 상세 요약은 sticky `codex-review-summary` 코멘트를 확인하세요.",
+        ]
+    )
 
 
 def command_post_current(args: argparse.Namespace) -> None:
@@ -481,20 +490,26 @@ def command_post_current(args: argparse.Namespace) -> None:
     judgment = decisions.get("judgment") or {}
     blocking = any(hard_block(finding) for finding, _ in allowed)
     event = "REQUEST_CHANGES" if blocking or judgment.get("status") == "NEEDS_WORK" else "COMMENT"
-    payload = {
-        "commit_id": head_sha,
-        "event": event,
-        "body": render_current_body(
-            event=event,
-            allowed=allowed,
-            denied_count=denied_count,
-            unplaced=unplaced,
-            decisions=decisions,
-        ),
-        "comments": comments,
-    }
-    github_api(f"/repos/{repo}/pulls/{pr_number}/reviews", method="POST", payload=payload)
-    print(f"posted {event} review with {len(comments)} inline comments and {len(unplaced)} unplaced findings")
+    summary_body = render_current_body(
+        event=event,
+        allowed=allowed,
+        denied_count=denied_count,
+        unplaced=unplaced,
+        decisions=decisions,
+    )
+    upsert_marker_comment(repo=repo, pr_number=pr_number, marker=REVIEW_SUMMARY_MARKER, body=summary_body)
+
+    if comments or event == "REQUEST_CHANGES":
+        payload = {
+            "commit_id": head_sha,
+            "event": event,
+            "body": render_current_review_body(event),
+            "comments": comments,
+        }
+        github_api(f"/repos/{repo}/pulls/{pr_number}/reviews", method="POST", payload=payload)
+        print(f"posted {event} review with {len(comments)} inline comments and {len(unplaced)} unplaced findings")
+    else:
+        print(f"updated sticky review summary with {len(unplaced)} unplaced findings")
 
 
 def collect_review_threads(repo: str, pr_number: str) -> list[dict[str, Any]]:
@@ -585,98 +600,7 @@ def is_current_head_inline_comment(comment: dict[str, Any], head_sha: str) -> bo
     return comment_commit_oid(comment) == head_sha
 
 
-def code_snippet(workspace: Path, file_path: str | None, line: int | None) -> str | None:
-    if not file_path or line is None:
-        return None
-    path = (workspace / file_path).resolve()
-    try:
-        path.relative_to(workspace.resolve())
-    except ValueError:
-        return None
-    if not path.exists() or not path.is_file():
-        return None
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    if line < 1 or line > len(lines):
-        return None
-    start = max(1, line - 15)
-    end = min(len(lines), line + 15)
-    width = len(str(end))
-    return "\n".join(f"{idx:>{width}}: {lines[idx - 1]}" for idx in range(start, end + 1))
-
-
-def format_line_snippet(lines: list[str], line: int, radius: int) -> str:
-    start = max(1, line - radius)
-    end = min(len(lines), line + radius)
-    width = len(str(end))
-    return "\n".join(f"{idx:>{width}}: {lines[idx - 1]}" for idx in range(start, end + 1))
-
-
-def add_search_term(terms: list[str], seen: set[str], value: str) -> None:
-    term = value.strip()
-    if not (3 <= len(term) <= 120) or "\n" in term:
-        return
-    if not re.search(r"[A-Za-z0-9_]", term):
-        return
-    key = term.lower()
-    if key in seen:
-        return
-    terms.append(term)
-    seen.add(key)
-
-
-def resolve_search_terms(body: str) -> list[str]:
-    terms: list[str] = []
-    seen: set[str] = set()
-    redacted = redact_comment_body(body)
-    for span in re.findall(r"`([^`\n]{3,120})`", redacted):
-        add_search_term(terms, seen, span)
-        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", span):
-            add_search_term(terms, seen, token)
-            if len(terms) >= RESOLVE_SEARCH_MAX_TERMS:
-                return terms
-        if len(terms) >= RESOLVE_SEARCH_MAX_TERMS:
-            return terms
-    return terms
-
-
-def search_current_context(workspace: Path, file_path: str | None, body: str) -> list[dict[str, Any]]:
-    if not file_path:
-        return []
-    path = (workspace / file_path).resolve()
-    try:
-        path.relative_to(workspace.resolve())
-    except ValueError:
-        return []
-    if not path.exists() or not path.is_file():
-        return []
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    contexts: list[dict[str, Any]] = []
-    seen_ranges: set[tuple[int, int]] = set()
-    for term in resolve_search_terms(body):
-        needle = term.lower()
-        for index, line in enumerate(lines, start=1):
-            if needle not in line.lower():
-                continue
-            start = max(1, index - RESOLVE_SEARCH_CONTEXT_RADIUS)
-            end = min(len(lines), index + RESOLVE_SEARCH_CONTEXT_RADIUS)
-            range_key = (start, end)
-            if range_key in seen_ranges:
-                continue
-            contexts.append(
-                {
-                    "term": term,
-                    "line": index,
-                    "snippet": format_line_snippet(lines, index, RESOLVE_SEARCH_CONTEXT_RADIUS),
-                }
-            )
-            seen_ranges.add(range_key)
-            if len(contexts) >= RESOLVE_SEARCH_MAX_MATCHES:
-                return contexts
-            break
-    return contexts
-
-
-def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any], workspace: Path) -> dict[str, Any]:
+def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any]) -> dict[str, Any]:
     line = comment.get("line") or thread.get("line") or comment.get("originalLine") or thread.get("originalLine")
     try:
         line_int = int(line) if line is not None else None
@@ -684,20 +608,16 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any], workspac
         line_int = None
     file_path = comment.get("path") or thread.get("path")
     body = comment.get("body") or ""
-    outdated = bool(thread.get("isOutdated") or comment.get("outdated"))
     return {
         "thread_id": thread["id"],
         "comment_node_id": comment["id"],
         "comment_id": int(comment["fullDatabaseId"]),
         "file": file_path,
         "line": line_int,
-        "outdated": outdated,
         "marker_key": extract_marker_key(body),
         "current_commit_oid": comment_commit_oid(comment) or None,
         "original_commit_oid": comment_original_commit_oid(comment) or None,
         "body_excerpt": redact_comment_body(body),
-        "code_snippet": code_snippet(workspace, file_path, line_int),
-        "search_context": search_current_context(workspace, file_path, body) if outdated else [],
         "url": comment.get("url"),
     }
 
@@ -706,7 +626,6 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
     head_sha = require_env("HEAD_SHA")
-    workspace = Path(args.workspace)
     batch_dir = Path(args.batch_dir)
     batch_dir.mkdir(parents=True, exist_ok=True)
     for stale_batch in batch_dir.glob("resolve-batch-*.json"):
@@ -725,7 +644,7 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
                 continue
             if is_current_head_inline_comment(comment, head_sha):
                 continue
-            items.append(build_resolve_item(thread, comment, workspace))
+            items.append(build_resolve_item(thread, comment))
 
     if not items:
         write_github_output({"has_comments": "false", "batch_indexes": "[]"})
@@ -790,7 +709,7 @@ def render_resolution_body(
     unresolved: list[tuple[dict[str, Any], dict[str, Any]]],
 ) -> str:
     lines = [
-        "<!-- codex-resolve-check -->",
+        RESOLVE_MARKER,
         "Codex 해결 여부 확인이 완료되었습니다.",
         "",
         f"- 이벤트: {event}",
@@ -818,7 +737,6 @@ def render_resolution_body(
 def command_apply_resolutions(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
-    head_sha = require_env("HEAD_SHA")
     comments = load_resolution_inputs(Path(args.batches))
     resolutions = load_resolution_outputs(Path(args.results), set(comments))
 
@@ -837,13 +755,9 @@ def command_apply_resolutions(args: argparse.Namespace) -> None:
             unresolved.append((comment, resolution))
 
     event = "REQUEST_CHANGES" if unresolved else "COMMENT"
-    payload = {
-        "commit_id": head_sha,
-        "event": event,
-        "body": render_resolution_body(event=event, resolved=resolved, unresolved=unresolved),
-    }
-    github_api(f"/repos/{repo}/pulls/{pr_number}/reviews", method="POST", payload=payload)
-    print(f"posted {event} resolve-check review; resolved={len(resolved)} unresolved={len(unresolved)}")
+    body = render_resolution_body(event=event, resolved=resolved, unresolved=unresolved)
+    upsert_marker_comment(repo=repo, pr_number=pr_number, marker=RESOLVE_MARKER, body=body)
+    print(f"updated sticky resolve-check summary; resolved={len(resolved)} unresolved={len(unresolved)}")
 
 
 def latest_marker_comment(comments: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
@@ -853,7 +767,27 @@ def latest_marker_comment(comments: list[dict[str, Any]], marker: str) -> dict[s
     return sorted(matches, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""))[-1]
 
 
+def upsert_marker_comment(
+    *,
+    repo: str,
+    pr_number: str,
+    marker: str,
+    body: str,
+    list_comments: Any = github_paginated,
+    api: Any = github_api,
+) -> str:
+    comments = list_comments(f"/repos/{repo}/issues/{pr_number}/comments?per_page=100")
+    existing = latest_marker_comment(comments, marker)
+    if existing:
+        api(f"/repos/{repo}/issues/comments/{existing['id']}", method="PATCH", payload={"body": body})
+        return "updated"
+    api(f"/repos/{repo}/issues/{pr_number}/comments", method="POST", payload={"body": body})
+    return "created"
+
+
 def review_marker_kind(body: str) -> str | None:
+    if REVIEW_SUMMARY_MARKER in body:
+        return "review-summary"
     if REVIEW_MARKER in body:
         return "review"
     if RESOLVE_MARKER in body:
@@ -930,6 +864,8 @@ def build_review_context_markdown(
     title = str(pr.get("title") or "")
     body = redact_comment_body(str(pr.get("body") or "")).strip() or "(PR body is empty.)"
     latest_design = latest_marker_comment(issue_comments, DESIGN_MARKER)
+    latest_review_summary = latest_marker_comment(issue_comments, REVIEW_SUMMARY_MARKER)
+    latest_resolve_summary = latest_marker_comment(issue_comments, RESOLVE_MARKER)
     grouped_threads = unresolved_thread_summaries(threads)
     recent_reviews = []
     for review in reviews:
@@ -975,6 +911,25 @@ def build_review_context_markdown(
         lines.append("(none)")
 
     lines.extend(["", "## Recent Codex Review And Resolve Summaries (advisory)", ""])
+    sticky_summaries = [
+        ("review-summary", latest_review_summary),
+        ("resolve", latest_resolve_summary),
+    ]
+    for marker_kind, comment in sticky_summaries:
+        if not comment:
+            continue
+        author = ((comment.get("user") or {}).get("login")) or ""
+        updated_at = comment.get("updated_at") or comment.get("created_at") or ""
+        lines.extend(
+            [
+                f"### sticky-{marker_kind} {updated_at}",
+                "",
+                f"- author: {author}",
+                "",
+                trim_text(redact_comment_body(str(comment.get("body") or "")), 1800),
+                "",
+            ]
+        )
     if recent_reviews:
         for submitted_at, marker_kind, review in recent_reviews:
             author = ((review.get("user") or {}).get("login")) or ""
@@ -990,7 +945,7 @@ def build_review_context_markdown(
                     "",
                 ]
             )
-    else:
+    elif not any(comment for _, comment in sticky_summaries):
         lines.append("(none)")
 
     lines.extend(["", "## Current Unresolved Inline Threads (advisory until verified)", ""])
@@ -1128,13 +1083,14 @@ def upsert_design_comment(
     list_comments: Any = github_paginated,
     api: Any = github_api,
 ) -> str:
-    comments = list_comments(f"/repos/{repo}/issues/{pr_number}/comments?per_page=100")
-    existing = latest_marker_comment(comments, DESIGN_MARKER)
-    if existing:
-        api(f"/repos/{repo}/issues/comments/{existing['id']}", method="PATCH", payload={"body": body})
-        return "updated"
-    api(f"/repos/{repo}/issues/{pr_number}/comments", method="POST", payload={"body": body})
-    return "created"
+    return upsert_marker_comment(
+        repo=repo,
+        pr_number=pr_number,
+        marker=DESIGN_MARKER,
+        body=body,
+        list_comments=list_comments,
+        api=api,
+    )
 
 
 def command_post_design_plan(args: argparse.Namespace) -> None:
@@ -1163,7 +1119,6 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_previous.set_defaults(func=command_resolve_previous)
 
     collect = subparsers.add_parser("collect-resolutions")
-    collect.add_argument("--workspace", required=True)
     collect.add_argument("--batch-dir", required=True)
     collect.set_defaults(func=command_collect_resolutions)
 

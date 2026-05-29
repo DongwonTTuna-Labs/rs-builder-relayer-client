@@ -205,16 +205,12 @@ class CollectResolutionsTests(unittest.TestCase):
         threads,
         *,
         head_sha="head-sha",
-        workspace_text="fn one() {}\nfn two() {}\n",
         stale_batches=None,
     ):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            workspace = root / "workspace"
             batch_dir = root / "batches"
             output_path = root / "github-output"
-            (workspace / "src").mkdir(parents=True)
-            (workspace / "src" / "lib.rs").write_text(workspace_text, encoding="utf-8")
             if stale_batches:
                 batch_dir.mkdir(parents=True)
                 for name, payload in stale_batches.items():
@@ -228,7 +224,7 @@ class CollectResolutionsTests(unittest.TestCase):
                 "HEAD_SHA": head_sha,
                 "GITHUB_OUTPUT": str(output_path),
             }
-            args = argparse.Namespace(workspace=str(workspace), batch_dir=str(batch_dir))
+            args = argparse.Namespace(batch_dir=str(batch_dir))
             with patch.dict(os.environ, env, clear=False), patch.object(
                 post_review,
                 "collect_review_threads",
@@ -296,6 +292,8 @@ class CollectResolutionsTests(unittest.TestCase):
         comment = batches["resolve-batch-0.json"]["comments"][0]
         self.assertEqual("head-sha", comment["current_commit_oid"])
         self.assertEqual("old-sha", comment["original_commit_oid"])
+        self.assertNotIn("code_snippet", comment)
+        self.assertNotIn("search_context", comment)
 
     def test_ignores_human_authored_inline_marker_comments(self):
         outputs, batches = self.collect([review_thread(author="DongwonTTuna", commit_oid="old-sha")])
@@ -303,7 +301,7 @@ class CollectResolutionsTests(unittest.TestCase):
         self.assertIn("has_comments=false", outputs)
         self.assertEqual({}, batches)
 
-    def test_outdated_comment_includes_current_search_context(self):
+    def test_outdated_comment_is_minimal_thread_pointer(self):
         body = "\n".join(
             [
                 post_review.INLINE_MARKER,
@@ -311,19 +309,6 @@ class CollectResolutionsTests(unittest.TestCase):
                 "**[SUGGEST][test-coverage] redaction assertion misses lowercase leak**",
                 "",
                 "`contains(WALLET_OWNER)` misses lowercase address output.",
-            ]
-        )
-        workspace_text = "\n".join(
-            [
-                "fn unrelated_one() {}",
-                "fn stale_original_line() {}",
-                "fn unrelated_three() {}",
-                "fn unrelated_four() {}",
-                "fn redaction_test() {",
-                "    let owner_checksum = to_checksum(&address(WALLET_OWNER), None);",
-                "    assert!(!debug.contains(&owner_checksum));",
-                "    assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));",
-                "}",
             ]
         )
 
@@ -337,15 +322,14 @@ class CollectResolutionsTests(unittest.TestCase):
                     outdated=True,
                 )
             ],
-            workspace_text=workspace_text,
         )
 
         self.assertIn("has_comments=true", outputs)
         comment = batches["resolve-batch-0.json"]["comments"][0]
-        self.assertIn("stale_original_line", comment["code_snippet"])
-        self.assertTrue(comment["search_context"])
-        search_text = "\n".join(context["snippet"] for context in comment["search_context"])
-        self.assertIn("owner_checksum.to_ascii_lowercase", search_text)
+        self.assertEqual("test-coverage-7", comment["marker_key"])
+        self.assertEqual("old-sha", comment["original_commit_oid"])
+        self.assertNotIn("code_snippet", comment)
+        self.assertNotIn("search_context", comment)
 
     def test_ignores_current_head_inline_comments(self):
         outputs, batches = self.collect(
@@ -399,6 +383,18 @@ class ReviewContextTests(unittest.TestCase):
                 "body": post_review.DESIGN_MARKER + "\nold design",
                 "updated_at": "2026-05-27T00:00:00Z",
                 "user": {"login": "codex-reviewer-for-dongwonttuna"},
+            },
+            {
+                "id": 2,
+                "body": post_review.REVIEW_SUMMARY_MARKER + "\nsticky review summary",
+                "updated_at": "2026-05-27T02:00:00Z",
+                "user": {"login": "codex-reviewer-for-dongwonttuna"},
+            },
+            {
+                "id": 3,
+                "body": post_review.RESOLVE_MARKER + "\nsticky resolve summary",
+                "updated_at": "2026-05-27T03:00:00Z",
+                "user": {"login": "codex-reviewer-for-dongwonttuna"},
             }
         ]
         reviews = [
@@ -437,6 +433,8 @@ class ReviewContextTests(unittest.TestCase):
         self.assertIn("Latest Sticky Design Plan (advisory)", context)
         self.assertIn("old design", context)
         self.assertIn("Recent Codex Review And Resolve Summaries", context)
+        self.assertIn("sticky review summary", context)
+        self.assertIn("sticky resolve summary", context)
         self.assertIn("review summary", context)
         self.assertIn("Current Unresolved Inline Threads", context)
         self.assertIn("domain", context)
@@ -460,6 +458,145 @@ class ReviewContextTests(unittest.TestCase):
 
         self.assertLessEqual(len(context), 2015)
         self.assertIn("...[truncated]", context)
+
+
+class StickySummaryTests(unittest.TestCase):
+    def test_upsert_marker_comment_updates_latest_match(self):
+        calls = []
+
+        def list_comments(path):
+            self.assertEqual(path, "/repos/repo/name/issues/21/comments?per_page=100")
+            return [
+                {"id": 1, "body": post_review.REVIEW_SUMMARY_MARKER, "updated_at": "2026-05-26T00:00:00Z"},
+                {"id": 2, "body": post_review.REVIEW_SUMMARY_MARKER, "updated_at": "2026-05-27T00:00:00Z"},
+            ]
+
+        def api(path, *, method="GET", payload=None):
+            calls.append((path, method, payload))
+
+        result = post_review.upsert_marker_comment(
+            repo="repo/name",
+            pr_number="21",
+            marker=post_review.REVIEW_SUMMARY_MARKER,
+            body=post_review.REVIEW_SUMMARY_MARKER + "\nnew",
+            list_comments=list_comments,
+            api=api,
+        )
+
+        self.assertEqual("updated", result)
+        self.assertEqual(
+            ("/repos/repo/name/issues/comments/2", "PATCH", {"body": post_review.REVIEW_SUMMARY_MARKER + "\nnew"}),
+            calls[0],
+        )
+
+    def test_render_current_body_uses_sticky_review_summary_marker(self):
+        body = post_review.render_current_body(
+            event="COMMENT",
+            allowed=[],
+            denied_count=0,
+            unplaced=[],
+            decisions={"judgment": {}, "merge_notes": []},
+        )
+
+        self.assertIn(post_review.REVIEW_SUMMARY_MARKER, body)
+        self.assertNotIn(post_review.REVIEW_MARKER, body)
+
+    def test_post_current_without_inline_comments_only_upserts_sticky_summary(self):
+        calls = []
+
+        def fake_upsert(**kwargs):
+            calls.append(("upsert", kwargs["marker"], kwargs["body"]))
+            return "updated"
+
+        env = {
+            "GITHUB_REPOSITORY": "repo/name",
+            "PR_NUMBER": "21",
+            "HEAD_SHA": "head-sha",
+        }
+        args = argparse.Namespace(artifacts="artifacts", decisions="decisions.json")
+        with patch.dict(os.environ, env, clear=False), patch.object(
+            post_review, "load_current_findings", return_value=[]
+        ), patch.object(
+            post_review,
+            "load_decisions",
+            return_value={"by_id": {}, "judgment": {"status": "LGTM"}, "merge_notes": []},
+        ), patch.object(
+            post_review, "build_changed_line_map", return_value={}
+        ), patch.object(
+            post_review, "upsert_marker_comment", side_effect=fake_upsert
+        ), patch.object(
+            post_review, "github_api"
+        ) as api:
+            post_review.command_post_current(args)
+
+        api.assert_not_called()
+        self.assertEqual(1, len(calls))
+        self.assertEqual(post_review.REVIEW_SUMMARY_MARKER, calls[0][1])
+        self.assertIn("Codex 리뷰가 완료되었습니다", calls[0][2])
+
+    def test_apply_resolutions_resolves_threads_and_upserts_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches = root / "batches"
+            results = root / "results"
+            batches.mkdir()
+            results.mkdir()
+            (batches / "resolve-batch-0.json").write_text(
+                json.dumps(
+                    {
+                        "comments": [
+                            {
+                                "comment_id": 1,
+                                "thread_id": "thread-a",
+                                "file": "src/lib.rs",
+                                "line": 7,
+                                "url": "https://github.example/comment",
+                            },
+                            {
+                                "comment_id": 2,
+                                "thread_id": "thread-b",
+                                "file": "src/main.rs",
+                                "line": 9,
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (results / "resolutions-0.json").write_text(
+                json.dumps(
+                    {
+                        "resolutions": [
+                            {"comment_id": 1, "resolved": True, "reason": "현재 head에서 해결됨"},
+                            {"comment_id": 2, "resolved": False, "reason": "아직 실제 결함"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def fake_resolve(thread_id):
+                calls.append(("resolve", thread_id))
+
+            def fake_upsert(**kwargs):
+                calls.append(("upsert", kwargs["marker"], kwargs["body"]))
+                return "updated"
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "resolve_thread", side_effect=fake_resolve
+            ), patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
+                post_review.command_apply_resolutions(args)
+
+        self.assertIn(("resolve", "thread-a"), calls)
+        upserts = [call for call in calls if call[0] == "upsert"]
+        self.assertEqual(1, len(upserts))
+        self.assertEqual(post_review.RESOLVE_MARKER, upserts[0][1])
+        self.assertIn("아직 미해결", upserts[0][2])
 
 
 class DesignPlanTests(unittest.TestCase):
