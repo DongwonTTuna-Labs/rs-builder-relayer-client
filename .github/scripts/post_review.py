@@ -30,6 +30,7 @@ REVIEW_CONTEXT_MAX_CHARS = 60000
 REVIEW_CONTEXT_SECTION_LIMIT = 12000
 TRUSTED_USER = "DongwonTTuna"
 TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna", "codex-reviewer-for-dongwonttuna[bot]")
+CODEX_AUTOFIX_COMMIT_SUBJECT = "fix(codex-review): apply bounded autofix"
 LIFECYCLE_STATES = {
     "resolved_by_code",
     "fix_now",
@@ -53,6 +54,7 @@ TECH_LEAD_ACTIONS = INLINE_ACTIONS | SUMMARY_ACTIONS
 AUTOFIX_MANIFEST_SCHEMA = "codex.autofix_manifest.v1"
 AUTOFIX_MAX_FILES = 8
 AUTOFIX_MAX_PATCH_BYTES = 120000
+AUTOFIX_MAX_COMMITS = 2
 AUTOFIX_ALLOWED_PREFIXES = (".github/scripts/", "docs/", "src/", "tests/")
 AUTOFIX_FORBIDDEN_PREFIXES = (".codex/", ".github/actions/", ".github/workflows/")
 AUTOFIX_FORBIDDEN_FILES = {"Cargo.lock", "Cargo.toml"}
@@ -73,6 +75,15 @@ AUTOFIX_DANGEROUS_KEYWORDS = (
     "wallet",
     "wallet-create",
     "wire",
+)
+SECRET_PATTERNS = (
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+    r"\bgh[opsru]_[A-Za-z0-9_]{20,}\b",
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
+    r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b",
+    r"\bsk-clb-[A-Za-z0-9_-]{20,}\b",
+    r"\bAKIA[0-9A-Z]{16}\b",
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
 )
 
 
@@ -251,6 +262,7 @@ def skipped_current_review() -> dict[str, str]:
         "base_ref": "",
         "base_sha": "",
         "trigger": "",
+        "trigger_class": "",
     }
 
 
@@ -266,24 +278,43 @@ def resolve_current_review_event(
     actor: str,
     triggering_actor: str,
     fetch_pr: Any = github_api,
+    fetch_commit: Any = github_api,
+    fetch_compare: Any = github_api,
 ) -> dict[str, str]:
-    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
-        return skipped_current_review()
-
     if event_name in {"pull_request", "pull_request_target"}:
         pr = event.get("pull_request") or {}
         sender = (event.get("sender") or {}).get("login")
         base_ref = ((pr.get("base") or {}).get("ref")) or ""
         head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
         author = (pr.get("user") or {}).get("login")
+        action = str(event.get("action") or "")
         if (
             not pr
             or pr.get("draft")
             or base_ref != "main"
             or head_repo != repo
             or author != TRUSTED_USER
-            or sender != TRUSTED_USER
         ):
+            return skipped_current_review()
+        trigger_class = ""
+        if actor == TRUSTED_USER and triggering_actor == TRUSTED_USER and sender == TRUSTED_USER:
+            trigger_class = "human_trusted_synchronize"
+        elif (
+            event_name == "pull_request_target"
+            and action == "synchronize"
+            and is_trusted_codex_review_author(actor)
+            and is_trusted_codex_review_author(triggering_actor)
+            and is_trusted_codex_review_author(sender or "")
+            and is_codex_autofix_commit(
+                repo,
+                str(pr["head"]["sha"]),
+                base_sha=str(pr["base"]["sha"]),
+                fetch_commit=fetch_commit,
+                fetch_compare=fetch_compare,
+            )
+        ):
+            trigger_class = "codex_app_autofix_synchronize"
+        else:
             return skipped_current_review()
         return {
             "should_run": "true",
@@ -293,9 +324,12 @@ def resolve_current_review_event(
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
             "trigger": f"{event_name}:{event.get('action', '')}",
+            "trigger_class": trigger_class,
         }
 
     if event_name == "issue_comment":
+        if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+            return skipped_current_review()
         issue = event.get("issue") or {}
         comment = event.get("comment") or {}
         body = str(comment.get("body") or "")
@@ -317,9 +351,50 @@ def resolve_current_review_event(
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
             "trigger": "issue_comment:/codex-review",
+            "trigger_class": "human_command",
         }
 
     return skipped_current_review()
+
+
+def is_codex_autofix_commit(
+    repo: str,
+    head_sha: str,
+    *,
+    base_sha: str = "",
+    fetch_commit: Any = github_api,
+    fetch_compare: Any = github_api,
+) -> bool:
+    try:
+        commit = fetch_commit(f"/repos/{repo}/commits/{head_sha}")
+    except SystemExit:
+        return False
+    message = str(((commit.get("commit") or {}).get("message")) or "")
+    subject = message.splitlines()[0] if message else ""
+    author_login = str(((commit.get("author") or {}).get("login")) or "")
+    committer_login = str(((commit.get("committer") or {}).get("login")) or "")
+    if subject != CODEX_AUTOFIX_COMMIT_SUBJECT:
+        return False
+    if author_login and not is_trusted_codex_review_author(author_login):
+        return False
+    if committer_login and not is_trusted_codex_review_author(committer_login):
+        return False
+    if not base_sha:
+        return True
+    try:
+        compare = fetch_compare(f"/repos/{repo}/compare/{base_sha}...{head_sha}")
+    except SystemExit:
+        return False
+    commits = compare.get("commits") or []
+    if not any(str(item.get("sha") or "") == head_sha for item in commits):
+        return False
+    autofix_count = 0
+    for item in commits:
+        item_message = str(((item.get("commit") or {}).get("message")) or "")
+        item_subject = item_message.splitlines()[0] if item_message else ""
+        if item_subject == CODEX_AUTOFIX_COMMIT_SUBJECT:
+            autofix_count += 1
+    return autofix_count <= AUTOFIX_MAX_COMMITS
 
 
 def resolve_previous_review_event(
@@ -639,6 +714,7 @@ def validate_autofix_patch_text(patch_text: str, manifest: dict[str, Any]) -> No
         if not (line.startswith("+") or line.startswith("-")) or line.startswith(("+++", "---")):
             continue
         changed = line[1:]
+        assert_no_secret_patterns(changed, "autofix patch")
         lowered = changed.lower()
         if re.search(
             r"\bpub(?:\([^)]*\))?\s+(?:async\s+)?(fn|struct|enum|mod|trait|type|use|const|static)\b",
@@ -661,12 +737,12 @@ def render_current_inline(finding: dict[str, Any], decision: dict[str, Any] | No
     lines = [
         INLINE_MARKER,
         f"<!-- codex-review-id: {finding['id']} -->",
-        f"**[{finding['type']}][{finding['agent']}] {finding['title']}**",
+        f"**[{finding['type']}][{finding['agent']}] {redact_secrets(str(finding['title']))}**",
         "",
-        finding["reason"],
+        redact_secrets(str(finding["reason"])),
     ]
     if decision:
-        lines.extend(["", f"테크리드: {decision['reason']}"])
+        lines.extend(["", f"테크리드: {redact_secrets(str(decision['reason']))}"])
     return "\n".join(lines)
 
 
@@ -691,7 +767,7 @@ def render_current_body(
         lines.extend(
             [
                 f"- 테크리드 상태: {judgment.get('status', 'UNKNOWN')}",
-                f"- 테크리드 요약: {judgment.get('headline', '')}",
+                f"- 테크리드 요약: {redact_secrets(str(judgment.get('headline', '')))}",
             ]
         )
     if unplaced:
@@ -703,7 +779,7 @@ def render_current_body(
             suffix = f" 테크리드: {decision['reason']}" if decision else ""
             lines.append(
                 f"- [{finding['type']}][{finding['agent']}] {finding['id']} {location} - "
-                f"{finding['title']}: {finding['reason']}{suffix}"
+                f"{redact_secrets(str(finding['title']))}: {redact_secrets(str(finding['reason']))}{redact_secrets(suffix)}"
             )
     merge_notes = decisions.get("merge_notes") or []
     if merge_notes:
@@ -711,7 +787,7 @@ def render_current_body(
         for note in merge_notes[:10]:
             lines.append(
                 f"- {note.get('primary_id')}: 병합됨 {', '.join(note.get('merged_ids') or [])} - "
-                f"{note.get('reason', '')}"
+                f"{redact_secrets(str(note.get('reason', '')))}"
             )
     return "\n".join(lines)
 
@@ -859,16 +935,16 @@ def collect_review_threads(repo: str, pr_number: str) -> list[dict[str, Any]]:
 
 
 def redact_secrets(body: str) -> str:
-    patterns = [
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-        r"\bgh[opsru]_[A-Za-z0-9_]{20,}\b",
-        r"\bsk-[A-Za-z0-9_-]{20,}\b",
-        r"\bsk-clb-[A-Za-z0-9_-]{20,}\b",
-    ]
     redacted = body
-    for pattern in patterns:
+    for pattern in SECRET_PATTERNS:
         redacted = re.sub(pattern, "[redacted]", redacted, flags=re.DOTALL)
     return redacted
+
+
+def assert_no_secret_patterns(text: str, context: str) -> None:
+    for pattern in SECRET_PATTERNS:
+        if re.search(pattern, text, flags=re.DOTALL):
+            raise SystemExit(f"{context} contains secret-like material")
 
 
 def redact_comment_body(body: str) -> str:
@@ -952,7 +1028,7 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any]) -> dict[
 def root_cause_key_for_comment(item: dict[str, Any]) -> str:
     marker_key = str(item.get("marker_key") or "").strip()
     if marker_key:
-        return re.sub(r"-[0-9]+$", "", marker_key)
+        return marker_key
     file_path = str(item.get("file") or "general")
     return thread_area(file_path)
 
@@ -1259,31 +1335,35 @@ def find_issue_by_key(repo: str, key: str) -> dict[str, Any] | None:
     return None
 
 
-def trusted_issue_key_for_thread(thread: dict[str, Any]) -> str:
+def trusted_issue_key_for_thread(repo: str, thread: dict[str, Any]) -> str:
     root = re.sub(r"[^a-z0-9-]+", "-", str(thread.get("root_cause_key") or "thread").lower()).strip("-")
     if not root:
         root = "thread"
     seed = "|".join(
         [
-            str(thread.get("thread_id") or ""),
+            "codex-v3",
+            repo,
             str(thread.get("area") or ""),
-            str(thread.get("file") or ""),
             root,
         ]
     )
-    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
     return trim_text(f"{root}-{digest}", 80).replace("\n", "")
 
 
-def trusted_deferred_issue_request(thread: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+def trusted_deferred_issue_request(repo: str, thread: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     trusted = dict(request)
-    trusted["key"] = trusted_issue_key_for_thread(thread)
+    trusted["key"] = trusted_issue_key_for_thread(repo, thread)
     trusted["source_threads"] = [thread.get("thread_id")]
     trusted["root_cause"] = {
         "key": thread.get("root_cause_key"),
         "area": thread.get("area"),
         "file": thread.get("file"),
     }
+    labels = [str(label) for label in (request.get("labels") or []) if str(label).strip()]
+    if "codex/deferred" not in labels:
+        labels.insert(0, "codex/deferred")
+    trusted["labels"] = labels
     return trusted
 
 
@@ -1301,22 +1381,67 @@ def get_same_repo_issue_by_url(repo: str, issue_url: str) -> dict[str, Any] | No
     return github_api(f"/repos/{repo}/issues/{number}")
 
 
+def is_codex_deferred_issue(issue: dict[str, Any]) -> bool:
+    if "pull_request" in issue or issue.get("state") != "open":
+        return False
+    labels: set[str] = set()
+    for label in issue.get("labels") or []:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            labels.add(str(name))
+    body = str(issue.get("body") or "")
+    return "codex/deferred" in labels or ISSUE_KEY_MARKER in body
+
+
+def extract_issue_source_threads(body: str) -> list[str]:
+    match = re.search(r"```json\s*(\{.*?\})\s*```", body, flags=re.DOTALL)
+    if not match:
+        return []
+    try:
+        machine = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
+    source_threads = machine.get("source_threads")
+    if not isinstance(source_threads, list):
+        return []
+    return [str(item) for item in source_threads if str(item).strip()]
+
+
+def merge_existing_issue_source_threads(request: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    merged = list(
+        dict.fromkeys(
+            [
+                *extract_issue_source_threads(str(existing.get("body") or "")),
+                *[str(item) for item in (request.get("source_threads") or []) if str(item).strip()],
+            ]
+        )
+    )
+    updated = dict(request)
+    updated["source_threads"] = merged
+    return updated
+
+
 def create_or_update_deferred_issue(*, repo: str, request: dict[str, Any]) -> dict[str, Any]:
     key = str(request.get("key") or "").strip()
     if not key:
         raise SystemExit("deferred issue request requires key")
-    body = issue_body_with_marker(request)
     existing = find_issue_by_key(repo, key)
     if existing:
         if existing.get("state") == "closed":
             return existing
+        request = merge_existing_issue_source_threads(request, existing)
+        body = issue_body_with_marker(request)
         return github_api(
             f"/repos/{repo}/issues/{existing['number']}",
             method="PATCH",
-            payload={"title": request["title"], "body": body},
+            payload={"title": redact_secrets(str(request["title"])), "body": body},
         )
+    body = issue_body_with_marker(request)
     payload = {
-        "title": request["title"],
+        "title": redact_secrets(str(request["title"])),
         "body": body,
         "labels": request.get("labels") or ["codex/deferred"],
     }
@@ -1498,7 +1623,7 @@ def apply_lifecycle_resolutions(
             if not issue_request:
                 unresolved.append((thread, {**decision, "reason": "defer_to_issue requires issue request"}))
                 continue
-            trusted_request = trusted_deferred_issue_request(thread, issue_request)
+            trusted_request = trusted_deferred_issue_request(repo, thread, issue_request)
             try:
                 issue = create_or_update_deferred_issue(repo=repo, request=trusted_request)
             except SystemExit as exc:
@@ -1539,6 +1664,18 @@ def apply_lifecycle_resolutions(
                             **decision,
                             "state": "needs_human",
                             "reason": "duplicate issue is closed; needs human decision before resolving",
+                        },
+                    )
+                )
+                continue
+            if not is_codex_deferred_issue(issue):
+                unresolved.append(
+                    (
+                        thread,
+                        {
+                            **decision,
+                            "state": "needs_human",
+                            "reason": "duplicate issue_url must point to an open Codex deferred issue, not a PR or general issue",
                         },
                     )
                 )

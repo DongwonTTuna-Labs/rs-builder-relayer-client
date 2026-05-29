@@ -42,9 +42,19 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             concurrency["group"],
         )
         self.assertEqual(
-            "${{ github.event_name != 'issue_comment' || (github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}",
+            "${{ (github.event_name == 'pull_request_target' && github.event.sender.login == 'DongwonTTuna') || (github.event_name == 'issue_comment' && github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}",
             concurrency["cancel-in-progress"],
         )
+
+    def test_resolve_exposes_trigger_class_without_job_actor_gates(self):
+        resolve_outputs = self.job("resolve")["outputs"]
+
+        self.assertEqual("${{ steps.resolve.outputs.trigger_class }}", resolve_outputs["trigger_class"])
+        for name, job in self.workflow["jobs"].items():
+            condition = str(job.get("if") or "")
+            with self.subTest(job=name):
+                self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", condition)
+                self.assertNotIn("github.actor == 'DongwonTTuna'", condition)
 
     def test_design_coordinate_keeps_write_permissions_out_of_model_job(self):
         permissions = self.job("design-coordinate")["permissions"]
@@ -83,7 +93,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
 
         self.assertEqual(["resolve", "tech-lead", "design-coordinate"], job["needs"])
         self.assertEqual(
-            "needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success' && github.triggering_actor == 'DongwonTTuna'",
+            "needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success'",
             job["if"],
         )
         self.assertEqual("write", permissions["pull-requests"])

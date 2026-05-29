@@ -55,11 +55,90 @@ class ResolveCurrentReviewEventTests(unittest.TestCase):
         self.assertEqual(result["head_sha"], "head-sha")
         self.assertEqual(result["base_sha"], "base-sha")
         self.assertEqual(result["trigger"], "pull_request:synchronize")
+        self.assertEqual(result["trigger_class"], "human_trusted_synchronize")
 
     def test_trusted_pull_request_target_runs(self):
         result = self.resolve(pr_payload(), event_name="pull_request_target")
         self.assertEqual(result["should_run"], "true")
         self.assertEqual(result["trigger"], "pull_request_target:synchronize")
+        self.assertEqual(result["trigger_class"], "human_trusted_synchronize")
+
+    def test_codex_autofix_bot_synchronize_runs_for_trusted_commit(self):
+        bot = post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]
+
+        def fetch_commit(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/commits/head-sha")
+            return {
+                "commit": {"message": post_review.CODEX_AUTOFIX_COMMIT_SUBJECT + "\n"},
+                "author": {"login": bot},
+                "committer": {"login": bot},
+            }
+
+        def fetch_compare(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/compare/base-sha...head-sha")
+            return {
+                "commits": [
+                    {"sha": "head-sha", "commit": {"message": post_review.CODEX_AUTOFIX_COMMIT_SUBJECT + "\n"}}
+                ]
+            }
+
+        result = self.resolve(
+            pr_payload(sender=bot),
+            event_name="pull_request_target",
+            actor=bot,
+            triggering_actor=bot,
+            fetch_commit=fetch_commit,
+            fetch_compare=fetch_compare,
+        )
+
+        self.assertEqual(result["should_run"], "true")
+        self.assertEqual(result["trigger_class"], "codex_app_autofix_synchronize")
+
+    def test_codex_autofix_bot_synchronize_requires_trusted_commit_subject(self):
+        bot = post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]
+
+        result = self.resolve(
+            pr_payload(sender=bot),
+            event_name="pull_request_target",
+            actor=bot,
+            triggering_actor=bot,
+            fetch_commit=lambda path: {
+                "commit": {"message": "chore: unrelated"},
+                "author": {"login": bot},
+                "committer": {"login": bot},
+            },
+            fetch_compare=lambda path: self.fail(f"unexpected compare fetch: {path}"),
+        )
+
+        self.assertEqual(result["should_run"], "false")
+
+    def test_codex_autofix_bot_synchronize_enforces_commit_cap(self):
+        bot = post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]
+        too_many = [
+            {
+                "sha": f"sha-{index}",
+                "commit": {"message": post_review.CODEX_AUTOFIX_COMMIT_SUBJECT + "\n"},
+            }
+            for index in range(post_review.AUTOFIX_MAX_COMMITS)
+        ]
+        too_many.append(
+            {"sha": "head-sha", "commit": {"message": post_review.CODEX_AUTOFIX_COMMIT_SUBJECT + "\n"}}
+        )
+
+        result = self.resolve(
+            pr_payload(sender=bot),
+            event_name="pull_request_target",
+            actor=bot,
+            triggering_actor=bot,
+            fetch_commit=lambda path: {
+                "commit": {"message": post_review.CODEX_AUTOFIX_COMMIT_SUBJECT + "\n"},
+                "author": {"login": bot},
+                "committer": {"login": bot},
+            },
+            fetch_compare=lambda path: {"commits": too_many},
+        )
+
+        self.assertEqual(result["should_run"], "false")
 
     def test_skips_untrusted_triggering_actor(self):
         result = self.resolve(pr_payload(), triggering_actor="somebody-else")
@@ -557,6 +636,25 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             post_review.normalize_lifecycle_outputs([payload], {"thread-a"})
 
+    def test_trusted_deferred_issue_key_groups_by_root_cause_not_thread_id(self):
+        base = {
+            "root_cause_key": "deposit-wallet-submit-state",
+            "area": "deposit-wallet",
+            "file": "src/deposit_wallet/http/submit_flow.rs",
+        }
+        first = {**base, "thread_id": "thread-a"}
+        second = {**base, "thread_id": "thread-b", "file": "src/deposit_wallet/http/status.rs"}
+
+        self.assertEqual(
+            post_review.trusted_issue_key_for_thread("repo/name", first),
+            post_review.trusted_issue_key_for_thread("repo/name", second),
+        )
+
+    def test_root_cause_key_uses_full_marker_id_not_axis_collapse(self):
+        item = {"marker_key": "correctness-17", "file": "src/lib.rs"}
+
+        self.assertEqual("correctness-17", post_review.root_cause_key_for_comment(item))
+
     def test_apply_lifecycle_replies_before_resolving_deferred_thread(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -652,6 +750,105 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertIn("https://github.example/issues/9", calls[1][2])
         self.assertIn('"resolved": false', calls[1][2])
         self.assertEqual(("resolve", "thread-a"), calls[2])
+
+    def test_duplicate_of_issue_requires_codex_deferred_issue(self):
+        calls = []
+
+        def fake_issue(repo, issue_url):
+            self.assertEqual("https://github.com/repo/name/issues/9", issue_url)
+            return {"state": "open", "number": 9, "body": "plain issue", "labels": []}
+
+        def fake_upsert(**kwargs):
+            calls.append(("upsert", kwargs["marker"], kwargs["body"]))
+            return "updated"
+
+        with patch.object(
+            post_review, "get_same_repo_issue_by_url", side_effect=fake_issue
+        ), patch.object(
+            post_review, "reply_to_review_thread"
+        ) as reply, patch.object(
+            post_review, "resolve_thread"
+        ) as resolve, patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
+            post_review.apply_lifecycle_resolutions(
+                repo="repo/name",
+                pr_number="21",
+                threads={"thread-a": {"thread_id": "thread-a", "file": "src/lib.rs"}},
+                decisions={
+                    "thread-a": {
+                        "thread_id": "thread-a",
+                        "state": "duplicate_of_issue",
+                        "reason": "이미 이슈가 있음",
+                        "evidence": "모델 판단",
+                        "issue_url": "https://github.com/repo/name/issues/9",
+                    }
+                },
+            )
+
+        reply.assert_not_called()
+        resolve.assert_not_called()
+        self.assertIn("must point to an open Codex deferred issue", calls[0][2])
+
+    def test_duplicate_of_issue_rejects_pull_request_issue_object(self):
+        issue = {
+            "state": "open",
+            "pull_request": {"url": "https://api.github.com/repos/repo/name/pulls/9"},
+            "labels": [{"name": "codex/deferred"}],
+            "body": "<!-- codex-issue-key: key -->",
+        }
+
+        self.assertFalse(post_review.is_codex_deferred_issue(issue))
+
+    def test_duplicate_of_issue_accepts_codex_deferred_label_or_marker(self):
+        self.assertTrue(
+            post_review.is_codex_deferred_issue(
+                {"state": "open", "labels": [{"name": "codex/deferred"}], "body": ""}
+            )
+        )
+        self.assertTrue(
+            post_review.is_codex_deferred_issue(
+                {"state": "open", "labels": [], "body": "<!-- codex-issue-key: abc -->"}
+            )
+        )
+
+    def test_deferred_issue_update_preserves_existing_source_threads(self):
+        key = "submit-state-abc"
+        existing_body = post_review.issue_body_with_marker(
+            {
+                "key": key,
+                "body": "existing",
+                "root_cause": {"key": "submit-state"},
+                "source_threads": ["thread-a"],
+            }
+        )
+        calls = []
+
+        def fake_find(repo, issue_key):
+            self.assertEqual("repo/name", repo)
+            self.assertEqual(key, issue_key)
+            return {"number": 9, "state": "open", "body": existing_body}
+
+        def fake_api(path, *, method="GET", payload=None):
+            calls.append((path, method, payload))
+            return {"number": 9, "state": "open", "body": payload["body"]}
+
+        with patch.object(post_review, "find_issue_by_key", side_effect=fake_find), patch.object(
+            post_review, "github_api", side_effect=fake_api
+        ):
+            post_review.create_or_update_deferred_issue(
+                repo="repo/name",
+                request={
+                    "key": key,
+                    "title": "submit state",
+                    "body": "updated",
+                    "root_cause": {"key": "submit-state"},
+                    "source_threads": ["thread-b"],
+                    "labels": ["codex/deferred"],
+                },
+            )
+
+        updated_body = calls[0][2]["body"]
+        self.assertIn('"thread-a"', updated_body)
+        self.assertIn('"thread-b"', updated_body)
 
     def test_apply_lifecycle_forced_needs_human_overrides_model_terminal_state(self):
         calls = []
@@ -823,6 +1020,51 @@ class StickySummaryTests(unittest.TestCase):
 
         self.assertIn(post_review.REVIEW_SUMMARY_MARKER, body)
         self.assertNotIn(post_review.REVIEW_MARKER, body)
+
+    def test_current_review_inline_redacts_secret_like_values(self):
+        token = "github_pat_" + ("A" * 24)
+        body = post_review.render_current_inline(
+            {
+                "id": "correctness-1",
+                "type": "MUST",
+                "agent": "correctness",
+                "title": f"leaks {token}",
+                "reason": f"reason includes {token}",
+            },
+            {"reason": f"decision includes {token}"},
+        )
+
+        self.assertIn("[redacted]", body)
+        self.assertNotIn(token, body)
+
+    def test_current_review_body_redacts_secret_like_values(self):
+        token = "sk-proj-" + ("A" * 24)
+        body = post_review.render_current_body(
+            event="COMMENT",
+            allowed=[],
+            denied_count=0,
+            unplaced=[
+                (
+                    {
+                        "id": "correctness-1",
+                        "type": "MUST",
+                        "agent": "correctness",
+                        "file": "src/lib.rs",
+                        "line": 7,
+                        "title": f"title {token}",
+                        "reason": f"reason {token}",
+                    },
+                    {"reason": f"decision {token}"},
+                )
+            ],
+            decisions={
+                "judgment": {"status": "NEEDS_WORK", "headline": f"headline {token}"},
+                "merge_notes": [{"primary_id": "correctness-1", "merged_ids": [], "reason": f"merge {token}"}],
+            },
+        )
+
+        self.assertIn("[redacted]", body)
+        self.assertNotIn(token, body)
 
     def test_post_current_without_inline_comments_only_upserts_sticky_summary(self):
         calls = []
@@ -1052,6 +1294,24 @@ index 0000000..1111111 100644
 index 0000000..1111111 100644
 GIT binary patch
 literal 0
+"""
+
+        with self.assertRaises(SystemExit):
+            post_review.validate_autofix_patch_text(patch, manifest)
+
+    def test_validate_autofix_patch_blocks_secret_like_material(self):
+        manifest = {
+            "schema_version": post_review.AUTOFIX_MANIFEST_SCHEMA,
+            "eligible": [{"id": "correctness-1", "file": "src/lib.rs"}],
+        }
+        token = "github_pat_" + ("A" * 24)
+        patch = f"""diff --git a/src/lib.rs b/src/lib.rs
+index 0000000..1111111 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+-fn existing() {{}}
++fn existing() {{ let _token = "{token}"; }}
 """
 
         with self.assertRaises(SystemExit):

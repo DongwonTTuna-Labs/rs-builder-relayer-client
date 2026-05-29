@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: codex-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name != 'issue_comment' || (github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request_target' && github.event.sender.login == 'DongwonTTuna') || (github.event_name == 'issue_comment' && github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}
 
 jobs:
   resolve:
@@ -38,6 +38,7 @@ jobs:
       base_ref: ${{ steps.resolve.outputs.base_ref }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
       trigger: ${{ steps.resolve.outputs.trigger }}
+      trigger_class: ${{ steps.resolve.outputs.trigger_class }}
     steps:
       - name: Checkout workflow helper
         uses: actions/checkout@v6
@@ -57,7 +58,7 @@ jobs:
   review:
     name: review-${{ matrix.axis }}
     needs: resolve
-    if: needs.resolve.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -314,7 +315,7 @@ jobs:
   tech-lead:
     name: tech-lead
     needs: [resolve, review]
-    if: needs.resolve.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -597,7 +598,7 @@ jobs:
   autofix-plan:
     name: autofix-plan
     needs: [resolve, review, tech-lead]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -648,7 +649,7 @@ jobs:
   autofix-patch:
     name: autofix-patch
     needs: [resolve, tech-lead, autofix-plan]
-    if: needs.resolve.outputs.should_run == 'true' && needs.autofix-plan.outputs.should_run == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.autofix-plan.outputs.should_run == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -783,7 +784,7 @@ jobs:
   autofix-apply:
     name: autofix-apply
     needs: [resolve, autofix-patch]
-    if: needs.resolve.outputs.should_run == 'true' && needs.autofix-patch.result == 'success' && needs.resolve.outputs.head_ref != '' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.autofix-patch.result == 'success' && needs.resolve.outputs.head_ref != ''
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -865,7 +866,7 @@ jobs:
   design-context:
     name: design-context
     needs: [resolve, tech-lead]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -903,7 +904,7 @@ jobs:
   design-normalize:
     name: design-normalize
     needs: [resolve, tech-lead, design-context]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-context.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-context.result == 'success'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -1101,7 +1102,7 @@ jobs:
   design-cluster:
     name: design-cluster
     needs: [resolve, tech-lead, design-normalize]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -1305,7 +1306,7 @@ jobs:
   design-analyze:
     name: design-analyze-${{ matrix.batch }}
     needs: [resolve, tech-lead, design-cluster]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -1518,7 +1519,7 @@ jobs:
   design-coordinate:
     name: design-coordinate
     needs: [resolve, tech-lead, design-normalize, design-cluster, design-analyze]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-analyze.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-analyze.result == 'success'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -1796,7 +1797,7 @@ jobs:
   design-post:
     name: design-post
     needs: [resolve, tech-lead, design-coordinate]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -1839,7 +1840,7 @@ jobs:
   post:
     name: post
     needs: [resolve, review, tech-lead]
-    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.resolve.outputs.should_run == 'true' && needs.tech-lead.result == 'success'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
