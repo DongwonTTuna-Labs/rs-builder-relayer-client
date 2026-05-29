@@ -59,6 +59,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         checkouts = [step for step in job["steps"] if step.get("uses") == "actions/checkout@v6"]
         checkout = self.step("design-post", "Checkout trusted PR scripts")
         download = self.step("design-post", "Download design plan")
+        app_token = self.step("design-post", "Generate App installation token")
         post = self.step("design-post", "Post sticky design plan")
 
         self.assertEqual(["resolve", "tech-lead", "design-coordinate"], job["needs"])
@@ -83,6 +84,14 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertEqual("actions/download-artifact@v8", download["uses"])
         self.assertEqual("codex-design-plan", download["with"]["name"])
         self.assertEqual("artifacts", download["with"]["path"])
+        self.assertLess(
+            self.step_index("design-post", "Generate App installation token"),
+            self.step_index("design-post", "Post sticky design plan"),
+        )
+        self.assertEqual("actions/create-github-app-token@v3", app_token["uses"])
+        self.assertEqual("${{ secrets.CODEX_APP_ID }}", app_token["with"]["app-id"])
+        self.assertEqual("${{ secrets.CODEX_APP_PRIVATE_KEY }}", app_token["with"]["private-key"])
+        self.assertEqual("${{ steps.app-token.outputs.token }}", post["env"]["GH_TOKEN"])
         self.assertIn("trusted/.github/scripts/post_review.py post-design-plan", post["run"])
         self.assertIn("artifacts/design-plan.md", post["run"])
 

@@ -1464,9 +1464,16 @@ jobs:
           name: codex-design-plan
           path: artifacts
 
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+
       - name: Post sticky design plan
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
         run: python3 trusted/.github/scripts/post_review.py post-design-plan --body artifacts/design-plan.md
