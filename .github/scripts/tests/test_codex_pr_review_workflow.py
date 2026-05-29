@@ -27,6 +27,18 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
                 return index
         self.fail(f"missing step {step_name!r} in job {job_name!r}")
 
+    def test_non_command_issue_comments_do_not_cancel_review_runs(self):
+        concurrency = self.workflow["concurrency"]
+
+        self.assertEqual(
+            "codex-pr-review-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}",
+            concurrency["group"],
+        )
+        self.assertEqual(
+            "${{ github.event_name != 'issue_comment' || (github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}",
+            concurrency["cancel-in-progress"],
+        )
+
     def test_design_coordinate_keeps_write_permissions_out_of_model_job(self):
         permissions = self.job("design-coordinate")["permissions"]
 
