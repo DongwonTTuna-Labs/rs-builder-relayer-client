@@ -155,7 +155,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
 
@@ -443,7 +443,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-tech-lead
 
@@ -733,7 +733,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-autofix
 
@@ -1005,7 +1005,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-normalize
 
@@ -1190,7 +1190,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-cluster
 
@@ -1407,7 +1407,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-analyze-${{ matrix.batch }}
 
@@ -1694,7 +1694,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-coordinate
 

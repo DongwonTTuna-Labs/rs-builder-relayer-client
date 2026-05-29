@@ -245,6 +245,9 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         helper_checkout = next(
             step for step in self.resolve_job("collect")["steps"] if step.get("name") == "Checkout workflow helper"
         )
+        collect = self.resolve_job("collect")
+        resolve_check = self.resolve_job("resolve-check")
+        apply = self.resolve_job("apply")
 
         self.assertNotIn("pull_request_target:", self.resolve_workflow_text)
         self.assertIn("workflow_run:", self.resolve_workflow_text)
@@ -253,6 +256,10 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", self.resolve_workflow_text)
         self.assertIn("pr_number:", self.resolve_workflow_text)
         self.assertEqual("main", helper_checkout["with"]["ref"])
+        self.assertNotIn("github.actor == 'DongwonTTuna'", collect.get("if", ""))
+        self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", collect.get("if", ""))
+        self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", resolve_check.get("if", ""))
+        self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", apply.get("if", ""))
 
     def test_resolve_checker_uses_lifecycle_schema_and_trusted_agent(self):
         resolve_check = self.resolve_job("resolve-check")
@@ -264,6 +271,18 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("thread_id", codex["with"]["output-schema"])
         self.assertIn("resolved_by_code", codex["with"]["output-schema"])
         self.assertIn("defer_to_issue", codex["with"]["output-schema"])
+
+    def test_codex_relay_setup_action_is_sha_pinned(self):
+        self.assertNotIn("setup-codex-relay@main", self.workflow_text)
+        self.assertNotIn("setup-codex-relay@main", self.resolve_workflow_text)
+        self.assertIn(
+            "setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9",
+            self.workflow_text,
+        )
+        self.assertIn(
+            "setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9",
+            self.resolve_workflow_text,
+        )
 
     def test_reviewer_and_tech_lead_prompts_use_trusted_agents(self):
         reviewer_prompt = self.step("review", "Build reviewer prompt")["run"]

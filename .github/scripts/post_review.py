@@ -99,8 +99,23 @@ def trim_text(value: Any, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
 
 
+def marker_value(value: Any, *, limit: int = 120) -> str:
+    text = trim_text(redact_secrets(value), limit).replace("\r", " ").replace("\n", " ").strip()
+    text = text.replace("-->", "").replace("--", "-")
+    return text
+
+
+def slug_key(value: Any, *, fallback: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", marker_value(value).lower()).strip("-")
+    return slug or fallback
+
+
 def is_trusted_codex_review_author(author: str) -> bool:
     return author in TRUSTED_CODEX_REVIEW_AUTHORS
+
+
+def is_trusted_workflow_actor(actor: str) -> bool:
+    return actor == TRUSTED_USER or is_trusted_codex_review_author(actor)
 
 
 def github_api(path: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
@@ -375,6 +390,8 @@ def is_codex_autofix_commit(
     committer_login = str(((commit.get("committer") or {}).get("login")) or "")
     if subject != CODEX_AUTOFIX_COMMIT_SUBJECT:
         return False
+    if not author_login or not committer_login:
+        return False
     if author_login and not is_trusted_codex_review_author(author_login):
         return False
     if committer_login and not is_trusted_codex_review_author(committer_login):
@@ -406,17 +423,20 @@ def resolve_previous_review_event(
     triggering_actor: str,
     fetch_pr: Any = github_api,
 ) -> dict[str, str]:
-    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
-        return skipped_resolve_checker()
-
     if event_name in {"pull_request", "pull_request_target"}:
+        if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+            return skipped_resolve_checker()
         pr = event.get("pull_request") or {}
     elif event_name == "workflow_dispatch":
+        if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+            return skipped_resolve_checker()
         pr_number = str((event.get("inputs") or {}).get("pr_number") or "").strip()
         if not pr_number:
             return skipped_resolve_checker()
         pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
     elif event_name == "workflow_run":
+        if not is_trusted_workflow_actor(actor) or not is_trusted_workflow_actor(triggering_actor):
+            return skipped_resolve_checker()
         workflow_run = event.get("workflow_run") or {}
         if (
             workflow_run.get("name") != "Codex PR Review"
@@ -431,6 +451,10 @@ def resolve_previous_review_event(
         if not pr_number:
             return skipped_resolve_checker()
         pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
+        completed_head_sha = str(workflow_run.get("head_sha") or "").strip()
+        current_head_sha = str(((pr.get("head") or {}).get("sha")) or "")
+        if completed_head_sha and completed_head_sha != current_head_sha:
+            return skipped_resolve_checker()
     else:
         return skipped_resolve_checker()
 
@@ -678,6 +702,7 @@ def validate_autofix_patch_text(patch_text: str, manifest: dict[str, Any]) -> No
         raise SystemExit("autofix patch is empty")
     if encoded_size > AUTOFIX_MAX_PATCH_BYTES:
         raise SystemExit(f"autofix patch is too large: {encoded_size} bytes")
+    assert_no_secret_patterns(patch_text, "autofix patch")
     files = patch_changed_files(patch_text)
     if not files:
         raise SystemExit("autofix patch has no changed files")
@@ -733,10 +758,22 @@ def command_validate_autofix_patch(args: argparse.Namespace) -> None:
     print(f"validated bounded autofix patch for {len(patch_changed_files(patch_text))} files")
 
 
+def root_cause_marker_key(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
+    fallback = str(finding.get("id") or "finding")
+    raw = (decision or {}).get("primary_root_cause_key") or finding.get("root_cause_key") or fallback
+    return slug_key(raw, fallback=fallback)
+
+
 def render_current_inline(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
+    root_cause_key = root_cause_marker_key(finding, decision)
+    area = marker_value(thread_area(str(finding.get("file") or "")) or "general")
+    failure_kind = marker_value(finding.get("agent") or "unknown")
     lines = [
         INLINE_MARKER,
         f"<!-- codex-review-id: {finding['id']} -->",
+        f"<!-- codex-root-cause-key: {root_cause_key} -->",
+        f"<!-- codex-root-cause-area: {area} -->",
+        f"<!-- codex-root-cause-failure-kind: {failure_kind} -->",
         f"**[{finding['type']}][{finding['agent']}] {redact_secrets(str(finding['title']))}**",
         "",
         redact_secrets(str(finding["reason"])),
@@ -833,7 +870,7 @@ def command_post_current(args: argparse.Namespace) -> None:
     for finding, decision in allowed:
         file_path = finding["file"]
         line = finding["line"]
-        root_cause_key = str((decision or {}).get("primary_root_cause_key") or finding.get("root_cause_key") or finding["id"])
+        root_cause_key = root_cause_marker_key(finding, decision)
         if (
             isinstance(file_path, str)
             and isinstance(line, int)
@@ -951,9 +988,30 @@ def redact_comment_body(body: str) -> str:
     return trim_text(redact_secrets(body), 1200)
 
 
-def extract_marker_key(body: str) -> str | None:
-    match = re.search(r"<!--\s*codex-review-id:\s*([^>]+?)\s*-->", body)
+def extract_html_marker_value(body: str, name: str) -> str | None:
+    match = re.search(rf"<!--\s*{re.escape(name)}:\s*([^>]+?)\s*-->", body)
     return match.group(1).strip() if match else None
+
+
+def extract_marker_key(body: str) -> str | None:
+    return extract_html_marker_value(body, "codex-review-id")
+
+
+def extract_root_cause_metadata(body: str) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    key = extract_html_marker_value(body, "codex-root-cause-key")
+    if key:
+        normalized_key = slug_key(key, fallback="")
+        if normalized_key:
+            metadata["root_cause_key"] = normalized_key
+            metadata["root_cause_key_source"] = "codex-root-cause-key"
+    area = extract_html_marker_value(body, "codex-root-cause-area")
+    if area:
+        metadata["root_cause_area"] = slug_key(area, fallback="general")
+    failure_kind = extract_html_marker_value(body, "codex-root-cause-failure-kind")
+    if failure_kind:
+        metadata["root_cause_failure_kind"] = slug_key(failure_kind, fallback="unknown")
+    return metadata
 
 
 def parse_thread_lifecycle_marker(body: str) -> dict[str, Any] | None:
@@ -1011,7 +1069,7 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any]) -> dict[
         line_int = None
     file_path = comment.get("path") or thread.get("path")
     body = comment.get("body") or ""
-    return {
+    item = {
         "thread_id": thread["id"],
         "comment_node_id": comment["id"],
         "comment_id": int(comment["fullDatabaseId"]),
@@ -1023,9 +1081,14 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any]) -> dict[
         "body_excerpt": redact_comment_body(body),
         "url": comment.get("url"),
     }
+    item.update(extract_root_cause_metadata(body))
+    return item
 
 
 def root_cause_key_for_comment(item: dict[str, Any]) -> str:
+    root_cause_key = str(item.get("root_cause_key") or "").strip()
+    if root_cause_key:
+        return root_cause_key
     marker_key = str(item.get("marker_key") or "").strip()
     if marker_key:
         return marker_key
@@ -1080,18 +1143,27 @@ def build_thread_lifecycle_inventory(threads: list[dict[str, Any]], *, head_sha:
         comments.sort(key=lambda item: int(item["comment_id"]))
         first = comments[0]
         file_path = first.get("file") or thread.get("path")
-        area = thread_area(str(file_path) if file_path else None)
+        area = str(first.get("root_cause_area") or thread_area(str(file_path) if file_path else None))
         root_cause_key = root_cause_key_for_comment(first)
+        root_cause_key_source = str(first.get("root_cause_key_source") or "legacy-codex-review-id")
         item = {
             "thread_id": str(thread["id"]),
             "file": file_path,
             "area": area,
             "root_cause_key": root_cause_key,
+            "root_cause_key_source": root_cause_key_source,
             "comments": comments,
         }
+        if first.get("root_cause_failure_kind"):
+            item["root_cause_failure_kind"] = first["root_cause_failure_kind"]
+        needs_human_hints: list[str] = []
+        if root_cause_key_source != "codex-root-cause-key":
+            needs_human_hints.append("missing trusted root-cause metadata; deferred issue handoff requires human review")
         if comments_connection_has_more_than_limit(thread):
-            item["needs_human_hint"] = "thread has more than 50 comments; GitHub comments connection may be incomplete"
+            needs_human_hints.append("thread has more than 50 comments; GitHub comments connection may be incomplete")
+        if needs_human_hints:
             item["forced_state"] = "needs_human"
+            item["needs_human_hint"] = "; ".join(needs_human_hints)
         inventory.append(item)
     return sorted(
         inventory,

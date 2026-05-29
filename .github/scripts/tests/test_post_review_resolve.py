@@ -112,6 +112,26 @@ class ResolveCurrentReviewEventTests(unittest.TestCase):
 
         self.assertEqual(result["should_run"], "false")
 
+    def test_codex_autofix_bot_synchronize_requires_author_and_committer_login(self):
+        bot = post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]
+
+        for missing_side in ("author", "committer"):
+            with self.subTest(missing_side=missing_side):
+                result = self.resolve(
+                    pr_payload(sender=bot),
+                    event_name="pull_request_target",
+                    actor=bot,
+                    triggering_actor=bot,
+                    fetch_commit=lambda path, missing_side=missing_side: {
+                        "commit": {"message": post_review.CODEX_AUTOFIX_COMMIT_SUBJECT + "\n"},
+                        "author": None if missing_side == "author" else {"login": bot},
+                        "committer": None if missing_side == "committer" else {"login": bot},
+                    },
+                    fetch_compare=lambda path: self.fail(f"unexpected compare fetch: {path}"),
+                )
+
+                self.assertEqual(result["should_run"], "false")
+
     def test_codex_autofix_bot_synchronize_enforces_commit_cap(self):
         bot = post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]
         too_many = [
@@ -252,6 +272,49 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
 
         self.assertEqual(result["should_collect"], "true")
         self.assertEqual(result["pr_number"], "54")
+
+    def test_trusted_bot_workflow_run_collects_after_codex_pr_review(self):
+        bot = post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]
+
+        def fetch_pr(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/pulls/54")
+            return pr_payload()["pull_request"]
+
+        result = self.resolve(
+            {
+                "workflow_run": {
+                    "name": "Codex PR Review",
+                    "event": "pull_request_target",
+                    "conclusion": "success",
+                    "head_sha": "head-sha",
+                    "pull_requests": [{"number": 54}],
+                }
+            },
+            event_name="workflow_run",
+            actor=bot,
+            triggering_actor=bot,
+            fetch_pr=fetch_pr,
+        )
+
+        self.assertEqual(result["should_collect"], "true")
+        self.assertEqual(result["pr_number"], "54")
+
+    def test_workflow_run_skips_when_completed_head_is_not_current_pr_head(self):
+        result = self.resolve(
+            {
+                "workflow_run": {
+                    "name": "Codex PR Review",
+                    "event": "pull_request_target",
+                    "conclusion": "success",
+                    "head_sha": "stale-sha",
+                    "pull_requests": [{"number": 54}],
+                }
+            },
+            event_name="workflow_run",
+            fetch_pr=lambda path: pr_payload()["pull_request"],
+        )
+
+        self.assertEqual(result["should_collect"], "false")
 
     def test_workflow_run_skips_non_review_or_missing_pr(self):
         cases = [
@@ -591,6 +654,95 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertEqual(1, len(inventory))
         self.assertEqual("thread-node-id", inventory[0]["thread_id"])
         self.assertEqual([3311706429, 3311706431], [item["comment_id"] for item in inventory[0]["comments"]])
+
+    def test_render_current_inline_persists_root_cause_metadata(self):
+        body = post_review.render_current_inline(
+            {
+                "id": "correctness-1",
+                "agent": "correctness",
+                "type": "MUST",
+                "file": "src/deposit_wallet/http/submit_flow.rs",
+                "line": 7,
+                "title": "submit state invariant",
+                "reason": "state must stay observable",
+                "root_cause_key": "deposit-wallet-submit-state",
+            },
+            {"primary_root_cause_key": "deposit-wallet-submit-state", "reason": "publish representative"},
+        )
+
+        self.assertIn("<!-- codex-review-id: correctness-1 -->", body)
+        self.assertIn("<!-- codex-root-cause-key: deposit-wallet-submit-state -->", body)
+        self.assertIn("<!-- codex-root-cause-area: deposit-wallet -->", body)
+        self.assertIn("<!-- codex-root-cause-failure-kind: correctness -->", body)
+
+    def test_thread_inventory_extracts_root_cause_key_not_finding_id(self):
+        body = post_review.render_current_inline(
+            {
+                "id": "correctness-1",
+                "agent": "correctness",
+                "type": "MUST",
+                "file": "src/deposit_wallet/http/submit_flow.rs",
+                "line": 7,
+                "title": "submit state invariant",
+                "reason": "state must stay observable",
+                "root_cause_key": "deposit-wallet-submit-state",
+            },
+            {"primary_root_cause_key": "deposit-wallet-submit-state", "reason": "publish representative"},
+        )
+        thread = review_thread(
+            author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+            body=body,
+            commit_oid="old-sha",
+        )
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("deposit-wallet-submit-state", inventory[0]["root_cause_key"])
+        self.assertEqual("codex-root-cause-key", inventory[0]["root_cause_key_source"])
+        self.assertEqual("correctness-1", inventory[0]["comments"][0]["marker_key"])
+
+    def test_deferred_issue_key_is_stable_for_same_root_cause_across_finding_ids(self):
+        threads = []
+        for finding_id in ("correctness-1", "correctness-7"):
+            body = post_review.render_current_inline(
+                {
+                    "id": finding_id,
+                    "agent": "correctness",
+                    "type": "MUST",
+                    "file": "src/deposit_wallet/http/submit_flow.rs",
+                    "line": 7,
+                    "title": "submit state invariant",
+                    "reason": "state must stay observable",
+                    "root_cause_key": "deposit-wallet-submit-state",
+                },
+                {"primary_root_cause_key": "deposit-wallet-submit-state", "reason": "publish representative"},
+            )
+            thread = review_thread(
+                author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0],
+                body=body,
+                commit_oid="old-sha",
+            )
+            thread["id"] = f"thread-{finding_id}"
+            thread["comments"]["nodes"][0]["id"] = f"comment-{finding_id}"
+            thread["comments"]["nodes"][0]["fullDatabaseId"] = "1" if finding_id.endswith("1") else "7"
+            threads.append(thread)
+
+        inventory = post_review.build_thread_lifecycle_inventory(threads, head_sha="head-sha")
+
+        self.assertEqual(
+            post_review.trusted_issue_key_for_thread("repo/name", inventory[0]),
+            post_review.trusted_issue_key_for_thread("repo/name", inventory[1]),
+        )
+
+    def test_missing_root_cause_marker_forces_needs_human(self):
+        thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
+
+        inventory = post_review.build_thread_lifecycle_inventory([thread], head_sha="head-sha")
+
+        self.assertEqual("correctness-1", inventory[0]["root_cause_key"])
+        self.assertEqual("legacy-codex-review-id", inventory[0]["root_cause_key_source"])
+        self.assertEqual("needs_human", inventory[0]["forced_state"])
+        self.assertIn("root-cause metadata", inventory[0]["needs_human_hint"])
 
     def test_batch_planner_uses_thread_batches_not_three_comment_batches(self):
         threads = []
@@ -1312,6 +1464,26 @@ index 0000000..1111111 100644
 @@ -1,2 +1,2 @@
 -fn existing() {{}}
 +fn existing() {{ let _token = "{token}"; }}
+"""
+
+        with self.assertRaises(SystemExit):
+            post_review.validate_autofix_patch_text(patch, manifest)
+
+    def test_validate_autofix_patch_blocks_secret_like_context_line(self):
+        manifest = {
+            "schema_version": post_review.AUTOFIX_MANIFEST_SCHEMA,
+            "eligible": [{"id": "correctness-1", "file": "src/lib.rs"}],
+        }
+        token = "github_pat_" + ("A" * 24)
+        patch = f"""diff --git a/src/lib.rs b/src/lib.rs
+index 0000000..1111111 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@
+ fn existing() {{ let _token = "{token}"; }}
+-fn old_name() {{}}
++fn new_name() {{}}
+ fn tail() {{}}
 """
 
         with self.assertRaises(SystemExit):

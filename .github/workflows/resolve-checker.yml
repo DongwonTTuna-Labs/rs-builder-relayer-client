@@ -23,7 +23,6 @@ concurrency:
 jobs:
   collect:
     name: collect
-    if: github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -101,7 +100,7 @@ jobs:
   resolve-check:
     name: resolve-check-${{ matrix.batch }}
     needs: collect
-    if: needs.collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: needs.collect.outputs.has_comments == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -201,7 +200,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
         with:
           codex-home: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
 
@@ -331,7 +330,7 @@ jobs:
   apply:
     name: apply
     needs: [collect, resolve-check]
-    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true' && github.triggering_actor == 'DongwonTTuna'
+    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
