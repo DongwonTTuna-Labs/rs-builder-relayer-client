@@ -70,6 +70,7 @@ pub struct SignedDepositWalletBatch {
     digest: H256,
     signature: String,
     verified_signer: Address,
+    nonce_lease_binding: Option<H256>,
 }
 
 impl fmt::Debug for SignedDepositWalletBatch {
@@ -135,6 +136,15 @@ impl SignedDepositWalletBatch {
 
     pub fn verified_signer(&self) -> Address {
         self.verified_signer
+    }
+
+    pub(crate) fn with_nonce_lease_binding(mut self, binding: H256) -> Self {
+        self.nonce_lease_binding = Some(binding);
+        self
+    }
+
+    pub(crate) fn nonce_lease_binding(&self) -> Option<H256> {
+        self.nonce_lease_binding
     }
 
     fn validate_submit_preflight(&self) -> Result<()> {
@@ -340,6 +350,7 @@ fn validate_deposit_wallet_batch_signature_parts(
         digest,
         signature: signature.to_string(),
         verified_signer,
+        nonce_lease_binding: None,
     })
 }
 

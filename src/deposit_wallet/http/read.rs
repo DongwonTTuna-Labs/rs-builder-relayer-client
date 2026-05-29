@@ -31,6 +31,7 @@ pub struct DepositWalletNonceLeaseSigningContext {
     submit_from: Address,
     deposit_wallet: Address,
     chain_id: u64,
+    nonce_lease_binding: H256,
     _not_send_sync: PhantomData<Rc<()>>,
 }
 
@@ -59,6 +60,27 @@ impl DepositWalletNonceLease {
             )
         })
     }
+
+    pub(super) fn signing_binding(
+        &self,
+        deposit_wallet: Address,
+        chain_id: u64,
+    ) -> Result<H256> {
+        let reservation = self.reservation.as_ref().ok_or_else(|| {
+            RelayerError::reconciliation_required(
+                "WALLET nonce lease was already consumed; owner-scoped reconciliation required"
+                    .to_string(),
+            )
+        })?;
+        Ok(nonce_lease_signing_binding(
+            self.owner,
+            self.nonce,
+            deposit_wallet,
+            chain_id,
+            reservation.id(),
+            reservation.created_at_unix_seconds(),
+        ))
+    }
 }
 
 impl DepositWalletNonceLeaseSigningContext {
@@ -67,6 +89,7 @@ impl DepositWalletNonceLeaseSigningContext {
         nonce: U256,
         deposit_wallet: Address,
         chain_id: u64,
+        nonce_lease_binding: H256,
     ) -> Self {
         Self {
             owner,
@@ -75,6 +98,7 @@ impl DepositWalletNonceLeaseSigningContext {
             submit_from: owner,
             deposit_wallet,
             chain_id,
+            nonce_lease_binding,
             _not_send_sync: PhantomData,
         }
     }
@@ -102,6 +126,73 @@ impl DepositWalletNonceLeaseSigningContext {
     pub fn chain_id(&self) -> u64 {
         self.chain_id
     }
+
+    /// Marks a signed WALLET batch as having been produced for this nonce lease.
+    ///
+    /// `sign_and_submit_wallet_batch_with_nonce_lease` only accepts signed
+    /// batches returned through this method, which prevents callers from
+    /// replaying an older same-nonce `SignedDepositWalletBatch` under a fresh
+    /// owner nonce lease.
+    pub fn validate_signed_batch(
+        &self,
+        signed: SignedDepositWalletBatch,
+    ) -> Result<SignedDepositWalletBatch> {
+        if signed.owner() != self.owner {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch owner does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        if signed.nonce_owner() != self.nonce_owner {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce owner does not match WALLET nonce lease"
+                    .to_string(),
+            ));
+        }
+        if signed.submit_from() != self.submit_from {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch submit from does not match WALLET nonce lease"
+                    .to_string(),
+            ));
+        }
+        if signed.deposit_wallet() != self.deposit_wallet {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch wallet does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        if signed.chain_id() != self.chain_id {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch chain id does not match WALLET nonce lease"
+                    .to_string(),
+            ));
+        }
+        if signed.nonce() != self.nonce {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        Ok(signed.with_nonce_lease_binding(self.nonce_lease_binding))
+    }
+}
+
+fn nonce_lease_signing_binding(
+    owner: Address,
+    nonce: U256,
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce_read_id: u64,
+    created_at_unix_seconds: u64,
+) -> H256 {
+    let mut input = Vec::with_capacity(144);
+    input.extend_from_slice(b"deposit-wallet nonce lease signing context v1");
+    input.extend_from_slice(owner.as_bytes());
+    let mut nonce_bytes = [0u8; 32];
+    nonce.to_big_endian(&mut nonce_bytes);
+    input.extend_from_slice(&nonce_bytes);
+    input.extend_from_slice(deposit_wallet.as_bytes());
+    input.extend_from_slice(&chain_id.to_be_bytes());
+    input.extend_from_slice(&nonce_read_id.to_be_bytes());
+    input.extend_from_slice(&created_at_unix_seconds.to_be_bytes());
+    H256::from(keccak256(input))
 }
 
 impl fmt::Debug for DepositWalletNonceLease {
@@ -245,6 +336,14 @@ impl DepositWalletRelayerClient {
             Err(error) => return Err(error),
         };
         self.record_terminal_observation_from_receipt(owner, &receipt, transaction_type)?;
+        if matches!(receipt.state, RelayerTransactionState::Confirmed)
+            && self.ambiguous_submit_block(owner).is_some()
+        {
+            return Err(RelayerError::reconciliation_required(format!(
+                "confirmed deposit wallet transaction {} still requires owner-scoped manual reconciliation before success can be returned",
+                sanitized_external_token(&receipt.transaction_id)
+            )));
+        }
         classify_owner_transaction_receipt(receipt)
     }
 
@@ -260,8 +359,7 @@ impl DepositWalletRelayerClient {
 
         let transaction_id = validate_transaction_id(transaction_id)?;
         let mut url = self.base_url.endpoint(TRANSACTION_PATH);
-        url.query_pairs_mut()
-            .append_pair("transactionID", &transaction_id);
+        url.query_pairs_mut().append_pair("id", &transaction_id);
         let response = self
             .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
             .await?;
