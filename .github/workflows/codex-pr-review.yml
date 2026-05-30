@@ -45,7 +45,15 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$PR_NUMBER"
-          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefName,baseRefOid,headRefName,headRefOid,headRepository,files > pr.json
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefName,headRefName,headRefOid,headRepository,files > pr.json
+          BASE_REF="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path("pr.json").read_text())["baseRefName"])
+          PY
+          )"
+          BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BASE_REF}" --jq '.object.sha')"
+          export BASE_SHA
           python3 - <<'PY'
           import json, os
           from pathlib import Path
@@ -57,7 +65,7 @@ jobs:
           values = {
               "pr_number": os.environ["PR_NUMBER"],
               "base_ref": meta["baseRefName"],
-              "base_sha": meta["baseRefOid"],
+              "base_sha": os.environ["BASE_SHA"],
               "head_ref": meta["headRefName"],
               "head_sha": meta["headRefOid"],
               "head_repo": head_repo,

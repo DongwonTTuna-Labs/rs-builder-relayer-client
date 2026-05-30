@@ -95,6 +95,11 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(f"name: {name}", self.workflow_text)
 
+    def test_pr_metadata_uses_supported_gh_fields(self):
+        self.assertNotIn("baseRefOid", self.workflow_text)
+        self.assertIn("--json baseRefName,headRefName,headRefOid,headRepository,files", self.workflow_text)
+        self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BASE_REF}"', self.workflow_text)
+
 
 if __name__ == "__main__":
     unittest.main()
