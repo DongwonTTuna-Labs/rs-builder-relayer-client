@@ -28,10 +28,22 @@ def _add_stage_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     parser = subparsers.add_parser(name)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--out", type=Path, required=False)
+    if name == "stage00-resolve-gate":
+        parser.add_argument("--inventory", type=Path, required=False)
     parser.set_defaults(func=lambda args, stage=name: run_stage(stage, args))
 
 
 def run_stage(stage: str, args: argparse.Namespace) -> int:
+    if stage == "stage00-resolve-gate" and getattr(args, "inventory", None):
+        from .artifacts import read_json_artifact
+        from .stage00 import build_resolve_gate_result
+
+        payload = build_resolve_gate_result(read_json_artifact(args.inventory))
+        if args.out:
+            write_json_artifact(args.out, payload)
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
     if not args.dry_run:
         print(f"{stage} requires --dry-run in phase 1", file=sys.stderr)
         return 2
