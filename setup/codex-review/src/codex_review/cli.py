@@ -42,6 +42,9 @@ def _add_stage_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     if name == "stage04-design-chief":
         parser.add_argument("--design", type=Path, required=False)
         parser.add_argument("--model-approval", type=Path, required=False)
+    if name == "stage05-fix-dispatch":
+        parser.add_argument("--design", type=Path, required=False)
+        parser.add_argument("--design-chief", type=Path, required=False)
     parser.set_defaults(func=lambda args, stage=name: run_stage(stage, args))
 
 
@@ -100,6 +103,16 @@ def run_stage(stage: str, args: argparse.Namespace) -> int:
         from .stage04 import build_design_chief_result
 
         payload = build_design_chief_result(read_json_artifact(args.design), read_json_artifact(args.model_approval))
+        if args.out:
+            write_json_artifact(args.out, payload)
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    if stage == "stage05-fix-dispatch" and getattr(args, "design", None) and getattr(args, "design_chief", None):
+        from .artifacts import read_json_artifact
+        from .stage05 import build_fix_dispatch_result
+
+        payload = build_fix_dispatch_result(read_json_artifact(args.design), read_json_artifact(args.design_chief))
         if args.out:
             write_json_artifact(args.out, payload)
         else:
