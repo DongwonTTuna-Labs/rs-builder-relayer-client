@@ -105,6 +105,10 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertNotIn("ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}", self.workflow_text)
         self.assertGreaterEqual(self.workflow_text.count("ref: ${{ github.sha }}"), 6)
 
+    def test_stage00_checkout_precedes_artifact_generation(self):
+        stage00 = self.workflow_text.split("stage00-resolve-gate:", 1)[1].split("stage01-review-model:", 1)[0]
+        self.assertLess(stage00.index("uses: actions/checkout@v6"), stage00.index("id: meta"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,10 @@ jobs:
       head_repo: ${{ steps.meta.outputs.head_repo }}
       can_continue: ${{ steps.result.outputs.can_continue }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - id: meta
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,10 +103,6 @@ jobs:
               for key in ["pr_number", "base_sha", "head_sha", "head_ref", "head_repo"]:
                   print(f"{key}={values[key]}", file=output)
           PY
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
       - shell: bash
         run: |
           set -euo pipefail
