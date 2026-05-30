@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -246,6 +247,20 @@ def run_stage02_comment(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stage07_validation(args: argparse.Namespace) -> int:
+    from .stage07 import run_validation_commands
+
+    commands = args.commands.read_text(encoding="utf-8").splitlines()
+    try:
+        run_validation_commands(commands, args.workspace)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        return int(exc.returncode)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -278,6 +293,10 @@ def build_parser() -> argparse.ArgumentParser:
     fallback.add_argument("--reason", required=True)
     fallback.add_argument("--out", type=Path, required=False)
     fallback.set_defaults(func=run_stage05_fallback_fix_outputs)
+    validation = subparsers.add_parser("stage07-run-validation")
+    validation.add_argument("--commands", type=Path, required=True)
+    validation.add_argument("--workspace", type=Path, required=True)
+    validation.set_defaults(func=run_stage07_validation)
     relay = subparsers.add_parser("relay-contract")
     relay.set_defaults(func=run_relay_contract)
     normalize = subparsers.add_parser("normalize-codex-args")

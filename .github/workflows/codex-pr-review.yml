@@ -607,13 +607,7 @@ jobs:
               print(command)
           PY
           test -s artifacts/validation-commands.txt
-          while IFS= read -r command; do
-            case "$command" in
-              python3\ -m\ unittest*|python3\ .github/scripts/tests/*|actionlint*|ruby\ -e*|git\ diff\ --check|cargo\ fmt*|cargo\ clippy*|cargo\ test*) ;;
-              *) echo "unsupported validation command: $command" >&2; exit 1 ;;
-            esac
-            (cd workspace && bash -lc "$command")
-          done < artifacts/validation-commands.txt
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage07-run-validation --commands artifacts/validation-commands.txt --workspace workspace
           git -C workspace config user.name "codex-reviewer-for-dongwonttuna[bot]"
           git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"
           git -C workspace add --all

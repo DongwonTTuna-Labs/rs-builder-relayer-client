@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_review.stage07 import build_push_result
+from codex_review.stage07 import build_push_result, validation_command_argv
 
 
 def fix_merge():
@@ -45,6 +45,57 @@ def trusted_push():
 
 
 class Stage07Tests(unittest.TestCase):
+    def test_validation_command_argv_allows_known_validation_commands(self):
+        cases = {
+            "python3 -m unittest discover -s .github/scripts/codex-review/tests": [
+                "python3",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                ".github/scripts/codex-review/tests",
+            ],
+            "python3 .github/scripts/tests/test_codex_pr_review_workflow.py": [
+                "python3",
+                ".github/scripts/tests/test_codex_pr_review_workflow.py",
+            ],
+            "git diff --check": ["git", "diff", "--check"],
+            "cargo fmt --all --check": ["cargo", "fmt", "--all", "--check"],
+            "cargo test --workspace --all-features": ["cargo", "test", "--workspace", "--all-features"],
+            "cargo clippy --workspace --all-targets --all-features -- -D warnings": [
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        }
+
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(expected, validation_command_argv(command))
+
+    def test_validation_command_argv_rejects_shell_suffixes(self):
+        commands = [
+            "cargo test --workspace --all-features; echo injected",
+            "cargo test --workspace --all-features && echo injected",
+            "cargo test --workspace --all-features | tee out",
+            "cargo test --workspace --all-features > out",
+            "cargo test --workspace --all-features $(echo injected)",
+            "cargo test --workspace --all-features `echo injected`",
+            "python3 .github/scripts/tests/test_codex_pr_review_workflow.py; echo injected",
+            "python3 ../scripts/tests/test_codex_pr_review_workflow.py",
+        ]
+
+        for command in commands:
+            with self.subTest(command=command):
+                with self.assertRaises(ValueError) as ctx:
+                    validation_command_argv(command)
+                self.assertIn("unsupported validation command", str(ctx.exception))
+
     def test_trusted_push_record_can_continue_without_merging_pr(self):
         result = build_push_result(fix_merge(), trusted_push())
 
@@ -138,6 +189,36 @@ class Stage07Tests(unittest.TestCase):
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual("codex.stage07.push.v1", payload["schema_version"])
             self.assertEqual("pushed", payload["status"])
+
+    def test_validation_cli_rejects_suffix_before_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            commands_path = tmp_path / "validation-commands.txt"
+            commands_path.write_text("cargo test --workspace --all-features; touch injected\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_review.cli",
+                    "stage07-run-validation",
+                    "--commands",
+                    str(commands_path),
+                    "--workspace",
+                    str(tmp_path),
+                ],
+                cwd=ROOT,
+                env={"PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual("", result.stdout)
+            self.assertEqual(1, result.returncode)
+            self.assertIn("unsupported validation command", result.stderr)
+            self.assertFalse((tmp_path / "injected").exists())
 
 
 if __name__ == "__main__":

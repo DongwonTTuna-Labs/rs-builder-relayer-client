@@ -220,7 +220,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
 
         self.assertIn("validation-commands.txt", trusted_push)
-        self.assertIn("unsupported validation command", trusted_push)
+        self.assertIn("stage07-run-validation", trusted_push)
+        self.assertNotIn("bash -lc \"$command\"", trusted_push)
         self.assertLess(trusted_push.index("validation-commands.txt"), trusted_push.index("git -C workspace commit"))
 
 
