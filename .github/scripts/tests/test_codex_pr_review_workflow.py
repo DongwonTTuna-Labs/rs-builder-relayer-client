@@ -1,5 +1,7 @@
 import json
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -213,8 +215,51 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
     def test_trusted_push_revalidates_applied_patch_files(self):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
 
-        self.assertIn("git -C workspace diff --name-only", trusted_push)
+        self.assertIn("git -C workspace apply --index", trusted_push)
+        self.assertIn("git -C workspace diff --cached --name-only", trusted_push)
+        self.assertIn("git -C workspace diff --cached --check", trusted_push)
         self.assertIn("expected = set(data.get(\"touched_files\") or [])", trusted_push)
+
+    def test_trusted_push_uses_trusted_root_scripts_and_workspace_pr_checkout(self):
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+
+        self.assertLess(trusted_push.index("ref: ${{ github.sha }}"), trusted_push.index("path: workspace"))
+        self.assertIn("persist-credentials: false", trusted_push.split("path: workspace", 1)[0])
+        self.assertIn("ref: ${{ needs.stage00-resolve-gate.outputs.head_ref }}", trusted_push)
+        self.assertIn("PYTHONPATH=\"$CODEX_PYTHONPATH\" python3 -m codex_review.cli stage07-run-validation", trusted_push)
+        self.assertNotIn("workspace/.github/scripts/codex-review/src", trusted_push)
+
+    def test_stage07_cached_diff_includes_added_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            (repo / "README.md").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            patch = repo / "add.patch"
+            patch.write_text(
+                "diff --git a/new.txt b/new.txt\n"
+                "new file mode 100644\n"
+                "index 0000000..ce01362\n"
+                "--- /dev/null\n"
+                "+++ b/new.txt\n"
+                "@@ -0,0 +1 @@\n"
+                "+hello\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(["git", "apply", "--index", str(patch)], cwd=repo, check=True)
+            diff = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=repo,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+
+        self.assertEqual(["new.txt"], diff.stdout.splitlines())
 
     def test_trusted_push_runs_validation_commands_before_commit(self):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]

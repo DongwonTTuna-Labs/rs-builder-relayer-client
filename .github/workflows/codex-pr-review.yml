@@ -567,6 +567,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
           ref: ${{ needs.stage00-resolve-gate.outputs.head_ref }}
           fetch-depth: 0
           path: workspace
@@ -588,8 +592,8 @@ jobs:
           PY
           patch_hash="$(sha256sum artifacts/candidate.patch | awk '{print $1}')"
           test -s artifacts/candidate.patch
-          git -C workspace apply "$GITHUB_WORKSPACE/artifacts/candidate.patch"
-          git -C workspace diff --name-only > artifacts/applied-files.txt
+          git -C workspace apply --index "$GITHUB_WORKSPACE/artifacts/candidate.patch"
+          git -C workspace diff --cached --name-only > artifacts/applied-files.txt
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -599,7 +603,7 @@ jobs:
           if actual != expected:
               raise SystemExit(f"applied patch files mismatch: expected {sorted(expected)}, got {sorted(actual)}")
           PY
-          git -C workspace diff --check
+          git -C workspace diff --cached --check
           python3 - <<'PY' > artifacts/validation-commands.txt
           import json
           data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
