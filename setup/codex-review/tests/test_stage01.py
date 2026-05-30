@@ -87,6 +87,22 @@ class Stage01Tests(unittest.TestCase):
         self.assertEqual(0, result["finding_count"])
         self.assertEqual([], result["findings"])
 
+    def test_lgtm_review_rejects_needs_work_axis_result(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_review_result(
+                request(),
+                model_review(
+                    status="lgtm",
+                    findings=[],
+                    axis_results=[
+                        {"axis": "correctness", "status": "needs_work", "summary": "correctness summary"},
+                        {"axis": "tests", "status": "lgtm", "summary": "tests summary"},
+                    ],
+                ),
+            )
+
+        self.assertIn("top-level status lgtm conflicts with needs_work axis_results: correctness", str(ctx.exception))
+
     def test_axis_results_must_match_request_axes(self):
         with self.assertRaises(ValueError) as ctx:
             build_review_result(

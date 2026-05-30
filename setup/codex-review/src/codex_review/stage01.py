@@ -141,6 +141,12 @@ def validate_model_review(payload: dict[str, Any], expected_axes: list[str]) -> 
     status = _require_string(payload.get("status"), "status")
     if status not in REVIEW_STATUSES:
         raise ValueError(f"unknown review status: {status}")
+    axis_results = _validate_axis_results(payload.get("axis_results"), expected_axes)
+    needs_work_axes = [result["axis"] for result in axis_results if result["status"] == "needs_work"]
+    if status == "lgtm" and needs_work_axes:
+        raise ValueError(
+            f"top-level status lgtm conflicts with needs_work axis_results: {', '.join(needs_work_axes)}"
+        )
     findings = _validate_findings(payload.get("findings"), expected_axes)
     if status == "lgtm" and findings:
         raise ValueError("lgtm review must not include findings")
@@ -149,7 +155,7 @@ def validate_model_review(payload: dict[str, Any], expected_axes: list[str]) -> 
     return {
         "status": status,
         "summary": _require_string(payload.get("summary"), "summary"),
-        "axis_results": _validate_axis_results(payload.get("axis_results"), expected_axes),
+        "axis_results": axis_results,
         "findings": findings,
     }
 
