@@ -1,5 +1,6 @@
-import unittest
 import json
+import re
+import unittest
 from pathlib import Path
 
 import yaml
@@ -7,6 +8,8 @@ import yaml
 
 WORKFLOW_PATH = Path(__file__).resolve().parents[2] / "workflows" / "codex-pr-review.yml"
 RESOLVE_WORKFLOW_PATH = Path(__file__).resolve().parents[2] / "workflows" / "resolve-checker.yml"
+RELAY_SETUP_ACTION_SHA = "f7816f244a031e1132004ed5906f8ba7b3207aa5"
+RELAY_ARGS_SHA = "c36946ed34d86ecd40b4805e1427c031b34c8a2b5f3018085b45a048e07bcf09"
 
 
 class CodexPrReviewWorkflowTests(unittest.TestCase):
@@ -175,13 +178,29 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         combined = self.workflow_text + "\n" + self.resolve_workflow_text
 
         self.assertNotIn("setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9", combined)
-        self.assertIn("setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5", combined)
+        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_SHA}", combined)
         self.assertNotIn("trusted-actor:", combined)
         self.assertIn("trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]", combined)
         self.assertEqual(
             combined.count("uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@"),
             combined.count("trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]"),
         )
+
+    def test_relay_args_hash_matches_json_output_without_output_key_prefix(self):
+        validate_steps = []
+
+        for workflow in (self.workflow, self.resolve_workflow):
+            for job in workflow["jobs"].values():
+                validate_steps.extend(
+                    step
+                    for step in job.get("steps", [])
+                    if step.get("name") == "Validate Codex relay args"
+                )
+
+        self.assertEqual(8, len(validate_steps))
+        for step in validate_steps:
+            with self.subTest(run=step["run"]):
+                self.assertEqual([RELAY_ARGS_SHA], re.findall(r'expected="([0-9a-f]{64})"', step["run"]))
 
     def test_bounded_autofix_keeps_model_and_write_jobs_separate(self):
         plan = self.job("autofix-plan")
@@ -336,14 +355,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
     def test_codex_relay_setup_action_is_sha_pinned(self):
         self.assertNotIn("setup-codex-relay@main", self.workflow_text)
         self.assertNotIn("setup-codex-relay@main", self.resolve_workflow_text)
-        self.assertIn(
-            "setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5",
-            self.workflow_text,
-        )
-        self.assertIn(
-            "setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5",
-            self.resolve_workflow_text,
-        )
+        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_SHA}", self.workflow_text)
+        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_SHA}", self.resolve_workflow_text)
 
     def test_codex_action_is_sha_pinned(self):
         pinned = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
