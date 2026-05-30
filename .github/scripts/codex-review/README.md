@@ -73,8 +73,15 @@ may include `tests`. Stage06 deduplicates those entries into
 
 Stage07 requires non-empty `validation_commands`. After applying the candidate
 patch and running `git diff --check`, the trusted push job runs each validation
-command from an allowlist before committing or pushing. Missing, unsupported, or
-failing validation commands block the push.
+command from a narrow allowlist of trusted-ref workflow helper commands or fixed
+safe commands before committing or pushing. It does not run PR-head Python test
+discovery paths in the privileged write job. Missing, unsupported, or failing
+validation commands block the push.
+
+The trusted push job rechecks the changed file set after validation and before
+commit. The staged diff must still match the Stage06 `touched_files` list, and
+there must be no unstaged or untracked changes; only that revalidated file list
+is staged for commit.
 
 ## Non-Negotiable Rules
 

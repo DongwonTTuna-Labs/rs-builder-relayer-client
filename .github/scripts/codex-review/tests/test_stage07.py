@@ -8,7 +8,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_review.stage07 import build_push_result, validation_command_argv
+from codex_review.stage07 import (
+    assert_workspace_changes_match,
+    build_push_result,
+    stage_workspace_files,
+    validation_command_argv,
+)
 
 
 def fix_merge():
@@ -47,18 +52,6 @@ def trusted_push():
 class Stage07Tests(unittest.TestCase):
     def test_validation_command_argv_allows_known_validation_commands(self):
         cases = {
-            "python3 -m unittest discover -s .github/scripts/codex-review/tests": [
-                "python3",
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                ".github/scripts/codex-review/tests",
-            ],
-            "python3 .github/scripts/tests/test_codex_pr_review_workflow.py": [
-                "python3",
-                ".github/scripts/tests/test_codex_pr_review_workflow.py",
-            ],
             "git diff --check": ["git", "diff", "--check"],
             "cargo fmt --all --check": ["cargo", "fmt", "--all", "--check"],
             "cargo test --workspace --all-features": ["cargo", "test", "--workspace", "--all-features"],
@@ -77,6 +70,20 @@ class Stage07Tests(unittest.TestCase):
         for command, expected in cases.items():
             with self.subTest(command=command):
                 self.assertEqual(expected, validation_command_argv(command))
+
+    def test_validation_command_argv_rejects_pr_head_test_discovery(self):
+        commands = [
+            "python3 -m unittest discover -s .github/scripts/codex-review/tests",
+            "python3 -m unittest discover -s .github/scripts/tests",
+            "python3 -m unittest discover -s .github/scripts/codex-review/tests -p test_stage07.py",
+            "python3 .github/scripts/tests/test_codex_pr_review_workflow.py",
+        ]
+
+        for command in commands:
+            with self.subTest(command=command):
+                with self.assertRaises(ValueError) as ctx:
+                    validation_command_argv(command)
+                self.assertIn("unsupported validation command", str(ctx.exception))
 
     def test_validation_command_argv_rejects_shell_suffixes(self):
         commands = [
@@ -219,6 +226,91 @@ class Stage07Tests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertIn("unsupported validation command", result.stderr)
             self.assertFalse((tmp_path / "injected").exists())
+
+    def test_workspace_revalidation_rejects_validation_side_effect_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            (repo / "allowed.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            (repo / "allowed.txt").write_text("changed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
+            (repo / "created-by-validation.txt").write_text("side effect\n", encoding="utf-8")
+
+            with self.assertRaises(ValueError) as ctx:
+                assert_workspace_changes_match(repo, ["allowed.txt"])
+
+            self.assertIn("workspace changed files mismatch", str(ctx.exception))
+            self.assertIn("created-by-validation.txt", str(ctx.exception))
+
+    def test_workspace_revalidation_rejects_validation_side_effect_modified_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            (repo / "allowed.txt").write_text("base\n", encoding="utf-8")
+            (repo / "outside.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "allowed.txt", "outside.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            (repo / "allowed.txt").write_text("changed\n", encoding="utf-8")
+            subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
+            (repo / "outside.txt").write_text("side effect\n", encoding="utf-8")
+
+            with self.assertRaises(ValueError) as ctx:
+                assert_workspace_changes_match(repo, ["allowed.txt"])
+
+            self.assertIn("workspace changed files mismatch", str(ctx.exception))
+            self.assertIn("outside.txt", str(ctx.exception))
+
+    def test_workspace_revalidation_rejects_validation_side_effect_on_allowed_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            (repo / "allowed.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            (repo / "allowed.txt").write_text("candidate patch\n", encoding="utf-8")
+            subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
+            (repo / "allowed.txt").write_text("validation side effect\n", encoding="utf-8")
+
+            with self.assertRaises(ValueError) as ctx:
+                assert_workspace_changes_match(repo, ["allowed.txt"])
+
+            self.assertIn("unstaged", str(ctx.exception))
+            self.assertIn("allowed.txt", str(ctx.exception))
+
+    def test_stage_workspace_files_stages_only_revalidated_files_and_handles_deletions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            (repo / "deleted.txt").write_text("base\n", encoding="utf-8")
+            (repo / "untouched.txt").write_text("base\n", encoding="utf-8")
+            subprocess.run(["git", "add", "deleted.txt", "untouched.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            (repo / "deleted.txt").unlink()
+            (repo / "untouched.txt").write_text("side effect\n", encoding="utf-8")
+            stage_workspace_files(repo, ["deleted.txt"])
+            cached = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=repo,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+
+            self.assertEqual(["deleted.txt"], cached.stdout.splitlines())
 
 
 if __name__ == "__main__":

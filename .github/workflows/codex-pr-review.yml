@@ -593,15 +593,13 @@ jobs:
           patch_hash="$(sha256sum artifacts/candidate.patch | awk '{print $1}')"
           test -s artifacts/candidate.patch
           git -C workspace apply --index "$GITHUB_WORKSPACE/artifacts/candidate.patch"
-          git -C workspace diff --cached --name-only > artifacts/applied-files.txt
-          python3 - <<'PY'
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 - <<'PY'
           import json
           from pathlib import Path
+          from codex_review.stage07 import assert_workspace_changes_match
           data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
-          expected = set(data.get("touched_files") or [])
-          actual = set(Path("artifacts/applied-files.txt").read_text(encoding="utf-8").splitlines())
-          if actual != expected:
-              raise SystemExit(f"applied patch files mismatch: expected {sorted(expected)}, got {sorted(actual)}")
+          actual = assert_workspace_changes_match(Path("workspace"), data.get("touched_files") or [])
+          Path("artifacts/applied-files.txt").write_text("\n".join(actual) + "\n", encoding="utf-8")
           PY
           git -C workspace diff --cached --check
           python3 - <<'PY' > artifacts/validation-commands.txt
@@ -612,9 +610,22 @@ jobs:
           PY
           test -s artifacts/validation-commands.txt
           PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage07-run-validation --commands artifacts/validation-commands.txt --workspace workspace
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from codex_review.stage07 import assert_workspace_changes_match
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          actual = assert_workspace_changes_match(Path("workspace"), data.get("touched_files") or [])
+          Path("artifacts/revalidated-files.txt").write_text("\n".join(actual) + "\n", encoding="utf-8")
+          PY
           git -C workspace config user.name "codex-reviewer-for-dongwonttuna[bot]"
           git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"
-          git -C workspace add --all
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 - <<'PY'
+          from pathlib import Path
+          from codex_review.stage07 import stage_workspace_files
+          files = Path("artifacts/revalidated-files.txt").read_text(encoding="utf-8").splitlines()
+          stage_workspace_files(Path("workspace"), files)
+          PY
           git -C workspace commit -m "fix: apply codex review v3 patch"
           git -C workspace push origin "HEAD:${HEAD_REF}"
           pushed_sha="$(git -C workspace rev-parse HEAD)"

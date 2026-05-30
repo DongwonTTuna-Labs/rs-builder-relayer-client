@@ -216,9 +216,18 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
 
         self.assertIn("git -C workspace apply --index", trusted_push)
-        self.assertIn("git -C workspace diff --cached --name-only", trusted_push)
         self.assertIn("git -C workspace diff --cached --check", trusted_push)
-        self.assertIn("expected = set(data.get(\"touched_files\") or [])", trusted_push)
+        self.assertIn("assert_workspace_changes_match(Path(\"workspace\"), data.get(\"touched_files\") or [])", trusted_push)
+        self.assertIn("artifacts/applied-files.txt", trusted_push)
+
+    def test_trusted_push_revalidates_after_validation_before_commit(self):
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+
+        self.assertIn("artifacts/revalidated-files.txt", trusted_push)
+        self.assertIn("stage_workspace_files(Path(\"workspace\"), files)", trusted_push)
+        self.assertLess(trusted_push.index("stage07-run-validation"), trusted_push.index("artifacts/revalidated-files.txt"))
+        self.assertLess(trusted_push.index("artifacts/revalidated-files.txt"), trusted_push.index("git -C workspace commit"))
+        self.assertNotIn("git -C workspace add --all\n", trusted_push)
 
     def test_trusted_push_uses_trusted_root_scripts_and_workspace_pr_checkout(self):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]

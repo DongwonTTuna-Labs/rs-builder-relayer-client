@@ -25,10 +25,6 @@ EXACT_VALIDATION_COMMANDS = {
     ("actionlint", "-ignore", 'label "dongwontuna-labs-runner" is unknown', ".github/workflows/codex-pr-review.yml"),
     ("ruby", "-e", RUBY_WORKFLOW_YAML_CHECK),
 }
-UNITTEST_DISCOVERY_DIRS = {
-    ".github/scripts/codex-review/tests",
-    ".github/scripts/tests",
-}
 
 
 def _require_string(value: Any, field: str) -> str:
@@ -79,37 +75,6 @@ def _unsupported_validation_command(command: str) -> None:
     raise ValueError(f"unsupported validation command: {command}")
 
 
-def _is_allowed_test_filename(value: str) -> bool:
-    path = PurePosixPath(value)
-    return len(path.parts) == 1 and path.name.startswith("test_") and path.suffix == ".py"
-
-
-def _is_allowed_unittest_command(argv: list[str]) -> bool:
-    if len(argv) not in {6, 8}:
-        return False
-    if argv[:5] != ["python3", "-m", "unittest", "discover", "-s"]:
-        return False
-    if argv[5] not in UNITTEST_DISCOVERY_DIRS:
-        return False
-    if len(argv) == 8:
-        return argv[6] == "-p" and _is_allowed_test_filename(argv[7])
-    return True
-
-
-def _is_allowed_python_script_command(argv: list[str]) -> bool:
-    if len(argv) != 2 or argv[0] != "python3":
-        return False
-    path = PurePosixPath(argv[1])
-    return (
-        not path.is_absolute()
-        and ".." not in path.parts
-        and len(path.parts) == 4
-        and path.parts[:3] == (".github", "scripts", "tests")
-        and path.name.startswith("test_")
-        and path.suffix == ".py"
-    )
-
-
 def validation_command_argv(command: str) -> list[str]:
     try:
         argv = shlex.split(_require_string(command, "validation command"), posix=True)
@@ -117,8 +82,6 @@ def validation_command_argv(command: str) -> list[str]:
         _unsupported_validation_command(command)
         raise AssertionError("unreachable") from exc
     if tuple(argv) in EXACT_VALIDATION_COMMANDS:
-        return argv
-    if _is_allowed_unittest_command(argv) or _is_allowed_python_script_command(argv):
         return argv
     _unsupported_validation_command(command)
     raise AssertionError("unreachable")
@@ -132,6 +95,42 @@ def run_validation_commands(commands: list[str], workspace: Path) -> None:
     argv_commands = validation_commands_argv(commands)
     for argv in argv_commands:
         subprocess.run(argv, cwd=workspace, check=True)
+
+
+def _git_output_lines(workspace: Path, args: list[str]) -> list[str]:
+    result = subprocess.run(["git", *args], cwd=workspace, check=True, text=True, stdout=subprocess.PIPE)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def workspace_changed_files(workspace: Path) -> list[str]:
+    changed = set(_git_output_lines(workspace, ["diff", "--name-only"]))
+    changed.update(_git_output_lines(workspace, ["diff", "--cached", "--name-only"]))
+    changed.update(_git_output_lines(workspace, ["ls-files", "--others", "--exclude-standard"]))
+    return sorted(changed)
+
+
+def assert_workspace_changes_match(workspace: Path, expected_files: list[str]) -> list[str]:
+    expected = sorted(set(expected_files))
+    staged = _git_output_lines(workspace, ["diff", "--cached", "--name-only"])
+    unstaged = _git_output_lines(workspace, ["diff", "--name-only"])
+    untracked = _git_output_lines(workspace, ["ls-files", "--others", "--exclude-standard"])
+    if staged != expected or unstaged or untracked:
+        raise ValueError(
+            "workspace changed files mismatch: "
+            f"expected staged {expected}, got staged {staged}, unstaged {unstaged}, untracked {untracked}"
+        )
+    return staged
+
+
+def stage_workspace_files(workspace: Path, files: list[str]) -> None:
+    paths = sorted(set(files))
+    if not paths:
+        raise ValueError("files must be non-empty")
+    for path in paths:
+        parsed = PurePosixPath(path)
+        if parsed.is_absolute() or ".." in parsed.parts:
+            raise ValueError(f"invalid workspace path: {path}")
+    subprocess.run(["git", "add", "--all", "--", *paths], cwd=workspace, check=True)
 
 
 def validate_trusted_push(payload: dict[str, Any]) -> dict[str, Any]:
