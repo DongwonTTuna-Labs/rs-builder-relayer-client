@@ -35,6 +35,12 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
                 return index
         self.fail(f"missing step {step_name!r} in job {job_name!r}")
 
+    def resolve_step_index(self, job_name, step_name):
+        for index, step in enumerate(self.resolve_job(job_name)["steps"]):
+            if step.get("name") == step_name:
+                return index
+        self.fail(f"missing step {step_name!r} in resolve job {job_name!r}")
+
     def test_non_command_issue_comments_do_not_cancel_review_runs(self):
         concurrency = self.workflow["concurrency"]
 
@@ -221,15 +227,29 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertEqual("artifacts", normalize_download["with"]["path"])
 
     def test_resolve_checker_uses_minimal_batches_and_sticky_summary(self):
+        validate = self.resolve_job("validate-upstream")
         collect = self.resolve_job("collect")
         resolve_check = self.resolve_job("resolve-check")
         apply = self.resolve_job("apply")
 
         collect_run = next(step["run"] for step in collect["steps"] if step.get("name") == "Collect previous Codex comments")
         prompt_run = next(step["run"] for step in resolve_check["steps"] if step.get("name") == "Build resolve-check prompt")
+        validate_run = next(step["run"] for step in apply["steps"] if step.get("name") == "Validate resolution artifacts")
         apply_run = next(step["run"] for step in apply["steps"] if step.get("name") == "Apply resolution decisions")
         app_token = next(step for step in apply["steps"] if step.get("name") == "Generate App installation token")
 
+        self.assertEqual("read", validate["permissions"]["contents"])
+        self.assertEqual("read", validate["permissions"]["pull-requests"])
+        self.assertNotIn("issues", validate["permissions"])
+        self.assertNotIn("id-token", validate["permissions"])
+        self.assertEqual("validate-upstream", collect["needs"])
+        self.assertEqual("needs.validate-upstream.outputs.should_collect == 'true'", collect["if"])
+        self.assertEqual(["collect", "resolve-check"], apply["needs"])
+        self.assertEqual(
+            "needs.collect.result == 'success' && needs.resolve-check.result == 'success' && needs.collect.outputs.has_comments == 'true'",
+            apply["if"],
+        )
+        self.assertNotIn("always()", apply["if"])
         self.assertIn("post_review.py collect-resolutions", collect_run)
         self.assertNotIn("--workspace", collect_run)
         self.assertIn("Use the files in this workspace as the source of truth", prompt_run)
@@ -240,15 +260,21 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertEqual("write", apply["permissions"]["pull-requests"])
         self.assertEqual("write", app_token["with"]["permission-issues"])
         self.assertEqual("write", app_token["with"]["permission-pull-requests"])
+        self.assertLess(
+            self.resolve_step_index("apply", "Validate resolution artifacts"),
+            self.resolve_step_index("apply", "Generate App installation token"),
+        )
+        self.assertIn("post_review.py validate-resolution-artifacts", validate_run)
         self.assertIn("post_review.py apply-resolutions", apply_run)
 
     def test_resolve_checker_runs_after_review_or_manual_dispatch(self):
         helper_checkout = next(
-            step for step in self.resolve_job("collect")["steps"] if step.get("name") == "Checkout workflow helper"
+            step for step in self.resolve_job("validate-upstream")["steps"] if step.get("name") == "Checkout workflow helper"
         )
         collect = self.resolve_job("collect")
         resolve_check = self.resolve_job("resolve-check")
         apply = self.resolve_job("apply")
+        reporter = self.resolve_job("report-failure")
 
         self.assertNotIn("pull_request_target:", self.resolve_workflow_text)
         self.assertIn("workflow_run:", self.resolve_workflow_text)
@@ -261,6 +287,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", collect.get("if", ""))
         self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", resolve_check.get("if", ""))
         self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", apply.get("if", ""))
+        self.assertNotIn("actions/create-github-app-token", json.dumps(reporter))
+        self.assertNotIn("permission-pull-requests", json.dumps(reporter))
 
     def test_resolve_checker_uses_lifecycle_schema_and_trusted_agent(self):
         resolve_check = self.resolve_job("resolve-check")

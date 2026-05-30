@@ -21,8 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  collect:
-    name: collect
+  validate-upstream:
+    name: validate-upstream
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -31,12 +31,14 @@ jobs:
       pull-requests: read
     timeout-minutes: 10
     outputs:
-      has_comments: ${{ steps.collect.outputs.has_comments }}
-      batch_indexes: ${{ steps.collect.outputs.batch_indexes || '[]' }}
+      should_collect: ${{ steps.resolve.outputs.should_collect }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       head_sha: ${{ steps.resolve.outputs.head_sha }}
+      head_repo: ${{ steps.resolve.outputs.head_repo }}
       base_ref: ${{ steps.resolve.outputs.base_ref }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
+      upstream_run_id: ${{ steps.resolve.outputs.upstream_run_id }}
+      upstream_run_attempt: ${{ steps.resolve.outputs.upstream_run_attempt }}
     steps:
       - name: Checkout workflow helper
         uses: actions/checkout@v6
@@ -53,38 +55,60 @@ jobs:
           GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: python3 workflow/.github/scripts/post_review.py resolve-previous
 
+  collect:
+    name: collect
+    needs: validate-upstream
+    if: needs.validate-upstream.outputs.should_collect == 'true'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 10
+    outputs:
+      has_comments: ${{ steps.collect.outputs.has_comments }}
+      batch_indexes: ${{ steps.collect.outputs.batch_indexes || '[]' }}
+      pr_number: ${{ needs.validate-upstream.outputs.pr_number }}
+      head_sha: ${{ needs.validate-upstream.outputs.head_sha }}
+      head_repo: ${{ needs.validate-upstream.outputs.head_repo }}
+      base_ref: ${{ needs.validate-upstream.outputs.base_ref }}
+      base_sha: ${{ needs.validate-upstream.outputs.base_sha }}
+      upstream_run_id: ${{ needs.validate-upstream.outputs.upstream_run_id }}
+      upstream_run_attempt: ${{ needs.validate-upstream.outputs.upstream_run_attempt }}
+    steps:
       - name: Checkout PR head
-        if: steps.resolve.outputs.should_collect == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.resolve.outputs.head_sha }}
+          ref: ${{ needs.validate-upstream.outputs.head_sha }}
           path: workspace
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout trusted PR scripts
-        if: steps.resolve.outputs.should_collect == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.resolve.outputs.base_sha }}
+          ref: ${{ needs.validate-upstream.outputs.base_sha }}
           path: trusted
           fetch-depth: 1
           persist-credentials: false
 
       - name: Prepare resolve batch directory
-        if: steps.resolve.outputs.should_collect == 'true'
         run: |
           rm -rf artifacts/resolve-batches
           mkdir -p artifacts/resolve-batches
 
       - name: Collect previous Codex comments
-        if: steps.resolve.outputs.should_collect == 'true'
         id: collect
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
-          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.validate-upstream.outputs.pr_number }}
+          BASE_SHA: ${{ needs.validate-upstream.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.validate-upstream.outputs.head_sha }}
+          HEAD_REPO: ${{ needs.validate-upstream.outputs.head_repo }}
+          UPSTREAM_RUN_ID: ${{ needs.validate-upstream.outputs.upstream_run_id }}
+          UPSTREAM_RUN_ATTEMPT: ${{ needs.validate-upstream.outputs.upstream_run_attempt }}
         run: >-
           python3 trusted/.github/scripts/post_review.py collect-resolutions
           --batch-dir artifacts/resolve-batches
@@ -132,7 +156,7 @@ jobs:
 
       - name: Prepare resolve-check artifacts
         run: |
-          rm -rf artifacts/resolve-batches artifacts/resolutions-*.json artifacts/lifecycle-*.json
+          rm -rf artifacts/resolve-batches artifacts/result-*.json
           mkdir -p artifacts/resolve-batches artifacts
 
       - name: Download resolve batches
@@ -151,7 +175,8 @@ jobs:
         run: |
           set -euo pipefail
           agent_file="trusted/.codex/agents/thread-lifecycle-triager.md"
-          batch_file="artifacts/resolve-batches/resolve-batch-${BATCH}.json"
+          batch_padded="$(printf '%03d' "$BATCH")"
+          batch_file="artifacts/resolve-batches/batch-${batch_padded}.json"
           prompt_file="${RUNNER_TEMP}/prompt-resolve-${BATCH}.md"
 
           test -f "$agent_file" || { echo "missing thread lifecycle triager agent: $agent_file" >&2; exit 1; }
@@ -225,11 +250,18 @@ jobs:
               "$schema": "http://json-schema.org/draft-07/schema#",
               "type": "object",
               "additionalProperties": false,
-              "required": ["schema_version", "threads"],
+              "required": ["schema_version", "source_manifest_schema_version", "batch_index", "threads"],
               "properties": {
                 "schema_version": {
                   "type": "string",
                   "enum": ["codex.thread_lifecycle_result.v3"]
+                },
+                "source_manifest_schema_version": {
+                  "type": "string",
+                  "enum": ["codex-resolve-manifest.v3"]
+                },
+                "batch_index": {
+                  "type": "integer"
                 },
                 "threads": {
                   "type": "array",
@@ -302,8 +334,9 @@ jobs:
           import os
           from pathlib import Path
 
-          batch = str(os.environ["BATCH"])
-          batch_file = Path("artifacts") / "resolve-batches" / f"resolve-batch-{batch}.json"
+          batch = int(os.environ["BATCH"])
+          batch_padded = f"{batch:03d}"
+          batch_file = Path("artifacts") / "resolve-batches" / f"batch-{batch_padded}.json"
           expected = {
               str(thread["thread_id"])
               for thread in json.loads(batch_file.read_text(encoding="utf-8"))["threads"]
@@ -315,7 +348,11 @@ jobs:
               raise SystemExit(f"thread ids mismatch: expected {sorted(expected)}, got {sorted(actual)}")
           if payload.get("schema_version") != "codex.thread_lifecycle_result.v3":
               raise SystemExit(f"invalid lifecycle schema: {payload.get('schema_version')}")
-          out = Path("artifacts") / f"lifecycle-{batch}.json"
+          if payload.get("source_manifest_schema_version") != "codex-resolve-manifest.v3":
+              raise SystemExit(f"invalid manifest schema: {payload.get('source_manifest_schema_version')}")
+          if int(payload.get("batch_index")) != batch:
+              raise SystemExit(f"batch index mismatch: expected {batch}, got {payload.get('batch_index')}")
+          out = Path("artifacts") / f"result-{batch_padded}.json"
           out.parent.mkdir(parents=True, exist_ok=True)
           out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           PY
@@ -324,13 +361,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: codex-resolve-${{ matrix.batch }}-result
-          path: artifacts/lifecycle-${{ matrix.batch }}.json
+          path: artifacts/result-*.json
           retention-days: 7
 
   apply:
     name: apply
     needs: [collect, resolve-check]
-    if: always() && !cancelled() && needs.collect.outputs.has_comments == 'true'
+    if: needs.collect.result == 'success' && needs.resolve-check.result == 'success' && needs.collect.outputs.has_comments == 'true'
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -350,7 +387,7 @@ jobs:
 
       - name: Prepare apply artifacts
         run: |
-          rm -rf artifacts/resolve-batches artifacts/resolutions artifacts/resolutions-*.json
+          rm -rf artifacts/resolve-batches artifacts/resolutions
           mkdir -p artifacts/resolve-batches artifacts/resolutions
 
       - name: Download resolve batches
@@ -365,6 +402,16 @@ jobs:
           pattern: codex-resolve-*-result
           path: artifacts/resolutions
           merge-multiple: true
+
+      - name: Validate resolution artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.collect.outputs.pr_number }}
+        run: >-
+          python3 trusted/.github/scripts/post_review.py validate-resolution-artifacts
+          --batches artifacts/resolve-batches
+          --results artifacts/resolutions
 
       - name: Generate App installation token
         id: app-token
@@ -384,3 +431,36 @@ jobs:
           python3 trusted/.github/scripts/post_review.py apply-resolutions
           --batches artifacts/resolve-batches
           --results artifacts/resolutions
+
+  report-failure:
+    name: report-failure
+    needs: [validate-upstream, collect, resolve-check, apply]
+    if: always() && !cancelled() && (needs.validate-upstream.outputs.should_collect != 'true' || needs.collect.result == 'failure' || needs.resolve-check.result == 'failure' || needs.apply.result == 'failure')
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - name: Checkout workflow helper
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          path: workflow
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Post resolve-check failure summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.validate-upstream.outputs.pr_number }}
+          VALIDATE_UPSTREAM_RESULT: ${{ needs.validate-upstream.result }}
+          VALIDATE_UPSTREAM_SHOULD_COLLECT: ${{ needs.validate-upstream.outputs.should_collect }}
+          COLLECT_RESULT: ${{ needs.collect.result }}
+          RESOLVE_CHECK_RESULT: ${{ needs.resolve-check.result }}
+          APPLY_RESULT: ${{ needs.apply.result }}
+        run: >-
+          python3 workflow/.github/scripts/post_review.py post-resolve-failure
