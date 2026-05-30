@@ -74,7 +74,11 @@ def _validate_output(raw_output: Any, task: dict[str, Any]) -> dict[str, Any]:
     status = _require_string(raw_output.get("status"), f"{task_id} status")
     if status not in OUTPUT_STATUSES:
         raise ValueError(f"{task_id} has unknown status: {status}")
-    touched_files = _string_list(raw_output.get("touched_files"), f"{task_id} touched_files", allow_empty=False)
+    touched_files = _string_list(
+        raw_output.get("touched_files"),
+        f"{task_id} touched_files",
+        allow_empty=status == "conflict",
+    )
     allowed_files = set(task["allowed_files"])
     for path in touched_files:
         if path.startswith(".github/workflows/"):

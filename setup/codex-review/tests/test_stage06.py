@@ -101,6 +101,14 @@ class Stage06Tests(unittest.TestCase):
         self.assertEqual(["FIX-DES-001: manual merge required"], result["conflicts"])
         self.assertEqual("", result["candidate_patch"])
 
+    def test_conflict_output_may_have_no_touched_files(self):
+        result = build_fix_merge_result(dispatch(), fix_outputs(status="conflict", touched_files=[]))
+
+        self.assertEqual("conflict", result["status"])
+        self.assertFalse(result["can_continue"])
+        self.assertEqual([], result["touched_files"])
+        self.assertEqual(["FIX-DES-001: manual merge required"], result["conflicts"])
+
     def test_cli_reads_inputs_and_writes_fix_merge_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
