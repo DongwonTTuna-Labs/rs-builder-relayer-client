@@ -152,6 +152,23 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         stage00 = self.workflow_text.split("stage00-resolve-gate:", 1)[1].split("stage01-review-model:", 1)[0]
         self.assertLess(stage00.index("uses: actions/checkout@v6"), stage00.index("id: meta"))
 
+    def test_stage00_collects_review_threads_instead_of_empty_inventory(self):
+        stage00 = self.workflow_text.split("stage00-resolve-gate:", 1)[1].split("stage01-review-model:", 1)[0]
+
+        self.assertIn("reviewThreads(first: 100)", stage00)
+        self.assertIn("python3 -m codex_review.cli stage00-context", stage00)
+        self.assertNotIn('"threads": []', stage00)
+
+    def test_stage05_prompt_allows_workflow_files_when_allowed(self):
+        self.assertIn("Only modify files listed in allowed_files.", self.workflow_text)
+        self.assertNotIn("touch workflow files", self.workflow_text)
+
+    def test_trusted_push_revalidates_applied_patch_files(self):
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+
+        self.assertIn("git -C workspace diff --name-only", trusted_push)
+        self.assertIn("expected = set(data.get(\"touched_files\") or [])", trusted_push)
+
 
 if __name__ == "__main__":
     unittest.main()

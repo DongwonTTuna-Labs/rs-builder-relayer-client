@@ -183,11 +183,45 @@ def run_normalize_codex_args(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stage00_context(args: argparse.Namespace) -> int:
+    from .artifacts import read_json_artifact
+    from .stage00 import build_context_artifacts
+
+    payload = build_context_artifacts(
+        read_json_artifact(args.pr_json),
+        read_json_artifact(args.review_threads),
+        repository=args.repository,
+        pr_number=args.pr_number,
+        base_sha=args.base_sha,
+        run_id=args.run_id,
+        event_name=args.event_name,
+    )
+    write_json_artifact(args.out_dir / "thread-inventory.json", payload["thread_inventory"])
+    write_json_artifact(args.out_dir / "review-request.json", payload["review_request"])
+    write_json_artifact(args.out_dir / "run-state.json", payload["run_state"])
+    if args.github_output:
+        with args.github_output.open("a", encoding="utf-8") as output:
+            for key in ["pr_number", "base_sha", "head_sha", "head_ref", "head_repo"]:
+                print(f"{key}={payload['outputs'][key]}", file=output)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for stage in STAGE_SCHEMAS:
         _add_stage_parser(subparsers, stage)
+    context = subparsers.add_parser("stage00-context")
+    context.add_argument("--pr-json", type=Path, required=True)
+    context.add_argument("--review-threads", type=Path, required=True)
+    context.add_argument("--repository", required=True)
+    context.add_argument("--pr-number", required=True)
+    context.add_argument("--base-sha", required=True)
+    context.add_argument("--run-id", required=True)
+    context.add_argument("--event-name", required=True)
+    context.add_argument("--out-dir", type=Path, required=True)
+    context.add_argument("--github-output", type=Path, required=False)
+    context.set_defaults(func=run_stage00_context)
     relay = subparsers.add_parser("relay-contract")
     relay.set_defaults(func=run_relay_contract)
     normalize = subparsers.add_parser("normalize-codex-args")

@@ -58,51 +58,26 @@ jobs:
           )"
           BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BASE_REF}" --jq '.object.sha')"
           export BASE_SHA
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          meta = json.loads(Path("pr.json").read_text())
-          repo = meta.get("headRepository") or {}
-          head_repo = repo.get("nameWithOwner") or os.environ["GITHUB_REPOSITORY"]
-          files = [{"path": item["path"], "status": item.get("changeType") or "modified"} for item in (meta.get("files") or [])]
-          out = Path("artifacts"); out.mkdir(exist_ok=True)
-          values = {
-              "pr_number": os.environ["PR_NUMBER"],
-              "base_ref": meta["baseRefName"],
-              "base_sha": os.environ["BASE_SHA"],
-              "head_ref": meta["headRefName"],
-              "head_sha": meta["headRefOid"],
-              "head_repo": head_repo,
-          }
-          (out / "thread-inventory.json").write_text(json.dumps({
-              "schema_version": "codex.stage00.thread_inventory.v1",
-              "repository": os.environ["GITHUB_REPOSITORY"],
-              "pr_number": values["pr_number"],
-              "base_ref": values["base_ref"],
-              "base_sha": values["base_sha"],
-              "head_sha": values["head_sha"],
-              "threads": [],
-          }, indent=2) + "\n")
-          (out / "review-request.json").write_text(json.dumps({
-              "schema_version": "codex.stage01.review_request.v1",
-              "repository": os.environ["GITHUB_REPOSITORY"],
-              "pr_number": values["pr_number"],
-              "base_sha": values["base_sha"],
-              "head_sha": values["head_sha"],
-              "changed_files": files,
-              "axes": ["correctness", "tests", "performance", "domain"],
-          }, indent=2) + "\n")
-          (out / "run-state.json").write_text(json.dumps({
-              "schema_version": "codex.stage08.run_state.v1",
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "event_name": os.environ["GITHUB_EVENT_NAME"],
-              "loop_count": 0,
-              "max_loops": 1,
-          }, indent=2) + "\n")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              for key in ["pr_number", "base_sha", "head_sha", "head_ref", "head_repo"]:
-                  print(f"{key}={values[key]}", file=output)
-          PY
+          graphql_query="$(cat <<'GRAPHQL'
+          query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first: 100){pageInfo{hasNextPage}nodes{id isResolved path line originalLine comments(first: 50){pageInfo{hasNextPage}nodes{id databaseId body}}}}}}}
+          GRAPHQL
+          )"
+          gh api graphql \
+            -F owner="$GITHUB_REPOSITORY_OWNER" \
+            -F name="${GITHUB_REPOSITORY#*/}" \
+            -F number="$PR_NUMBER" \
+            -f query="$graphql_query" \
+            > review-threads.json
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage00-context \
+            --pr-json pr.json \
+            --review-threads review-threads.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --base-sha "$BASE_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --out-dir artifacts \
+            --github-output "$GITHUB_OUTPUT"
       - shell: bash
         run: |
           set -euo pipefail
@@ -154,6 +129,7 @@ jobs:
           set -euo pipefail
           printf '%s\n' "Review this pull request and return only codex.stage01.model_review.v1 JSON." \
             "Use axes correctness, tests, performance, and domain. Write human-readable text in Korean." \
+            "Security hardening is out of scope; do not raise sandbox privilege findings unless they break stage contracts." \
             "Do not edit files, push, post comments, or depend on legacy workflow scripts." > artifacts/stage01-prompt.md
           cat artifacts/review-request.json >> artifacts/stage01-prompt.md
       - id: relay-token
@@ -453,7 +429,7 @@ jobs:
       - shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "Produce codex.stage06.fix_outputs.v1 JSON for every dispatch task. Use unified diffs only. Do not push, post comments, or touch workflow files." > artifacts/stage05-fix-prompt.md
+          printf '%s\n' "Produce codex.stage06.fix_outputs.v1 JSON for every dispatch task. Use unified diffs only. Only modify files listed in allowed_files. Do not push or post comments." > artifacts/stage05-fix-prompt.md
           cat artifacts/stage05-fix-dispatch.json >> artifacts/stage05-fix-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
@@ -557,6 +533,16 @@ jobs:
           patch_hash="$(sha256sum artifacts/candidate.patch | awk '{print $1}')"
           test -s artifacts/candidate.patch
           git -C workspace apply "$GITHUB_WORKSPACE/artifacts/candidate.patch"
+          git -C workspace diff --name-only > artifacts/applied-files.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          expected = set(data.get("touched_files") or [])
+          actual = set(Path("artifacts/applied-files.txt").read_text(encoding="utf-8").splitlines())
+          if actual != expected:
+              raise SystemExit(f"applied patch files mismatch: expected {sorted(expected)}, got {sorted(actual)}")
+          PY
           git -C workspace diff --check
           git -C workspace config user.name "codex-reviewer-for-dongwonttuna[bot]"
           git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"

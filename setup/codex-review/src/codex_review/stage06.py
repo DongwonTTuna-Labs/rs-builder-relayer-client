@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .validators import require_keys, require_schema_version
+from .validators import parse_unified_diff_paths, require_keys, require_schema_version
 
 
 FIX_DISPATCH_SCHEMA = "codex.stage05.fix_dispatch.v1"
@@ -79,16 +79,19 @@ def _validate_output(raw_output: Any, task: dict[str, Any]) -> dict[str, Any]:
         f"{task_id} touched_files",
         allow_empty=status == "conflict",
     )
+    patch = str(raw_output.get("patch") or "")
+    patch_files = parse_unified_diff_paths(patch) if patch.strip() else []
     allowed_files = set(task["allowed_files"])
-    for path in touched_files:
-        if path.startswith(".github/workflows/"):
-            raise ValueError("workflow files cannot be touched by fix outputs")
+    for path in sorted(set(touched_files) | set(patch_files)):
         if path not in allowed_files:
             raise ValueError(f"{task_id} touched file is not allowed: {path}")
-    patch = str(raw_output.get("patch") or "")
+    if sorted(touched_files) != patch_files:
+        raise ValueError(f"{task_id} patch files must match touched_files")
     conflict_reason = str(raw_output.get("conflict_reason") or "").strip()
     if status == "completed" and not patch.strip():
         raise ValueError(f"{task_id} completed output requires patch")
+    if status == "completed" and not patch_files:
+        raise ValueError(f"{task_id} completed output requires file-bearing patch")
     if status == "conflict" and not conflict_reason:
         raise ValueError(f"{task_id} conflict output requires conflict_reason")
     return {

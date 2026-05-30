@@ -38,16 +38,22 @@ def dispatch():
     }
 
 
-def fix_outputs(status="completed", touched_files=None):
+def fix_outputs(status="completed", touched_files=None, patch=None):
     if touched_files is None:
-        touched_files = ["src/lib.rs"]
+        touched_files = [] if status == "conflict" else ["src/lib.rs"]
+    if patch is None:
+        patch = (
+            ""
+            if status == "conflict"
+            else "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        )
     return {
         "schema_version": "codex.stage06.fix_outputs.v1",
         "outputs": [
             {
                 "task_id": "FIX-DES-001",
                 "status": status,
-                "patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+                "patch": patch,
                 "touched_files": touched_files,
                 "tests": ["cargo test --workspace --all-features"],
                 "conflict_reason": "manual merge required" if status == "conflict" else "",
@@ -84,14 +90,40 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertIn("touched file is not allowed", str(ctx.exception))
 
-    def test_workflow_file_changes_are_blocked_before_patch_policy(self):
+    def test_workflow_file_changes_are_allowed_when_task_allows_them(self):
         payload = dispatch()
         payload["tasks"][0]["allowed_files"].append(".github/workflows/codex-pr-review.yml")
+        outputs = fix_outputs(touched_files=[".github/workflows/codex-pr-review.yml"])
+        outputs["outputs"][0]["patch"] = (
+            "diff --git a/.github/workflows/codex-pr-review.yml b/.github/workflows/codex-pr-review.yml\n"
+            "--- a/.github/workflows/codex-pr-review.yml\n"
+            "+++ b/.github/workflows/codex-pr-review.yml\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual([".github/workflows/codex-pr-review.yml"], result["touched_files"])
+
+    def test_patch_files_must_match_touched_files(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_fix_merge_result(dispatch(), fix_outputs(touched_files=["tests/lib.rs"]))
+
+        self.assertIn("patch files must match touched_files", str(ctx.exception))
+
+    def test_patch_files_must_be_allowed_even_when_touched_files_claim_allowed(self):
+        payload = fix_outputs()
+        payload["outputs"][0]["patch"] = (
+            "diff --git a/.github/workflows/codex-pr-review.yml b/.github/workflows/codex-pr-review.yml\n"
+            "--- a/.github/workflows/codex-pr-review.yml\n"
+            "+++ b/.github/workflows/codex-pr-review.yml\n"
+            "@@ -1 +1 @@\n-old\n+new\n"
+        )
 
         with self.assertRaises(ValueError) as ctx:
-            build_fix_merge_result(payload, fix_outputs(touched_files=[".github/workflows/codex-pr-review.yml"]))
+            build_fix_merge_result(dispatch(), payload)
 
-        self.assertIn("workflow files cannot be touched by fix outputs", str(ctx.exception))
+        self.assertIn("touched file is not allowed", str(ctx.exception))
 
     def test_conflict_output_stops_pipeline_with_conflict_report(self):
         result = build_fix_merge_result(dispatch(), fix_outputs(status="conflict"))

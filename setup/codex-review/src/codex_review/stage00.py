@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from .validators import require_keys, require_schema_version
@@ -16,6 +17,116 @@ def _require_string(value: Any, field: str) -> str:
     if not text:
         raise ValueError(f"{field} is required")
     return text
+
+
+def _review_threads_connection(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("reviewThreads connection is required") from exc
+    if not isinstance(connection, dict):
+        raise ValueError("reviewThreads connection must be an object")
+    return connection
+
+
+def _build_thread(raw: dict[str, Any]) -> dict[str, Any]:
+    thread_id = _require_string(raw.get("id"), "review thread id")
+    comments_connection = raw.get("comments") or {}
+    if not isinstance(comments_connection, dict):
+        raise ValueError(f"{thread_id} comments connection must be an object")
+    comments = comments_connection.get("nodes") or []
+    if not isinstance(comments, list):
+        raise ValueError(f"{thread_id} comments nodes must be an array")
+    forced_state = ""
+    needs_human_hint = ""
+    if comments_connection.get("pageInfo", {}).get("hasNextPage"):
+        forced_state = "needs_human"
+        needs_human_hint = "review thread has more than 50 comments"
+    if not comments:
+        forced_state = "needs_human"
+        needs_human_hint = "review thread has no visible comments"
+        comments = [{"id": f"{thread_id}:missing-comments", "databaseId": None, "body": ""}]
+    return {
+        "thread_id": thread_id,
+        "file": raw.get("path"),
+        "line": raw.get("line") or raw.get("originalLine"),
+        "root_cause_key": f"github-review-thread:{thread_id}",
+        "forced_state": forced_state,
+        "needs_human_hint": needs_human_hint,
+        "comments": [
+            {
+                "comment_node_id": _require_string(comment.get("id"), f"{thread_id} comment_node_id"),
+                "comment_id": comment.get("databaseId"),
+                "body_sha256": hashlib.sha256(str(comment.get("body") or "").encode("utf-8")).hexdigest(),
+            }
+            for comment in comments
+            if isinstance(comment, dict)
+        ],
+    }
+
+
+def build_context_artifacts(
+    pr_payload: dict[str, Any],
+    review_threads_payload: dict[str, Any],
+    *,
+    repository: str,
+    pr_number: str,
+    base_sha: str,
+    run_id: str,
+    event_name: str,
+) -> dict[str, Any]:
+    require_keys(pr_payload, ["baseRefName", "headRefName", "headRefOid", "files"])
+    repo = pr_payload.get("headRepository") or {}
+    head_repo = repo.get("nameWithOwner") if isinstance(repo, dict) else None
+    files = [
+        {"path": _require_string(item.get("path"), "changed file path"), "status": item.get("changeType") or "modified"}
+        for item in (pr_payload.get("files") or [])
+        if isinstance(item, dict)
+    ]
+    connection = _review_threads_connection(review_threads_payload)
+    if connection.get("pageInfo", {}).get("hasNextPage"):
+        raise ValueError("reviewThreads pagination exceeded")
+    threads = [
+        _build_thread(raw)
+        for raw in (connection.get("nodes") or [])
+        if isinstance(raw, dict) and not raw.get("isResolved")
+    ]
+    values = {
+        "pr_number": _require_string(pr_number, "pr_number"),
+        "base_ref": _require_string(pr_payload.get("baseRefName"), "baseRefName"),
+        "base_sha": _require_string(base_sha, "base_sha"),
+        "head_ref": _require_string(pr_payload.get("headRefName"), "headRefName"),
+        "head_sha": _require_string(pr_payload.get("headRefOid"), "headRefOid"),
+        "head_repo": head_repo or _require_string(repository, "repository"),
+    }
+    return {
+        "outputs": values,
+        "thread_inventory": {
+            "schema_version": THREAD_INVENTORY_SCHEMA,
+            "repository": _require_string(repository, "repository"),
+            "pr_number": values["pr_number"],
+            "base_ref": values["base_ref"],
+            "base_sha": values["base_sha"],
+            "head_sha": values["head_sha"],
+            "threads": threads,
+        },
+        "review_request": {
+            "schema_version": "codex.stage01.review_request.v1",
+            "repository": _require_string(repository, "repository"),
+            "pr_number": values["pr_number"],
+            "base_sha": values["base_sha"],
+            "head_sha": values["head_sha"],
+            "changed_files": files,
+            "axes": ["correctness", "tests", "performance", "domain"],
+        },
+        "run_state": {
+            "schema_version": "codex.stage08.run_state.v1",
+            "run_id": _require_string(run_id, "run_id"),
+            "event_name": _require_string(event_name, "event_name"),
+            "loop_count": 0,
+            "max_loops": 1,
+        },
+    }
 
 
 def _validate_comment(thread_id: str, comment: Any) -> None:
