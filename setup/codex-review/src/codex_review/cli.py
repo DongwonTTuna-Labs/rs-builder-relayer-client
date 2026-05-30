@@ -206,6 +206,18 @@ def run_stage00_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stage05_fallback_fix_outputs(args: argparse.Namespace) -> int:
+    from .artifacts import read_json_artifact
+    from .stage06 import build_conflict_fix_outputs
+
+    payload = build_conflict_fix_outputs(read_json_artifact(args.dispatch), args.reason)
+    if args.out:
+        write_json_artifact(args.out, payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -222,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--out-dir", type=Path, required=True)
     context.add_argument("--github-output", type=Path, required=False)
     context.set_defaults(func=run_stage00_context)
+    fallback = subparsers.add_parser("stage05-fallback-fix-outputs")
+    fallback.add_argument("--dispatch", type=Path, required=True)
+    fallback.add_argument("--reason", required=True)
+    fallback.add_argument("--out", type=Path, required=False)
+    fallback.set_defaults(func=run_stage05_fallback_fix_outputs)
     relay = subparsers.add_parser("relay-contract")
     relay.set_defaults(func=run_relay_contract)
     normalize = subparsers.add_parser("normalize-codex-args")

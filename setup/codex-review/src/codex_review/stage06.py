@@ -66,6 +66,25 @@ def validate_dispatch(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_conflict_fix_outputs(dispatch_payload: dict[str, Any], reason: str) -> dict[str, Any]:
+    dispatch = validate_dispatch(dispatch_payload)
+    conflict_reason = _require_string(reason, "reason")
+    return {
+        "schema_version": FIX_OUTPUTS_SCHEMA,
+        "outputs": [
+            {
+                "task_id": task_id,
+                "status": "conflict",
+                "patch": "",
+                "touched_files": [],
+                "tests": [],
+                "conflict_reason": conflict_reason,
+            }
+            for task_id in dispatch["task_ids"]
+        ],
+    }
+
+
 def _validate_output(raw_output: Any, task: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(raw_output, dict):
         raise ValueError("outputs entries must be objects")

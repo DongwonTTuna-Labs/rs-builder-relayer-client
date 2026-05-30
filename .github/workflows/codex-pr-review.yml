@@ -429,7 +429,17 @@ jobs:
       - shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "Produce codex.stage06.fix_outputs.v1 JSON for every dispatch task. Use unified diffs only. Only modify files listed in allowed_files. Do not push or post comments." > artifacts/stage05-fix-prompt.md
+          cat > artifacts/stage05-fix-prompt.md <<'PROMPT'
+          Return exactly one JSON object.
+          Schema: codex.stage06.fix_outputs.v1.
+          For every dispatch task, produce exactly one outputs entry.
+          No markdown, no prose, no code fences, no logs.
+          Use unified diffs only.
+          Only modify files listed in allowed_files.
+          Do not emit an empty outputs array.
+          If a valid JSON output would be too large or uncertain, emit conflict outputs with empty patch, touched_files, tests, and a concise conflict_reason.
+          Do not push or post comments.
+          PROMPT
           cat artifacts/stage05-fix-dispatch.json >> artifacts/stage05-fix-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
@@ -445,7 +455,9 @@ jobs:
           normalized="$(PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli normalize-codex-args --raw "$CODEX_ARGS")"
           test -n "$normalized"
           printf 'codex_args=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
-      - uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+      - id: fix-agent
+        continue-on-error: true
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
@@ -456,6 +468,16 @@ jobs:
           sandbox: danger-full-access
           output-schema: |
             {"type":"object","additionalProperties":false,"required":["schema_version","outputs"],"properties":{"schema_version":{"type":"string","enum":["codex.stage06.fix_outputs.v1"]},"outputs":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["task_id","status","patch","touched_files","tests","conflict_reason"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["completed","conflict"]},"patch":{"type":"string"},"touched_files":{"type":"array","items":{"type":"string"}},"tests":{"type":"array","items":{"type":"string"}},"conflict_reason":{"type":"string"}}}}}}
+      - shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.fix-agent.outcome }}" != "success" || ! -s artifacts/fix-outputs.json ]]; then
+            PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage05-fallback-fix-outputs --dispatch artifacts/stage05-fix-dispatch.json --reason "stage05 codex action did not produce fix-outputs.json" --out artifacts/fix-outputs.json
+          fi
+          if ! PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage06-fix-merge --dispatch artifacts/stage05-fix-dispatch.json --fix-outputs artifacts/fix-outputs.json --out /tmp/stage06-fix-merge-validate.json; then
+            PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage05-fallback-fix-outputs --dispatch artifacts/stage05-fix-dispatch.json --reason "stage05 codex action produced invalid fix-outputs.json" --out artifacts/fix-outputs.json
+            PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage06-fix-merge --dispatch artifacts/stage05-fix-dispatch.json --fix-outputs artifacts/fix-outputs.json --out /tmp/stage06-fix-merge-validate.json
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: codex-v3-fix-outputs

@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_review.stage06 import build_fix_merge_result
+from codex_review.stage06 import build_conflict_fix_outputs, build_fix_merge_result
 
 
 def dispatch():
@@ -212,6 +212,31 @@ class Stage06Tests(unittest.TestCase):
         self.assertEqual([], result["touched_files"])
         self.assertEqual(["FIX-DES-001: manual merge required"], result["conflicts"])
 
+    def test_build_conflict_fix_outputs_covers_every_dispatch_task(self):
+        payload = dispatch()
+        payload["task_count"] = 2
+        payload["tasks"].append(
+            {
+                "task_id": "FIX-DES-002",
+                "allowed_files": ["README.md"],
+            }
+        )
+
+        outputs = build_conflict_fix_outputs(payload, "codex action did not produce fix-outputs.json")
+
+        self.assertEqual("codex.stage06.fix_outputs.v1", outputs["schema_version"])
+        self.assertEqual(["FIX-DES-001", "FIX-DES-002"], [output["task_id"] for output in outputs["outputs"]])
+        for output in outputs["outputs"]:
+            self.assertEqual("conflict", output["status"])
+            self.assertEqual("", output["patch"])
+            self.assertEqual([], output["touched_files"])
+            self.assertEqual([], output["tests"])
+            self.assertIn("codex action did not produce fix-outputs.json", output["conflict_reason"])
+
+        result = build_fix_merge_result(payload, outputs)
+        self.assertEqual("conflict", result["status"])
+        self.assertFalse(result["can_continue"])
+
     def test_cli_reads_inputs_and_writes_fix_merge_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -247,6 +272,41 @@ class Stage06Tests(unittest.TestCase):
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual("codex.stage06.fix_merge.v1", payload["schema_version"])
             self.assertEqual("ready", payload["status"])
+
+    def test_cli_writes_conflict_fix_outputs_fallback_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            dispatch_path = tmp_path / "dispatch.json"
+            out_path = tmp_path / "fix-outputs.json"
+            dispatch_path.write_text(json.dumps(dispatch()), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_review.cli",
+                    "stage05-fallback-fix-outputs",
+                    "--dispatch",
+                    str(dispatch_path),
+                    "--reason",
+                    "codex action did not produce fix-outputs.json",
+                    "--out",
+                    str(out_path),
+                ],
+                cwd=ROOT,
+                env={"PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual("", result.stderr)
+            self.assertEqual(0, result.returncode)
+            payload = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual("codex.stage06.fix_outputs.v1", payload["schema_version"])
+            self.assertEqual("conflict", payload["outputs"][0]["status"])
+            self.assertIn("codex action did not produce fix-outputs.json", payload["outputs"][0]["conflict_reason"])
 
 
 if __name__ == "__main__":

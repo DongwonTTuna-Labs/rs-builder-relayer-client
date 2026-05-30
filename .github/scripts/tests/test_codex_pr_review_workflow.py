@@ -163,6 +163,24 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("Only modify files listed in allowed_files.", self.workflow_text)
         self.assertNotIn("touch workflow files", self.workflow_text)
 
+    def test_stage05_prompt_requires_final_json_or_conflict(self):
+        stage05 = self.workflow_text.split("stage05-fix-agent:", 1)[1].split("stage06-fix-merge:", 1)[0]
+
+        self.assertIn("Return exactly one JSON object.", stage05)
+        self.assertIn("No markdown, no prose, no code fences, no logs.", stage05)
+        self.assertIn("If a valid JSON output would be too large or uncertain, emit conflict outputs", stage05)
+        self.assertIn("Do not emit an empty outputs array.", stage05)
+
+    def test_stage05_action_failure_is_normalized_to_conflict_outputs(self):
+        stage05 = self.workflow_text.split("stage05-fix-agent:", 1)[1].split("stage06-fix-merge:", 1)[0]
+
+        self.assertIn("id: fix-agent", stage05)
+        self.assertIn("continue-on-error: true", stage05)
+        self.assertIn("steps.fix-agent.outcome", stage05)
+        self.assertIn("! -s artifacts/fix-outputs.json", stage05)
+        self.assertIn("stage05-fallback-fix-outputs", stage05)
+        self.assertLess(stage05.index("continue-on-error: true"), stage05.index("name: codex-v3-fix-outputs"))
+
     def test_trusted_push_revalidates_applied_patch_files(self):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
 
