@@ -186,6 +186,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
 
         self.assertIn("name: codex-v3-stage00-lifecycle", stage01)
         self.assertIn("Use stage00 lifecycle, thread inventory, and artifacts/pr-diff.patch", stage01)
+        self.assertIn("Stage07 pushes use checkout GITHUB_TOKEN credentials", stage01)
+        self.assertIn("stage08 reentry is produced in the same run", stage01)
         self.assertIn(
             "cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/pr-diff.patch artifacts/review-request.json",
             stage01,
@@ -283,8 +285,21 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertLess(trusted_push.index("ref: ${{ github.sha }}"), trusted_push.index("path: workspace"))
         self.assertIn("persist-credentials: false", trusted_push.split("path: workspace", 1)[0])
         self.assertIn("ref: ${{ needs.stage00-resolve-gate.outputs.head_ref }}", trusted_push)
+        self.assertIn("persist-credentials: true", trusted_push.split("path: workspace", 1)[1].split("uses: actions/download-artifact@v8", 1)[0])
         self.assertIn("PYTHONPATH=\"$CODEX_PYTHONPATH\" python3 -m codex_review.cli stage07-run-validation", trusted_push)
         self.assertNotIn("workspace/.github/scripts/codex-review/src", trusted_push)
+
+    def test_stage07_uses_github_token_push_and_stage08_same_run_artifact(self):
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+        stage08 = self.workflow_text.split("stage08-reentry:", 1)[1]
+
+        self.assertIn('git -C workspace push origin "HEAD:${HEAD_REF}"', trusted_push)
+        self.assertNotIn("GH_TOKEN:", trusted_push)
+        self.assertNotIn("token:", trusted_push)
+        self.assertNotIn("secrets.", trusted_push)
+        self.assertIn("needs: [stage00-resolve-gate, stage07-trusted-push]", stage08)
+        self.assertIn("name: codex-v3-stage08", stage08)
+        self.assertIn("if-no-files-found: error", stage08)
 
     def test_stage07_cached_diff_includes_added_files(self):
         with tempfile.TemporaryDirectory() as tmp:

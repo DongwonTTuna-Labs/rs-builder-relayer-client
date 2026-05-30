@@ -95,6 +95,19 @@ commit. The staged diff must still match the Stage06 `touched_files` list, and
 there must be no unstaged or untracked changes; only that revalidated file list
 is staged for commit.
 
+## Stage07/Stage08 Reentry Contract
+
+Stage07 checks out the PR branch into `workspace` with the checkout action's
+`GITHUB_TOKEN` credentials and pushes only from the trusted write job. It must
+not introduce a PAT or model-provided token for that push. A push made with the
+workflow `GITHUB_TOKEN` does not create a new workflow run, so the PR-scoped
+`cancel-in-progress` setting does not cancel the current run before Stage08.
+
+Stage08 is therefore a same-run artifact contract: after Stage07 writes
+`codex-v3-stage07`, Stage08 downloads it and `run-state.json`, writes
+`stage08-reentry.json`, and uploads `codex-v3-stage08` with
+`if-no-files-found: error`.
+
 ## Non-Negotiable Rules
 
 - Do not directly merge a PR.
