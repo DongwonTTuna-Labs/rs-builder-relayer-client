@@ -8,7 +8,7 @@ import yaml
 
 WORKFLOW_PATH = Path(__file__).resolve().parents[2] / "workflows" / "codex-pr-review.yml"
 RESOLVE_WORKFLOW_PATH = Path(__file__).resolve().parents[2] / "workflows" / "resolve-checker.yml"
-RELAY_SETUP_ACTION_SHA = "f7816f244a031e1132004ed5906f8ba7b3207aa5"
+RELAY_SETUP_ACTION_REF = "main"
 RELAY_ARGS_SHA = "c36946ed34d86ecd40b4805e1427c031b34c8a2b5f3018085b45a048e07bcf09"
 
 
@@ -178,7 +178,10 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         combined = self.workflow_text + "\n" + self.resolve_workflow_text
 
         self.assertNotIn("setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9", combined)
-        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_SHA}", combined)
+        self.assertNotIn("setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5", combined)
+        self.assertNotIn("setup-codex-relay@1ef985bfb6ee2090a4909ff459d70728e164f318", combined)
+        self.assertNotIn("setup-codex-relay@98e76df0fd8f3d8d59a891b8fc4ff0518d03ec46", combined)
+        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_REF}", combined)
         self.assertNotIn("trusted-actor:", combined)
         self.assertIn("trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]", combined)
         self.assertEqual(
@@ -353,11 +356,9 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("resolved_by_code", codex["with"]["output-schema"])
         self.assertIn("defer_to_issue", codex["with"]["output-schema"])
 
-    def test_codex_relay_setup_action_is_sha_pinned(self):
-        self.assertNotIn("setup-codex-relay@main", self.workflow_text)
-        self.assertNotIn("setup-codex-relay@main", self.resolve_workflow_text)
-        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_SHA}", self.workflow_text)
-        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_SHA}", self.resolve_workflow_text)
+    def test_codex_relay_setup_action_tracks_main(self):
+        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_REF}", self.workflow_text)
+        self.assertIn(f"setup-codex-relay@{RELAY_SETUP_ACTION_REF}", self.resolve_workflow_text)
 
     def test_codex_action_is_sha_pinned(self):
         pinned = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"

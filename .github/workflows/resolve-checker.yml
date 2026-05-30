@@ -230,7 +230,8 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5
+        # Always use @main: home-server-infra owns the shared native OIDC action.
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
           codex-home: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
