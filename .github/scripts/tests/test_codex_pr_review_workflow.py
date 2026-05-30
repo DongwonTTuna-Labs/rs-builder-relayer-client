@@ -61,7 +61,12 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(relay_uses, codex_uses)
         self.assertEqual(relay_uses, id_token_grants)
         self.assertIn("trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]", self.workflow_text)
-        self.assertIn('expected="c36946ed34d86ecd40b4805e1427c031b34c8a2b5f3018085b45a048e07bcf09"', self.workflow_text)
+
+    def test_codex_args_are_normalized_before_action(self):
+        self.assertEqual(4, self.workflow_text.count("id: codex-args"))
+        self.assertEqual(4, self.workflow_text.count("normalize-codex-args --raw \"$CODEX_ARGS\""))
+        self.assertEqual(4, self.workflow_text.count("codex-args: ${{ steps.codex-args.outputs.codex_args }}"))
+        self.assertNotIn("codex-args: ${{ steps.relay-token.outputs.codex_args }}", self.workflow_text)
 
     def test_codex_model_jobs_share_relay_codex_home(self):
         for stage in ("stage01", "stage03", "stage04", "stage05"):

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .artifacts import write_json_artifact
-from .relay import default_relay_contract
+from .relay import default_relay_contract, normalize_codex_args
 
 
 STAGE_SCHEMAS = {
@@ -178,6 +178,11 @@ def run_relay_contract(_: argparse.Namespace) -> int:
     return 0
 
 
+def run_normalize_codex_args(args: argparse.Namespace) -> int:
+    print(normalize_codex_args(args.raw))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -185,6 +190,9 @@ def build_parser() -> argparse.ArgumentParser:
         _add_stage_parser(subparsers, stage)
     relay = subparsers.add_parser("relay-contract")
     relay.set_defaults(func=run_relay_contract)
+    normalize = subparsers.add_parser("normalize-codex-args")
+    normalize.add_argument("--raw", required=True)
+    normalize.set_defaults(func=run_normalize_codex_args)
     return parser
 
 

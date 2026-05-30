@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 
 
-DEFAULT_RELAY_ARGS_SHA = "c36946ed34d86ecd40b4805e1427c031b34c8a2b5f3018085b45a048e07bcf09"
+DEFAULT_RELAY_ARGS_SHA = "d7f6aad9e595f8b84e6b7659586706ef09f85c675b37661944b83fa0cf05cff3"
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,24 @@ def default_relay_contract() -> RelayContract:
         codex_args_sha256=DEFAULT_RELAY_ARGS_SHA,
         trusted_actors=("DongwonTTuna", "codex-reviewer-for-dongwonttuna[bot]"),
     )
+
+
+def normalize_codex_args(raw_args: str) -> str:
+    try:
+        args = json.loads(raw_args)
+    except json.JSONDecodeError as exc:
+        raise ValueError("codex args must be valid JSON") from exc
+    if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+        raise ValueError("codex args must be a JSON string array")
+    normalized: list[str] = []
+    index = 0
+    while index < len(args):
+        if args[index : index + 2] == ["--enable", "use_legacy_landlock"]:
+            index += 2
+            continue
+        normalized.append(args[index])
+        index += 1
+    return json.dumps(normalized, ensure_ascii=True, separators=(",", ":"))
 
 
 def redact_sensitive_value(value: str) -> str:

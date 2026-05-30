@@ -48,6 +48,17 @@ class CliTests(unittest.TestCase):
         self.assertIn("codex_args_sha256", result.stdout)
         self.assertNotIn("sk-clb-", result.stdout)
 
+    def test_normalize_codex_args_command_removes_legacy_landlock(self):
+        result = self.run_cli(
+            "normalize-codex-args",
+            "--raw",
+            '["--enable","use_legacy_landlock","--ignore-user-config"]',
+        )
+
+        self.assertEqual("", result.stderr)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual('["--ignore-user-config"]\n', result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
