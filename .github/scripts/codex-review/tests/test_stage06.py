@@ -68,8 +68,8 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertEqual("codex.stage06.fix_merge.v1", result["schema_version"])
         self.assertEqual("stage06-fix-merge", result["stage"])
-        self.assertEqual("ready", result["status"])
-        self.assertTrue(result["can_continue"])
+        self.assertEqual("needs_validation", result["status"])
+        self.assertFalse(result["can_continue"])
         self.assertFalse(result["push_allowed"])
         self.assertEqual(["src/lib.rs"], result["touched_files"])
         self.assertIn("diff --git", result["candidate_patch"])
@@ -215,6 +215,8 @@ class Stage06Tests(unittest.TestCase):
 
         result = build_fix_merge_result(payload, outputs)
 
+        self.assertEqual("needs_validation", result["status"])
+        self.assertFalse(result["can_continue"])
         self.assertEqual(["git diff --check"], result["validation_commands"])
         self.assertEqual(
             [
@@ -224,6 +226,22 @@ class Stage06Tests(unittest.TestCase):
             ],
             result["deferred_validation_commands"],
         )
+
+    def test_deferred_validation_blocks_stage07_even_with_push_safe_commands(self):
+        payload = dispatch()
+        payload["tasks"][0]["test_plan"] = [
+            "cargo fmt --all --check",
+            "cargo test --workspace --all-features",
+        ]
+        outputs = fix_outputs()
+        outputs["outputs"][0]["tests"] = ["git diff --check"]
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual("needs_validation", result["status"])
+        self.assertFalse(result["can_continue"])
+        self.assertEqual(["cargo fmt --all --check", "git diff --check"], result["validation_commands"])
+        self.assertEqual(["cargo test --workspace --all-features"], result["deferred_validation_commands"])
 
     def test_missing_task_output_fails_closed(self):
         outputs = fix_outputs()
@@ -303,6 +321,7 @@ class Stage06Tests(unittest.TestCase):
                 "rename to src/new.rs\n"
             ),
         )
+        outputs["outputs"][0]["tests"] = []
 
         result = build_fix_merge_result(payload, outputs)
 
@@ -339,6 +358,7 @@ class Stage06Tests(unittest.TestCase):
                 "copy to src/copied.rs\n"
             ),
         )
+        outputs["outputs"][0]["tests"] = []
 
         result = build_fix_merge_result(payload, outputs)
 
@@ -491,7 +511,7 @@ class Stage06Tests(unittest.TestCase):
             self.assertEqual(0, result.returncode)
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual("codex.stage06.fix_merge.v1", payload["schema_version"])
-            self.assertEqual("ready", payload["status"])
+            self.assertEqual("needs_validation", payload["status"])
 
     def test_cli_writes_conflict_fix_outputs_fallback_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:

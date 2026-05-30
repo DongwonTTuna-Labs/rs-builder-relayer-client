@@ -211,11 +211,14 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
     validation_commands, deferred_validation_commands = _partition_stage07_validation_commands(
         raw_validation_commands
     )
+    needs_deferred_validation = bool(deferred_validation_commands)
+    can_continue = not conflicts and not needs_deferred_validation
+    status = "conflict" if conflicts else "needs_validation" if needs_deferred_validation else "ready"
     return {
         "schema_version": FIX_MERGE_SCHEMA,
         "stage": "stage06-fix-merge",
-        "status": "conflict" if conflicts else "ready",
-        "can_continue": not conflicts,
+        "status": status,
+        "can_continue": can_continue,
         "push_allowed": False,
         "repository": dispatch["repository"],
         "pr_number": dispatch["pr_number"],

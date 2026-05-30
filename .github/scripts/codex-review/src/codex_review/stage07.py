@@ -54,10 +54,23 @@ def validate_fix_merge(payload: dict[str, Any]) -> dict[str, Any]:
     require_schema_version(payload, FIX_MERGE_SCHEMA)
     require_keys(
         payload,
-        ["status", "can_continue", "repository", "pr_number", "head_sha", "touched_files", "validation_commands", "candidate_patch"],
+        [
+            "status",
+            "can_continue",
+            "repository",
+            "pr_number",
+            "head_sha",
+            "touched_files",
+            "validation_commands",
+            "deferred_validation_commands",
+            "candidate_patch",
+        ],
     )
     if _require_string(payload.get("status"), "status") != "ready" or payload.get("can_continue") is not True:
         raise ValueError("stage07 requires ready fix_merge")
+    deferred_validation_commands = _string_list(payload.get("deferred_validation_commands"), "deferred_validation_commands")
+    if deferred_validation_commands:
+        raise ValueError("stage07 requires no deferred validation commands")
     if not str(payload.get("candidate_patch") or "").strip():
         raise ValueError("candidate_patch is required")
     return {

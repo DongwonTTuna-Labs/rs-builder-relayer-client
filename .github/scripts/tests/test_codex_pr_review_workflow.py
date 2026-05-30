@@ -279,6 +279,14 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertLess(trusted_push.index("artifacts/revalidated-files.txt"), trusted_push.index("git -C workspace commit"))
         self.assertNotIn("git -C workspace add --all\n", trusted_push)
 
+    def test_stage07_requires_stage06_ready_status(self):
+        stage06 = self.workflow_text.split("stage06-fix-merge:", 1)[1].split("stage07-trusted-push:", 1)[0]
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+
+        self.assertIn("status: ${{ steps.result.outputs.status }}", stage06)
+        self.assertIn("print(f\"status={data['status']}\", file=output)", stage06)
+        self.assertIn("needs.stage06-fix-merge.outputs.status == 'ready'", trusted_push)
+
     def test_trusted_push_uses_trusted_root_scripts_and_workspace_pr_checkout(self):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
 

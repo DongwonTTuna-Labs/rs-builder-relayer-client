@@ -31,7 +31,7 @@ def fix_merge():
         "task_ids": ["FIX-DES-001"],
         "touched_files": ["src/lib.rs"],
         "validation_commands": ["git diff --check"],
-        "deferred_validation_commands": ["python3 -m unittest discover -s .github/scripts/codex-review/tests"],
+        "deferred_validation_commands": [],
         "candidate_patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
         "conflicts": [],
     }
@@ -122,6 +122,27 @@ class Stage07Tests(unittest.TestCase):
             build_push_result(payload, trusted_push())
 
         self.assertIn("validation_commands", str(ctx.exception))
+
+    def test_stage07_rejects_deferred_validation_commands(self):
+        payload = fix_merge()
+        payload["deferred_validation_commands"] = [
+            "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+        ]
+
+        with self.assertRaises(ValueError) as ctx:
+            build_push_result(payload, trusted_push())
+
+        self.assertIn("stage07 requires no deferred validation commands", str(ctx.exception))
+
+    def test_stage07_rejects_mixed_push_safe_and_deferred_validation_commands(self):
+        payload = fix_merge()
+        payload["validation_commands"] = ["git diff --check"]
+        payload["deferred_validation_commands"] = ["cargo test --workspace --all-features"]
+
+        with self.assertRaises(ValueError) as ctx:
+            build_push_result(payload, trusted_push())
+
+        self.assertIn("stage07 requires no deferred validation commands", str(ctx.exception))
 
     def test_stage07_requires_ready_fix_merge(self):
         payload = fix_merge()

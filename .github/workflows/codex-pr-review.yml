@@ -560,6 +560,7 @@ jobs:
       labels: dongwontuna-labs-runner
     outputs:
       can_continue: ${{ steps.result.outputs.can_continue }}
+      status: ${{ steps.result.outputs.status }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -583,16 +584,16 @@ jobs:
           data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+              print(f"status={data['status']}", file=output)
           PY
       - uses: actions/upload-artifact@v7
         with:
           name: codex-v3-stage06
           path: artifacts/stage06-fix-merge.json
           if-no-files-found: error
-
   stage07-trusted-push:
     needs: [stage00-resolve-gate, stage06-fix-merge]
-    if: needs.stage06-fix-merge.outputs.can_continue == 'true' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
+    if: needs.stage06-fix-merge.outputs.can_continue == 'true' && needs.stage06-fix-merge.outputs.status == 'ready' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -689,7 +690,6 @@ jobs:
           name: codex-v3-stage07
           path: artifacts/stage07-push.json
           if-no-files-found: error
-
   stage08-reentry:
     needs: [stage00-resolve-gate, stage07-trusted-push]
     runs-on:

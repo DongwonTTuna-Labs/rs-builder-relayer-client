@@ -81,13 +81,23 @@ push-safe commands, while `deferred_validation_commands` preserves full
 PR-head validation commands such as Python test discovery, `cargo test`, and
 `cargo clippy` for non-privileged CI or final human verification evidence.
 
-Stage07 requires non-empty `validation_commands`. After applying the candidate
-patch and running `git diff --check`, the trusted push job runs each validation
-command from a narrow allowlist of trusted-ref workflow helper commands or fixed
-safe commands before committing or pushing. The privileged write job must not run
+Stage07 requires non-empty `validation_commands` and empty
+`deferred_validation_commands`. After applying the candidate patch and running
+`git diff --check`, the trusted push job runs each validation command from a
+narrow allowlist of trusted-ref workflow helper commands or fixed safe commands
+before committing or pushing. The privileged write job must not run
 PR-head-controlled code, including Python test discovery, `cargo test`, or
 `cargo clippy`. Unsupported commands are not passed to Stage07; if every planned
-validation is deferred, Stage06 falls back to `git diff --check` for push-safety.
+validation is deferred, Stage06 falls back to `git diff --check` for push-safety
+diagnostics only. That fallback is workspace hygiene validation, not replacement
+evidence for full PR-head validation.
+
+If any `deferred_validation_commands` remain, the same workflow run is not
+Stage07-push-ready. Stage06 records a non-ready status with `can_continue:
+false` while preserving `candidate_patch`, `touched_files`,
+`validation_commands`, and `deferred_validation_commands` for diagnosis and
+follow-up validation. Automatic push requires separate non-privileged validation
+success evidence for the deferred commands before a later Stage07 attempt.
 Missing, unsupported, or failing Stage07 validation commands block the push.
 
 The trusted push job rechecks the changed file set after validation and before
