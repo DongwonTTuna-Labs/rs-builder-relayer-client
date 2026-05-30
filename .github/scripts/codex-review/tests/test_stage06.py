@@ -79,10 +79,72 @@ class Stage06Tests(unittest.TestCase):
             result["validation_commands"],
         )
 
+    def test_completed_outputs_touching_same_file_conflict(self):
+        payload = dispatch()
+        payload["task_count"] = 2
+        payload["tasks"] = [
+            {
+                "task_id": "FIX-DES-001",
+                "allowed_files": ["src/lib.rs"],
+                "test_plan": [],
+            },
+            {
+                "task_id": "FIX-DES-002",
+                "allowed_files": ["src/lib.rs"],
+                "test_plan": [],
+            },
+        ]
+        outputs = {
+            "schema_version": "codex.stage06.fix_outputs.v1",
+            "outputs": [
+                {
+                    "task_id": "FIX-DES-001",
+                    "status": "completed",
+                    "patch": (
+                        "diff --git a/src/lib.rs b/src/lib.rs\n"
+                        "--- a/src/lib.rs\n"
+                        "+++ b/src/lib.rs\n"
+                        "@@ -1 +1 @@\n"
+                        "-old\n"
+                        "+new\n"
+                    ),
+                    "touched_files": ["src/lib.rs"],
+                    "tests": [],
+                    "conflict_reason": "",
+                },
+                {
+                    "task_id": "FIX-DES-002",
+                    "status": "completed",
+                    "patch": (
+                        "diff --git a/src/lib.rs b/src/lib.rs\n"
+                        "--- a/src/lib.rs\n"
+                        "+++ b/src/lib.rs\n"
+                        "@@ -1 +1 @@\n"
+                        "-old\n"
+                        "+other\n"
+                    ),
+                    "touched_files": ["src/lib.rs"],
+                    "tests": [],
+                    "conflict_reason": "",
+                },
+            ],
+        }
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual("conflict", result["status"])
+        self.assertFalse(result["can_continue"])
+        self.assertEqual("", result["candidate_patch"])
+        self.assertEqual(["src/lib.rs"], result["touched_files"])
+        self.assertEqual(
+            ["multiple completed outputs touch the same file: src/lib.rs (FIX-DES-001, FIX-DES-002)"],
+            result["conflicts"],
+        )
+
     def test_validation_commands_are_deduped_across_dispatch_and_outputs(self):
         payload = dispatch()
         payload["tasks"][0]["test_plan"] = [
-            "python3 -m unittest discover -s setup/codex-review/tests",
+            "python3 -m unittest discover -s .github/scripts/codex-review/tests",
             "git diff --check",
         ]
         outputs = fix_outputs()
@@ -95,7 +157,7 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertEqual(
             [
-                "python3 -m unittest discover -s setup/codex-review/tests",
+                "python3 -m unittest discover -s .github/scripts/codex-review/tests",
                 "git diff --check",
                 "actionlint .github/workflows/codex-pr-review.yml",
             ],

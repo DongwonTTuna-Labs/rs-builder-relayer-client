@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CODEX_PYTHONPATH: setup/codex-review/src
+  CODEX_PYTHONPATH: .github/scripts/codex-review/src
 
 jobs:
   stage00-resolve-gate:

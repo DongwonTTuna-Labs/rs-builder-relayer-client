@@ -144,6 +144,17 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
         for output in outputs
         if output["status"] == "conflict"
     ]
+    completed_file_tasks: dict[str, list[str]] = {}
+    for output in outputs:
+        if output["status"] != "completed":
+            continue
+        for path in output["touched_files"]:
+            completed_file_tasks.setdefault(path, []).append(output["task_id"])
+    conflicts.extend(
+        f"multiple completed outputs touch the same file: {path} ({', '.join(task_ids)})"
+        for path, task_ids in sorted(completed_file_tasks.items())
+        if len(task_ids) > 1
+    )
     touched_files = sorted({path for output in outputs for path in output["touched_files"]})
     candidate_patch = "\n".join(
         output["patch"].rstrip("\n")
