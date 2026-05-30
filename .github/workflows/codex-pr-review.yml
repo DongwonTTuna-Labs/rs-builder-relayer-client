@@ -185,7 +185,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     outputs:
       requires_design: ${{ steps.result.outputs.requires_design }}
       requires_fix: ${{ steps.result.outputs.requires_fix }}

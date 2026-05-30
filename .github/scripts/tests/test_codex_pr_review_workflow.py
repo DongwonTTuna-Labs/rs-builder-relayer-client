@@ -181,6 +181,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         stage02 = self.workflow_text.split("stage01-stage02:", 1)[1].split("stage03-design-model:", 1)[0]
 
         self.assertIn("issues: write", stage02)
+        self.assertIn("pull-requests: write", stage02)
         self.assertIn("python3 -m codex_review.cli stage02-comment", stage02)
         self.assertIn("codex-review-v3-stage02", stage02)
         self.assertIn("issues/${PR_NUMBER}/comments", stage02)
