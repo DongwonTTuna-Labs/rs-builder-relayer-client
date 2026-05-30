@@ -10,5 +10,6 @@ __all__ = [
     "stage03",
     "stage04",
     "stage05",
+    "stage06",
     "validators",
 ]
