@@ -168,6 +168,12 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("python3 -m codex_review.cli stage00-context", stage00)
         self.assertNotIn('"threads": []', stage00)
 
+    def test_stage00_collects_authoritative_pr_diff_artifact(self):
+        stage00 = self.workflow_text.split("stage00-resolve-gate:", 1)[1].split("stage01-review-model:", 1)[0]
+
+        self.assertIn('gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --patch > artifacts/pr-diff.patch', stage00)
+        self.assertIn("artifacts/pr-diff.patch", stage00)
+
     def test_stage00_lifecycle_consumes_unresolved_thread_gate(self):
         stage00 = self.workflow_text.split("stage00-resolve-gate:", 1)[1].split("stage01-review-model:", 1)[0]
 
@@ -179,9 +185,9 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         stage01 = self.workflow_text.split("stage01-review-model:", 1)[1].split("stage01-stage02:", 1)[0]
 
         self.assertIn("name: codex-v3-stage00-lifecycle", stage01)
-        self.assertIn("Use stage00 lifecycle and thread inventory", stage01)
+        self.assertIn("Use stage00 lifecycle, thread inventory, and artifacts/pr-diff.patch", stage01)
         self.assertIn(
-            "cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/review-request.json",
+            "cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/pr-diff.patch artifacts/review-request.json",
             stage01,
         )
 
