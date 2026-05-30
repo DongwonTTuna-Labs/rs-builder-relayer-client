@@ -4,6 +4,11 @@ This directory contains the implementation surface for the v3 Codex review workf
 
 The live workflow should stay thin. It should call commands from this package, pass artifacts between jobs, and keep privileged GitHub write operations outside model jobs.
 
+Model jobs execute trusted helper code from the workflow checkout. When a model
+needs to inspect PR-head files, the workflow checks out the PR head into a
+separate `workspace` directory and points prompts at that path; `PYTHONPATH`
+continues to reference the trusted workflow checkout.
+
 ## Current Scope
 
 V3 provides:

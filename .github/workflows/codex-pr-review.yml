@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CODEX_PYTHONPATH: .github/scripts/codex-review/src
+  CODEX_PYTHONPATH: ${{ github.workspace }}/.github/scripts/codex-review/src
 
 jobs:
   stage00-resolve-gate:
@@ -125,9 +125,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
           repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
           ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
           fetch-depth: 0
+          path: workspace
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -143,6 +148,7 @@ jobs:
           printf '%s\n' "Review this pull request and return only codex.stage01.model_review.v1 JSON." \
             "Use axes correctness, tests, performance, and domain. Write human-readable text in Korean." \
             "Use stage00 lifecycle and thread inventory before evaluating the current diff." \
+            "The PR head checkout is in workspace; inspect review target files and diffs through that path." \
             "Security hardening is out of scope; do not raise sandbox privilege findings unless they break stage contracts." \
             "Do not edit files, push, post comments, or depend on legacy workflow scripts." > artifacts/stage01-prompt.md
           cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/review-request.json >> artifacts/stage01-prompt.md
@@ -255,9 +261,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
           repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
           ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
           fetch-depth: 0
+          path: workspace
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -271,6 +282,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "Create codex.stage03.model_design.v1 JSON for the blocking findings." > artifacts/stage03-prompt.md
+          printf '%s\n' "The PR head checkout is in workspace; inspect review target files and diffs through that path." >> artifacts/stage03-prompt.md
           cat artifacts/stage01-review.json artifacts/stage02-techlead.json >> artifacts/stage03-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
@@ -348,9 +360,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
           repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
           ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
           fetch-depth: 0
+          path: workspace
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -360,6 +377,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s\n' "Approve or reject the design. Return codex.stage04.model_design_chief.v1 JSON only." > artifacts/stage04-prompt.md
+          printf '%s\n' "The PR head checkout is in workspace; inspect review target files and diffs through that path." >> artifacts/stage04-prompt.md
           cat artifacts/stage03-design.json >> artifacts/stage04-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
@@ -452,9 +470,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
           repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
           ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
           fetch-depth: 0
+          path: workspace
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -470,6 +493,7 @@ jobs:
           No markdown, no prose, no code fences, no logs.
           Use unified diffs only.
           Only modify files listed in allowed_files.
+          The PR head checkout is in workspace; read target files there and emit repository-relative unified diffs without a workspace/ prefix.
           Do not emit an empty outputs array.
           If a valid JSON output would be too large or uncertain, emit conflict outputs with empty patch, touched_files, tests, and a concise conflict_reason.
           Do not push or post comments.

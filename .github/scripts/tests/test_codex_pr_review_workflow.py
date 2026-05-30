@@ -20,6 +20,12 @@ STAGES = [
     "stage07-push",
     "stage08-reentry",
 ]
+MODEL_JOB_RANGES = {
+    "stage01-review-model": "stage01-stage02",
+    "stage03-design-model": "stage03-design",
+    "stage04-design-chief-model": "stage04-stage05",
+    "stage05-fix-agent": "stage06-fix-merge",
+}
 
 
 class CodexPrReviewWorkflowTests(unittest.TestCase):
@@ -30,7 +36,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
     def test_uses_one_codex_orchestrator_workflow(self):
         self.assertTrue(WORKFLOW_PATH.exists())
         self.assertFalse(RESOLVE_WORKFLOW_PATH.exists(), "resolve-checker.yml must be folded into the v3 orchestrator")
-        self.assertLess(len(self.workflow_text.splitlines()), 700)
+        self.assertLess(len(self.workflow_text.splitlines()), 720)
 
     def test_orchestrator_calls_all_stage_cli_contracts(self):
         for stage in STAGES:
@@ -178,6 +184,27 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             "cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/review-request.json",
             stage01,
         )
+
+    def assert_model_job_uses_trusted_helpers_and_pr_workspace(self, job_name, next_job_name):
+        job = self.workflow_text.split(f"{job_name}:", 1)[1].split(f"{next_job_name}:", 1)[0]
+
+        self.assertLess(job.index("ref: ${{ github.sha }}"), job.index("path: workspace"))
+        self.assertIn("persist-credentials: false", job.split("path: workspace", 1)[0])
+        self.assertIn("repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}", job)
+        self.assertIn("ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}", job)
+        self.assertIn("path: workspace", job)
+        self.assertIn('PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli normalize-codex-args', job)
+        self.assertIn("workspace", job)
+        self.assertNotIn("workspace/.github/scripts/codex-review/src", job)
+
+    def test_codex_model_jobs_use_trusted_helpers_and_pr_workspace(self):
+        self.assertIn(
+            "CODEX_PYTHONPATH: ${{ github.workspace }}/.github/scripts/codex-review/src",
+            self.workflow_text,
+        )
+        for job_name, next_job_name in MODEL_JOB_RANGES.items():
+            with self.subTest(job=job_name):
+                self.assert_model_job_uses_trusted_helpers_and_pr_workspace(job_name, next_job_name)
 
     def test_stage02_posts_sticky_review_summary_to_pr(self):
         stage02 = self.workflow_text.split("stage01-stage02:", 1)[1].split("stage03-design-model:", 1)[0]
