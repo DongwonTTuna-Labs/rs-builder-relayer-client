@@ -42,9 +42,19 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             concurrency["group"],
         )
         self.assertEqual(
-            "${{ github.event_name != 'issue_comment' || (github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}",
+            "${{ (github.event_name == 'pull_request_target' && github.event.sender.login == 'DongwonTTuna') || (github.event_name == 'issue_comment' && github.actor == 'DongwonTTuna' && github.triggering_actor == 'DongwonTTuna' && contains(github.event.comment.body, '/codex-review')) }}",
             concurrency["cancel-in-progress"],
         )
+
+    def test_resolve_exposes_trigger_class_without_job_actor_gates(self):
+        resolve_outputs = self.job("resolve")["outputs"]
+
+        self.assertEqual("${{ steps.resolve.outputs.trigger_class }}", resolve_outputs["trigger_class"])
+        for name, job in self.workflow["jobs"].items():
+            condition = str(job.get("if") or "")
+            with self.subTest(job=name):
+                self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", condition)
+                self.assertNotIn("github.actor == 'DongwonTTuna'", condition)
 
     def test_design_coordinate_keeps_write_permissions_out_of_model_job(self):
         permissions = self.job("design-coordinate")["permissions"]
@@ -83,7 +93,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
 
         self.assertEqual(["resolve", "tech-lead", "design-coordinate"], job["needs"])
         self.assertEqual(
-            "needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success' && github.triggering_actor == 'DongwonTTuna'",
+            "needs.resolve.outputs.should_run == 'true' && needs.tech-lead.outputs.needs_design == 'true' && needs.design-coordinate.result == 'success'",
             job["if"],
         )
         self.assertEqual("write", permissions["pull-requests"])
@@ -128,6 +138,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         prompt_steps = [
             ("review", "Build reviewer prompt"),
             ("tech-lead", "Build tech-lead prompt"),
+            ("autofix-patch", "Build autofix prompt"),
             ("design-normalize", "Build normalizer prompt"),
             ("design-analyze", "Build cluster analysis prompt"),
             ("design-coordinate", "Build coordinator prompt"),
@@ -141,29 +152,69 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
                 self.assertIn("HEAD_SHA=${HEAD_SHA}", run)
                 self.assertIn("Use current files as the source of truth", run)
 
-    def test_stale_cleanup_refreshes_design_context_before_normalize(self):
-        self.assertEqual(["resolve", "tech-lead"], self.job("design-stale-collect")["needs"])
-        self.assertEqual(
-            ["resolve", "tech-lead", "design-stale-collect"],
-            self.job("design-stale-check")["needs"],
-        )
-        self.assertEqual(
-            ["resolve", "tech-lead", "design-stale-collect", "design-stale-check"],
-            self.job("design-stale-apply")["needs"],
-        )
-        self.assertEqual(["resolve", "tech-lead", "design-stale-apply"], self.job("design-context")["needs"])
-        self.assertEqual(["resolve", "tech-lead", "design-context"], self.job("design-normalize")["needs"])
-        self.assertIn("needs.design-stale-apply.result == 'success'", self.job("design-context")["if"])
-        self.assertIn("needs.design-stale-apply.result == 'skipped'", self.job("design-context")["if"])
+    def test_bounded_autofix_keeps_model_and_write_jobs_separate(self):
+        plan = self.job("autofix-plan")
+        patch = self.job("autofix-patch")
+        apply = self.job("autofix-apply")
+        patch_prompt = self.step("autofix-patch", "Build autofix prompt")["run"]
+        patch_codex = self.step("autofix-patch", "Run bounded autofix")
+        apply_token = self.step("autofix-apply", "Generate App installation token")
+        apply_run = self.step("autofix-apply", "Apply patch with stop rules")["run"]
 
-        collect = self.step("design-stale-collect", "Collect stale Codex inline comments")
-        apply = self.step("design-stale-apply", "Apply stale cleanup decisions")
+        self.assertEqual(["resolve", "review", "tech-lead"], plan["needs"])
+        self.assertEqual(["resolve", "tech-lead", "autofix-plan"], patch["needs"])
+        self.assertEqual(["resolve", "autofix-patch"], apply["needs"])
+        self.assertEqual("read", patch["permissions"]["contents"])
+        self.assertEqual("read", patch["permissions"]["pull-requests"])
+        self.assertEqual("write", patch["permissions"]["id-token"])
+        self.assertNotIn("issues", patch["permissions"])
+        self.assertEqual("write", apply["permissions"]["contents"])
+        self.assertNotIn("pull-requests", apply["permissions"])
+        self.assertEqual("write", apply_token["with"]["permission-contents"])
+        self.assertNotIn("permission-pull-requests", apply_token["with"])
+        self.assertIn('agent_file="trusted/.codex/agents/bounded-autofix-planner.md"', patch_prompt)
+        self.assertEqual("workspace-write", patch_codex["with"]["sandbox"])
+        self.assertIn("validate-autofix-patch", apply_run)
+        self.assertIn('actual_head="$(git -C workspace rev-parse HEAD)"', apply_run)
+        self.assertIn('if [ "$actual_head" != "$EXPECTED_HEAD_SHA" ]; then', apply_run)
+        self.assertIn("fix(codex-review): apply bounded autofix", apply_run)
+        self.assertNotIn("cargo fmt", apply_run)
+        self.assertNotIn("cargo clippy", apply_run)
+        self.assertNotIn("cargo test", apply_run)
+
+    def test_design_model_jobs_checkout_trusted_prompt_sources(self):
+        for job_name, prompt_step in (
+            ("design-normalize", "Build normalizer prompt"),
+            ("design-cluster", "Build cluster prompt"),
+            ("design-analyze", "Build cluster analysis prompt"),
+            ("design-coordinate", "Build coordinator prompt"),
+        ):
+            with self.subTest(job=job_name):
+                checkout = self.step(job_name, "Checkout trusted PR scripts")
+                prompt = self.step(job_name, prompt_step)["run"]
+
+                self.assertEqual("actions/checkout@v6", checkout["uses"])
+                self.assertEqual("${{ needs.resolve.outputs.base_sha }}", checkout["with"]["ref"])
+                self.assertEqual("trusted", checkout["with"]["path"])
+                self.assertIs(False, checkout["with"]["persist-credentials"])
+                self.assertLess(
+                    self.step_index(job_name, "Checkout trusted PR scripts"),
+                    self.step_index(job_name, prompt_step),
+                )
+                self.assertIn("trusted/.codex/agents/", prompt)
+                self.assertIn("trusted/.codex/skills/", prompt)
+
+    def test_stale_cleanup_refreshes_design_context_before_normalize(self):
+        self.assertNotIn("design-stale-collect", self.workflow["jobs"])
+        self.assertNotIn("design-stale-check", self.workflow["jobs"])
+        self.assertNotIn("design-stale-apply", self.workflow["jobs"])
+        self.assertEqual(["resolve", "tech-lead"], self.job("design-context")["needs"])
+        self.assertEqual(["resolve", "tech-lead", "design-context"], self.job("design-normalize")["needs"])
+        self.assertNotIn("design-stale", self.job("design-context")["if"])
+
         context = self.step("design-context", "Build refreshed design review context")
         normalize_download = self.step("design-normalize", "Download refreshed review context")
 
-        self.assertIn("post_review.py collect-resolutions", collect["run"])
-        self.assertNotIn("--workspace", collect["run"])
-        self.assertIn("post_review.py apply-resolutions", apply["run"])
         self.assertIn("post_review.py build-review-context", context["run"])
         self.assertEqual("codex-design-review-context", normalize_download["with"]["name"])
         self.assertEqual("artifacts", normalize_download["with"]["path"])
@@ -183,12 +234,91 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("Use the files in this workspace as the source of truth", prompt_run)
         self.assertIn("BASE_SHA=${BASE_SHA}", prompt_run)
         self.assertIn("HEAD_SHA=${HEAD_SHA}", prompt_run)
-        self.assertIn("Treat the batch JSON only as a list of review threads to verify", prompt_run)
+        self.assertIn("Treat the thread lifecycle batch JSON only as a list of review threads to verify", prompt_run)
         self.assertEqual("write", apply["permissions"]["issues"])
         self.assertEqual("write", apply["permissions"]["pull-requests"])
         self.assertEqual("write", app_token["with"]["permission-issues"])
         self.assertEqual("write", app_token["with"]["permission-pull-requests"])
         self.assertIn("post_review.py apply-resolutions", apply_run)
+
+    def test_resolve_checker_runs_after_review_or_manual_dispatch(self):
+        helper_checkout = next(
+            step for step in self.resolve_job("collect")["steps"] if step.get("name") == "Checkout workflow helper"
+        )
+        collect = self.resolve_job("collect")
+        resolve_check = self.resolve_job("resolve-check")
+        apply = self.resolve_job("apply")
+
+        self.assertNotIn("pull_request_target:", self.resolve_workflow_text)
+        self.assertIn("workflow_run:", self.resolve_workflow_text)
+        self.assertIn("workflows:", self.resolve_workflow_text)
+        self.assertIn("- Codex PR Review", self.resolve_workflow_text)
+        self.assertIn("workflow_dispatch:", self.resolve_workflow_text)
+        self.assertIn("pr_number:", self.resolve_workflow_text)
+        self.assertEqual("main", helper_checkout["with"]["ref"])
+        self.assertNotIn("github.actor == 'DongwonTTuna'", collect.get("if", ""))
+        self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", collect.get("if", ""))
+        self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", resolve_check.get("if", ""))
+        self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", apply.get("if", ""))
+
+    def test_resolve_checker_uses_lifecycle_schema_and_trusted_agent(self):
+        resolve_check = self.resolve_job("resolve-check")
+        prompt_run = next(step["run"] for step in resolve_check["steps"] if step.get("name") == "Build resolve-check prompt")
+        codex = next(step for step in resolve_check["steps"] if step.get("name") == "Run resolve checker")
+
+        self.assertIn('agent_file="trusted/.codex/agents/thread-lifecycle-triager.md"', prompt_run)
+        self.assertIn("thread lifecycle batch", prompt_run)
+        self.assertIn("thread_id", codex["with"]["output-schema"])
+        self.assertIn("resolved_by_code", codex["with"]["output-schema"])
+        self.assertIn("defer_to_issue", codex["with"]["output-schema"])
+
+    def test_codex_relay_setup_action_is_sha_pinned(self):
+        self.assertNotIn("setup-codex-relay@main", self.workflow_text)
+        self.assertNotIn("setup-codex-relay@main", self.resolve_workflow_text)
+        self.assertIn(
+            "setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9",
+            self.workflow_text,
+        )
+        self.assertIn(
+            "setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9",
+            self.resolve_workflow_text,
+        )
+
+    def test_codex_action_is_sha_pinned(self):
+        pinned = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
+
+        self.assertNotIn("openai/codex-action@v1", self.workflow_text)
+        self.assertNotIn("openai/codex-action@v1", self.resolve_workflow_text)
+        self.assertIn(pinned, self.workflow_text)
+        self.assertIn(pinned, self.resolve_workflow_text)
+
+    def test_root_cause_schemas_require_non_empty_values(self):
+        self.assertIn('"root_cause_key": {\n                        "type": "string",\n                        "minLength": 1', self.workflow_text)
+        self.assertIn(
+            '"primary_root_cause_key": {\n                        "type": "string",\n                        "minLength": 1',
+            self.workflow_text,
+        )
+
+    def test_reviewer_and_tech_lead_prompts_use_trusted_agents(self):
+        reviewer_prompt = self.step("review", "Build reviewer prompt")["run"]
+        tech_lead_prompt = self.step("tech-lead", "Build tech-lead prompt")["run"]
+        workflow_text = self.workflow_text
+
+        self.assertIn('agent_file="trusted/.codex/agents/${AXIS}-reviewer.md"', reviewer_prompt)
+        self.assertNotIn('agent_file="workspace/.codex/agents/${AXIS}-reviewer.md"', reviewer_prompt)
+        self.assertIn('agent_file="trusted/.codex/agents/tech-lead-reviewer.md"', tech_lead_prompt)
+        self.assertNotIn('agent_file="workspace/.codex/agents/tech-lead-reviewer.md"', tech_lead_prompt)
+        self.assertIn("publish_and_fix_now", workflow_text)
+        self.assertIn("needs_human", workflow_text)
+        self.assertNotIn('"allow": { "type": "boolean" }', workflow_text)
+        self.assertNotIn("workspace/.codex/skills", workflow_text)
+        self.assertIn("trusted/.codex/skills/review-design-coordinator/SKILL.md", workflow_text)
+
+    def test_current_review_caps_inline_comments_by_root_cause(self):
+        post_review = Path(__file__).resolve().parents[1].joinpath("post_review.py").read_text(encoding="utf-8")
+
+        self.assertIn("MAX_INLINE_COMMENTS = 12", post_review)
+        self.assertIn("MAX_INLINE_COMMENTS_PER_FILE = 3", post_review)
 
     def test_review_summary_uses_sticky_issue_comment_permissions(self):
         post = self.job("post")

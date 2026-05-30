@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -12,17 +13,79 @@ from typing import Any
 
 
 AXES = ("correctness", "security", "performance", "test-coverage", "domain")
+FINDING_ID_PATTERN = r"^(correctness|security|performance|test-coverage|domain)-[0-9]+$"
 INLINE_MARKER = "<!-- codex-review-inline -->"
 REVIEW_MARKER = "<!-- codex-review -->"
 REVIEW_SUMMARY_MARKER = "<!-- codex-review-summary -->"
 RESOLVE_MARKER = "<!-- codex-resolve-check -->"
 DESIGN_MARKER = "<!-- codex-design-plan -->"
-MAX_INLINE_COMMENTS = 50
-RESOLVE_BATCH_SIZE = 3
+THREAD_LIFECYCLE_MARKER = "codex-thread-lifecycle:v3"
+ISSUE_KEY_MARKER = "codex-issue-key:"
+MAX_INLINE_COMMENTS = 12
+MAX_INLINE_COMMENTS_PER_FILE = 3
+THREAD_LIFECYCLE_BATCH_SIZE = 12
+THREAD_LIFECYCLE_HARD_MAX = 16
+THREAD_LIFECYCLE_BATCH_CHAR_BUDGET = 24000
+RESOLVE_BATCH_SIZE = THREAD_LIFECYCLE_BATCH_SIZE
 REVIEW_CONTEXT_MAX_CHARS = 60000
 REVIEW_CONTEXT_SECTION_LIMIT = 12000
 TRUSTED_USER = "DongwonTTuna"
-TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna",)
+TRUSTED_CODEX_REVIEW_AUTHORS = ("codex-reviewer-for-dongwonttuna", "codex-reviewer-for-dongwonttuna[bot]")
+CODEX_AUTOFIX_COMMIT_SUBJECT = "fix(codex-review): apply bounded autofix"
+LIFECYCLE_STATES = {
+    "resolved_by_code",
+    "fix_now",
+    "defer_to_issue",
+    "duplicate_of_issue",
+    "false_positive",
+    "stale_obsolete",
+    "needs_human",
+}
+TERMINAL_LIFECYCLE_STATES = {
+    "resolved_by_code",
+    "defer_to_issue",
+    "duplicate_of_issue",
+    "false_positive",
+    "stale_obsolete",
+}
+APPLY_WRITE_PERMISSIONS = {"ADMIN", "MAINTAIN", "WRITE"}
+INLINE_ACTIONS = {"publish_and_fix_now"}
+SUMMARY_ACTIONS = {"summary_only_fix_now", "defer_to_issue", "deny_false_positive", "needs_human"}
+TECH_LEAD_ACTIONS = INLINE_ACTIONS | SUMMARY_ACTIONS
+AUTOFIX_MANIFEST_SCHEMA = "codex.autofix_manifest.v1"
+AUTOFIX_MAX_FILES = 8
+AUTOFIX_MAX_PATCH_BYTES = 120000
+AUTOFIX_MAX_COMMITS = 2
+AUTOFIX_ALLOWED_PREFIXES = (".github/scripts/", "docs/", "src/", "tests/")
+AUTOFIX_FORBIDDEN_PREFIXES = (".codex/", ".github/actions/", ".github/workflows/")
+AUTOFIX_FORBIDDEN_FILES = {"Cargo.lock", "Cargo.toml"}
+AUTOFIX_DANGEROUS_KEYWORDS = (
+    "api key",
+    "auth",
+    "calldata",
+    "eip-712",
+    "exported",
+    "live-capable",
+    "nonce",
+    "private key",
+    "public api",
+    "secret",
+    "serde",
+    "signature",
+    "signing",
+    "wallet",
+    "wallet-create",
+    "wire",
+)
+SECRET_PATTERNS = (
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+    r"\bgh[opsru]_[A-Za-z0-9_]{20,}\b",
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}\b",
+    r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b",
+    r"\bsk-clb-[A-Za-z0-9_-]{20,}\b",
+    r"\bAKIA[0-9A-Z]{16}\b",
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+)
 
 
 def require_env(name: str) -> str:
@@ -37,8 +100,36 @@ def trim_text(value: Any, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
 
 
+def marker_value(value: Any, *, limit: int = 120) -> str:
+    text = trim_text(redact_secrets("" if value is None else str(value)), limit).replace("\r", " ").replace("\n", " ").strip()
+    text = text.replace("-->", "").replace("--", "-")
+    return text
+
+
+def slug_key(value: Any, *, fallback: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", marker_value(value).lower()).strip("-")
+    return slug or fallback
+
+
+def is_finding_id_key(value: Any) -> bool:
+    return bool(re.fullmatch(FINDING_ID_PATTERN, str(value or "").strip()))
+
+
+def normalize_root_cause_key(value: Any, *, context: str) -> str:
+    normalized = slug_key(value, fallback="")
+    if not normalized:
+        raise SystemExit(f"{context} root_cause_key is required")
+    if is_finding_id_key(normalized):
+        raise SystemExit(f"{context} root_cause_key must not be a finding id: {normalized}")
+    return normalized
+
+
 def is_trusted_codex_review_author(author: str) -> bool:
-    return author in TRUSTED_CODEX_REVIEW_AUTHORS or author.endswith("[bot]")
+    return author in TRUSTED_CODEX_REVIEW_AUTHORS
+
+
+def is_trusted_workflow_actor(actor: str) -> bool:
+    return actor == TRUSTED_USER or is_trusted_codex_review_author(actor)
 
 
 def github_api(path: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
@@ -112,6 +203,35 @@ def github_graphql(query: str, variables: dict[str, Any] | None = None) -> dict[
     return result["data"]
 
 
+def split_repo(repo: str) -> tuple[str, str]:
+    parts = repo.split("/", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise SystemExit(f"invalid repository name: {repo}")
+    return parts[0], parts[1]
+
+
+def apply_write_token_preflight(repo: str) -> str | None:
+    owner, name = split_repo(repo)
+    query = """
+    query($owner: String!, $name: String!) {
+      repository(owner: $owner, name: $name) {
+        viewerPermission
+      }
+    }
+    """
+    try:
+        data = github_graphql(query, {"owner": owner, "name": name})
+    except SystemExit as exc:
+        return f"GitHub token preflight failed before resolving review threads: {exc}"
+    permission = str(((data.get("repository") or {}).get("viewerPermission")) or "")
+    if permission not in APPLY_WRITE_PERMISSIONS:
+        return (
+            "GitHub token preflight failed before resolving review threads: "
+            f"viewerPermission={permission or '<missing>'}, expected one of {sorted(APPLY_WRITE_PERMISSIONS)}"
+        )
+    return None
+
+
 def parse_next_path(link: str) -> str | None:
     for part in link.split(","):
         if 'rel="next"' not in part:
@@ -167,9 +287,11 @@ def skipped_current_review() -> dict[str, str]:
         "should_run": "false",
         "pr_number": "",
         "head_sha": "",
+        "head_ref": "",
         "base_ref": "",
         "base_sha": "",
         "trigger": "",
+        "trigger_class": "",
     }
 
 
@@ -185,35 +307,58 @@ def resolve_current_review_event(
     actor: str,
     triggering_actor: str,
     fetch_pr: Any = github_api,
+    fetch_commit: Any = github_api,
+    fetch_compare: Any = github_api,
 ) -> dict[str, str]:
-    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
-        return skipped_current_review()
-
     if event_name in {"pull_request", "pull_request_target"}:
         pr = event.get("pull_request") or {}
         sender = (event.get("sender") or {}).get("login")
         base_ref = ((pr.get("base") or {}).get("ref")) or ""
         head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
         author = (pr.get("user") or {}).get("login")
+        action = str(event.get("action") or "")
         if (
             not pr
             or pr.get("draft")
             or base_ref != "main"
             or head_repo != repo
             or author != TRUSTED_USER
-            or sender != TRUSTED_USER
         ):
+            return skipped_current_review()
+        trigger_class = ""
+        if actor == TRUSTED_USER and triggering_actor == TRUSTED_USER and sender == TRUSTED_USER:
+            trigger_class = "human_trusted_synchronize"
+        elif (
+            event_name == "pull_request_target"
+            and action == "synchronize"
+            and is_trusted_codex_review_author(actor)
+            and is_trusted_codex_review_author(triggering_actor)
+            and is_trusted_codex_review_author(sender or "")
+            and is_codex_autofix_commit(
+                repo,
+                str(pr["head"]["sha"]),
+                base_sha=str(pr["base"]["sha"]),
+                fetch_commit=fetch_commit,
+                fetch_compare=fetch_compare,
+            )
+        ):
+            trigger_class = "codex_app_autofix_synchronize"
+        else:
             return skipped_current_review()
         return {
             "should_run": "true",
             "pr_number": str(pr["number"]),
             "head_sha": str(pr["head"]["sha"]),
+            "head_ref": str((pr.get("head") or {}).get("ref") or ""),
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
             "trigger": f"{event_name}:{event.get('action', '')}",
+            "trigger_class": trigger_class,
         }
 
     if event_name == "issue_comment":
+        if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+            return skipped_current_review()
         issue = event.get("issue") or {}
         comment = event.get("comment") or {}
         body = str(comment.get("body") or "")
@@ -231,12 +376,56 @@ def resolve_current_review_event(
             "should_run": "true",
             "pr_number": pr_number,
             "head_sha": str(pr["head"]["sha"]),
+            "head_ref": str((pr.get("head") or {}).get("ref") or ""),
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
             "trigger": "issue_comment:/codex-review",
+            "trigger_class": "human_command",
         }
 
     return skipped_current_review()
+
+
+def is_codex_autofix_commit(
+    repo: str,
+    head_sha: str,
+    *,
+    base_sha: str = "",
+    fetch_commit: Any = github_api,
+    fetch_compare: Any = github_api,
+) -> bool:
+    try:
+        commit = fetch_commit(f"/repos/{repo}/commits/{head_sha}")
+    except SystemExit:
+        return False
+    message = str(((commit.get("commit") or {}).get("message")) or "")
+    subject = message.splitlines()[0] if message else ""
+    author_login = str(((commit.get("author") or {}).get("login")) or "")
+    committer_login = str(((commit.get("committer") or {}).get("login")) or "")
+    if subject != CODEX_AUTOFIX_COMMIT_SUBJECT:
+        return False
+    if not author_login or not committer_login:
+        return False
+    if author_login and not is_trusted_codex_review_author(author_login):
+        return False
+    if committer_login and not is_trusted_codex_review_author(committer_login):
+        return False
+    if not base_sha:
+        return True
+    try:
+        compare = fetch_compare(f"/repos/{repo}/compare/{base_sha}...{head_sha}")
+    except SystemExit:
+        return False
+    commits = compare.get("commits") or []
+    if not any(str(item.get("sha") or "") == head_sha for item in commits):
+        return False
+    autofix_count = 0
+    for item in commits:
+        item_message = str(((item.get("commit") or {}).get("message")) or "")
+        item_subject = item_message.splitlines()[0] if item_message else ""
+        if item_subject == CODEX_AUTOFIX_COMMIT_SUBJECT:
+            autofix_count += 1
+    return autofix_count <= AUTOFIX_MAX_COMMITS
 
 
 def resolve_previous_review_event(
@@ -246,10 +435,43 @@ def resolve_previous_review_event(
     repo: str,
     actor: str,
     triggering_actor: str,
+    fetch_pr: Any = github_api,
 ) -> dict[str, str]:
-    if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER or event_name not in {"pull_request", "pull_request_target"}:
+    if event_name in {"pull_request", "pull_request_target"}:
+        if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+            return skipped_resolve_checker()
+        pr = event.get("pull_request") or {}
+    elif event_name == "workflow_dispatch":
+        if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
+            return skipped_resolve_checker()
+        pr_number = str((event.get("inputs") or {}).get("pr_number") or "").strip()
+        if not pr_number:
+            return skipped_resolve_checker()
+        pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
+    elif event_name == "workflow_run":
+        if not is_trusted_workflow_actor(actor) or not is_trusted_workflow_actor(triggering_actor):
+            return skipped_resolve_checker()
+        workflow_run = event.get("workflow_run") or {}
+        if (
+            workflow_run.get("name") != "Codex PR Review"
+            or workflow_run.get("event") != "pull_request_target"
+            or workflow_run.get("conclusion") != "success"
+        ):
+            return skipped_resolve_checker()
+        pull_requests = workflow_run.get("pull_requests") or []
+        if not pull_requests:
+            return skipped_resolve_checker()
+        pr_number = str(pull_requests[0].get("number") or "").strip()
+        if not pr_number:
+            return skipped_resolve_checker()
+        pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
+        completed_head_sha = str(workflow_run.get("head_sha") or "").strip()
+        current_head_sha = str(((pr.get("head") or {}).get("sha")) or "")
+        if completed_head_sha and completed_head_sha != current_head_sha:
+            return skipped_resolve_checker()
+    else:
         return skipped_resolve_checker()
-    pr = event.get("pull_request") or {}
+
     base_ref = ((pr.get("base") or {}).get("ref")) or ""
     head_repo = ((pr.get("head") or {}).get("repo") or {}).get("full_name")
     author = (pr.get("user") or {}).get("login")
@@ -319,7 +541,7 @@ def normalize_finding(axis: str, item: Any) -> dict[str, Any]:
     if not isinstance(item, dict):
         raise SystemExit(f"{axis} finding must be an object")
     finding_id = str(item.get("id") or "").strip()
-    if not re.match(r"^(correctness|security|performance|test-coverage|domain)-[0-9]+$", finding_id):
+    if not re.fullmatch(FINDING_ID_PATTERN, finding_id):
         raise SystemExit(f"{axis} finding has invalid id: {finding_id}")
     finding_type = str(item.get("type") or "SUGGEST").upper()
     if finding_type not in {"MUST", "SUGGEST", "IMO", "NITS", "ASK"}:
@@ -334,6 +556,7 @@ def normalize_finding(axis: str, item: Any) -> dict[str, Any]:
             line = None
     file_path = item.get("file")
     rule_ref = item.get("rule_ref")
+    root_cause_key = normalize_root_cause_key(item.get("root_cause_key"), context=finding_id)
     return {
         "id": finding_id,
         "agent": axis,
@@ -344,6 +567,10 @@ def normalize_finding(axis: str, item: Any) -> dict[str, Any]:
         "reason": trim_text(item.get("reason"), 1000).strip() or "No detail provided.",
         "rule_ref": str(rule_ref) if rule_ref else None,
         "cross_cutting": bool(item.get("cross_cutting")),
+        "root_cause_key": root_cause_key,
+        "scope": str(item.get("scope") or "current_pr"),
+        "public_api_risk": bool(item.get("public_api_risk")),
+        "autofix_eligible_hint": bool(item.get("autofix_eligible_hint")),
     }
 
 
@@ -358,34 +585,234 @@ def load_decisions(path: Path) -> dict[str, Any]:
             continue
         decision_id = str(decision.get("id") or "")
         if decision_id:
+            raw_primary_root = trim_text(decision.get("primary_root_cause_key"), 120).strip()
             by_id[decision_id] = {
-                "allow": bool(decision.get("allow")),
+                "action": normalize_tech_lead_action(decision),
                 "reason": trim_text(decision.get("reason"), 300).strip() or "No decision reason provided.",
+                "primary_root_cause_key": raw_primary_root,
+                "primary_root_cause_key_present": "primary_root_cause_key" in decision,
             }
     judgment = payload.get("judgment") if isinstance(payload.get("judgment"), dict) else None
     merge_notes = payload.get("merge_notes") if isinstance(payload.get("merge_notes"), list) else []
     return {"by_id": by_id, "judgment": judgment, "merge_notes": merge_notes}
 
 
-def hard_allow(finding: dict[str, Any]) -> bool:
-    rule_ref = (finding.get("rule_ref") or "").lower()
-    return finding["type"] == "MUST" or finding["agent"] == "security" or "critical" in rule_ref
+def validate_decision_coverage(findings: list[dict[str, Any]], decisions: dict[str, Any]) -> None:
+    expected = {finding["id"] for finding in findings}
+    actual = set(decisions["by_id"])
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        detail = []
+        if missing:
+            detail.append("missing=" + ",".join(missing))
+        if extra:
+            detail.append("extra=" + ",".join(extra))
+        raise SystemExit("tech-lead decisions do not exactly cover findings: " + "; ".join(detail))
+    known_roots = {finding["root_cause_key"] for finding in findings}
+    for finding in findings:
+        decision = decisions["by_id"].get(finding["id"]) or {}
+        raw_primary = str(decision.get("primary_root_cause_key") or "").strip()
+        if decision.get("primary_root_cause_key_present") and not raw_primary:
+            raise SystemExit(f"{finding['id']} primary_root_cause_key must not be empty when present")
+        if not raw_primary:
+            continue
+        primary = normalize_root_cause_key(raw_primary, context=f"{finding['id']} primary_root_cause_key")
+        if primary not in known_roots:
+            raise SystemExit(f"{finding['id']} primary_root_cause_key does not match any known root cause: {primary}")
+        decision["primary_root_cause_key"] = primary
 
 
-def hard_block(finding: dict[str, Any]) -> bool:
-    return hard_allow(finding)
+def normalize_tech_lead_action(decision: dict[str, Any]) -> str:
+    action = str(decision.get("action") or "").strip()
+    if action in TECH_LEAD_ACTIONS:
+        return action
+    raise SystemExit(f"unknown tech-lead action: {action or '<missing>'}")
+
+
+def action_for_finding(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
+    if decision:
+        return str(decision.get("action") or normalize_tech_lead_action(decision))
+    raise SystemExit(f"missing tech-lead decision for {finding['id']}")
+
+
+def autofix_block_reason(finding: dict[str, Any], action: str) -> str | None:
+    if action != "publish_and_fix_now":
+        return f"tech-lead action is {action}"
+    if finding.get("agent") == "security":
+        return "security finding requires human review"
+    if finding.get("scope") != "current_pr":
+        return f"finding scope is {finding.get('scope')}"
+    if not finding.get("file"):
+        return "cross-cutting finding is not eligible for bounded autofix"
+    if finding.get("public_api_risk"):
+        return "public API risk requires human review"
+    if not finding.get("autofix_eligible_hint"):
+        return "reviewer did not mark this finding as autofix eligible"
+    haystack = " ".join(
+        str(finding.get(key) or "")
+        for key in ("agent", "file", "title", "reason", "rule_ref", "root_cause_key")
+    ).lower()
+    for keyword in AUTOFIX_DANGEROUS_KEYWORDS:
+        if keyword in haystack:
+            return f"dangerous autofix keyword matched: {keyword}"
+    return None
+
+
+def build_autofix_manifest(findings: list[dict[str, Any]], decisions: dict[str, Any]) -> dict[str, Any]:
+    eligible: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    seen_roots: set[str] = set()
+    for finding in findings:
+        decision = decisions["by_id"].get(finding["id"])
+        action = action_for_finding(finding, decision)
+        reason = autofix_block_reason(finding, action)
+        root = normalize_root_cause_key(finding.get("root_cause_key"), context=finding["id"])
+        if reason is None and root in seen_roots:
+            reason = f"root cause already represented by an earlier eligible finding: {root}"
+        if reason:
+            blocked.append({"id": finding["id"], "root_cause_key": root, "action": action, "reason": reason})
+            continue
+        seen_roots.add(root)
+        eligible.append(
+            {
+                "id": finding["id"],
+                "agent": finding["agent"],
+                "type": finding["type"],
+                "file": finding.get("file"),
+                "line": finding.get("line"),
+                "title": finding["title"],
+                "reason": finding["reason"],
+                "root_cause_key": root,
+                "tech_lead_reason": (decision or {}).get("reason") or "",
+            }
+        )
+    return {
+        "schema_version": AUTOFIX_MANIFEST_SCHEMA,
+        "eligible": eligible,
+        "blocked": blocked,
+        "limits": {
+            "max_files": AUTOFIX_MAX_FILES,
+            "max_patch_bytes": AUTOFIX_MAX_PATCH_BYTES,
+            "forbidden_prefixes": list(AUTOFIX_FORBIDDEN_PREFIXES),
+            "forbidden_files": sorted(AUTOFIX_FORBIDDEN_FILES),
+        },
+    }
+
+
+def command_plan_autofix(args: argparse.Namespace) -> None:
+    findings = load_current_findings(Path(args.artifacts))
+    decisions = load_decisions(Path(args.decisions))
+    validate_decision_coverage(findings, decisions)
+    manifest = build_autofix_manifest(findings, decisions)
+    Path(args.output).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    eligible_count = len(manifest["eligible"])
+    write_github_output({"should_run": "true" if eligible_count else "false", "eligible_count": str(eligible_count)})
+    print(f"planned bounded autofix; eligible={eligible_count} blocked={len(manifest['blocked'])}")
+
+
+def patch_changed_files(patch_text: str) -> list[str]:
+    files: list[str] = []
+    for match in re.finditer(r"^diff --git a/(.*?) b/(.*?)$", patch_text, flags=re.MULTILINE):
+        path = match.group(2)
+        if path not in files:
+            files.append(path)
+    return files
+
+
+def validate_autofix_patch_text(patch_text: str, manifest: dict[str, Any]) -> None:
+    if manifest.get("schema_version") != AUTOFIX_MANIFEST_SCHEMA:
+        raise SystemExit(f"invalid autofix manifest schema: {manifest.get('schema_version')}")
+    if not manifest.get("eligible"):
+        raise SystemExit("autofix manifest has no eligible findings")
+    encoded_size = len(patch_text.encode("utf-8"))
+    if encoded_size == 0 or not patch_text.strip():
+        raise SystemExit("autofix patch is empty")
+    if encoded_size > AUTOFIX_MAX_PATCH_BYTES:
+        raise SystemExit(f"autofix patch is too large: {encoded_size} bytes")
+    assert_no_secret_patterns(patch_text, "autofix patch")
+    files = patch_changed_files(patch_text)
+    if not files:
+        raise SystemExit("autofix patch has no changed files")
+    if len(files) > AUTOFIX_MAX_FILES:
+        raise SystemExit(f"autofix patch changes too many files: {len(files)}")
+    eligible_files = {str(item.get("file")) for item in manifest.get("eligible", []) if item.get("file")}
+    if not eligible_files:
+        raise SystemExit("autofix manifest has no file-scoped eligible findings")
+    for path in files:
+        if path not in eligible_files:
+            raise SystemExit(f"autofix patch touches file outside eligible findings: {path}")
+        if path in AUTOFIX_FORBIDDEN_FILES or any(path.startswith(prefix) for prefix in AUTOFIX_FORBIDDEN_PREFIXES):
+            raise SystemExit(f"autofix patch touches forbidden path: {path}")
+        if not any(path.startswith(prefix) for prefix in AUTOFIX_ALLOWED_PREFIXES):
+            raise SystemExit(f"autofix patch touches unsupported path: {path}")
+    for line in patch_text.splitlines():
+        if line.startswith(("GIT binary patch", "Binary files ")):
+            raise SystemExit("autofix patch contains binary changes")
+        if line.startswith(
+            (
+                "deleted file mode ",
+                "new file mode 120000",
+                "old mode ",
+                "new mode ",
+                "similarity index ",
+                "dissimilarity index ",
+                "rename from ",
+                "rename to ",
+                "copy from ",
+                "copy to ",
+            )
+        ):
+            raise SystemExit(f"autofix patch contains unsupported file operation: {line}")
+        if not (line.startswith("+") or line.startswith("-")) or line.startswith(("+++", "---")):
+            continue
+        changed = line[1:]
+        assert_no_secret_patterns(changed, "autofix patch")
+        lowered = changed.lower()
+        if re.search(
+            r"\bpub(?:\([^)]*\))?\s+(?:async\s+)?(fn|struct|enum|mod|trait|type|use|const|static)\b",
+            changed,
+        ):
+            raise SystemExit("autofix patch changes public Rust API surface")
+        for keyword in AUTOFIX_DANGEROUS_KEYWORDS:
+            if keyword in lowered:
+                raise SystemExit(f"autofix patch contains guarded keyword: {keyword}")
+
+
+def command_validate_autofix_patch(args: argparse.Namespace) -> None:
+    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    patch_text = Path(args.patch).read_text(encoding="utf-8")
+    validate_autofix_patch_text(patch_text, manifest)
+    print(f"validated bounded autofix patch for {len(patch_changed_files(patch_text))} files")
+
+
+def root_cause_marker_key(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
+    fallback = normalize_root_cause_key(finding.get("root_cause_key"), context=str(finding.get("id") or "finding"))
+    raw = (decision or {}).get("primary_root_cause_key")
+    if not raw:
+        return fallback
+    try:
+        return normalize_root_cause_key(raw, context=f"{finding.get('id')} primary_root_cause_key")
+    except SystemExit:
+        return fallback
 
 
 def render_current_inline(finding: dict[str, Any], decision: dict[str, Any] | None) -> str:
+    root_cause_key = root_cause_marker_key(finding, decision)
+    area = marker_value(thread_area(str(finding.get("file") or "")) or "general")
+    failure_kind = marker_value(finding.get("agent") or "unknown")
     lines = [
         INLINE_MARKER,
         f"<!-- codex-review-id: {finding['id']} -->",
-        f"**[{finding['type']}][{finding['agent']}] {finding['title']}**",
+        f"<!-- codex-root-cause-key: {root_cause_key} -->",
+        f"<!-- codex-root-cause-area: {area} -->",
+        f"<!-- codex-root-cause-failure-kind: {failure_kind} -->",
+        f"**[{finding['type']}][{finding['agent']}] {redact_secrets(str(finding['title']))}**",
         "",
-        finding["reason"],
+        redact_secrets(str(finding["reason"])),
     ]
     if decision:
-        lines.extend(["", f"테크리드: {decision['reason']}"])
+        lines.extend(["", f"테크리드: {redact_secrets(str(decision['reason']))}"])
     return "\n".join(lines)
 
 
@@ -410,7 +837,7 @@ def render_current_body(
         lines.extend(
             [
                 f"- 테크리드 상태: {judgment.get('status', 'UNKNOWN')}",
-                f"- 테크리드 요약: {judgment.get('headline', '')}",
+                f"- 테크리드 요약: {redact_secrets(str(judgment.get('headline', '')))}",
             ]
         )
     if unplaced:
@@ -422,7 +849,7 @@ def render_current_body(
             suffix = f" 테크리드: {decision['reason']}" if decision else ""
             lines.append(
                 f"- [{finding['type']}][{finding['agent']}] {finding['id']} {location} - "
-                f"{finding['title']}: {finding['reason']}{suffix}"
+                f"{redact_secrets(str(finding['title']))}: {redact_secrets(str(finding['reason']))}{redact_secrets(suffix)}"
             )
     merge_notes = decisions.get("merge_notes") or []
     if merge_notes:
@@ -430,7 +857,7 @@ def render_current_body(
         for note in merge_notes[:10]:
             lines.append(
                 f"- {note.get('primary_id')}: 병합됨 {', '.join(note.get('merged_ids') or [])} - "
-                f"{note.get('reason', '')}"
+                f"{redact_secrets(str(note.get('reason', '')))}"
             )
     return "\n".join(lines)
 
@@ -453,27 +880,36 @@ def command_post_current(args: argparse.Namespace) -> None:
     head_sha = require_env("HEAD_SHA")
     findings = load_current_findings(Path(args.artifacts))
     decisions = load_decisions(Path(args.decisions))
+    validate_decision_coverage(findings, decisions)
     changed_by_file = build_changed_line_map(repo, pr_number)
 
     allowed: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    summary_only: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
     denied_count = 0
     for finding in findings:
         decision = decisions["by_id"].get(finding["id"])
-        allow = hard_allow(finding) or (decision["allow"] if decision else False)
-        if allow:
+        action = action_for_finding(finding, decision)
+        if action in INLINE_ACTIONS:
             allowed.append((finding, decision))
+        elif action in SUMMARY_ACTIONS:
+            summary_only.append((finding, decision))
         else:
             denied_count += 1
 
     comments: list[dict[str, Any]] = []
     unplaced: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    published_root_causes: set[str] = set()
+    per_file_counts: dict[str, int] = {}
     for finding, decision in allowed:
         file_path = finding["file"]
         line = finding["line"]
+        root_cause_key = root_cause_marker_key(finding, decision)
         if (
             isinstance(file_path, str)
             and isinstance(line, int)
             and line in changed_by_file.get(file_path, set())
+            and root_cause_key not in published_root_causes
+            and per_file_counts.get(file_path, 0) < MAX_INLINE_COMMENTS_PER_FILE
             and len(comments) < MAX_INLINE_COMMENTS
         ):
             comments.append(
@@ -484,11 +920,14 @@ def command_post_current(args: argparse.Namespace) -> None:
                     "body": render_current_inline(finding, decision),
                 }
             )
+            published_root_causes.add(root_cause_key)
+            per_file_counts[file_path] = per_file_counts.get(file_path, 0) + 1
         else:
             unplaced.append((finding, decision))
+    unplaced.extend(summary_only)
 
     judgment = decisions.get("judgment") or {}
-    blocking = any(hard_block(finding) for finding, _ in allowed)
+    blocking = bool(allowed)
     event = "REQUEST_CHANGES" if blocking or judgment.get("status") == "NEEDS_WORK" else "COMMENT"
     summary_body = render_current_body(
         event=event,
@@ -527,7 +966,9 @@ def collect_review_threads(repo: str, pr_number: str) -> list[dict[str, Any]]:
               path
               line
               originalLine
-              comments(first: 50) {
+              comments(first: 51) {
+                totalCount
+                pageInfo { hasNextPage endCursor }
                 nodes {
                   id
                   fullDatabaseId
@@ -564,25 +1005,83 @@ def collect_review_threads(repo: str, pr_number: str) -> list[dict[str, Any]]:
 
 
 def redact_secrets(body: str) -> str:
-    patterns = [
-        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-        r"\bgh[opsru]_[A-Za-z0-9_]{20,}\b",
-        r"\bsk-[A-Za-z0-9_-]{20,}\b",
-        r"\bsk-clb-[A-Za-z0-9_-]{20,}\b",
-    ]
     redacted = body
-    for pattern in patterns:
+    for pattern in SECRET_PATTERNS:
         redacted = re.sub(pattern, "[redacted]", redacted, flags=re.DOTALL)
     return redacted
+
+
+def assert_no_secret_patterns(text: str, context: str) -> None:
+    for pattern in SECRET_PATTERNS:
+        if re.search(pattern, text, flags=re.DOTALL):
+            raise SystemExit(f"{context} contains secret-like material")
 
 
 def redact_comment_body(body: str) -> str:
     return trim_text(redact_secrets(body), 1200)
 
 
-def extract_marker_key(body: str) -> str | None:
-    match = re.search(r"<!--\s*codex-review-id:\s*([^>]+?)\s*-->", body)
+def extract_html_marker_value(body: str, name: str) -> str | None:
+    match = re.search(rf"<!--\s*{re.escape(name)}:\s*([^>]*?)\s*-->", body)
     return match.group(1).strip() if match else None
+
+
+def extract_marker_key(body: str) -> str | None:
+    return extract_html_marker_value(body, "codex-review-id")
+
+
+def extract_root_cause_metadata(body: str) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    key = extract_html_marker_value(body, "codex-root-cause-key")
+    if key is not None:
+        try:
+            metadata["root_cause_key"] = normalize_root_cause_key(key, context="codex-root-cause-key marker")
+            metadata["root_cause_key_source"] = "codex-root-cause-key"
+        except SystemExit as exc:
+            normalized_key = slug_key(key, fallback="")
+            if normalized_key:
+                metadata["root_cause_key"] = normalized_key
+            metadata["root_cause_key_source"] = "invalid-codex-root-cause-key"
+            metadata["root_cause_key_invalid_reason"] = str(exc)
+    area = extract_html_marker_value(body, "codex-root-cause-area")
+    if area:
+        metadata["root_cause_area"] = slug_key(area, fallback="general")
+    failure_kind = extract_html_marker_value(body, "codex-root-cause-failure-kind")
+    if failure_kind:
+        metadata["root_cause_failure_kind"] = slug_key(failure_kind, fallback="unknown")
+    return metadata
+
+
+def parse_thread_lifecycle_marker(body: str) -> dict[str, Any] | None:
+    match = re.search(r"<!--\s*codex-thread-lifecycle:v3\s*(\{.*?\})?\s*-->", body, flags=re.DOTALL)
+    if not match:
+        return None
+    raw = (match.group(1) or "{}").strip()
+    try:
+        payload = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return {"state": "needs_human", "reason": "invalid lifecycle marker json"}
+    state = str(payload.get("state") or "").strip()
+    if state and state not in LIFECYCLE_STATES:
+        payload["state"] = "needs_human"
+        payload["reason"] = f"invalid lifecycle state: {state}"
+    return payload
+
+
+def thread_has_terminal_lifecycle_marker(thread: dict[str, Any]) -> bool:
+    for comment in (thread.get("comments") or {}).get("nodes") or []:
+        author = ((comment.get("author") or {}).get("login")) or ""
+        if not is_trusted_codex_review_author(author):
+            continue
+        payload = parse_thread_lifecycle_marker(str(comment.get("body") or ""))
+        if (
+            payload
+            and payload.get("state") in TERMINAL_LIFECYCLE_STATES
+            and payload.get("resolved") is True
+            and payload.get("resolved_at")
+        ):
+            return True
+    return False
 
 
 def comment_commit_oid(comment: dict[str, Any]) -> str:
@@ -608,7 +1107,7 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any]) -> dict[
         line_int = None
     file_path = comment.get("path") or thread.get("path")
     body = comment.get("body") or ""
-    return {
+    item = {
         "thread_id": thread["id"],
         "comment_node_id": comment["id"],
         "comment_id": int(comment["fullDatabaseId"]),
@@ -620,6 +1119,177 @@ def build_resolve_item(thread: dict[str, Any], comment: dict[str, Any]) -> dict[
         "body_excerpt": redact_comment_body(body),
         "url": comment.get("url"),
     }
+    item.update(extract_root_cause_metadata(body))
+    return item
+
+
+def root_cause_key_for_comment(item: dict[str, Any]) -> str:
+    root_cause_key = str(item.get("root_cause_key") or "").strip()
+    if root_cause_key:
+        return root_cause_key
+    marker_key = str(item.get("marker_key") or "").strip()
+    if marker_key:
+        return marker_key
+    file_path = str(item.get("file") or "general")
+    return thread_area(file_path)
+
+
+def aggregate_thread_root_cause_metadata(
+    comments: list[dict[str, Any]],
+    thread: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    first = comments[0]
+    first_file_path = first.get("file") or thread.get("path")
+    metadata = {
+        "file": first_file_path,
+        "area": str(first.get("root_cause_area") or thread_area(str(first_file_path) if first_file_path else None)),
+        "root_cause_key": root_cause_key_for_comment(first),
+        "root_cause_key_source": str(first.get("root_cause_key_source") or "legacy-codex-review-id"),
+    }
+    if first.get("root_cause_failure_kind"):
+        metadata["root_cause_failure_kind"] = str(first["root_cause_failure_kind"])
+
+    needs_human_hints: list[str] = []
+    valid_metadata: list[tuple[str, str, str]] = []
+    has_missing_marker = False
+    has_invalid_marker = False
+    for comment in comments:
+        source = str(comment.get("root_cause_key_source") or "legacy-codex-review-id")
+        if source == "codex-root-cause-key":
+            file_path = comment.get("file") or thread.get("path")
+            area = str(comment.get("root_cause_area") or thread_area(str(file_path) if file_path else None))
+            failure_kind = str(comment.get("root_cause_failure_kind") or "unknown")
+            valid_metadata.append((str(comment["root_cause_key"]), area, failure_kind))
+        elif source == "invalid-codex-root-cause-key":
+            has_invalid_marker = True
+        else:
+            has_missing_marker = True
+
+    if valid_metadata:
+        root_cause_key, area, failure_kind = valid_metadata[0]
+        metadata["root_cause_key"] = root_cause_key
+        metadata["area"] = area
+        metadata["root_cause_key_source"] = "codex-root-cause-key"
+        metadata["root_cause_failure_kind"] = failure_kind
+        if len(set(valid_metadata)) > 1:
+            needs_human_hints.append("conflicting root-cause metadata; deferred issue handoff requires human review")
+    if has_invalid_marker:
+        needs_human_hints.append("invalid root-cause metadata; deferred issue handoff requires human review")
+    if has_missing_marker:
+        needs_human_hints.append("missing trusted root-cause metadata; deferred issue handoff requires human review")
+    return metadata, needs_human_hints
+
+
+def thread_area(path: str | None) -> str:
+    if not path:
+        return "general"
+    if path.startswith("src/deposit_wallet/") or "deposit_wallet" in path:
+        return "deposit-wallet"
+    if path.startswith(".github/"):
+        return "workflow"
+    if path.startswith("docs/"):
+        return "docs"
+    if path.startswith("src/"):
+        return "rust-api"
+    return "general"
+
+
+def comments_connection_has_more_than_limit(thread: dict[str, Any], limit: int = 50) -> bool:
+    comments = thread.get("comments") or {}
+    total = comments.get("totalCount")
+    try:
+        if total is not None and int(total) > limit:
+            return True
+    except (TypeError, ValueError):
+        pass
+    page_info = comments.get("pageInfo") or {}
+    return bool(page_info.get("hasNextPage"))
+
+
+def build_thread_lifecycle_inventory(threads: list[dict[str, Any]], *, head_sha: str) -> list[dict[str, Any]]:
+    inventory: list[dict[str, Any]] = []
+    for thread in threads:
+        if thread.get("isResolved") or thread_has_terminal_lifecycle_marker(thread):
+            continue
+        comments = []
+        for comment in (thread.get("comments") or {}).get("nodes") or []:
+            body = comment.get("body") or ""
+            author = ((comment.get("author") or {}).get("login")) or ""
+            if INLINE_MARKER not in body:
+                continue
+            if not is_trusted_codex_review_author(author):
+                continue
+            if is_current_head_inline_comment(comment, head_sha):
+                continue
+            comments.append(build_resolve_item(thread, comment))
+        if not comments:
+            continue
+        comments.sort(key=lambda item: int(item["comment_id"]))
+        metadata, needs_human_hints = aggregate_thread_root_cause_metadata(comments, thread)
+        item = {
+            "thread_id": str(thread["id"]),
+            "file": metadata["file"],
+            "area": metadata["area"],
+            "root_cause_key": metadata["root_cause_key"],
+            "root_cause_key_source": metadata["root_cause_key_source"],
+            "comments": comments,
+        }
+        if metadata.get("root_cause_failure_kind"):
+            item["root_cause_failure_kind"] = metadata["root_cause_failure_kind"]
+        if comments_connection_has_more_than_limit(thread):
+            needs_human_hints.append("thread has more than 50 comments; GitHub comments connection may be incomplete")
+        if needs_human_hints:
+            item["forced_state"] = "needs_human"
+            item["needs_human_hint"] = "; ".join(needs_human_hints)
+        inventory.append(item)
+    return sorted(
+        inventory,
+        key=lambda item: (
+            str(item.get("area") or ""),
+            str(item.get("root_cause_key") or ""),
+            str(item.get("file") or ""),
+            str(item.get("thread_id") or ""),
+        ),
+    )
+
+
+def flatten_batch_comments(threads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [comment for thread in threads for comment in thread.get("comments", [])]
+
+
+def plan_thread_lifecycle_batches(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    batches: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    current_chars = 0
+
+    def emit() -> None:
+        nonlocal current, current_chars
+        if not current:
+            return
+        threads = current
+        batches.append(
+            {
+                "schema_version": "codex.thread_lifecycle_batch.v3",
+                "threads": threads,
+                "comments": flatten_batch_comments(threads),
+            }
+        )
+        current = []
+        current_chars = 0
+
+    for thread in inventory:
+        thread_chars = len(json.dumps(thread, ensure_ascii=False, sort_keys=True))
+        should_split = (
+            len(current) >= THREAD_LIFECYCLE_BATCH_SIZE
+            or len(current) >= THREAD_LIFECYCLE_HARD_MAX
+            or (current and current_chars + thread_chars > THREAD_LIFECYCLE_BATCH_CHAR_BUDGET)
+        )
+        if should_split:
+            emit()
+        current.append(thread)
+        current_chars += thread_chars
+    emit()
+    return batches
 
 
 def command_collect_resolutions(args: argparse.Namespace) -> None:
@@ -631,51 +1301,101 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
     for stale_batch in batch_dir.glob("resolve-batch-*.json"):
         stale_batch.unlink()
 
-    items: list[dict[str, Any]] = []
-    for thread in collect_review_threads(repo, pr_number):
-        if thread.get("isResolved"):
-            continue
-        for comment in (thread.get("comments") or {}).get("nodes") or []:
-            body = comment.get("body") or ""
-            author = ((comment.get("author") or {}).get("login")) or ""
-            if INLINE_MARKER not in body:
-                continue
-            if not is_trusted_codex_review_author(author):
-                continue
-            if is_current_head_inline_comment(comment, head_sha):
-                continue
-            items.append(build_resolve_item(thread, comment))
+    inventory = build_thread_lifecycle_inventory(collect_review_threads(repo, pr_number), head_sha=head_sha)
 
-    if not items:
+    if not inventory:
         write_github_output({"has_comments": "false", "batch_indexes": "[]"})
         print("no previous Codex inline comments to resolve")
         return
 
     batch_indexes: list[int] = []
-    for index, start in enumerate(range(0, len(items), RESOLVE_BATCH_SIZE)):
-        batch = {"comments": items[start : start + RESOLVE_BATCH_SIZE]}
+    batches = plan_thread_lifecycle_batches(inventory)
+    for index, batch in enumerate(batches):
         (batch_dir / f"resolve-batch-{index}.json").write_text(
             json.dumps(batch, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         batch_indexes.append(index)
     write_github_output({"has_comments": "true", "batch_indexes": json.dumps(batch_indexes)})
-    print(f"collected {len(items)} previous Codex inline comments in {len(batch_indexes)} batches")
+    comment_count = sum(len(item["comments"]) for item in inventory)
+    print(f"collected {comment_count} previous Codex inline comments in {len(batch_indexes)} lifecycle batches")
 
 
 def load_resolution_inputs(batches: Path) -> dict[int, dict[str, Any]]:
-    comments: dict[int, dict[str, Any]] = {}
+    items: dict[Any, dict[str, Any]] = {}
     for path in sorted(batches.glob("resolve-batch-*.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload.get("threads"), list):
+            for thread in payload.get("threads") or []:
+                thread_id = str(thread["thread_id"])
+                items[thread_id] = thread
+            continue
         for comment in payload.get("comments") or []:
             comment_id = int(comment["comment_id"])
-            comments[comment_id] = comment
-    if not comments:
+            items[comment_id] = comment
+    if not items:
         raise SystemExit("no resolve-check comments found")
-    return comments
+    return items
+
+
+def lifecycle_payloads_from_results(results: Path) -> list[dict[str, Any]]:
+    payloads = []
+    for pattern in ("lifecycle-*.json", "resolutions-*.json"):
+        for path in sorted(results.glob(pattern)):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload.get("threads"), list):
+                payloads.append(payload)
+    return payloads
+
+
+def normalize_lifecycle_outputs(payloads: list[dict[str, Any]], expected_thread_ids: set[str]) -> dict[str, dict[str, Any]]:
+    decisions: dict[str, dict[str, Any]] = {}
+    for payload in payloads:
+        if payload.get("schema_version") != "codex.thread_lifecycle_result.v3":
+            raise SystemExit(f"invalid lifecycle schema: {payload.get('schema_version')}")
+        for raw in payload.get("threads") or []:
+            if not isinstance(raw, dict):
+                raise SystemExit("lifecycle thread decision must be an object")
+            thread_id = str(raw.get("thread_id") or "")
+            state = str(raw.get("state") or "")
+            if thread_id in decisions:
+                raise SystemExit(f"duplicate lifecycle decision for thread {thread_id}")
+            if state not in LIFECYCLE_STATES:
+                raise SystemExit(f"unknown lifecycle state for {thread_id}: {state}")
+            reason = trim_text(raw.get("reason"), 300).strip()
+            evidence = trim_text(raw.get("evidence"), 500).strip()
+            if not reason:
+                raise SystemExit(f"{thread_id} lifecycle decision requires reason")
+            if state in {"defer_to_issue", "duplicate_of_issue", "false_positive", "stale_obsolete"} and not evidence:
+                raise SystemExit(f"{thread_id} lifecycle decision requires evidence")
+            issue = raw.get("issue") if isinstance(raw.get("issue"), dict) else None
+            issue_url = str(raw.get("issue_url") or "").strip()
+            if state == "defer_to_issue":
+                if not issue or not str(issue.get("key") or "").strip():
+                    raise SystemExit(f"{thread_id} defer_to_issue requires issue.key")
+                if not str(issue.get("title") or "").strip() or not str(issue.get("body") or "").strip():
+                    raise SystemExit(f"{thread_id} defer_to_issue requires issue title and body")
+            if state == "duplicate_of_issue" and not issue_url:
+                raise SystemExit(f"{thread_id} duplicate_of_issue requires issue_url")
+            decisions[thread_id] = {
+                "thread_id": thread_id,
+                "state": state,
+                "reason": reason,
+                "evidence": evidence,
+                "issue": issue,
+                "issue_url": issue_url,
+            }
+    actual_ids = set(decisions)
+    if actual_ids != expected_thread_ids:
+        raise SystemExit(f"lifecycle thread ids mismatch: expected {sorted(expected_thread_ids)}, got {sorted(actual_ids)}")
+    return decisions
 
 
 def load_resolution_outputs(results: Path, expected_ids: set[int]) -> dict[int, dict[str, Any]]:
+    lifecycle_payloads = lifecycle_payloads_from_results(results)
+    if lifecycle_payloads:
+        return normalize_lifecycle_outputs(lifecycle_payloads, {str(item) for item in expected_ids})  # type: ignore[return-value]
+
     resolutions: dict[int, dict[str, Any]] = {}
     for path in sorted(results.glob("resolutions-*.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -702,6 +1422,218 @@ def resolve_thread(thread_id: str) -> None:
     github_graphql(mutation, {"threadId": thread_id})
 
 
+def try_resolve_thread(thread_id: str) -> str | None:
+    try:
+        resolve_thread(thread_id)
+    except SystemExit as exc:
+        return str(exc)
+    return None
+
+
+def reply_to_review_thread(thread_id: str, body: str) -> None:
+    mutation = """
+    mutation($threadId: ID!, $body: String!) {
+      addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
+        comment { id }
+      }
+    }
+    """
+    github_graphql(mutation, {"threadId": thread_id, "body": body})
+
+
+def try_reply_to_review_thread(thread_id: str, body: str) -> str | None:
+    try:
+        reply_to_review_thread(thread_id, body)
+    except SystemExit as exc:
+        return str(exc)
+    return None
+
+
+def issue_body_with_marker(request: dict[str, Any]) -> str:
+    key = str(request["key"])
+    machine = {
+        "schema_version": "codex.issue.v3",
+        "idempotency_key": key,
+        "source_pr": os.environ.get("PR_NUMBER", ""),
+        "root_cause": request.get("root_cause") or {},
+        "source_threads": request.get("source_threads") or [],
+    }
+    body = redact_secrets(str(request.get("body") or ""))
+    return "\n".join(
+        [
+            f"<!-- {ISSUE_KEY_MARKER} {key} -->",
+            "<!-- codex-issue-schema: v3 -->",
+            body,
+            "",
+            "## Machine-readable",
+            "```json",
+            redact_secrets(json.dumps(machine, ensure_ascii=False, indent=2, sort_keys=True)),
+            "```",
+        ]
+    )
+
+
+def find_issue_by_key(repo: str, key: str) -> dict[str, Any] | None:
+    marker = f"{ISSUE_KEY_MARKER} {key}"
+    issues = github_paginated(f"/repos/{repo}/issues?state=all&per_page=100")
+    for issue in issues:
+        if "pull_request" in issue:
+            continue
+        if marker in str(issue.get("body") or ""):
+            return issue
+    return None
+
+
+def trusted_issue_key_for_thread(repo: str, thread: dict[str, Any]) -> str:
+    root = re.sub(r"[^a-z0-9-]+", "-", str(thread.get("root_cause_key") or "thread").lower()).strip("-")
+    if not root:
+        root = "thread"
+    failure_kind = str(thread.get("root_cause_failure_kind") or "")
+    seed = "|".join(
+        [
+            "codex-v3",
+            repo,
+            str(thread.get("area") or ""),
+            failure_kind,
+            root,
+        ]
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
+    return trim_text(f"{root}-{digest}", 80).replace("\n", "")
+
+
+def trusted_deferred_issue_request(repo: str, thread: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    trusted = dict(request)
+    trusted["key"] = trusted_issue_key_for_thread(repo, thread)
+    trusted["source_threads"] = [thread.get("thread_id")]
+    trusted["root_cause"] = {
+        "key": thread.get("root_cause_key"),
+        "area": thread.get("area"),
+        "failure_kind": thread.get("root_cause_failure_kind"),
+        "file": thread.get("file"),
+    }
+    labels = [str(label) for label in (request.get("labels") or []) if str(label).strip()]
+    if "codex/deferred" not in labels:
+        labels.insert(0, "codex/deferred")
+    trusted["labels"] = labels
+    return trusted
+
+
+def parse_same_repo_issue_number(repo: str, issue_url: str) -> str | None:
+    owner, name = split_repo(repo)
+    pattern = rf"^https://github\.com/{re.escape(owner)}/{re.escape(name)}/issues/([0-9]+)(?:[#?].*)?$"
+    match = re.match(pattern, issue_url.strip())
+    return match.group(1) if match else None
+
+
+def get_same_repo_issue_by_url(repo: str, issue_url: str) -> dict[str, Any] | None:
+    number = parse_same_repo_issue_number(repo, issue_url)
+    if not number:
+        return None
+    return github_api(f"/repos/{repo}/issues/{number}")
+
+
+def is_codex_deferred_issue(issue: dict[str, Any]) -> bool:
+    if "pull_request" in issue or issue.get("state") != "open":
+        return False
+    labels: set[str] = set()
+    for label in issue.get("labels") or []:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            labels.add(str(name))
+    body = str(issue.get("body") or "")
+    return "codex/deferred" in labels or ISSUE_KEY_MARKER in body
+
+
+def extract_issue_source_threads(body: str) -> list[str]:
+    marker_index = body.rfind("## Machine-readable")
+    if marker_index < 0:
+        return []
+    match = re.search(r"```json\s*(\{.*?\})\s*```", body[marker_index:], flags=re.DOTALL)
+    if not match:
+        return []
+    try:
+        machine = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return []
+    source_threads = machine.get("source_threads")
+    if not isinstance(source_threads, list):
+        return []
+    return [str(item) for item in source_threads if str(item).strip()]
+
+
+def merge_existing_issue_source_threads(request: dict[str, Any], existing: dict[str, Any]) -> dict[str, Any]:
+    merged = list(
+        dict.fromkeys(
+            [
+                *extract_issue_source_threads(str(existing.get("body") or "")),
+                *[str(item) for item in (request.get("source_threads") or []) if str(item).strip()],
+            ]
+        )
+    )
+    updated = dict(request)
+    updated["source_threads"] = merged
+    return updated
+
+
+def create_or_update_deferred_issue(*, repo: str, request: dict[str, Any]) -> dict[str, Any]:
+    key = str(request.get("key") or "").strip()
+    if not key:
+        raise SystemExit("deferred issue request requires key")
+    existing = find_issue_by_key(repo, key)
+    if existing:
+        if existing.get("state") == "closed":
+            return existing
+        request = merge_existing_issue_source_threads(request, existing)
+        body = issue_body_with_marker(request)
+        return github_api(
+            f"/repos/{repo}/issues/{existing['number']}",
+            method="PATCH",
+            payload={"title": redact_secrets(str(request["title"])), "body": body},
+        )
+    body = issue_body_with_marker(request)
+    payload = {
+        "title": redact_secrets(str(request["title"])),
+        "body": body,
+        "labels": request.get("labels") or ["codex/deferred"],
+    }
+    return github_api(f"/repos/{repo}/issues", method="POST", payload=payload)
+
+
+def render_lifecycle_reply(
+    *,
+    thread: dict[str, Any],
+    decision: dict[str, Any],
+    issue_url: str | None = None,
+) -> str:
+    reason = redact_secrets(str(decision["reason"]))
+    evidence = redact_secrets(str(decision.get("evidence") or ""))
+    marker_payload = {
+        "state": decision["state"],
+        "reason": reason,
+        "resolved": False,
+    }
+    if issue_url:
+        marker_payload["issue_url"] = issue_url
+    marker = f"<!-- {THREAD_LIFECYCLE_MARKER} {json.dumps(marker_payload, ensure_ascii=False, sort_keys=True)} -->"
+    lines = [
+        marker,
+        f"Codex thread lifecycle: `{decision['state']}`",
+        "",
+        f"- reason: {reason}",
+    ]
+    if evidence:
+        lines.append(f"- evidence: {evidence}")
+    if issue_url:
+        lines.append(f"- issue: {issue_url}")
+    if thread.get("comments"):
+        lines.append(f"- source comments: {len(thread.get('comments') or [])}")
+    return "\n".join(lines)
+
+
 def render_resolution_body(
     *,
     event: str,
@@ -723,32 +1655,82 @@ def render_resolution_body(
             if comment.get("line"):
                 location = f"{location}:{comment['line']}"
             url = comment.get("url") or ""
-            lines.append(f"- {location} - {resolution['reason']} {url}".rstrip())
+            lines.append(f"- {location} - {redact_secrets(str(resolution['reason']))} {url}".rstrip())
     if resolved:
         lines.extend(["", "이번에 해결됨:"])
         for comment, resolution in resolved[:25]:
             location = comment.get("file") or "일반"
             if comment.get("line"):
                 location = f"{location}:{comment['line']}"
-            lines.append(f"- {location} - {resolution['reason']}")
+            lines.append(f"- {location} - {redact_secrets(str(resolution['reason']))}")
     return "\n".join(lines)
+
+
+def render_apply_preflight_failure_body(error: str) -> str:
+    return "\n".join(
+        [
+            RESOLVE_MARKER,
+            "Codex thread lifecycle apply를 건너뛰었습니다.",
+            "",
+            "- 이벤트: REQUEST_CHANGES",
+            "- terminal 처리된 스레드: 0",
+            "- 열어둔 스레드: token preflight 실패",
+            "",
+            "원인:",
+            f"- {redact_secrets(error)}",
+            "",
+            "조치:",
+            "- apply job의 GitHub App token이 `pull-requests: write` 권한으로 review thread resolve를 수행할 수 있는지 확인해야 합니다.",
+            "- 이 단계에서는 thread reply/resolve나 deferred issue 생성을 시도하지 않았습니다.",
+        ]
+    )
 
 
 def command_apply_resolutions(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
-    comments = load_resolution_inputs(Path(args.batches))
-    resolutions = load_resolution_outputs(Path(args.results), set(comments))
+    preflight_error = apply_write_token_preflight(repo)
+    if preflight_error:
+        body = render_apply_preflight_failure_body(preflight_error)
+        try:
+            upsert_marker_comment(repo=repo, pr_number=pr_number, marker=RESOLVE_MARKER, body=body)
+        except SystemExit as exc:
+            raise SystemExit(
+                f"apply token preflight failed and sticky summary update failed: {preflight_error}; summary error: {exc}"
+            ) from exc
+        print(f"skipped apply-resolutions after token preflight failure: {preflight_error}")
+        return
+    inputs = load_resolution_inputs(Path(args.batches))
+    resolutions = load_resolution_outputs(Path(args.results), set(inputs))
+
+    if resolutions and all(isinstance(key, str) for key in resolutions):
+        apply_lifecycle_resolutions(repo=repo, pr_number=pr_number, threads=inputs, decisions=resolutions)  # type: ignore[arg-type]
+        return
 
     resolved: list[tuple[dict[str, Any], dict[str, Any]]] = []
     unresolved: list[tuple[dict[str, Any], dict[str, Any]]] = []
     resolved_threads: set[str] = set()
-    for comment_id, comment in comments.items():
+    for comment_id, comment in inputs.items():
         resolution = resolutions[comment_id]
         if resolution["resolved"]:
             thread_id = str(comment["thread_id"])
             if thread_id not in resolved_threads:
-                resolve_thread(thread_id)
+                body = render_lifecycle_reply(
+                    thread={"comments": [comment]},
+                    decision={
+                        "state": "resolved_by_code",
+                        "reason": resolution["reason"],
+                        "evidence": resolution["reason"],
+                    },
+                )
+                reply_error = try_reply_to_review_thread(thread_id, body)
+                if reply_error:
+                    unresolved.append((comment, {"reason": f"thread reply failed: {reply_error}"}))
+                    continue
+                error = try_resolve_thread(thread_id)
+                if error:
+                    unresolved.append((comment, {"reason": f"thread resolve failed: {error}"}))
+                    continue
                 resolved_threads.add(thread_id)
             resolved.append((comment, resolution))
         else:
@@ -758,6 +1740,151 @@ def command_apply_resolutions(args: argparse.Namespace) -> None:
     body = render_resolution_body(event=event, resolved=resolved, unresolved=unresolved)
     upsert_marker_comment(repo=repo, pr_number=pr_number, marker=RESOLVE_MARKER, body=body)
     print(f"updated sticky resolve-check summary; resolved={len(resolved)} unresolved={len(unresolved)}")
+
+
+def apply_lifecycle_resolutions(
+    *,
+    repo: str,
+    pr_number: str,
+    threads: dict[str, dict[str, Any]],
+    decisions: dict[str, dict[str, Any]],
+) -> None:
+    resolved: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    unresolved: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    no_issue_terminal = {"resolved_by_code", "false_positive", "stale_obsolete"}
+
+    for thread_id, thread in threads.items():
+        decision = decisions[thread_id]
+        state = decision["state"]
+        if thread.get("forced_state") == "needs_human":
+            unresolved.append(
+                (
+                    thread,
+                    {
+                        **decision,
+                        "state": "needs_human",
+                        "reason": str(thread.get("needs_human_hint") or "trusted collector forced needs_human"),
+                    },
+                )
+            )
+            continue
+        if state in {"fix_now", "needs_human"}:
+            unresolved.append((thread, decision))
+            continue
+
+        issue_url = decision.get("issue_url") or ""
+        if state == "defer_to_issue":
+            issue_request = decision.get("issue") or {}
+            if not issue_request:
+                unresolved.append((thread, {**decision, "reason": "defer_to_issue requires issue request"}))
+                continue
+            trusted_request = trusted_deferred_issue_request(repo, thread, issue_request)
+            try:
+                issue = create_or_update_deferred_issue(repo=repo, request=trusted_request)
+            except SystemExit as exc:
+                unresolved.append((thread, {**decision, "reason": f"deferred issue handling failed: {exc}"}))
+                continue
+            if issue.get("state") == "closed":
+                unresolved.append(
+                    (
+                        thread,
+                        {
+                            **decision,
+                            "reason": "matching deferred issue is closed; needs human decision before resolving",
+                        },
+                    )
+                )
+                continue
+            issue_url = str(issue.get("html_url") or issue_url)
+            if not issue_url:
+                unresolved.append((thread, {**decision, "reason": "issue url missing after deferred issue handling"}))
+                continue
+        elif state == "duplicate_of_issue":
+            if not issue_url:
+                unresolved.append((thread, {**decision, "reason": "duplicate_of_issue requires issue_url"}))
+                continue
+            try:
+                issue = get_same_repo_issue_by_url(repo, issue_url)
+            except SystemExit as exc:
+                unresolved.append((thread, {**decision, "reason": f"duplicate issue lookup failed: {exc}"}))
+                continue
+            if not issue:
+                unresolved.append((thread, {**decision, "reason": "duplicate issue_url must point to this repository"}))
+                continue
+            if issue.get("state") == "closed":
+                unresolved.append(
+                    (
+                        thread,
+                        {
+                            **decision,
+                            "state": "needs_human",
+                            "reason": "duplicate issue is closed; needs human decision before resolving",
+                        },
+                    )
+                )
+                continue
+            if not is_codex_deferred_issue(issue):
+                unresolved.append(
+                    (
+                        thread,
+                        {
+                            **decision,
+                            "state": "needs_human",
+                            "reason": "duplicate issue_url must point to an open Codex deferred issue, not a PR or general issue",
+                        },
+                    )
+                )
+                continue
+        elif state not in no_issue_terminal:
+            unresolved.append((thread, decision))
+            continue
+
+        reply_error = try_reply_to_review_thread(
+            thread_id,
+            render_lifecycle_reply(thread=thread, decision=decision, issue_url=issue_url or None),
+        )
+        if reply_error:
+            unresolved.append((thread, {**decision, "reason": f"thread reply failed: {reply_error}"}))
+            continue
+        error = try_resolve_thread(thread_id)
+        if error:
+            unresolved.append((thread, {**decision, "reason": f"thread resolve failed: {error}"}))
+            continue
+        resolved.append((thread, decision))
+
+    event = "REQUEST_CHANGES" if unresolved else "COMMENT"
+    body = render_lifecycle_resolution_body(event=event, resolved=resolved, unresolved=unresolved)
+    upsert_marker_comment(repo=repo, pr_number=pr_number, marker=RESOLVE_MARKER, body=body)
+    print(f"updated sticky lifecycle summary; resolved={len(resolved)} unresolved={len(unresolved)}")
+
+
+def render_lifecycle_resolution_body(
+    *,
+    event: str,
+    resolved: list[tuple[dict[str, Any], dict[str, Any]]],
+    unresolved: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> str:
+    lines = [
+        RESOLVE_MARKER,
+        "Codex thread lifecycle 확인이 완료되었습니다.",
+        "",
+        f"- 이벤트: {event}",
+        f"- terminal 처리된 스레드: {len(resolved)}",
+        f"- 열어둔 스레드: {len(unresolved)}",
+    ]
+    if unresolved:
+        lines.extend(["", "열어둔 스레드:"])
+        for thread, decision in unresolved[:25]:
+            location = thread.get("file") or "일반"
+            reason = redact_secrets(str(decision.get("reason", "")))
+            lines.append(f"- {location} - `{decision.get('state')}` {reason}".rstrip())
+    if resolved:
+        lines.extend(["", "이번에 terminal 처리됨:"])
+        for thread, decision in resolved[:25]:
+            location = thread.get("file") or "일반"
+            reason = redact_secrets(str(decision.get("reason", "")))
+            lines.append(f"- {location} - `{decision.get('state')}` {reason}".rstrip())
+    return "\n".join(lines)
 
 
 def latest_marker_comment(comments: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
@@ -983,17 +2110,11 @@ def command_build_review_context(args: argparse.Namespace) -> None:
     print(f"wrote review context to {args.output}")
 
 
-def finding_effectively_allowed(finding: dict[str, Any], decisions: dict[str, Any]) -> bool:
-    decision = decisions["by_id"].get(finding["id"])
-    return hard_allow(finding) or bool(decision and decision.get("allow"))
-
-
 def design_blockers(findings: list[dict[str, Any]], decisions: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     for finding in findings:
-        if not finding_effectively_allowed(finding, decisions):
-            continue
-        if hard_block(finding) or finding.get("type") == "MUST":
+        decision = decisions["by_id"].get(finding["id"])
+        if decision and decision.get("action") in {"publish_and_fix_now", "summary_only_fix_now"}:
             blockers.append(finding)
     return blockers
 
@@ -1007,6 +2128,7 @@ def should_run_design(findings: list[dict[str, Any]], decisions: dict[str, Any])
 def command_classify_design_need(args: argparse.Namespace) -> None:
     findings = load_current_findings(Path(args.artifacts))
     decisions = load_decisions(Path(args.decisions))
+    validate_decision_coverage(findings, decisions)
     needs_design, blocking_count = should_run_design(findings, decisions)
     write_github_output({"needs_design": "true" if needs_design else "false", "blocking_count": str(blocking_count)})
     print(f"needs_design={needs_design} blocking_count={blocking_count}")
@@ -1111,6 +2233,17 @@ def build_parser() -> argparse.ArgumentParser:
     post_current.add_argument("--artifacts", required=True)
     post_current.add_argument("--decisions", required=True)
     post_current.set_defaults(func=command_post_current)
+
+    plan_autofix = subparsers.add_parser("plan-autofix")
+    plan_autofix.add_argument("--artifacts", required=True)
+    plan_autofix.add_argument("--decisions", required=True)
+    plan_autofix.add_argument("--output", required=True)
+    plan_autofix.set_defaults(func=command_plan_autofix)
+
+    validate_autofix = subparsers.add_parser("validate-autofix-patch")
+    validate_autofix.add_argument("--manifest", required=True)
+    validate_autofix.add_argument("--patch", required=True)
+    validate_autofix.set_defaults(func=command_validate_autofix_patch)
 
     resolve_current = subparsers.add_parser("resolve-current")
     resolve_current.set_defaults(func=command_resolve_current)

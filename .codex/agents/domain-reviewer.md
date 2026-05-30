@@ -45,9 +45,10 @@ deposit-wallet / signer / relayer 의 경계, 공개 API 의 보수성, AGENTS.m
 - `TESTING.md` — acceptance evidence 의 요건
 - `REVIEW_CHECKLIST.md` — PR 리뷰 체크리스트
 
-## hard-rule 키워드
+## critical 키워드
 
-`rule_ref` 에 아래 키워드를 포함한 findings 는 post-script 의 hard rule 로 **강제 `allow=true`** 가 된다:
+`rule_ref` 에 아래 키워드를 포함한 findings 는 tech-lead 단계에서 사람이 볼 위험 신호로 취급된다.
+다만 v3 downstream은 `allow`를 쓰지 않으므로, 현재 코드와 diff 근거를 반드시 함께 남긴다.
 
 - `signing-safety-critical` — 서명 payload 의 근거 부재, nonce / chainId 혼동, deposit-wallet 의 live ready 주장에서 acceptance evidence 부족, public API 비호환 변경에서 docs 부재
 
