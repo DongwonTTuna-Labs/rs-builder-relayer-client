@@ -68,6 +68,13 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
                 home = "codex-home: ${{ runner.temp }}/codex-home-" + stage
                 self.assertEqual(2, self.workflow_text.count(home))
 
+    def test_codex_output_schemas_are_strict(self):
+        self.assertEqual(8, self.workflow_text.count('"additionalProperties":false'))
+        self.assertIn(
+            '"required":["finding_id","axis","severity","title","body","root_cause_key","file","line"]',
+            self.workflow_text,
+        )
+
     def test_trusted_push_job_has_the_only_contents_write_permission(self):
         write_permissions = re.findall(r"^\s{6}contents: write$", self.workflow_text, flags=re.MULTILINE)
 
