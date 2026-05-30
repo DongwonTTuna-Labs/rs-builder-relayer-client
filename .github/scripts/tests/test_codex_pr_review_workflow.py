@@ -70,6 +70,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
 
     def test_codex_output_schemas_are_strict(self):
         self.assertEqual(8, self.workflow_text.count('"additionalProperties":false'))
+        self.assertEqual(4, self.workflow_text.count('"schema_version":{"type":"string","enum":['))
+        self.assertNotIn('"schema_version":{"const":', self.workflow_text)
         self.assertIn(
             '"required":["finding_id","axis","severity","title","body","root_cause_key","file","line"]',
             self.workflow_text,
