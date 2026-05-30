@@ -5,12 +5,19 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
+import re
 import shlex
 from typing import Any
 
 
 class ContractViolation(ValueError):
     """Raised when a stage artifact does not satisfy its contract."""
+
+
+_HUNK_HEADER_RE = re.compile(
+    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))? "
+    r"\+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@(?: .*)?$"
+)
 
 
 def require_schema_version(payload: Mapping[str, Any], expected: str) -> None:
@@ -113,6 +120,64 @@ def _parse_unified_diff_files(patch: str) -> list[_PatchFile]:
         elif line == "GIT binary patch" and current is None:
             raise ContractViolation("binary patch missing diff --git header")
     return files
+
+
+def _hunk_count(raw_count: str | None) -> int:
+    return 1 if raw_count is None else int(raw_count)
+
+
+def validate_unified_diff_hunks(patch: str) -> None:
+    """Reject unified diffs whose hunk headers do not match their line bodies."""
+    expected_old: int | None = None
+    expected_new: int | None = None
+    actual_old = 0
+    actual_new = 0
+    hunk_start = 0
+
+    def finish_hunk() -> None:
+        if expected_old is None or expected_new is None:
+            return
+        if actual_old != expected_old or actual_new != expected_new:
+            raise ContractViolation(
+                f"malformed unified diff hunk at line {hunk_start}: "
+                f"expected -{expected_old}/+{expected_new} lines, "
+                f"saw -{actual_old}/+{actual_new}"
+            )
+
+    for lineno, line in enumerate(patch.splitlines(), 1):
+        if line.startswith("@@ "):
+            finish_hunk()
+            match = _HUNK_HEADER_RE.match(line)
+            if not match:
+                raise ContractViolation(f"malformed unified diff hunk at line {lineno}")
+            expected_old = _hunk_count(match.group("old_count"))
+            expected_new = _hunk_count(match.group("new_count"))
+            actual_old = 0
+            actual_new = 0
+            hunk_start = lineno
+            continue
+        if line.startswith("diff --git "):
+            finish_hunk()
+            expected_old = None
+            expected_new = None
+            actual_old = 0
+            actual_new = 0
+            hunk_start = 0
+            continue
+        if expected_old is None or expected_new is None:
+            continue
+        if line.startswith("\\"):
+            continue
+        if line.startswith(" "):
+            actual_old += 1
+            actual_new += 1
+        elif line.startswith("-"):
+            actual_old += 1
+        elif line.startswith("+"):
+            actual_new += 1
+        else:
+            raise ContractViolation(f"malformed unified diff hunk at line {lineno}")
+    finish_hunk()
 
 
 def parse_unified_diff_scope_paths(patch: str) -> list[str]:

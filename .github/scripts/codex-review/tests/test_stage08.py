@@ -42,16 +42,22 @@ def run_state(loop_count=0, event_name="pull_request_target"):
 
 
 class Stage08Tests(unittest.TestCase):
-    def test_push_schedules_next_synchronize_reentry(self):
-        result = build_reentry_result(push(), run_state())
+    def test_push_builds_same_run_reentry_artifact(self):
+        state = run_state(event_name="pull_request_target")
+        result = build_reentry_result(push(), state)
 
         self.assertEqual("codex.stage08.reentry.v1", result["schema_version"])
         self.assertEqual("stage08-reentry", result["stage"])
-        self.assertEqual("await_synchronize", result["status"])
-        self.assertFalse(result["same_run_reentry"])
+        self.assertEqual("same_run_reentry_ready", result["status"])
+        self.assertTrue(result["same_run_reentry"])
         self.assertTrue(result["can_continue"])
         self.assertEqual("stage00-resolve-gate", result["next_stage"])
         self.assertEqual("c" * 40, result["expected_head_sha"])
+        self.assertEqual("pull_request_target", result["source_event_name"])
+        self.assertEqual("pull_request_target", result["next_event_name"])
+        self.assertNotEqual("synchronize", result["next_event_name"])
+        self.assertEqual(state["loop_count"] + 1, result["loop_count"])
+        self.assertEqual(state["max_loops"], result["max_loops"])
 
     def test_same_run_loop_is_rejected_when_loop_count_reaches_max(self):
         with self.assertRaises(ValueError) as ctx:
@@ -111,7 +117,9 @@ class Stage08Tests(unittest.TestCase):
             self.assertEqual(0, result.returncode)
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual("codex.stage08.reentry.v1", payload["schema_version"])
-            self.assertEqual("await_synchronize", payload["status"])
+            self.assertEqual("same_run_reentry_ready", payload["status"])
+            self.assertTrue(payload["same_run_reentry"])
+            self.assertNotEqual("synchronize", payload["next_event_name"])
 
 
 if __name__ == "__main__":

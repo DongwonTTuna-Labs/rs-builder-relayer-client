@@ -261,6 +261,22 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertIn("patch files must match touched_files", str(ctx.exception))
 
+    def test_malformed_hunk_counts_are_rejected_before_stage07(self):
+        payload = fix_outputs()
+        payload["outputs"][0]["patch"] = (
+            "diff --git a/src/lib.rs b/src/lib.rs\n"
+            "--- a/src/lib.rs\n"
+            "+++ b/src/lib.rs\n"
+            "@@ -1,2 +1,2 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            build_fix_merge_result(dispatch(), payload)
+
+        self.assertIn("malformed unified diff hunk", str(ctx.exception))
+
     def test_patch_files_must_be_allowed_even_when_touched_files_claim_allowed(self):
         payload = fix_outputs()
         payload["outputs"][0]["patch"] = (

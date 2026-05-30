@@ -10,6 +10,7 @@ from .validators import (
     parse_unified_diff_scope_paths,
     require_keys,
     require_schema_version,
+    validate_unified_diff_hunks,
 )
 
 
@@ -106,8 +107,13 @@ def _validate_output(raw_output: Any, task: dict[str, Any]) -> dict[str, Any]:
         allow_empty=status == "conflict",
     )
     patch = str(raw_output.get("patch") or "")
-    patch_files = parse_unified_diff_paths(patch) if patch.strip() else []
-    patch_scope_files = parse_unified_diff_scope_paths(patch) if patch.strip() else []
+    if patch.strip():
+        validate_unified_diff_hunks(patch)
+        patch_files = parse_unified_diff_paths(patch)
+        patch_scope_files = parse_unified_diff_scope_paths(patch)
+    else:
+        patch_files = []
+        patch_scope_files = []
     allowed_files = set(task["allowed_files"])
     for path in sorted(set(touched_files) | set(patch_scope_files)):
         if path not in allowed_files:

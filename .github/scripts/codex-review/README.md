@@ -106,7 +106,10 @@ workflow `GITHUB_TOKEN` does not create a new workflow run, so the PR-scoped
 Stage08 is therefore a same-run artifact contract: after Stage07 writes
 `codex-v3-stage07`, Stage08 downloads it and `run-state.json`, writes
 `stage08-reentry.json`, and uploads `codex-v3-stage08` with
-`if-no-files-found: error`.
+`if-no-files-found: error`. The artifact records `same_run_reentry: true` and
+`status: same_run_reentry_ready`; `next_event_name` mirrors the source run
+event to document that no new `synchronize` event is being awaited. `loop_count`
+is still incremented so the same-run reentry limit remains enforceable.
 
 ## Non-Negotiable Rules
 
