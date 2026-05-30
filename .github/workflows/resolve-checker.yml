@@ -229,7 +229,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@1ef985bfb6ee2090a4909ff459d70728e164f318
         with:
           codex-home: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
