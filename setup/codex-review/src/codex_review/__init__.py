@@ -6,5 +6,6 @@ __all__ = [
     "relay",
     "stage00",
     "stage01",
+    "stage02",
     "validators",
 ]
