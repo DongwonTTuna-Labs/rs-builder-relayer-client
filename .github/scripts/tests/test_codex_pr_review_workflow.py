@@ -1,3 +1,4 @@
+import json
 import re
 import unittest
 from pathlib import Path
@@ -76,6 +77,25 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             '"required":["finding_id","axis","severity","title","body","root_cause_key","file","line"]',
             self.workflow_text,
         )
+        schemas = [
+            json.loads(line.strip())
+            for line in self.workflow_text.splitlines()
+            if line.strip().startswith('{"type":"object"')
+        ]
+        self.assertEqual(4, len(schemas))
+
+        def assert_enum_types(node, path="schema"):
+            if isinstance(node, dict):
+                if "enum" in node:
+                    self.assertIn("type", node, path)
+                for key, value in node.items():
+                    assert_enum_types(value, f"{path}.{key}")
+            elif isinstance(node, list):
+                for index, value in enumerate(node):
+                    assert_enum_types(value, f"{path}[{index}]")
+
+        for schema in schemas:
+            assert_enum_types(schema)
 
     def test_trusted_push_job_has_the_only_contents_write_permission(self):
         write_permissions = re.findall(r"^\s{6}contents: write$", self.workflow_text, flags=re.MULTILINE)

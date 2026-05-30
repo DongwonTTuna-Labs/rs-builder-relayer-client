@@ -178,7 +178,7 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home-stage01
           codex-args: ${{ steps.relay-token.outputs.codex_args }}
           output-schema: |
-            {"type":"object","additionalProperties":false,"required":["schema_version","status","summary","axis_results","findings"],"properties":{"schema_version":{"type":"string","enum":["codex.stage01.model_review.v1"]},"status":{"enum":["lgtm","needs_work"]},"summary":{"type":"string"},"axis_results":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["axis","status","summary"],"properties":{"axis":{"enum":["correctness","tests","performance","domain"]},"status":{"enum":["lgtm","needs_work"]},"summary":{"type":"string"}}}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["finding_id","axis","severity","title","body","root_cause_key","file","line"],"properties":{"finding_id":{"type":"string"},"axis":{"enum":["correctness","tests","performance","domain"]},"severity":{"enum":["must","should","nit"]},"title":{"type":"string"},"body":{"type":"string"},"root_cause_key":{"type":"string"},"file":{"type":["string","null"]},"line":{"type":["integer","null"]}}}}}}
+            {"type":"object","additionalProperties":false,"required":["schema_version","status","summary","axis_results","findings"],"properties":{"schema_version":{"type":"string","enum":["codex.stage01.model_review.v1"]},"status":{"type":"string","enum":["lgtm","needs_work"]},"summary":{"type":"string"},"axis_results":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["axis","status","summary"],"properties":{"axis":{"type":"string","enum":["correctness","tests","performance","domain"]},"status":{"type":"string","enum":["lgtm","needs_work"]},"summary":{"type":"string"}}}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["finding_id","axis","severity","title","body","root_cause_key","file","line"],"properties":{"finding_id":{"type":"string"},"axis":{"type":"string","enum":["correctness","tests","performance","domain"]},"severity":{"type":"string","enum":["must","should","nit"]},"title":{"type":"string"},"body":{"type":"string"},"root_cause_key":{"type":"string"},"file":{"type":["string","null"]},"line":{"type":["integer","null"]}}}}}}
       - uses: actions/upload-artifact@v7
         with:
           name: codex-v3-stage01-model
@@ -369,7 +369,7 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home-stage04
           codex-args: ${{ steps.relay-token.outputs.codex_args }}
           output-schema: |
-            {"type":"object","additionalProperties":false,"required":["schema_version","status","summary","reviewed_step_ids","rejection_reasons"],"properties":{"schema_version":{"type":"string","enum":["codex.stage04.model_design_chief.v1"]},"status":{"enum":["approved","rejected"]},"summary":{"type":"string"},"reviewed_step_ids":{"type":"array","items":{"type":"string"}},"rejection_reasons":{"type":"array","items":{"type":"string"}}}}
+            {"type":"object","additionalProperties":false,"required":["schema_version","status","summary","reviewed_step_ids","rejection_reasons"],"properties":{"schema_version":{"type":"string","enum":["codex.stage04.model_design_chief.v1"]},"status":{"type":"string","enum":["approved","rejected"]},"summary":{"type":"string"},"reviewed_step_ids":{"type":"array","items":{"type":"string"}},"rejection_reasons":{"type":"array","items":{"type":"string"}}}}
       - uses: actions/upload-artifact@v7
         with:
           name: codex-v3-stage04-model
@@ -471,7 +471,7 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home-stage05
           codex-args: ${{ steps.relay-token.outputs.codex_args }}
           output-schema: |
-            {"type":"object","additionalProperties":false,"required":["schema_version","outputs"],"properties":{"schema_version":{"type":"string","enum":["codex.stage06.fix_outputs.v1"]},"outputs":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["task_id","status","patch","touched_files","tests","conflict_reason"],"properties":{"task_id":{"type":"string"},"status":{"enum":["completed","conflict"]},"patch":{"type":"string"},"touched_files":{"type":"array","items":{"type":"string"}},"tests":{"type":"array","items":{"type":"string"}},"conflict_reason":{"type":"string"}}}}}}
+            {"type":"object","additionalProperties":false,"required":["schema_version","outputs"],"properties":{"schema_version":{"type":"string","enum":["codex.stage06.fix_outputs.v1"]},"outputs":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["task_id","status","patch","touched_files","tests","conflict_reason"],"properties":{"task_id":{"type":"string"},"status":{"type":"string","enum":["completed","conflict"]},"patch":{"type":"string"},"touched_files":{"type":"array","items":{"type":"string"}},"tests":{"type":"array","items":{"type":"string"}},"conflict_reason":{"type":"string"}}}}}}
       - uses: actions/upload-artifact@v7
         with:
           name: codex-v3-fix-outputs
