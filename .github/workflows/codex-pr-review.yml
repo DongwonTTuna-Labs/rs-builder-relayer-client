@@ -133,14 +133,19 @@ jobs:
         with:
           name: codex-v3-context
           path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage00-lifecycle
+          path: artifacts
       - shell: bash
         run: |
           set -euo pipefail
           printf '%s\n' "Review this pull request and return only codex.stage01.model_review.v1 JSON." \
             "Use axes correctness, tests, performance, and domain. Write human-readable text in Korean." \
+            "Use stage00 lifecycle and thread inventory before evaluating the current diff." \
             "Security hardening is out of scope; do not raise sandbox privilege findings unless they break stage contracts." \
             "Do not edit files, push, post comments, or depend on legacy workflow scripts." > artifacts/stage01-prompt.md
-          cat artifacts/review-request.json >> artifacts/stage01-prompt.md
+          cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/review-request.json >> artifacts/stage01-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
@@ -177,6 +182,10 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
     outputs:
       requires_design: ${{ steps.result.outputs.requires_design }}
       requires_fix: ${{ steps.result.outputs.requires_fix }}
@@ -194,11 +203,27 @@ jobs:
           name: codex-v3-stage01-model
           path: artifacts
       - id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.stage00-resolve-gate.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
           PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage01-review --request artifacts/review-request.json --model-output artifacts/stage01-model-review.json --out artifacts/stage01-review.json
           PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage02-techlead --review artifacts/stage01-review.json --out artifacts/stage02-techlead.json
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage02-comment --review artifacts/stage01-review.json --techlead artifacts/stage02-techlead.json --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --out artifacts/stage02-comment.md
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          body = Path("artifacts/stage02-comment.md").read_text(encoding="utf-8")
+          Path("artifacts/stage02-comment-payload.json").write_text(json.dumps({"body": body}), encoding="utf-8")
+          PY
+          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | select(.body | contains("<!-- codex-review-v3-stage02 -->")) | .id' | tail -n 1)"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/$comment_id" --input artifacts/stage02-comment-payload.json >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input artifacts/stage02-comment-payload.json >/dev/null
+          fi
           python3 - <<'PY'
           import json, os
           data = json.load(open("artifacts/stage02-techlead.json", encoding="utf-8"))

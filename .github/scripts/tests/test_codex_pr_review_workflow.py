@@ -28,7 +28,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
     def test_uses_one_codex_orchestrator_workflow(self):
         self.assertTrue(WORKFLOW_PATH.exists())
         self.assertFalse(RESOLVE_WORKFLOW_PATH.exists(), "resolve-checker.yml must be folded into the v3 orchestrator")
-        self.assertLess(len(self.workflow_text.splitlines()), 650)
+        self.assertLess(len(self.workflow_text.splitlines()), 700)
 
     def test_orchestrator_calls_all_stage_cli_contracts(self):
         for stage in STAGES:
@@ -166,6 +166,26 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("python3 -m codex_review.cli stage00-lifecycle", stage00)
         self.assertIn("artifacts/stage00-lifecycle.json", stage00)
         self.assertIn("data = json.load(open(\"artifacts/stage00-lifecycle.json\"", stage00)
+
+    def test_stage01_prompt_consumes_lifecycle_context(self):
+        stage01 = self.workflow_text.split("stage01-review-model:", 1)[1].split("stage01-stage02:", 1)[0]
+
+        self.assertIn("name: codex-v3-stage00-lifecycle", stage01)
+        self.assertIn("Use stage00 lifecycle and thread inventory", stage01)
+        self.assertIn(
+            "cat artifacts/stage00-lifecycle.json artifacts/thread-inventory.json artifacts/review-request.json",
+            stage01,
+        )
+
+    def test_stage02_posts_sticky_review_summary_to_pr(self):
+        stage02 = self.workflow_text.split("stage01-stage02:", 1)[1].split("stage03-design-model:", 1)[0]
+
+        self.assertIn("issues: write", stage02)
+        self.assertIn("python3 -m codex_review.cli stage02-comment", stage02)
+        self.assertIn("codex-review-v3-stage02", stage02)
+        self.assertIn("issues/${PR_NUMBER}/comments", stage02)
+        self.assertIn("issues/comments/$comment_id", stage02)
+        self.assertNotIn("openai/codex-action", stage02)
 
     def test_stage05_prompt_allows_workflow_files_when_allowed(self):
         self.assertIn("Only modify files listed in allowed_files.", self.workflow_text)

@@ -55,6 +55,16 @@ human-blocking gates stay blocking and keep `can_continue` false.
 
 The workflow uploads this artifact as `codex-v3-stage00-lifecycle`.
 
+Stage01 model prompts must include both `stage00-lifecycle.json` and
+`thread-inventory.json` so unresolved thread lifecycle state is reviewed as part
+of the current PR context instead of being left as an unused artifact.
+
+## Review Summary Comment
+
+Stage02 writes a marker-based sticky PR comment from the trusted workflow path
+after `stage01-review.json` and `stage02-techlead.json` are validated. Model jobs
+must not post comments directly.
+
 ## Validation Command Contract
 
 Stage05 fix dispatch tasks may include a `test_plan`, and individual fix outputs

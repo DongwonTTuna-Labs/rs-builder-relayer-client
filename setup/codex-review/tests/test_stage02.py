@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_review.stage02 import build_techlead_result
+from codex_review.stage02 import build_review_comment_body, build_techlead_result
 
 
 def finding(finding_id="REV-001", severity="must"):
@@ -83,6 +83,20 @@ class Stage02Tests(unittest.TestCase):
         self.assertEqual([], result["blocking_finding_ids"])
         self.assertEqual(["REV-003"], result["non_blocking_finding_ids"])
 
+    def test_review_comment_body_lists_status_findings_and_run_url(self):
+        review_payload = review(findings=[finding("REV-001", "must")])
+        techlead_payload = build_techlead_result(review_payload)
+
+        body = build_review_comment_body(review_payload, techlead_payload, run_url="https://example.invalid/run/1")
+
+        self.assertIn("<!-- codex-review-v3-stage02 -->", body)
+        self.assertIn("status: `needs_design`", body)
+        self.assertIn("blocking: `REV-001`", body)
+        self.assertIn("https://example.invalid/run/1", body)
+        self.assertIn("REV-001", body)
+        self.assertIn("Fix incorrect value", body)
+        self.assertIn("src/lib.rs:10", body)
+
     def test_finding_count_mismatch_fails_closed(self):
         payload = review()
         payload["finding_count"] = 2
@@ -135,6 +149,46 @@ class Stage02Tests(unittest.TestCase):
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual("codex.stage02.techlead.v1", payload["schema_version"])
             self.assertEqual("needs_design", payload["status"])
+
+    def test_cli_writes_review_comment_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            review_payload = review()
+            techlead_payload = build_techlead_result(review_payload)
+            review_path = tmp_path / "review.json"
+            techlead_path = tmp_path / "techlead.json"
+            out_path = tmp_path / "comment.md"
+            review_path.write_text(json.dumps(review_payload), encoding="utf-8")
+            techlead_path.write_text(json.dumps(techlead_payload), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_review.cli",
+                    "stage02-comment",
+                    "--review",
+                    str(review_path),
+                    "--techlead",
+                    str(techlead_path),
+                    "--run-url",
+                    "https://example.invalid/run/2",
+                    "--out",
+                    str(out_path),
+                ],
+                cwd=ROOT,
+                env={"PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual("", result.stderr)
+            self.assertEqual(0, result.returncode)
+            body = out_path.read_text(encoding="utf-8")
+            self.assertIn("<!-- codex-review-v3-stage02 -->", body)
+            self.assertIn("https://example.invalid/run/2", body)
 
 
 if __name__ == "__main__":

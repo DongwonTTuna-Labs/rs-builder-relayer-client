@@ -12,6 +12,7 @@ TECHLEAD_SCHEMA = "codex.stage02.techlead.v1"
 REVIEW_STATUSES = {"lgtm", "needs_work"}
 FINDING_SEVERITIES = {"must", "should", "nit"}
 BLOCKING_SEVERITIES = {"must", "should"}
+COMMENT_MARKER = "<!-- codex-review-v3-stage02 -->"
 
 
 def _require_string(value: Any, field: str) -> str:
@@ -130,3 +131,47 @@ def build_techlead_result(review_payload: dict[str, Any]) -> dict[str, Any]:
         "non_blocking_finding_ids": non_blocking_ids,
         "summary": review["summary"],
     }
+
+
+def _format_location(finding: dict[str, Any]) -> str:
+    file = str(finding.get("file") or "").strip()
+    line = finding.get("line")
+    if file and isinstance(line, int) and line > 0:
+        return f"{file}:{line}"
+    return file or "general"
+
+
+def build_review_comment_body(
+    review_payload: dict[str, Any], techlead_payload: dict[str, Any], *, run_url: str = ""
+) -> str:
+    review = validate_review_artifact(review_payload)
+    require_schema_version(techlead_payload, TECHLEAD_SCHEMA)
+    require_keys(techlead_payload, ["status", "blocking_finding_ids", "non_blocking_finding_ids", "summary"])
+    status = _require_string(techlead_payload.get("status"), "techlead status")
+    blocking_ids = [str(item) for item in techlead_payload.get("blocking_finding_ids") or []]
+    non_blocking_ids = [str(item) for item in techlead_payload.get("non_blocking_finding_ids") or []]
+    summary = str(techlead_payload.get("summary") or review["summary"] or "").strip()
+    lines = [
+        COMMENT_MARKER,
+        "## Codex Review V3",
+        "",
+        f"- status: `{status}`",
+        f"- findings: `{len(review['findings'])}`",
+        f"- blocking: `{', '.join(blocking_ids) if blocking_ids else 'none'}`",
+        f"- non-blocking: `{', '.join(non_blocking_ids) if non_blocking_ids else 'none'}`",
+    ]
+    if run_url.strip():
+        lines.append(f"- run: {run_url.strip()}")
+    if summary:
+        lines.extend(["", "### Summary", summary])
+    if review["findings"]:
+        lines.extend(["", "### Findings"])
+        for finding in review["findings"]:
+            lines.append(
+                f"- `{finding['finding_id']}` `{finding['severity']}` `{finding['axis']}` "
+                f"{_format_location(finding)} - {finding['title']}"
+            )
+            lines.append(f"  {finding['body']}")
+    else:
+        lines.extend(["", "No findings."])
+    return "\n".join(lines).rstrip() + "\n"

@@ -230,6 +230,22 @@ def run_stage00_lifecycle(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stage02_comment(args: argparse.Namespace) -> int:
+    from .artifacts import read_json_artifact
+    from .stage02 import build_review_comment_body
+
+    body = build_review_comment_body(
+        read_json_artifact(args.review),
+        read_json_artifact(args.techlead),
+        run_url=args.run_url,
+    )
+    if args.out:
+        args.out.write_text(body, encoding="utf-8")
+    else:
+        print(body, end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -251,6 +267,12 @@ def build_parser() -> argparse.ArgumentParser:
     lifecycle.add_argument("--inventory", type=Path, required=True)
     lifecycle.add_argument("--out", type=Path, required=False)
     lifecycle.set_defaults(func=run_stage00_lifecycle)
+    comment = subparsers.add_parser("stage02-comment")
+    comment.add_argument("--review", type=Path, required=True)
+    comment.add_argument("--techlead", type=Path, required=True)
+    comment.add_argument("--run-url", required=True)
+    comment.add_argument("--out", type=Path, required=False)
+    comment.set_defaults(func=run_stage02_comment)
     fallback = subparsers.add_parser("stage05-fallback-fix-outputs")
     fallback.add_argument("--dispatch", type=Path, required=True)
     fallback.add_argument("--reason", required=True)
