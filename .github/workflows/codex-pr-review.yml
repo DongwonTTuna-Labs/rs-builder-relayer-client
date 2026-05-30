@@ -101,7 +101,7 @@ jobs:
           PY
       - uses: actions/checkout@v6
         with:
-          ref: ${{ steps.meta.outputs.base_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - shell: bash
         run: |
@@ -195,7 +195,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -296,7 +296,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -383,7 +383,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -484,7 +484,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -585,7 +585,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:

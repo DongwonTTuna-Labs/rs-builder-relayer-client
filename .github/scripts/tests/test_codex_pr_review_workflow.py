@@ -100,6 +100,11 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("--json baseRefName,headRefName,headRefOid,headRepository,files", self.workflow_text)
         self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BASE_REF}"', self.workflow_text)
 
+    def test_trusted_stage_checkouts_use_workflow_ref_for_dispatch_validation(self):
+        self.assertNotIn("ref: ${{ steps.meta.outputs.base_sha }}", self.workflow_text)
+        self.assertNotIn("ref: ${{ needs.stage00-resolve-gate.outputs.base_sha }}", self.workflow_text)
+        self.assertGreaterEqual(self.workflow_text.count("ref: ${{ github.sha }}"), 6)
+
 
 if __name__ == "__main__":
     unittest.main()
