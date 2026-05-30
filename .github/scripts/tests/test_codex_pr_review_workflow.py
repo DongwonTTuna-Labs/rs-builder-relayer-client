@@ -287,6 +287,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
 
         self.assertEqual("read", validate["permissions"]["contents"])
         self.assertEqual("read", validate["permissions"]["pull-requests"])
+        self.assertEqual("read", validate["permissions"]["actions"])
         self.assertNotIn("issues", validate["permissions"])
         self.assertNotIn("id-token", validate["permissions"])
         self.assertEqual("validate-upstream", collect["needs"])
