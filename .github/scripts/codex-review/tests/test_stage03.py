@@ -86,7 +86,7 @@ def model_design(target_ids=None):
                 "files": ["src/lib.rs"],
             }
         ],
-        "test_plan": ["Run the existing Rust test suite."],
+        "test_plan": ["cargo test --workspace --all-features"],
         "risk_notes": ["The main risk is preserving current caller behavior."],
     }
 
@@ -102,7 +102,7 @@ class Stage03Tests(unittest.TestCase):
         self.assertTrue(result["requires_design"])
         self.assertEqual(["REV-001"], result["target_finding_ids"])
         self.assertEqual("DES-001", result["implementation_steps"][0]["step_id"])
-        self.assertEqual(["Run the existing Rust test suite."], result["test_plan"])
+        self.assertEqual(["cargo test --workspace --all-features"], result["test_plan"])
 
     def test_stage03_requires_design_required_techlead(self):
         with self.assertRaises(ValueError) as ctx:

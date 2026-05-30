@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .stage07 import validation_command_argv
 from .validators import parse_unified_diff_paths, require_keys, require_schema_version
 
 
@@ -136,6 +137,21 @@ def validate_fix_outputs(payload: dict[str, Any], dispatch: dict[str, Any]) -> l
     return [_validate_output(output, dispatch["tasks_by_id"][str(output["task_id"])]) for output in raw_outputs]
 
 
+def _partition_stage07_validation_commands(commands: list[str]) -> tuple[list[str], list[str]]:
+    validation_commands: list[str] = []
+    deferred_validation_commands: list[str] = []
+    for command in commands:
+        try:
+            validation_command_argv(command)
+        except ValueError:
+            deferred_validation_commands.append(command)
+        else:
+            validation_commands.append(command)
+    if not validation_commands:
+        validation_commands.append("git diff --check")
+    return validation_commands, deferred_validation_commands
+
+
 def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload: dict[str, Any]) -> dict[str, Any]:
     dispatch = validate_dispatch(dispatch_payload)
     outputs = validate_fix_outputs(fix_outputs_payload, dispatch)
@@ -161,17 +177,17 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
         for output in outputs
         if output["status"] == "completed"
     )
-    validation_commands = list(
+    raw_validation_commands = list(
         dict.fromkeys(
             command
             for task in dispatch["tasks"]
             for command in task["test_plan"]
         )
     )
-    validation_commands = list(
+    raw_validation_commands = list(
         dict.fromkeys(
             [
-                *validation_commands,
+                *raw_validation_commands,
                 *[
                     command
                     for output in outputs
@@ -179,6 +195,9 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
                 ],
             ]
         )
+    )
+    validation_commands, deferred_validation_commands = _partition_stage07_validation_commands(
+        raw_validation_commands
     )
     return {
         "schema_version": FIX_MERGE_SCHEMA,
@@ -193,6 +212,7 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
         "task_ids": dispatch["task_ids"],
         "touched_files": touched_files,
         "validation_commands": validation_commands,
+        "deferred_validation_commands": deferred_validation_commands,
         "candidate_patch": "" if conflicts else candidate_patch + "\n",
         "conflicts": conflicts,
     }

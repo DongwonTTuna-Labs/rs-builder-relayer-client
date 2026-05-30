@@ -221,6 +221,21 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("Only modify files listed in allowed_files.", self.workflow_text)
         self.assertNotIn("touch workflow files", self.workflow_text)
 
+    def test_stage03_prompt_requires_exact_test_plan_commands(self):
+        stage03 = self.workflow_text.split("stage03-design-model:", 1)[1].split("stage03-design:", 1)[0]
+
+        self.assertIn("test_plan entries must be exact commands", stage03)
+        self.assertIn("one command per entry", stage03)
+        self.assertIn("no markdown, no backticks, no prose", stage03)
+        self.assertIn("cargo test --workspace --all-features", stage03)
+
+    def test_stage04_prompt_uses_stage06_stage07_validation_split(self):
+        stage04 = self.workflow_text.split("stage04-design-chief-model:", 1)[1].split("stage04-stage05:", 1)[0]
+
+        self.assertIn("Approve exact test_plan commands", stage04)
+        self.assertIn("Stage06 separates Stage07 push-safe validation_commands", stage04)
+        self.assertIn("deferred_validation_commands", stage04)
+
     def test_stage05_prompt_requires_final_json_or_conflict(self):
         stage05 = self.workflow_text.split("stage05-fix-agent:", 1)[1].split("stage06-fix-merge:", 1)[0]
 

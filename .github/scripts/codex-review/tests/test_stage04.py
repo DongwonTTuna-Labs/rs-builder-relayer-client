@@ -34,7 +34,7 @@ def design():
                 "files": ["src/lib.rs"],
             }
         ],
-        "test_plan": ["Run the existing Rust test suite."],
+        "test_plan": ["cargo test --workspace --all-features"],
         "risk_notes": ["The main risk is preserving current caller behavior."],
     }
 

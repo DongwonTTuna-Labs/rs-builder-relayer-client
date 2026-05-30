@@ -29,7 +29,8 @@ def fix_merge():
         "head_sha": "b" * 40,
         "task_ids": ["FIX-DES-001"],
         "touched_files": ["src/lib.rs"],
-        "validation_commands": ["python3 -m unittest discover -s .github/scripts/codex-review/tests"],
+        "validation_commands": ["git diff --check"],
+        "deferred_validation_commands": ["python3 -m unittest discover -s .github/scripts/codex-review/tests"],
         "candidate_patch": "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
         "conflicts": [],
     }
@@ -104,7 +105,7 @@ class Stage07Tests(unittest.TestCase):
         self.assertFalse(result["pr_merged"])
         self.assertEqual("c" * 40, result["pushed_head_sha"])
         self.assertEqual(["src/lib.rs"], result["touched_files"])
-        self.assertEqual(["python3 -m unittest discover -s .github/scripts/codex-review/tests"], result["validation_commands"])
+        self.assertEqual(["git diff --check"], result["validation_commands"])
 
     def test_stage07_requires_validation_commands(self):
         payload = fix_merge()

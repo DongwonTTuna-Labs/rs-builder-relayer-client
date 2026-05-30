@@ -281,9 +281,13 @@ jobs:
       - shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "Create codex.stage03.model_design.v1 JSON for the blocking findings." > artifacts/stage03-prompt.md
-          printf '%s\n' "The PR head checkout is in workspace; inspect review target files and diffs through that path." >> artifacts/stage03-prompt.md
-          cat artifacts/stage01-review.json artifacts/stage02-techlead.json >> artifacts/stage03-prompt.md
+          {
+            printf '%s\n' "Create codex.stage03.model_design.v1 JSON for the blocking findings."
+            printf '%s\n' "The PR head checkout is in workspace; inspect review target files and diffs through that path."
+            printf '%s\n' "test_plan entries must be exact commands: one command per entry, no markdown, no backticks, no prose."
+            printf '%s\n' "Use exact commands such as cargo fmt --all --check, cargo clippy --workspace --all-targets --all-features -- -D warnings, cargo test --workspace --all-features, python3 -m unittest discover -s .github/scripts/codex-review/tests, git diff --check."
+            cat artifacts/stage01-review.json artifacts/stage02-techlead.json
+          } > artifacts/stage03-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
@@ -376,9 +380,13 @@ jobs:
       - shell: bash
         run: |
           set -euo pipefail
-          printf '%s\n' "Approve or reject the design. Return codex.stage04.model_design_chief.v1 JSON only." > artifacts/stage04-prompt.md
-          printf '%s\n' "The PR head checkout is in workspace; inspect review target files and diffs through that path." >> artifacts/stage04-prompt.md
-          cat artifacts/stage03-design.json >> artifacts/stage04-prompt.md
+          {
+            printf '%s\n' "Approve or reject the design. Return codex.stage04.model_design_chief.v1 JSON only."
+            printf '%s\n' "The PR head checkout is in workspace; inspect review target files and diffs through that path."
+            printf '%s\n' "Approve exact test_plan commands; reject markdown, backticks, prose, or combined command strings."
+            printf '%s\n' "Stage06 separates Stage07 push-safe validation_commands from full deferred_validation_commands, so do not reject exact cargo test, cargo clippy, or python3 unittest commands solely because Stage07 will not run them."
+            cat artifacts/stage03-design.json
+          } > artifacts/stage04-prompt.md
       - id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:

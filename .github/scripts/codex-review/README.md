@@ -73,16 +73,22 @@ must not post comments directly.
 ## Validation Command Contract
 
 Stage05 fix dispatch tasks may include a `test_plan`, and individual fix outputs
-may include `tests`. Stage06 deduplicates those entries into
-`validation_commands` in `stage06-fix-merge.json`.
+may include `tests`. Stage03/Stage05 entries must be exact commands, with one
+command per entry and no markdown, backticks, prose, or combined shell strings.
+Stage06 deduplicates those entries and partitions them in
+`stage06-fix-merge.json`: `validation_commands` contains only Stage07
+push-safe commands, while `deferred_validation_commands` preserves full
+PR-head validation commands such as Python test discovery, `cargo test`, and
+`cargo clippy` for non-privileged CI or final human verification evidence.
 
 Stage07 requires non-empty `validation_commands`. After applying the candidate
 patch and running `git diff --check`, the trusted push job runs each validation
 command from a narrow allowlist of trusted-ref workflow helper commands or fixed
 safe commands before committing or pushing. The privileged write job must not run
 PR-head-controlled code, including Python test discovery, `cargo test`, or
-`cargo clippy`. Missing, unsupported, or failing validation commands block the
-push.
+`cargo clippy`. Unsupported commands are not passed to Stage07; if every planned
+validation is deferred, Stage06 falls back to `git diff --check` for push-safety.
+Missing, unsupported, or failing Stage07 validation commands block the push.
 
 The trusted push job rechecks the changed file set after validation and before
 commit. The staged diff must still match the Stage06 `touched_files` list, and

@@ -75,8 +75,12 @@ class Stage06Tests(unittest.TestCase):
         self.assertIn("diff --git", result["candidate_patch"])
         self.assertEqual([], result["conflicts"])
         self.assertEqual(
-            ["cargo fmt --all --check", "cargo test --workspace --all-features"],
+            ["cargo fmt --all --check"],
             result["validation_commands"],
+        )
+        self.assertEqual(
+            ["cargo test --workspace --all-features"],
+            result["deferred_validation_commands"],
         )
 
     def test_completed_outputs_touching_same_file_conflict(self):
@@ -157,11 +161,68 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertEqual(
             [
-                "python3 -m unittest discover -s .github/scripts/codex-review/tests",
                 "git diff --check",
                 "actionlint .github/workflows/codex-pr-review.yml",
             ],
             result["validation_commands"],
+        )
+        self.assertEqual(
+            ["python3 -m unittest discover -s .github/scripts/codex-review/tests"],
+            result["deferred_validation_commands"],
+        )
+
+    def test_pr_head_execution_validation_commands_are_deferred_from_stage07(self):
+        payload = dispatch()
+        payload["tasks"][0]["test_plan"] = [
+            "cargo fmt --all --check",
+            "cargo test --workspace --all-features",
+            "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+            "python3 -m unittest discover -s .github/scripts/codex-review/tests",
+            "`git diff --check`",
+        ]
+        outputs = fix_outputs()
+        outputs["outputs"][0]["tests"] = [
+            "git diff --check",
+            "cargo test --workspace --all-features",
+        ]
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual(
+            ["cargo fmt --all --check", "git diff --check"],
+            result["validation_commands"],
+        )
+        self.assertEqual(
+            [
+                "cargo test --workspace --all-features",
+                "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+                "python3 -m unittest discover -s .github/scripts/codex-review/tests",
+                "`git diff --check`",
+            ],
+            result["deferred_validation_commands"],
+        )
+
+    def test_stage07_validation_commands_fall_back_to_diff_check_when_all_are_deferred(self):
+        payload = dispatch()
+        payload["tasks"][0]["test_plan"] = [
+            "cargo test --workspace --all-features",
+            "python3 -m unittest discover -s .github/scripts/tests -p test_codex_pr_review_workflow.py",
+        ]
+        outputs = fix_outputs()
+        outputs["outputs"][0]["tests"] = [
+            "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+        ]
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual(["git diff --check"], result["validation_commands"])
+        self.assertEqual(
+            [
+                "cargo test --workspace --all-features",
+                "python3 -m unittest discover -s .github/scripts/tests -p test_codex_pr_review_workflow.py",
+                "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+            ],
+            result["deferred_validation_commands"],
         )
 
     def test_missing_task_output_fails_closed(self):
