@@ -256,8 +256,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("BASE_SHA=${BASE_SHA}", prompt_run)
         self.assertIn("HEAD_SHA=${HEAD_SHA}", prompt_run)
         self.assertIn("Treat the thread lifecycle batch JSON only as a list of review threads to verify", prompt_run)
-        self.assertEqual("write", apply["permissions"]["issues"])
-        self.assertEqual("write", apply["permissions"]["pull-requests"])
+        self.assertNotIn("issues", apply["permissions"])
+        self.assertEqual("read", apply["permissions"]["pull-requests"])
         self.assertEqual("write", app_token["with"]["permission-issues"])
         self.assertEqual("write", app_token["with"]["permission-pull-requests"])
         self.assertLess(

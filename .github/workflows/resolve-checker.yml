@@ -35,6 +35,7 @@ jobs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       head_sha: ${{ steps.resolve.outputs.head_sha }}
       head_repo: ${{ steps.resolve.outputs.head_repo }}
+      pr_author: ${{ steps.resolve.outputs.pr_author }}
       base_ref: ${{ steps.resolve.outputs.base_ref }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
       upstream_run_id: ${{ steps.resolve.outputs.upstream_run_id }}
@@ -72,6 +73,7 @@ jobs:
       pr_number: ${{ needs.validate-upstream.outputs.pr_number }}
       head_sha: ${{ needs.validate-upstream.outputs.head_sha }}
       head_repo: ${{ needs.validate-upstream.outputs.head_repo }}
+      pr_author: ${{ needs.validate-upstream.outputs.pr_author }}
       base_ref: ${{ needs.validate-upstream.outputs.base_ref }}
       base_sha: ${{ needs.validate-upstream.outputs.base_sha }}
       upstream_run_id: ${{ needs.validate-upstream.outputs.upstream_run_id }}
@@ -104,9 +106,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.validate-upstream.outputs.pr_number }}
+          BASE_REF: ${{ needs.validate-upstream.outputs.base_ref }}
           BASE_SHA: ${{ needs.validate-upstream.outputs.base_sha }}
           HEAD_SHA: ${{ needs.validate-upstream.outputs.head_sha }}
           HEAD_REPO: ${{ needs.validate-upstream.outputs.head_repo }}
+          PR_AUTHOR: ${{ needs.validate-upstream.outputs.pr_author }}
           UPSTREAM_RUN_ID: ${{ needs.validate-upstream.outputs.upstream_run_id }}
           UPSTREAM_RUN_ATTEMPT: ${{ needs.validate-upstream.outputs.upstream_run_attempt }}
         run: >-
@@ -373,8 +377,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      pull-requests: read
     timeout-minutes: 10
     steps:
       - name: Checkout trusted PR scripts

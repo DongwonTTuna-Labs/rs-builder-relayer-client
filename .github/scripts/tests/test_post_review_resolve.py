@@ -18,7 +18,10 @@ SPEC.loader.exec_module(post_review)
 def pr_payload(
     *,
     draft=False,
+    state="open",
     base_ref="main",
+    base_sha="base-sha",
+    head_sha="head-sha",
     head_repo="DongwonTTuna-Labs/bioden",
     author="DongwonTTuna",
     sender="DongwonTTuna",
@@ -28,11 +31,39 @@ def pr_payload(
         "sender": {"login": sender},
         "pull_request": {
             "number": 54,
+            "state": state,
             "draft": draft,
-            "base": {"ref": base_ref, "sha": "base-sha"},
-            "head": {"sha": "head-sha", "repo": {"full_name": head_repo}},
+            "base": {"ref": base_ref, "sha": base_sha},
+            "head": {"sha": head_sha, "repo": {"full_name": head_repo}},
             "user": {"login": author},
         },
+    }
+
+
+def workflow_run_api_payload(
+    *,
+    path=".github/workflows/codex-pr-review.yml",
+    event="pull_request_target",
+    conclusion="success",
+    head_sha="head-sha",
+    head_repo="DongwonTTuna-Labs/bioden",
+    repository="DongwonTTuna-Labs/bioden",
+    pull_requests=None,
+    run_id=100,
+    run_attempt=1,
+):
+    if pull_requests is None:
+        pull_requests = [{"number": 54}]
+    return {
+        "id": run_id,
+        "run_attempt": run_attempt,
+        "path": path,
+        "event": event,
+        "conclusion": conclusion,
+        "head_sha": head_sha,
+        "head_repository": {"full_name": head_repo},
+        "repository": {"full_name": repository},
+        "pull_requests": pull_requests,
     }
 
 
@@ -257,9 +288,14 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
             self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/pulls/54")
             return pr_payload()["pull_request"]
 
+        def fetch_run(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/actions/runs/100")
+            return workflow_run_api_payload()
+
         result = self.resolve(
             {
                 "workflow_run": {
+                    "id": 100,
                     "name": "Codex PR Review",
                     "event": "pull_request_target",
                     "conclusion": "success",
@@ -268,19 +304,27 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
             },
             event_name="workflow_run",
             fetch_pr=fetch_pr,
+            fetch_run=fetch_run,
         )
 
         self.assertEqual(result["should_collect"], "true")
         self.assertEqual(result["pr_number"], "54")
+        self.assertEqual(result["upstream_run_id"], "100")
+        self.assertEqual(result["upstream_run_attempt"], "1")
 
     def test_trusted_issue_comment_workflow_run_collects_after_codex_pr_review(self):
         def fetch_pr(path):
             self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/pulls/54")
             return pr_payload()["pull_request"]
 
+        def fetch_run(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/actions/runs/100")
+            return workflow_run_api_payload(event="issue_comment")
+
         result = self.resolve(
             {
                 "workflow_run": {
+                    "id": 100,
                     "name": "Codex PR Review",
                     "event": "issue_comment",
                     "conclusion": "success",
@@ -290,6 +334,7 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
             },
             event_name="workflow_run",
             fetch_pr=fetch_pr,
+            fetch_run=fetch_run,
         )
 
         self.assertEqual(result["should_collect"], "true")
@@ -302,9 +347,14 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
             self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/pulls/54")
             return pr_payload()["pull_request"]
 
+        def fetch_run(path):
+            self.assertEqual(path, "/repos/DongwonTTuna-Labs/bioden/actions/runs/100")
+            return workflow_run_api_payload()
+
         result = self.resolve(
             {
                 "workflow_run": {
+                    "id": 100,
                     "name": "Codex PR Review",
                     "event": "pull_request_target",
                     "conclusion": "success",
@@ -316,6 +366,7 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
             actor=bot,
             triggering_actor=bot,
             fetch_pr=fetch_pr,
+            fetch_run=fetch_run,
         )
 
         self.assertEqual(result["should_collect"], "true")
@@ -325,6 +376,7 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
         result = self.resolve(
             {
                 "workflow_run": {
+                    "id": 100,
                     "name": "Codex PR Review",
                     "event": "pull_request_target",
                     "conclusion": "success",
@@ -333,24 +385,36 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
                 }
             },
             event_name="workflow_run",
+            fetch_run=lambda path: workflow_run_api_payload(head_sha="stale-sha"),
             fetch_pr=lambda path: pr_payload()["pull_request"],
+        )
+
+        self.assertEqual(result["should_collect"], "false")
+
+    def test_workflow_run_skips_when_upstream_workflow_path_mismatches(self):
+        result = self.resolve(
+            {"workflow_run": {"id": 100, "name": "Codex PR Review"}},
+            event_name="workflow_run",
+            fetch_run=lambda path: workflow_run_api_payload(path=".github/workflows/other-review.yml"),
+            fetch_pr=lambda path: self.fail(f"unexpected PR fetch: {path}"),
         )
 
         self.assertEqual(result["should_collect"], "false")
 
     def test_workflow_run_skips_non_review_or_missing_pr(self):
         cases = [
-            {"workflow_run": {"name": "CI", "event": "pull_request_target", "pull_requests": [{"number": 54}]}},
-            {"workflow_run": {"name": "Codex PR Review", "event": "push", "pull_requests": [{"number": 54}]}},
-            {"workflow_run": {"name": "Codex PR Review", "event": "pull_request_target", "conclusion": "cancelled", "pull_requests": [{"number": 54}]}},
-            {"workflow_run": {"name": "Codex PR Review", "event": "pull_request_target", "conclusion": "success", "pull_requests": []}},
-            {"workflow_run": {"name": "Codex PR Review", "event": "pull_request_target", "conclusion": "success", "pull_requests": [{"number": 54}, {"number": 55}]}},
+            workflow_run_api_payload(path=".github/workflows/ci.yml"),
+            workflow_run_api_payload(event="push"),
+            workflow_run_api_payload(conclusion="cancelled"),
+            workflow_run_api_payload(pull_requests=[]),
+            workflow_run_api_payload(pull_requests=[{"number": 54}, {"number": 55}]),
         ]
-        for event in cases:
-            with self.subTest(event=event):
+        for run_payload in cases:
+            with self.subTest(run_payload=run_payload):
                 result = self.resolve(
-                    event,
+                    {"workflow_run": {"id": 100, "name": "Codex PR Review"}},
                     event_name="workflow_run",
+                    fetch_run=lambda path, run_payload=run_payload: run_payload,
                     fetch_pr=lambda path: self.fail(f"unexpected fetch: {path}"),
                 )
                 self.assertEqual(result["should_collect"], "false")
@@ -433,7 +497,18 @@ def append_review_comment(thread, *, body, comment_id="3311706431", line=4):
     )
 
 
-def write_lifecycle_artifacts(root, *, threads, decisions, head_sha="head-sha", batch_index=0):
+def write_lifecycle_artifacts(
+    root,
+    *,
+    threads,
+    decisions,
+    base_ref="main",
+    base_sha="base-sha",
+    head_sha="head-sha",
+    head_repo="repo/name",
+    pr_author="DongwonTTuna",
+    batch_index=0,
+):
     batches = root / "batches"
     results = root / "results"
     batches.mkdir()
@@ -452,9 +527,11 @@ def write_lifecycle_artifacts(root, *, threads, decisions, head_sha="head-sha", 
         "schema_version": "codex-resolve-manifest.v3",
         "repository": "repo/name",
         "pr_number": "21",
-        "base_sha": "base-sha",
+        "base_ref": base_ref,
+        "base_sha": base_sha,
         "head_sha": head_sha,
-        "head_repo": "repo/name",
+        "head_repo": head_repo,
+        "pr_author": pr_author,
         "upstream_run_id": "100",
         "upstream_run_attempt": "1",
         "batch_count": 1,
@@ -471,11 +548,28 @@ def write_lifecycle_artifacts(root, *, threads, decisions, head_sha="head-sha", 
         "threads": {
             thread["thread_id"]: {
                 "file": thread.get("file"),
+                "area": thread.get("area"),
+                "root_cause_key": thread.get("root_cause_key"),
+                "root_cause_key_source": thread.get("root_cause_key_source"),
+                "root_cause_failure_kind": thread.get("root_cause_failure_kind"),
                 "source_comment_node_ids": [
                     comment.get("comment_node_id")
                     for comment in thread.get("comments", [])
                     if comment.get("comment_node_id")
                 ],
+                "source_comment_body_sha256": {
+                    comment.get("comment_node_id"): comment.get("body_sha256")
+                    for comment in thread.get("comments", [])
+                    if comment.get("comment_node_id") and comment.get("body_sha256")
+                },
+                "source_comment_locations": {
+                    comment.get("comment_node_id"): {
+                        "file": comment.get("file"),
+                        "line": comment.get("line"),
+                    }
+                    for comment in thread.get("comments", [])
+                    if comment.get("comment_node_id")
+                },
                 "latest_comment_created_at": max(
                     [comment.get("created_at") or "" for comment in thread.get("comments", [])],
                     default="",
@@ -504,6 +598,49 @@ def write_lifecycle_artifacts(root, *, threads, decisions, head_sha="head-sha", 
     return batches, results
 
 
+def read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def write_json(path, payload):
+    Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def lifecycle_thread(thread_id="thread-a", *, comment_id="comment-a", body_sha="source-body-sha"):
+    return {
+        "thread_id": thread_id,
+        "root_cause_key": "deposit-wallet-submit-state",
+        "root_cause_key_source": "codex-root-cause-key",
+        "root_cause_failure_kind": "correctness",
+        "area": "deposit-wallet",
+        "file": "src/deposit_wallet/http/submit_flow.rs",
+        "comments": [
+            {
+                "comment_node_id": comment_id,
+                "created_at": "2026-05-29T00:00:00Z",
+                "body_sha256": body_sha,
+                "comment_id": 1,
+                "thread_id": thread_id,
+                "file": "src/deposit_wallet/http/submit_flow.rs",
+                "line": 7,
+                "url": "https://github.example/comment",
+                "body_excerpt": "state invariant",
+            }
+        ],
+    }
+
+
+def lifecycle_decision(thread_id="thread-a", *, state="resolved_by_code"):
+    return {
+        "thread_id": thread_id,
+        "state": state,
+        "reason": "현재 head에서 해결됨",
+        "evidence": "테스트와 코드 확인",
+        "issue": None,
+        "issue_url": "",
+    }
+
+
 class CollectResolutionsTests(unittest.TestCase):
     def collect(
         self,
@@ -526,9 +663,11 @@ class CollectResolutionsTests(unittest.TestCase):
             env = {
                 "GITHUB_REPOSITORY": "DongwonTTuna-Labs/rs-builder-relayer-client",
                 "PR_NUMBER": "12",
+                "BASE_REF": "main",
                 "BASE_SHA": "base-sha",
                 "HEAD_SHA": head_sha,
                 "HEAD_REPO": "DongwonTTuna-Labs/rs-builder-relayer-client",
+                "PR_AUTHOR": "DongwonTTuna",
                 "UPSTREAM_RUN_ID": "100",
                 "UPSTREAM_RUN_ATTEMPT": "1",
                 "GITHUB_OUTPUT": str(output_path),
@@ -1279,7 +1418,7 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
             ), patch.object(
                 post_review, "resolve_thread", side_effect=fake_resolve
             ), patch.object(
-                post_review, "validate_current_pr_head"
+                post_review, "validate_current_pr_state"
             ), patch.object(
                 post_review, "revalidate_thread_snapshots"
             ), patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
@@ -1433,6 +1572,201 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertNotIn(("resolve", "thread-a"), calls)
         self.assertFalse(any(call[0] == "reply" for call in calls))
         self.assertIn("more than 50 comments", calls[0][2])
+
+    def test_validate_resolution_artifacts_rejects_batch_without_manifest_source_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["comments"] = []
+            batch["comments"] = []
+            write_json(batch_path, batch)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("source comments mismatch", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_batch_missing_manifest_source_node(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["comments"][0]["comment_node_id"] = "comment-other"
+            batch["comments"][0]["comment_node_id"] = "comment-other"
+            write_json(batch_path, batch)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("source comments mismatch", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_batch_source_body_hash_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["comments"][0]["body_sha256"] = "tampered-body-sha"
+            batch["comments"][0]["body_sha256"] = "tampered-body-sha"
+            write_json(batch_path, batch)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("source body hash mismatch", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_latest_comment_timestamp_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["comments"][0]["created_at"] = "2026-05-30T00:00:00Z"
+            batch["comments"][0]["created_at"] = "2026-05-30T00:00:00Z"
+            write_json(batch_path, batch)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("latest comment timestamp mismatch", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_thread_metadata_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["root_cause_key"] = "other-root"
+            write_json(batch_path, batch)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("thread metadata mismatch", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_manifest_thread_set_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            manifest_path = batches / "resolve-manifest.v3.json"
+            manifest = read_json(manifest_path)
+            manifest["threads"] = {}
+            write_json(manifest_path, manifest)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("manifest thread set mismatch", str(ctx.exception))
+
+    def test_apply_resolutions_aborts_globally_when_revalidation_forces_needs_human(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread("thread-a"), lifecycle_thread("thread-b", comment_id="comment-b")],
+                decisions=[lifecycle_decision("thread-a"), lifecycle_decision("thread-b")],
+            )
+            calls = []
+
+            def force_needs_human(*, repo, pr_number, threads, manifest):
+                threads["thread-a"]["forced_state"] = "needs_human"
+                threads["thread-a"]["needs_human_hint"] = "human comment was added after lifecycle collection"
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(
+                post_review, "revalidate_thread_snapshots", side_effect=force_needs_human
+            ), patch.object(
+                post_review, "reply_to_review_thread", side_effect=lambda *args: calls.append(("reply", args))
+            ), patch.object(
+                post_review, "resolve_thread", side_effect=lambda *args: calls.append(("resolve", args))
+            ), patch.object(
+                post_review, "create_or_update_deferred_issue", side_effect=lambda *args, **kwargs: calls.append(("issue", args, kwargs))
+            ), patch.object(
+                post_review, "upsert_marker_comment", side_effect=lambda *args, **kwargs: calls.append(("upsert", args, kwargs))
+            ), self.assertRaises(SystemExit) as ctx:
+                post_review.command_apply_resolutions(args)
+
+        self.assertIn("thread snapshot validation failed", str(ctx.exception))
+        self.assertEqual([], calls)
+
+    def test_validate_current_pr_state_rejects_changed_pr_state_before_apply(self):
+        manifest = {
+            "repository": "DongwonTTuna-Labs/bioden",
+            "pr_number": "54",
+            "base_ref": "main",
+            "base_sha": "base-sha",
+            "head_sha": "head-sha",
+            "head_repo": "DongwonTTuna-Labs/bioden",
+            "pr_author": "DongwonTTuna",
+        }
+        cases = [
+            ("closed", pr_payload(state="closed")["pull_request"], "PR state changed"),
+            ("draft", pr_payload(draft=True)["pull_request"], "PR became draft"),
+            ("base-ref", pr_payload(base_ref="develop")["pull_request"], "PR base ref changed"),
+            ("base-sha", pr_payload(base_sha="other-base")["pull_request"], "PR base SHA changed"),
+            ("head-sha", pr_payload(head_sha="other-head")["pull_request"], "PR head SHA changed"),
+            ("head-repo", pr_payload(head_repo="somebody/fork")["pull_request"], "PR head repo changed"),
+            ("author", pr_payload(author="somebody-else")["pull_request"], "PR author changed"),
+        ]
+        for name, pr, message in cases:
+            with self.subTest(name=name), patch.object(post_review, "github_api", return_value=pr):
+                with self.assertRaises(SystemExit) as ctx:
+                    post_review.validate_current_pr_state("DongwonTTuna-Labs/bioden", "54", manifest)
+                self.assertIn(message, str(ctx.exception))
 
 
 class ReviewContextTests(unittest.TestCase):
@@ -1717,7 +2051,7 @@ class StickySummaryTests(unittest.TestCase):
             ), patch.object(
                 post_review, "reply_to_review_thread", side_effect=fake_reply
             ), patch.object(
-                post_review, "validate_current_pr_head"
+                post_review, "validate_current_pr_state"
             ), patch.object(
                 post_review, "revalidate_thread_snapshots"
             ), patch.object(post_review, "upsert_marker_comment", side_effect=fake_upsert):
@@ -1733,51 +2067,12 @@ class StickySummaryTests(unittest.TestCase):
     def test_validate_resolution_artifacts_rejects_zero_results_before_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            batches = root / "batches"
-            results = root / "results"
-            batches.mkdir()
-            results.mkdir()
-            (batches / "thread-inventory.v3.json").write_text(
-                json.dumps({"schema_version": "codex.thread_inventory.v3", "threads": []}),
-                encoding="utf-8",
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[lifecycle_thread()],
+                decisions=[lifecycle_decision()],
             )
-            (batches / "resolve-manifest.v3.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": "codex-resolve-manifest.v3",
-                        "repository": "repo/name",
-                        "pr_number": "21",
-                        "base_sha": "base-sha",
-                        "head_sha": "head-sha",
-                        "head_repo": "repo/name",
-                        "batch_count": 1,
-                        "expected_batch_filenames": ["batch-000.json"],
-                        "expected_result_filenames": ["result-000.json"],
-                        "batches": [
-                            {
-                                "index": 0,
-                                "batch_filename": "batch-000.json",
-                                "result_filename": "result-000.json",
-                                "thread_ids": ["thread-a"],
-                            }
-                        ],
-                        "threads": {},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (batches / "batch-000.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": "codex.thread_lifecycle_batch.v3",
-                        "source_manifest_schema_version": "codex-resolve-manifest.v3",
-                        "batch_index": 0,
-                        "threads": [{"thread_id": "thread-a", "comments": []}],
-                        "comments": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
+            (results / "result-000.json").unlink()
 
             env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
             args = argparse.Namespace(batches=str(batches), results=str(results))

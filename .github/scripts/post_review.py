@@ -31,6 +31,7 @@ THREAD_INVENTORY_SCHEMA = "codex.thread_inventory.v3"
 RESOLVE_MANIFEST_SCHEMA = "codex-resolve-manifest.v3"
 THREAD_LIFECYCLE_BATCH_SCHEMA = "codex.thread_lifecycle_batch.v3"
 THREAD_LIFECYCLE_RESULT_SCHEMA = "codex.thread_lifecycle_result.v3"
+CODEX_PR_REVIEW_WORKFLOW_PATH = ".github/workflows/codex-pr-review.yml"
 REVIEW_CONTEXT_MAX_CHARS = 60000
 REVIEW_CONTEXT_SECTION_LIMIT = 12000
 TRUSTED_USER = "DongwonTTuna"
@@ -417,7 +418,10 @@ def resolve_previous_review_event(
     actor: str,
     triggering_actor: str,
     fetch_pr: Any = github_api,
+    fetch_run: Any = github_api,
 ) -> dict[str, str]:
+    upstream_run_id = ""
+    upstream_run_attempt = ""
     if event_name in {"pull_request", "pull_request_target"}:
         if actor != TRUSTED_USER or triggering_actor != TRUSTED_USER:
             return skipped_resolve_checker()
@@ -432,12 +436,18 @@ def resolve_previous_review_event(
     elif event_name == "workflow_run":
         if not is_trusted_workflow_actor(actor) or not is_trusted_workflow_actor(triggering_actor):
             return skipped_resolve_checker()
-        workflow_run = event.get("workflow_run") or {}
-        if (
-            workflow_run.get("name") != "Codex PR Review"
-            or workflow_run.get("event") not in {"pull_request_target", "issue_comment"}
-            or workflow_run.get("conclusion") != "success"
-        ):
+        workflow_run_event = event.get("workflow_run") or {}
+        upstream_run_id = str(workflow_run_event.get("id") or "").strip()
+        if not upstream_run_id:
+            return skipped_resolve_checker()
+        workflow_run = fetch_run(f"/repos/{repo}/actions/runs/{upstream_run_id}") or {}
+        if str(workflow_run.get("path") or "") != CODEX_PR_REVIEW_WORKFLOW_PATH:
+            return skipped_resolve_checker()
+        if str(((workflow_run.get("repository") or {}).get("full_name")) or "") != repo:
+            return skipped_resolve_checker()
+        if workflow_run.get("event") not in {"pull_request_target", "issue_comment"}:
+            return skipped_resolve_checker()
+        if workflow_run.get("conclusion") != "success":
             return skipped_resolve_checker()
         pull_requests = workflow_run.get("pull_requests") or []
         if len(pull_requests) != 1:
@@ -450,6 +460,11 @@ def resolve_previous_review_event(
         current_head_sha = str(((pr.get("head") or {}).get("sha")) or "")
         if completed_head_sha and completed_head_sha != current_head_sha:
             return skipped_resolve_checker()
+        completed_head_repo = str(((workflow_run.get("head_repository") or {}).get("full_name")) or "")
+        current_head_repo = str((((pr.get("head") or {}).get("repo") or {}).get("full_name")) or "")
+        if not completed_head_repo or completed_head_repo != current_head_repo:
+            return skipped_resolve_checker()
+        upstream_run_attempt = str(workflow_run.get("run_attempt") or "")
     else:
         return skipped_resolve_checker()
 
@@ -463,10 +478,11 @@ def resolve_previous_review_event(
         "pr_number": str(pr["number"]),
         "head_sha": str(pr["head"]["sha"]),
         "head_repo": str(head_repo),
+        "pr_author": str(author),
         "base_ref": "main",
         "base_sha": str(pr["base"]["sha"]),
-        "upstream_run_id": str(((event.get("workflow_run") or {}).get("id")) or ""),
-        "upstream_run_attempt": str(((event.get("workflow_run") or {}).get("run_attempt")) or ""),
+        "upstream_run_id": upstream_run_id,
+        "upstream_run_attempt": upstream_run_attempt,
     }
 
 
@@ -1290,19 +1306,30 @@ def result_filename(index: int) -> str:
 def thread_snapshot_metadata(thread: dict[str, Any]) -> dict[str, Any]:
     comments = thread.get("comments") or []
     created_values = [str(comment.get("created_at") or "") for comment in comments if comment.get("created_at")]
+    source_comment_node_ids = [
+        str(comment.get("comment_node_id"))
+        for comment in comments
+        if str(comment.get("comment_node_id") or "").strip()
+    ]
     return {
         "file": thread.get("file"),
         "area": thread.get("area"),
         "root_cause_key": thread.get("root_cause_key"),
-        "source_comment_node_ids": [
-            str(comment.get("comment_node_id"))
-            for comment in comments
-            if str(comment.get("comment_node_id") or "").strip()
-        ],
+        "root_cause_key_source": thread.get("root_cause_key_source"),
+        "root_cause_failure_kind": thread.get("root_cause_failure_kind"),
+        "source_comment_node_ids": source_comment_node_ids,
         "source_comment_body_sha256": {
             str(comment.get("comment_node_id")): str(comment.get("body_sha256"))
             for comment in comments
             if str(comment.get("comment_node_id") or "").strip() and str(comment.get("body_sha256") or "").strip()
+        },
+        "source_comment_locations": {
+            str(comment.get("comment_node_id")): {
+                "file": comment.get("file"),
+                "line": comment.get("line"),
+            }
+            for comment in comments
+            if str(comment.get("comment_node_id") or "").strip()
         },
         "latest_comment_created_at": max(created_values, default=""),
     }
@@ -1312,9 +1339,11 @@ def build_resolve_manifest(
     *,
     repo: str,
     pr_number: str,
+    base_ref: str,
     base_sha: str,
     head_sha: str,
     head_repo: str,
+    pr_author: str,
     upstream_run_id: str,
     upstream_run_attempt: str,
     batches: list[dict[str, Any]],
@@ -1337,9 +1366,11 @@ def build_resolve_manifest(
         "schema_version": RESOLVE_MANIFEST_SCHEMA,
         "repository": repo,
         "pr_number": str(pr_number),
+        "base_ref": base_ref,
         "base_sha": base_sha,
         "head_sha": head_sha,
         "head_repo": head_repo,
+        "pr_author": pr_author,
         "upstream_run_id": upstream_run_id,
         "upstream_run_attempt": upstream_run_attempt,
         "batch_count": len(batches),
@@ -1353,9 +1384,11 @@ def build_resolve_manifest(
 def command_collect_resolutions(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
+    base_ref = require_env("BASE_REF")
     base_sha = require_env("BASE_SHA")
     head_sha = require_env("HEAD_SHA")
     head_repo = require_env("HEAD_REPO")
+    pr_author = require_env("PR_AUTHOR")
     upstream_run_id = os.environ.get("UPSTREAM_RUN_ID", "").strip()
     upstream_run_attempt = os.environ.get("UPSTREAM_RUN_ATTEMPT", "").strip()
     batch_dir = Path(args.batch_dir)
@@ -1368,9 +1401,11 @@ def command_collect_resolutions(args: argparse.Namespace) -> None:
     manifest = build_resolve_manifest(
         repo=repo,
         pr_number=pr_number,
+        base_ref=base_ref,
         base_sha=base_sha,
         head_sha=head_sha,
         head_repo=head_repo,
+        pr_author=pr_author,
         upstream_run_id=upstream_run_id,
         upstream_run_attempt=upstream_run_attempt,
         batches=batches,
@@ -1419,8 +1454,74 @@ def load_resolve_manifest(batches: Path) -> dict[str, Any]:
     return manifest
 
 
+def validate_manifest_required_fields(manifest: dict[str, Any]) -> None:
+    required = ("repository", "pr_number", "base_ref", "base_sha", "head_sha", "head_repo", "pr_author")
+    missing = [name for name in required if not str(manifest.get(name) or "").strip()]
+    if missing:
+        raise SystemExit(f"resolve manifest missing required fields: {', '.join(missing)}")
+
+
+def assert_thread_metadata_matches_manifest(thread_id: str, thread: dict[str, Any], expected: dict[str, Any]) -> None:
+    actual = thread_snapshot_metadata(thread)
+    metadata_keys = ("file", "area", "root_cause_key", "root_cause_key_source", "root_cause_failure_kind")
+    for key in metadata_keys:
+        if str(actual.get(key) or "") != str(expected.get(key) or ""):
+            raise SystemExit(
+                f"thread metadata mismatch for {thread_id}: {key} expected {expected.get(key)!r}, got {actual.get(key)!r}"
+            )
+
+    expected_nodes = [str(node_id) for node_id in expected.get("source_comment_node_ids") or [] if str(node_id or "").strip()]
+    actual_nodes = [str(node_id) for node_id in actual.get("source_comment_node_ids") or [] if str(node_id or "").strip()]
+    if not expected_nodes or not actual_nodes or actual_nodes != expected_nodes:
+        raise SystemExit(
+            f"source comments mismatch for {thread_id}: expected {expected_nodes}, got {actual_nodes}"
+        )
+
+    expected_body_hashes = {str(key): str(value) for key, value in (expected.get("source_comment_body_sha256") or {}).items()}
+    actual_body_hashes = {str(key): str(value) for key, value in (actual.get("source_comment_body_sha256") or {}).items()}
+    expected_node_set = set(expected_nodes)
+    if set(expected_body_hashes) != expected_node_set or set(actual_body_hashes) != expected_node_set:
+        raise SystemExit(f"source body hash mismatch for {thread_id}: expected hashes for {sorted(expected_node_set)}")
+    if actual_body_hashes != expected_body_hashes:
+        raise SystemExit(f"source body hash mismatch for {thread_id}")
+
+    expected_locations = expected.get("source_comment_locations") or {}
+    actual_locations = actual.get("source_comment_locations") or {}
+    if actual_locations != expected_locations:
+        raise SystemExit(f"source comment location mismatch for {thread_id}")
+
+    if str(actual.get("latest_comment_created_at") or "") != str(expected.get("latest_comment_created_at") or ""):
+        raise SystemExit(
+            f"latest comment timestamp mismatch for {thread_id}: expected {expected.get('latest_comment_created_at')!r}, got {actual.get('latest_comment_created_at')!r}"
+        )
+
+
+def validate_manifest_thread_snapshots(manifest: dict[str, Any], inputs: dict[str, dict[str, Any]]) -> None:
+    manifest_threads = manifest.get("threads")
+    if not isinstance(manifest_threads, dict):
+        raise SystemExit("resolve manifest requires thread snapshots")
+    manifest_ids = {str(thread_id) for thread_id in manifest_threads}
+    input_ids = set(inputs)
+    if manifest_ids != input_ids:
+        raise SystemExit(f"manifest thread set mismatch: expected {sorted(manifest_ids)}, got {sorted(input_ids)}")
+    batch_ids = {
+        str(thread_id)
+        for batch in manifest.get("batches") or []
+        for thread_id in (batch.get("thread_ids") or [])
+        if str(thread_id or "").strip()
+    }
+    if batch_ids != manifest_ids:
+        raise SystemExit(f"manifest batch thread set mismatch: expected {sorted(manifest_ids)}, got {sorted(batch_ids)}")
+    for thread_id, thread in inputs.items():
+        snapshot = manifest_threads.get(thread_id)
+        if not isinstance(snapshot, dict):
+            raise SystemExit(f"resolve manifest snapshot for {thread_id} must be an object")
+        assert_thread_metadata_matches_manifest(thread_id, thread, snapshot)
+
+
 def load_resolution_inputs(batches: Path, manifest: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     manifest = manifest or load_resolve_manifest(batches)
+    validate_manifest_required_fields(manifest)
     expected_batches = {str(name) for name in manifest.get("expected_batch_filenames") or []}
     actual_batches = {path.name for path in batches.glob("batch-*.json") if path.is_file()}
     if actual_batches != expected_batches:
@@ -1450,6 +1551,7 @@ def load_resolution_inputs(batches: Path, manifest: dict[str, Any] | None = None
             items[thread_id] = thread
     if not items:
         raise SystemExit("no resolve-check comments found")
+    validate_manifest_thread_snapshots(manifest, items)
     return items
 
 
@@ -1757,16 +1859,32 @@ def render_lifecycle_reply(
     return "\n".join(lines)
 
 
-def validate_current_pr_head(repo: str, pr_number: str, manifest: dict[str, Any]) -> None:
+def validate_current_pr_state(repo: str, pr_number: str, manifest: dict[str, Any]) -> None:
     pr = github_api(f"/repos/{repo}/pulls/{pr_number}")
+    if str(pr.get("state") or "") != "open":
+        raise SystemExit(f"PR state changed since collection: expected open, got {pr.get('state')}")
+    if pr.get("draft"):
+        raise SystemExit("PR became draft since lifecycle collection")
+    current_base_ref = str(((pr.get("base") or {}).get("ref")) or "")
+    expected_base_ref = str(manifest.get("base_ref") or "")
+    if current_base_ref != expected_base_ref:
+        raise SystemExit(f"PR base ref changed since collection: expected {expected_base_ref}, got {current_base_ref}")
+    current_base_sha = str(((pr.get("base") or {}).get("sha")) or "")
+    expected_base_sha = str(manifest.get("base_sha") or "")
+    if current_base_sha != expected_base_sha:
+        raise SystemExit(f"PR base SHA changed since collection: expected {expected_base_sha}, got {current_base_sha}")
     current_head = str(((pr.get("head") or {}).get("sha")) or "")
     expected_head = str(manifest.get("head_sha") or "")
     if current_head != expected_head:
         raise SystemExit(f"PR head SHA changed since collection: expected {expected_head}, got {current_head}")
     current_head_repo = str((((pr.get("head") or {}).get("repo") or {}).get("full_name")) or "")
     expected_head_repo = str(manifest.get("head_repo") or "")
-    if expected_head_repo and current_head_repo != expected_head_repo:
+    if current_head_repo != expected_head_repo:
         raise SystemExit(f"PR head repo changed since collection: expected {expected_head_repo}, got {current_head_repo}")
+    current_author = str(((pr.get("user") or {}).get("login")) or "")
+    expected_author = str(manifest.get("pr_author") or "")
+    if current_author != expected_author or current_author != TRUSTED_USER:
+        raise SystemExit(f"PR author changed since collection: expected {expected_author}, got {current_author}")
 
 
 def validate_resolution_artifact_contract(
@@ -1786,7 +1904,7 @@ def validate_resolution_artifact_contract(
     expected_ids = set(inputs)
     decisions = load_resolution_outputs(results, manifest, expected_ids)
     if check_current_head:
-        validate_current_pr_head(repo, pr_number, manifest)
+        validate_current_pr_state(repo, pr_number, manifest)
     return manifest, inputs, decisions
 
 
@@ -1813,8 +1931,10 @@ def revalidate_thread_snapshots(
     repo: str,
     pr_number: str,
     threads: dict[str, dict[str, Any]],
+    manifest: dict[str, Any],
 ) -> None:
     current_threads = current_thread_lookup(repo, pr_number)
+    manifest_threads = manifest.get("threads") or {}
     for thread_id, thread in threads.items():
         current = current_threads.get(thread_id)
         if not current:
@@ -1824,20 +1944,22 @@ def revalidate_thread_snapshots(
             thread["_already_resolved"] = True
             continue
         current_comments = comment_lookup(current)
-        source_comments = thread.get("comments") or []
-        latest_source_created_at = max(
-            [str(comment.get("created_at") or "") for comment in source_comments if comment.get("created_at")],
-            default="",
-        )
-        for source_comment in source_comments:
-            node_id = str(source_comment.get("comment_node_id") or "")
+        snapshot = manifest_threads.get(thread_id) or {}
+        source_comment_node_ids = [
+            str(node_id)
+            for node_id in snapshot.get("source_comment_node_ids") or []
+            if str(node_id or "").strip()
+        ]
+        expected_body_hashes = snapshot.get("source_comment_body_sha256") or {}
+        latest_source_created_at = str(snapshot.get("latest_comment_created_at") or "")
+        for node_id in source_comment_node_ids:
             if not node_id:
                 continue
             current_comment = current_comments.get(node_id)
             if not current_comment:
                 mark_thread_needs_human(thread, "source review comment disappeared before apply")
                 continue
-            expected_body_sha = str(source_comment.get("body_sha256") or "")
+            expected_body_sha = str(expected_body_hashes.get(node_id) or "")
             if expected_body_sha:
                 actual_body_sha = hashlib.sha256(str(current_comment.get("body") or "").encode("utf-8")).hexdigest()
                 if actual_body_sha != expected_body_sha:
@@ -1853,14 +1975,14 @@ def revalidate_thread_snapshots(
 def command_validate_resolution_artifacts(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
-    _manifest, inputs, _decisions = validate_resolution_artifact_contract(
+    manifest, inputs, _decisions = validate_resolution_artifact_contract(
         repo=repo,
         pr_number=pr_number,
         batches=Path(args.batches),
         results=Path(args.results),
         check_current_head=True,
     )
-    revalidate_thread_snapshots(repo=repo, pr_number=pr_number, threads=inputs)
+    revalidate_thread_snapshots(repo=repo, pr_number=pr_number, threads=inputs, manifest=manifest)
     forced = [
         f"{thread_id}: {thread.get('needs_human_hint')}"
         for thread_id, thread in inputs.items()
@@ -1905,14 +2027,21 @@ def command_post_resolve_failure(args: argparse.Namespace) -> None:
 def command_apply_resolutions(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
-    _manifest, inputs, resolutions = validate_resolution_artifact_contract(
+    manifest, inputs, resolutions = validate_resolution_artifact_contract(
         repo=repo,
         pr_number=pr_number,
         batches=Path(args.batches),
         results=Path(args.results),
         check_current_head=True,
     )
-    revalidate_thread_snapshots(repo=repo, pr_number=pr_number, threads=inputs)
+    revalidate_thread_snapshots(repo=repo, pr_number=pr_number, threads=inputs, manifest=manifest)
+    forced = [
+        f"{thread_id}: {thread.get('needs_human_hint')}"
+        for thread_id, thread in inputs.items()
+        if thread.get("forced_state") == "needs_human"
+    ]
+    if forced:
+        raise SystemExit("thread snapshot validation failed: " + "; ".join(forced[:10]))
     apply_lifecycle_resolutions(repo=repo, pr_number=pr_number, threads=inputs, decisions=resolutions)
 
 
