@@ -152,6 +152,10 @@ def validate_model_review(payload: dict[str, Any], expected_axes: list[str]) -> 
         raise ValueError("lgtm review must not include findings")
     if status == "needs_work" and not findings:
         raise ValueError("needs_work review requires at least one finding")
+    finding_axes = {finding["axis"] for finding in findings}
+    mismatched_finding_axes = sorted(finding_axes - set(needs_work_axes))
+    if mismatched_finding_axes:
+        raise ValueError(f"finding axes must have needs_work axis_results: {', '.join(mismatched_finding_axes)}")
     return {
         "status": status,
         "summary": _require_string(payload.get("summary"), "summary"),

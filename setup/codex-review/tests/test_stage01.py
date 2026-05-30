@@ -152,6 +152,20 @@ class Stage01Tests(unittest.TestCase):
 
         self.assertIn("needs_work review requires at least one finding", str(ctx.exception))
 
+    def test_findings_require_matching_needs_work_axis_result(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_review_result(
+                request(),
+                model_review(
+                    axis_results=[
+                        {"axis": "correctness", "status": "lgtm", "summary": "correctness summary"},
+                        {"axis": "tests", "status": "needs_work", "summary": "tests summary"},
+                    ],
+                ),
+            )
+
+        self.assertIn("finding axes must have needs_work axis_results: correctness", str(ctx.exception))
+
     def test_cli_reads_request_and_model_output_then_writes_review_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
