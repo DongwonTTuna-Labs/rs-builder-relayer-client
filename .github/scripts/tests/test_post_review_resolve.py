@@ -391,6 +391,26 @@ class ResolvePreviousReviewEventTests(unittest.TestCase):
 
         self.assertEqual(result["should_collect"], "false")
 
+    def test_workflow_run_skips_when_fetched_run_head_sha_is_empty(self):
+        result = self.resolve(
+            {"workflow_run": {"id": 100, "name": "Codex PR Review"}},
+            event_name="workflow_run",
+            fetch_run=lambda path: workflow_run_api_payload(head_sha=""),
+            fetch_pr=lambda path: self.fail(f"unexpected PR fetch: {path}"),
+        )
+
+        self.assertEqual(result["should_collect"], "false")
+
+    def test_workflow_run_skips_when_fetched_run_id_mismatches_event(self):
+        result = self.resolve(
+            {"workflow_run": {"id": 100, "name": "Codex PR Review"}},
+            event_name="workflow_run",
+            fetch_run=lambda path: workflow_run_api_payload(run_id=101),
+            fetch_pr=lambda path: self.fail(f"unexpected PR fetch: {path}"),
+        )
+
+        self.assertEqual(result["should_collect"], "false")
+
     def test_workflow_run_skips_when_upstream_workflow_path_mismatches(self):
         result = self.resolve(
             {"workflow_run": {"id": 100, "name": "Codex PR Review"}},
@@ -552,6 +572,9 @@ def write_lifecycle_artifacts(
                 "root_cause_key": thread.get("root_cause_key"),
                 "root_cause_key_source": thread.get("root_cause_key_source"),
                 "root_cause_failure_kind": thread.get("root_cause_failure_kind"),
+                "forced_state": thread.get("forced_state"),
+                "needs_human_hint": thread.get("needs_human_hint"),
+                "comments_connection_incomplete": thread.get("comments_connection_incomplete"),
                 "source_comment_node_ids": [
                     comment.get("comment_node_id")
                     for comment in thread.get("comments", [])
@@ -614,6 +637,9 @@ def lifecycle_thread(thread_id="thread-a", *, comment_id="comment-a", body_sha="
         "root_cause_failure_kind": "correctness",
         "area": "deposit-wallet",
         "file": "src/deposit_wallet/http/submit_flow.rs",
+        "forced_state": "",
+        "needs_human_hint": "",
+        "comments_connection_incomplete": False,
         "comments": [
             {
                 "comment_node_id": comment_id,
@@ -628,6 +654,14 @@ def lifecycle_thread(thread_id="thread-a", *, comment_id="comment-a", body_sha="
             }
         ],
     }
+
+
+def forced_lifecycle_thread(thread_id="thread-a"):
+    thread = lifecycle_thread(thread_id)
+    thread["forced_state"] = "needs_human"
+    thread["needs_human_hint"] = "thread has more than 50 comments"
+    thread["comments_connection_incomplete"] = True
+    return thread
 
 
 def lifecycle_decision(thread_id="thread-a", *, state="resolved_by_code"):
@@ -1268,7 +1302,9 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
 
         self.assertEqual("submit-state", inventory[0]["root_cause_key"])
         self.assertEqual("codex-root-cause-key", inventory[0]["root_cause_key_source"])
-        self.assertNotIn("forced_state", inventory[0])
+        self.assertEqual("", inventory[0]["forced_state"])
+        self.assertEqual("", inventory[0]["needs_human_hint"])
+        self.assertFalse(inventory[0]["comments_connection_incomplete"])
 
     def test_batch_planner_uses_thread_batches_not_three_comment_batches(self):
         threads = []
@@ -1353,27 +1389,7 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
             root = Path(tmp)
             batches, results = write_lifecycle_artifacts(
                 root,
-                threads=[
-                    {
-                        "thread_id": "thread-a",
-                        "root_cause_key": "deposit-wallet-submit-state",
-                        "area": "deposit-wallet",
-                        "file": "src/deposit_wallet/http/submit_flow.rs",
-                        "comments": [
-                            {
-                                "comment_node_id": "comment-a",
-                                "created_at": "2026-05-29T00:00:00Z",
-                                "body_sha256": "source-body-sha",
-                                "comment_id": 1,
-                                "thread_id": "thread-a",
-                                "file": "src/deposit_wallet/http/submit_flow.rs",
-                                "line": 7,
-                                "url": "https://github.example/comment",
-                                "body_excerpt": "state invariant",
-                            }
-                        ],
-                    }
-                ],
+                threads=[lifecycle_thread()],
                 decisions=[
                     {
                         "thread_id": "thread-a",
@@ -1687,6 +1703,102 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
 
         self.assertIn("thread metadata mismatch", str(ctx.exception))
 
+    def test_load_resolution_inputs_rejects_removed_forced_state_from_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, _results = write_lifecycle_artifacts(
+                root,
+                threads=[forced_lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0].pop("forced_state")
+            write_json(batch_path, batch)
+
+            with self.assertRaises(SystemExit) as ctx:
+                post_review.load_resolution_inputs(batches)
+
+        self.assertIn("forced_state", str(ctx.exception))
+
+    def test_load_resolution_inputs_rejects_changed_needs_human_hint_from_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, _results = write_lifecycle_artifacts(
+                root,
+                threads=[forced_lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["needs_human_hint"] = "tampered hint"
+            write_json(batch_path, batch)
+
+            with self.assertRaises(SystemExit) as ctx:
+                post_review.load_resolution_inputs(batches)
+
+        self.assertIn("needs_human_hint", str(ctx.exception))
+
+    def test_load_resolution_inputs_rejects_changed_comments_connection_incomplete_from_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, _results = write_lifecycle_artifacts(
+                root,
+                threads=[forced_lifecycle_thread()],
+                decisions=[lifecycle_decision()],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0]["comments_connection_incomplete"] = False
+            write_json(batch_path, batch)
+
+            with self.assertRaises(SystemExit) as ctx:
+                post_review.load_resolution_inputs(batches)
+
+        self.assertIn("comments_connection_incomplete", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_manifest_forced_needs_human_even_if_batch_tampered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[forced_lifecycle_thread()],
+                decisions=[lifecycle_decision(state="false_positive")],
+            )
+            batch_path = batches / "batch-000.json"
+            batch = read_json(batch_path)
+            batch["threads"][0].pop("forced_state")
+            batch["threads"][0].pop("needs_human_hint")
+            batch["threads"][0].pop("comments_connection_incomplete")
+            write_json(batch_path, batch)
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("forced_state", str(ctx.exception))
+
+    def test_validate_resolution_artifacts_rejects_manifest_forced_needs_human_even_with_terminal_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            batches, results = write_lifecycle_artifacts(
+                root,
+                threads=[forced_lifecycle_thread()],
+                decisions=[lifecycle_decision(state="false_positive")],
+            )
+
+            env = {"GITHUB_REPOSITORY": "repo/name", "PR_NUMBER": "21"}
+            args = argparse.Namespace(batches=str(batches), results=str(results))
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review, "validate_current_pr_state"
+            ), patch.object(post_review, "revalidate_thread_snapshots"), self.assertRaises(SystemExit) as ctx:
+                post_review.command_validate_resolution_artifacts(args)
+
+        self.assertIn("manifest contains forced needs_human", str(ctx.exception))
+
     def test_validate_resolution_artifacts_rejects_manifest_thread_set_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1742,6 +1854,31 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
 
         self.assertIn("thread snapshot validation failed", str(ctx.exception))
         self.assertEqual([], calls)
+
+    def test_summarize_resolve_failure_does_not_mutate_github(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / "summary.md"
+            env = {
+                "GITHUB_REPOSITORY": "repo/name",
+                "PR_NUMBER": "21",
+                "VALIDATE_UPSTREAM_RESULT": "success",
+                "VALIDATE_UPSTREAM_SHOULD_COLLECT": "true",
+                "COLLECT_RESULT": "success",
+                "RESOLVE_CHECK_RESULT": "success",
+                "APPLY_RESULT": "failure",
+                "GITHUB_STEP_SUMMARY": str(summary_path),
+            }
+            with patch.dict(os.environ, env, clear=False), patch.object(
+                post_review,
+                "upsert_marker_comment",
+                side_effect=AssertionError("unexpected GitHub mutation"),
+            ):
+                post_review.command_summarize_resolve_failure(argparse.Namespace())
+
+            summary = summary_path.read_text(encoding="utf-8")
+
+        self.assertIn("Codex thread lifecycle apply를 건너뛰었습니다.", summary)
+        self.assertIn("apply: failure", summary)
 
     def test_validate_current_pr_state_rejects_changed_pr_state_before_apply(self):
         manifest = {
@@ -1981,37 +2118,8 @@ class StickySummaryTests(unittest.TestCase):
             batches, results = write_lifecycle_artifacts(
                 root,
                 threads=[
-                    {
-                        "thread_id": "thread-a",
-                        "file": "src/lib.rs",
-                        "comments": [
-                            {
-                                "comment_node_id": "comment-a",
-                                "created_at": "2026-05-29T00:00:00Z",
-                                "body_sha256": "source-body-sha",
-                                "comment_id": 1,
-                                "thread_id": "thread-a",
-                                "file": "src/lib.rs",
-                                "line": 7,
-                                "url": "https://github.example/comment",
-                            },
-                        ],
-                    },
-                    {
-                        "thread_id": "thread-b",
-                        "file": "src/main.rs",
-                        "comments": [
-                            {
-                                "comment_node_id": "comment-b",
-                                "created_at": "2026-05-29T00:00:00Z",
-                                "body_sha256": "source-body-sha",
-                                "comment_id": 2,
-                                "thread_id": "thread-b",
-                                "file": "src/main.rs",
-                                "line": 9,
-                            }
-                        ],
-                    },
+                    lifecycle_thread("thread-a", comment_id="comment-a"),
+                    lifecycle_thread("thread-b", comment_id="comment-b"),
                 ],
                 decisions=[
                     {

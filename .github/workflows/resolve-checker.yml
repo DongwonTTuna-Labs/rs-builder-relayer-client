@@ -444,7 +444,6 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
-      issues: write
     timeout-minutes: 5
     steps:
       - name: Checkout workflow helper
@@ -455,9 +454,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Post resolve-check failure summary
+      - name: Summarize resolve-check failure
         env:
-          GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.validate-upstream.outputs.pr_number }}
           VALIDATE_UPSTREAM_RESULT: ${{ needs.validate-upstream.result }}
@@ -466,4 +464,4 @@ jobs:
           RESOLVE_CHECK_RESULT: ${{ needs.resolve-check.result }}
           APPLY_RESULT: ${{ needs.apply.result }}
         run: >-
-          python3 workflow/.github/scripts/post_review.py post-resolve-failure
+          python3 workflow/.github/scripts/post_review.py summarize-resolve-failure

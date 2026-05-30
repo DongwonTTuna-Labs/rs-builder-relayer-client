@@ -289,6 +289,10 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertNotIn("github.triggering_actor == 'DongwonTTuna'", apply.get("if", ""))
         self.assertNotIn("actions/create-github-app-token", json.dumps(reporter))
         self.assertNotIn("permission-pull-requests", json.dumps(reporter))
+        self.assertNotIn("issues", reporter["permissions"])
+        self.assertNotIn("GH_TOKEN", json.dumps(reporter))
+        self.assertNotIn("post-resolve-failure", json.dumps(reporter))
+        self.assertIn("summarize-resolve-failure", json.dumps(reporter))
 
     def test_resolve_checker_uses_lifecycle_schema_and_trusted_agent(self):
         resolve_check = self.resolve_job("resolve-check")

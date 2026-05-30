@@ -441,6 +441,8 @@ def resolve_previous_review_event(
         if not upstream_run_id:
             return skipped_resolve_checker()
         workflow_run = fetch_run(f"/repos/{repo}/actions/runs/{upstream_run_id}") or {}
+        if str(workflow_run.get("id") or "").strip() != upstream_run_id:
+            return skipped_resolve_checker()
         if str(workflow_run.get("path") or "") != CODEX_PR_REVIEW_WORKFLOW_PATH:
             return skipped_resolve_checker()
         if str(((workflow_run.get("repository") or {}).get("full_name")) or "") != repo:
@@ -455,10 +457,12 @@ def resolve_previous_review_event(
         pr_number = str(pull_requests[0].get("number") or "").strip()
         if not pr_number:
             return skipped_resolve_checker()
-        pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
         completed_head_sha = str(workflow_run.get("head_sha") or "").strip()
+        if not completed_head_sha:
+            return skipped_resolve_checker()
+        pr = fetch_pr(f"/repos/{repo}/pulls/{pr_number}")
         current_head_sha = str(((pr.get("head") or {}).get("sha")) or "")
-        if completed_head_sha and completed_head_sha != current_head_sha:
+        if completed_head_sha != current_head_sha:
             return skipped_resolve_checker()
         completed_head_repo = str(((workflow_run.get("head_repository") or {}).get("full_name")) or "")
         current_head_repo = str((((pr.get("head") or {}).get("repo") or {}).get("full_name")) or "")
@@ -1236,10 +1240,14 @@ def build_thread_lifecycle_inventory(threads: list[dict[str, Any]], *, head_sha:
             "root_cause_key": metadata["root_cause_key"],
             "root_cause_key_source": metadata["root_cause_key_source"],
             "comments": comments,
+            "forced_state": "",
+            "needs_human_hint": "",
+            "comments_connection_incomplete": False,
         }
         if metadata.get("root_cause_failure_kind"):
             item["root_cause_failure_kind"] = metadata["root_cause_failure_kind"]
         if comments_connection_has_more_than_limit(thread):
+            item["comments_connection_incomplete"] = True
             needs_human_hints.append("thread has more than 50 comments; GitHub comments connection may be incomplete")
         if needs_human_hints:
             item["forced_state"] = "needs_human"
@@ -1317,6 +1325,9 @@ def thread_snapshot_metadata(thread: dict[str, Any]) -> dict[str, Any]:
         "root_cause_key": thread.get("root_cause_key"),
         "root_cause_key_source": thread.get("root_cause_key_source"),
         "root_cause_failure_kind": thread.get("root_cause_failure_kind"),
+        "forced_state": str(thread.get("forced_state") or ""),
+        "needs_human_hint": str(thread.get("needs_human_hint") or ""),
+        "comments_connection_incomplete": bool(thread.get("comments_connection_incomplete")),
         "source_comment_node_ids": source_comment_node_ids,
         "source_comment_body_sha256": {
             str(comment.get("comment_node_id")): str(comment.get("body_sha256"))
@@ -1470,6 +1481,22 @@ def assert_thread_metadata_matches_manifest(thread_id: str, thread: dict[str, An
                 f"thread metadata mismatch for {thread_id}: {key} expected {expected.get(key)!r}, got {actual.get(key)!r}"
             )
 
+    for key in ("forced_state", "needs_human_hint", "comments_connection_incomplete"):
+        if key not in expected:
+            raise SystemExit(f"resolve manifest snapshot for {thread_id} missing {key}")
+        if key not in thread:
+            raise SystemExit(f"thread metadata mismatch for {thread_id}: missing {key} in batch")
+        if key == "comments_connection_incomplete":
+            if bool(actual.get(key)) != bool(expected.get(key)):
+                raise SystemExit(
+                    f"thread metadata mismatch for {thread_id}: {key} expected {expected.get(key)!r}, got {actual.get(key)!r}"
+                )
+            continue
+        if str(actual.get(key) or "") != str(expected.get(key) or ""):
+            raise SystemExit(
+                f"thread metadata mismatch for {thread_id}: {key} expected {expected.get(key)!r}, got {actual.get(key)!r}"
+            )
+
     expected_nodes = [str(node_id) for node_id in expected.get("source_comment_node_ids") or [] if str(node_id or "").strip()]
     actual_nodes = [str(node_id) for node_id in actual.get("source_comment_node_ids") or [] if str(node_id or "").strip()]
     if not expected_nodes or not actual_nodes or actual_nodes != expected_nodes:
@@ -1517,6 +1544,23 @@ def validate_manifest_thread_snapshots(manifest: dict[str, Any], inputs: dict[st
         if not isinstance(snapshot, dict):
             raise SystemExit(f"resolve manifest snapshot for {thread_id} must be an object")
         assert_thread_metadata_matches_manifest(thread_id, thread, snapshot)
+
+
+def manifest_forced_needs_human_threads(manifest: dict[str, Any]) -> list[str]:
+    manifest_threads = manifest.get("threads") or {}
+    if not isinstance(manifest_threads, dict):
+        return []
+    return sorted(
+        str(thread_id)
+        for thread_id, snapshot in manifest_threads.items()
+        if isinstance(snapshot, dict) and str(snapshot.get("forced_state") or "") == "needs_human"
+    )
+
+
+def abort_if_manifest_forced_needs_human(manifest: dict[str, Any]) -> None:
+    forced = manifest_forced_needs_human_threads(manifest)
+    if forced:
+        raise SystemExit("manifest contains forced needs_human threads: " + ", ".join(forced[:10]))
 
 
 def load_resolution_inputs(batches: Path, manifest: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
@@ -1982,6 +2026,7 @@ def command_validate_resolution_artifacts(args: argparse.Namespace) -> None:
         results=Path(args.results),
         check_current_head=True,
     )
+    abort_if_manifest_forced_needs_human(manifest)
     revalidate_thread_snapshots(repo=repo, pr_number=pr_number, threads=inputs, manifest=manifest)
     forced = [
         f"{thread_id}: {thread.get('needs_human_hint')}"
@@ -1993,14 +2038,13 @@ def command_validate_resolution_artifacts(args: argparse.Namespace) -> None:
     print("resolve-check manifest and results are complete")
 
 
-def command_post_resolve_failure(args: argparse.Namespace) -> None:
+def command_summarize_resolve_failure(args: argparse.Namespace) -> None:
     del args
-    repo = require_env("GITHUB_REPOSITORY")
     pr_number = os.environ.get("PR_NUMBER", "").strip()
     lines = [
-        RESOLVE_MARKER,
         "Codex thread lifecycle apply를 건너뛰었습니다.",
         "",
+        f"- PR: {pr_number or 'unknown'}",
         "- 이벤트: REQUEST_CHANGES",
         "- terminal 처리된 스레드: 0",
         "- 열어둔 스레드: workflow failure",
@@ -2014,14 +2058,14 @@ def command_post_resolve_failure(args: argparse.Namespace) -> None:
         "",
         "조치:",
         "- upstream run, broker token exchange, resolve-check artifacts, App permission 상태를 확인해야 합니다.",
-        "- 이 reporter는 App token을 만들지 않았고 thread reply/resolve나 deferred issue 생성을 시도하지 않았습니다.",
+        "- 이 reporter는 App token, GITHUB_TOKEN mutation, thread reply/resolve, deferred issue, sticky comment를 시도하지 않았습니다.",
     ]
-    if not pr_number:
-        print("resolve-check failure summary skipped because PR_NUMBER is empty")
-        print("\n".join(lines))
-        return
-    upsert_marker_comment(repo=repo, pr_number=pr_number, marker=RESOLVE_MARKER, body="\n".join(lines))
-    print("posted resolve-check failure summary")
+    body = "\n".join(lines)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write(body + "\n")
+    print(body)
 
 
 def command_apply_resolutions(args: argparse.Namespace) -> None:
@@ -2034,6 +2078,7 @@ def command_apply_resolutions(args: argparse.Namespace) -> None:
         results=Path(args.results),
         check_current_head=True,
     )
+    abort_if_manifest_forced_needs_human(manifest)
     revalidate_thread_snapshots(repo=repo, pr_number=pr_number, threads=inputs, manifest=manifest)
     forced = [
         f"{thread_id}: {thread.get('needs_human_hint')}"
@@ -2570,8 +2615,8 @@ def build_parser() -> argparse.ArgumentParser:
     validate_resolutions.add_argument("--results", required=True)
     validate_resolutions.set_defaults(func=command_validate_resolution_artifacts)
 
-    failure = subparsers.add_parser("post-resolve-failure")
-    failure.set_defaults(func=command_post_resolve_failure)
+    failure = subparsers.add_parser("summarize-resolve-failure")
+    failure.set_defaults(func=command_summarize_resolve_failure)
 
     review_context = subparsers.add_parser("build-review-context")
     review_context.add_argument("--output", required=True)
