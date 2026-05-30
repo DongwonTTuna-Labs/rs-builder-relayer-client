@@ -35,6 +35,10 @@ def _add_stage_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         parser.add_argument("--model-output", type=Path, required=False)
     if name == "stage02-techlead":
         parser.add_argument("--review", type=Path, required=False)
+    if name == "stage03-design":
+        parser.add_argument("--review", type=Path, required=False)
+        parser.add_argument("--techlead", type=Path, required=False)
+        parser.add_argument("--model-design", type=Path, required=False)
     parser.set_defaults(func=lambda args, stage=name: run_stage(stage, args))
 
 
@@ -64,6 +68,25 @@ def run_stage(stage: str, args: argparse.Namespace) -> int:
         from .stage02 import build_techlead_result
 
         payload = build_techlead_result(read_json_artifact(args.review))
+        if args.out:
+            write_json_artifact(args.out, payload)
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    if (
+        stage == "stage03-design"
+        and getattr(args, "review", None)
+        and getattr(args, "techlead", None)
+        and getattr(args, "model_design", None)
+    ):
+        from .artifacts import read_json_artifact
+        from .stage03 import build_design_result
+
+        payload = build_design_result(
+            read_json_artifact(args.review),
+            read_json_artifact(args.techlead),
+            read_json_artifact(args.model_design),
+        )
         if args.out:
             write_json_artifact(args.out, payload)
         else:
