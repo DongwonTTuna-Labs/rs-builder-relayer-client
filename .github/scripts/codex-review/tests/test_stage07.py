@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from codex_review.stage06 import build_fix_merge_result
 from codex_review.stage07 import (
     assert_workspace_changes_match,
     build_push_result,
@@ -48,6 +49,12 @@ def trusted_push():
         "merge_commit": False,
         "pr_merged": False,
     }
+
+
+def init_repo(repo: Path) -> None:
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
 
 
 class Stage07Tests(unittest.TestCase):
@@ -222,9 +229,7 @@ class Stage07Tests(unittest.TestCase):
     def test_workspace_revalidation_rejects_validation_side_effect_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            init_repo(repo)
             (repo / "allowed.txt").write_text("base\n", encoding="utf-8")
             subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
             subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -242,9 +247,7 @@ class Stage07Tests(unittest.TestCase):
     def test_workspace_revalidation_rejects_validation_side_effect_modified_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            init_repo(repo)
             (repo / "allowed.txt").write_text("base\n", encoding="utf-8")
             (repo / "outside.txt").write_text("base\n", encoding="utf-8")
             subprocess.run(["git", "add", "allowed.txt", "outside.txt"], cwd=repo, check=True)
@@ -263,9 +266,7 @@ class Stage07Tests(unittest.TestCase):
     def test_workspace_revalidation_rejects_validation_side_effect_on_allowed_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            init_repo(repo)
             (repo / "allowed.txt").write_text("base\n", encoding="utf-8")
             subprocess.run(["git", "add", "allowed.txt"], cwd=repo, check=True)
             subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -283,9 +284,7 @@ class Stage07Tests(unittest.TestCase):
     def test_stage_workspace_files_stages_only_revalidated_files_and_handles_deletions(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            init_repo(repo)
             (repo / "deleted.txt").write_text("base\n", encoding="utf-8")
             (repo / "untouched.txt").write_text("base\n", encoding="utf-8")
             subprocess.run(["git", "add", "deleted.txt", "untouched.txt"], cwd=repo, check=True)
@@ -303,6 +302,71 @@ class Stage07Tests(unittest.TestCase):
             )
 
             self.assertEqual(["deleted.txt"], cached.stdout.splitlines())
+
+    def test_stage06_rename_copy_candidate_patch_applies_and_matches_stage07_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            init_repo(repo)
+            (repo / "old.txt").write_text("old\n", encoding="utf-8")
+            (repo / "original.txt").write_text("copy\n", encoding="utf-8")
+            subprocess.run(["git", "add", "old.txt", "original.txt"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            subprocess.run(["git", "mv", "old.txt", "new.txt"], cwd=repo, check=True)
+            (repo / "copied.txt").write_text("copy\n", encoding="utf-8")
+            subprocess.run(["git", "add", "copied.txt"], cwd=repo, check=True)
+            patch = subprocess.run(
+                ["git", "diff", "--cached", "-M", "-C", "--find-copies-harder"],
+                cwd=repo,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout
+            subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            merge = build_fix_merge_result(
+                {
+                    "schema_version": "codex.stage05.fix_dispatch.v1",
+                    "stage": "stage05-fix-dispatch",
+                    "status": "ready",
+                    "can_continue": True,
+                    "push_allowed": False,
+                    "allowed_side_effects": [],
+                    "repository": "DongwonTTuna-Labs/rs-builder-relayer-client",
+                    "pr_number": "36",
+                    "base_sha": "a" * 40,
+                    "head_sha": "b" * 40,
+                    "task_count": 1,
+                    "tasks": [
+                        {
+                            "task_id": "FIX-DES-001",
+                            "allowed_files": ["old.txt", "new.txt", "original.txt", "copied.txt"],
+                            "test_plan": ["git diff --check"],
+                        }
+                    ],
+                },
+                {
+                    "schema_version": "codex.stage06.fix_outputs.v1",
+                    "outputs": [
+                        {
+                            "task_id": "FIX-DES-001",
+                            "status": "completed",
+                            "patch": patch,
+                            "touched_files": ["copied.txt", "new.txt"],
+                            "tests": [],
+                            "conflict_reason": "",
+                        }
+                    ],
+                },
+            )
+
+            self.assertEqual("ready", merge["status"])
+            patch_path = repo / "candidate.patch"
+            patch_path.write_text(merge["candidate_patch"], encoding="utf-8")
+            subprocess.run(["git", "apply", "--index", str(patch_path)], cwd=repo, check=True)
+            patch_path.unlink()
+
+            self.assertEqual(["copied.txt", "new.txt"], assert_workspace_changes_match(repo, merge["touched_files"]))
 
 
 if __name__ == "__main__":

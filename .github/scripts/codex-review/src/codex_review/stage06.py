@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from .stage07 import validation_command_argv
-from .validators import parse_unified_diff_paths, require_keys, require_schema_version
+from .validators import (
+    parse_unified_diff_paths,
+    parse_unified_diff_scope_paths,
+    require_keys,
+    require_schema_version,
+)
 
 
 FIX_DISPATCH_SCHEMA = "codex.stage05.fix_dispatch.v1"
@@ -102,8 +107,9 @@ def _validate_output(raw_output: Any, task: dict[str, Any]) -> dict[str, Any]:
     )
     patch = str(raw_output.get("patch") or "")
     patch_files = parse_unified_diff_paths(patch) if patch.strip() else []
+    patch_scope_files = parse_unified_diff_scope_paths(patch) if patch.strip() else []
     allowed_files = set(task["allowed_files"])
-    for path in sorted(set(touched_files) | set(patch_files)):
+    for path in sorted(set(touched_files) | set(patch_scope_files)):
         if path not in allowed_files:
             raise ValueError(f"{task_id} touched file is not allowed: {path}")
     if sorted(touched_files) != patch_files:

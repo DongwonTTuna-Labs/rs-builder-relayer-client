@@ -275,6 +275,60 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertIn("touched file is not allowed", str(ctx.exception))
 
+    def test_rename_patch_uses_destination_for_touched_files_and_allows_source_scope(self):
+        payload = dispatch()
+        payload["tasks"][0]["allowed_files"] = ["src/old.rs", "src/new.rs"]
+        outputs = fix_outputs(
+            touched_files=["src/new.rs"],
+            patch=(
+                "diff --git a/src/old.rs b/src/new.rs\n"
+                "similarity index 100%\n"
+                "rename from src/old.rs\n"
+                "rename to src/new.rs\n"
+            ),
+        )
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual("ready", result["status"])
+        self.assertEqual(["src/new.rs"], result["touched_files"])
+
+    def test_rename_source_must_be_allowed_even_when_destination_is_allowed(self):
+        payload = dispatch()
+        payload["tasks"][0]["allowed_files"] = ["src/new.rs"]
+        outputs = fix_outputs(
+            touched_files=["src/new.rs"],
+            patch=(
+                "diff --git a/src/old.rs b/src/new.rs\n"
+                "similarity index 100%\n"
+                "rename from src/old.rs\n"
+                "rename to src/new.rs\n"
+            ),
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            build_fix_merge_result(payload, outputs)
+
+        self.assertIn("touched file is not allowed: src/old.rs", str(ctx.exception))
+
+    def test_copy_patch_uses_destination_for_touched_files_and_allows_source_scope(self):
+        payload = dispatch()
+        payload["tasks"][0]["allowed_files"] = ["src/original.rs", "src/copied.rs"]
+        outputs = fix_outputs(
+            touched_files=["src/copied.rs"],
+            patch=(
+                "diff --git a/src/original.rs b/src/copied.rs\n"
+                "similarity index 100%\n"
+                "copy from src/original.rs\n"
+                "copy to src/copied.rs\n"
+            ),
+        )
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual("ready", result["status"])
+        self.assertEqual(["src/copied.rs"], result["touched_files"])
+
     def test_candidate_patch_preserves_trailing_blank_context_lines(self):
         payload = dispatch()
         payload["task_count"] = 2

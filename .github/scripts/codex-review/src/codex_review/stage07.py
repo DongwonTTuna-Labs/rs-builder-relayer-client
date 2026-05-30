@@ -108,6 +108,12 @@ def workspace_changed_files(workspace: Path) -> list[str]:
 
 
 def assert_workspace_changes_match(workspace: Path, expected_files: list[str]) -> list[str]:
+    """Validate staged changes against Stage06/Stage07 post-apply path names.
+
+    The expected file list must use the same contract as parse_unified_diff_paths:
+    rename/copy destinations, deleted paths for deletes, and changed paths for
+    add/modify/binary patches.
+    """
     expected = sorted(set(expected_files))
     staged = _git_output_lines(workspace, ["diff", "--cached", "--name-only"])
     unstaged = _git_output_lines(workspace, ["diff", "--name-only"])

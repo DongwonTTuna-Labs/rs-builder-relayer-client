@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 import shlex
 from typing import Any
@@ -46,34 +47,114 @@ def _diff_git_paths(line: str) -> tuple[str, str]:
     return parts[2], parts[3]
 
 
-def parse_unified_diff_paths(patch: str) -> list[str]:
-    paths: set[str] = set()
-    saw_file_header = False
+@dataclass
+class _PatchFile:
+    git_source: str
+    git_destination: str
+    old_header: str | None = None
+    new_header: str | None = None
+    rename_from: str | None = None
+    rename_to: str | None = None
+    copy_from: str | None = None
+    copy_to: str | None = None
+    binary_paths: list[str] = field(default_factory=list)
+
+
+def _normalized_paths(paths: Iterable[str | None]) -> set[str]:
+    normalized_paths: set[str] = set()
+    for path in paths:
+        if path is None:
+            continue
+        normalized = _normalize_patch_path(path)
+        if normalized:
+            normalized_paths.add(normalized)
+    return normalized_paths
+
+
+def _parse_unified_diff_files(patch: str) -> list[_PatchFile]:
+    files: list[_PatchFile] = []
+    current: _PatchFile | None = None
     for line in patch.splitlines():
-        candidates: list[str] = []
         if line.startswith("diff --git "):
-            candidates.extend(_diff_git_paths(line))
-            saw_file_header = True
-        elif line.startswith(("--- ", "+++ ")):
-            candidates.append(line[4:])
+            source, destination = _diff_git_paths(line)
+            current = _PatchFile(source, destination)
+            files.append(current)
+        elif line.startswith("--- "):
+            if current is None:
+                raise ContractViolation("file header missing diff --git header")
+            current.old_header = line[4:]
+        elif line.startswith("+++ "):
+            if current is None:
+                raise ContractViolation("file header missing diff --git header")
+            current.new_header = line[4:]
         elif line.startswith("rename from "):
-            candidates.append(line.removeprefix("rename from "))
+            if current is None:
+                raise ContractViolation("rename header missing diff --git header")
+            current.rename_from = line.removeprefix("rename from ")
         elif line.startswith("rename to "):
-            candidates.append(line.removeprefix("rename to "))
+            if current is None:
+                raise ContractViolation("rename header missing diff --git header")
+            current.rename_to = line.removeprefix("rename to ")
         elif line.startswith("copy from "):
-            candidates.append(line.removeprefix("copy from "))
+            if current is None:
+                raise ContractViolation("copy header missing diff --git header")
+            current.copy_from = line.removeprefix("copy from ")
         elif line.startswith("copy to "):
-            candidates.append(line.removeprefix("copy to "))
+            if current is None:
+                raise ContractViolation("copy header missing diff --git header")
+            current.copy_to = line.removeprefix("copy to ")
         elif line.startswith("Binary files ") and line.endswith(" differ"):
             left, _, right = line.removeprefix("Binary files ").removesuffix(" differ").partition(" and ")
             if not right:
                 raise ContractViolation("malformed binary patch header")
-            candidates.extend([left, right])
-        elif line == "GIT binary patch" and not saw_file_header:
+            if current is None:
+                raise ContractViolation("binary patch missing diff --git header")
+            current.binary_paths.extend([left, right])
+        elif line == "GIT binary patch" and current is None:
             raise ContractViolation("binary patch missing diff --git header")
+    return files
 
-        for candidate in candidates:
-            normalized = _normalize_patch_path(candidate)
-            if normalized:
-                paths.add(normalized)
+
+def parse_unified_diff_scope_paths(patch: str) -> list[str]:
+    """Return every source and destination path a patch can affect."""
+    paths: set[str] = set()
+    for file in _parse_unified_diff_files(patch):
+        paths.update(
+            _normalized_paths(
+                [
+                    file.git_source,
+                    file.git_destination,
+                    file.old_header,
+                    file.new_header,
+                    file.rename_from,
+                    file.rename_to,
+                    file.copy_from,
+                    file.copy_to,
+                    *file.binary_paths,
+                ]
+            )
+        )
+    return sorted(paths)
+
+
+def parse_unified_diff_paths(patch: str) -> list[str]:
+    """Return Stage07 comparison paths after applying a unified diff.
+
+    Rename and copy patches compare by destination, deletes by deleted path,
+    and add/modify/binary patches by the changed post-apply path.
+    """
+    paths: set[str] = set()
+    for file in _parse_unified_diff_files(patch):
+        old_paths = _normalized_paths([file.old_header])
+        new_paths = _normalized_paths([file.new_header])
+        if file.rename_to:
+            paths.update(_normalized_paths([file.rename_to]))
+        elif file.copy_to:
+            paths.update(_normalized_paths([file.copy_to]))
+        elif old_paths and not new_paths:
+            paths.update(old_paths)
+        elif new_paths:
+            paths.update(new_paths)
+        else:
+            paths.update(_normalized_paths([file.git_destination]))
     return sorted(paths)
