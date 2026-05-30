@@ -68,6 +68,9 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(4, self.workflow_text.count("codex-args: ${{ steps.codex-args.outputs.codex_args }}"))
         self.assertNotIn("codex-args: ${{ steps.relay-token.outputs.codex_args }}", self.workflow_text)
 
+    def test_codex_model_jobs_disable_bwrap_sandbox_on_self_hosted_runner(self):
+        self.assertEqual(4, self.workflow_text.count("sandbox: danger-full-access"))
+
     def test_codex_model_jobs_share_relay_codex_home(self):
         for stage in ("stage01", "stage03", "stage04", "stage05"):
             with self.subTest(stage=stage):
