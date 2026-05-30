@@ -125,7 +125,11 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
         if output["status"] == "conflict"
     ]
     touched_files = sorted({path for output in outputs for path in output["touched_files"]})
-    candidate_patch = "\n".join(output["patch"].rstrip() for output in outputs if output["status"] == "completed").strip()
+    candidate_patch = "\n".join(
+        output["patch"].rstrip("\n")
+        for output in outputs
+        if output["status"] == "completed"
+    )
     return {
         "schema_version": FIX_MERGE_SCHEMA,
         "stage": "stage06-fix-merge",

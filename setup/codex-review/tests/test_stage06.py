@@ -125,6 +125,77 @@ class Stage06Tests(unittest.TestCase):
 
         self.assertIn("touched file is not allowed", str(ctx.exception))
 
+    def test_candidate_patch_preserves_trailing_blank_context_lines(self):
+        payload = dispatch()
+        payload["task_count"] = 2
+        payload["tasks"] = [
+            {
+                "task_id": "FIX-DES-001",
+                "allowed_files": ["a.txt"],
+            },
+            {
+                "task_id": "FIX-DES-002",
+                "allowed_files": ["b.txt"],
+            },
+        ]
+        outputs = {
+            "schema_version": "codex.stage06.fix_outputs.v1",
+            "outputs": [
+                {
+                    "task_id": "FIX-DES-001",
+                    "status": "completed",
+                    "patch": (
+                        "diff --git a/a.txt b/a.txt\n"
+                        "--- a/a.txt\n"
+                        "+++ b/a.txt\n"
+                        "@@ -1,3 +1,3 @@\n"
+                        " one\n"
+                        "-two\n"
+                        "+TWO\n"
+                        " \n"
+                    ),
+                    "touched_files": ["a.txt"],
+                    "tests": [],
+                    "conflict_reason": "",
+                },
+                {
+                    "task_id": "FIX-DES-002",
+                    "status": "completed",
+                    "patch": (
+                        "diff --git a/b.txt b/b.txt\n"
+                        "--- a/b.txt\n"
+                        "+++ b/b.txt\n"
+                        "@@ -1 +1 @@\n"
+                        "-alpha\n"
+                        "+BETA\n"
+                    ),
+                    "touched_files": ["b.txt"],
+                    "tests": [],
+                    "conflict_reason": "",
+                },
+            ],
+        }
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertIn("+TWO\n \ndiff --git a/b.txt", result["candidate_patch"])
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "a.txt").write_text("one\ntwo\n\n", encoding="utf-8")
+            (tmp_path / "b.txt").write_text("alpha\n", encoding="utf-8")
+            patch_path = tmp_path / "candidate.patch"
+            patch_path.write_text(result["candidate_patch"], encoding="utf-8")
+            check = subprocess.run(
+                ["git", "apply", "--check", str(patch_path)],
+                cwd=tmp_path,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual("", check.stderr)
+        self.assertEqual(0, check.returncode)
+
     def test_conflict_output_stops_pipeline_with_conflict_report(self):
         result = build_fix_merge_result(dispatch(), fix_outputs(status="conflict"))
 
