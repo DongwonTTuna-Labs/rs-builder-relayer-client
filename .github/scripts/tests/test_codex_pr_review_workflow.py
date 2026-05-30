@@ -175,7 +175,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         combined = self.workflow_text + "\n" + self.resolve_workflow_text
 
         self.assertNotIn("setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9", combined)
-        self.assertIn("setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb", combined)
+        self.assertIn("setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5", combined)
         self.assertNotIn("trusted-actor:", combined)
         self.assertIn("trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]", combined)
         self.assertEqual(
@@ -337,11 +337,11 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertNotIn("setup-codex-relay@main", self.workflow_text)
         self.assertNotIn("setup-codex-relay@main", self.resolve_workflow_text)
         self.assertIn(
-            "setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb",
+            "setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5",
             self.workflow_text,
         )
         self.assertIn(
-            "setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb",
+            "setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5",
             self.resolve_workflow_text,
         )
 

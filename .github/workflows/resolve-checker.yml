@@ -229,7 +229,7 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@f7816f244a031e1132004ed5906f8ba7b3207aa5
         with:
           codex-home: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
@@ -240,7 +240,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected="85f8c7646018470593ddd2e6e2dddfe750ac8edbbe71a4122bd538fb60540898"
+          expected="14f515cd6d538f98e8ff288c1973b39666c42eb8ad8590a2e089622c53c4bd87"
           actual="$(printf '%s' "$CODEX_ARGS" | sha256sum | awk '{print $1}')"
           test "$actual" = "$expected"
 
