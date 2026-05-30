@@ -19,8 +19,6 @@ RUBY_WORKFLOW_YAML_CHECK = (
 EXACT_VALIDATION_COMMANDS = {
     ("git", "diff", "--check"),
     ("cargo", "fmt", "--all", "--check"),
-    ("cargo", "test", "--workspace", "--all-features"),
-    ("cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"),
     ("actionlint", ".github/workflows/codex-pr-review.yml"),
     ("actionlint", "-ignore", 'label "dongwontuna-labs-runner" is unknown', ".github/workflows/codex-pr-review.yml"),
     ("ruby", "-e", RUBY_WORKFLOW_YAML_CHECK),

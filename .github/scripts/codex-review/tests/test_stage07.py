@@ -54,17 +54,6 @@ class Stage07Tests(unittest.TestCase):
         cases = {
             "git diff --check": ["git", "diff", "--check"],
             "cargo fmt --all --check": ["cargo", "fmt", "--all", "--check"],
-            "cargo test --workspace --all-features": ["cargo", "test", "--workspace", "--all-features"],
-            "cargo clippy --workspace --all-targets --all-features -- -D warnings": [
-                "cargo",
-                "clippy",
-                "--workspace",
-                "--all-targets",
-                "--all-features",
-                "--",
-                "-D",
-                "warnings",
-            ],
         }
 
         for command, expected in cases.items():
@@ -77,6 +66,8 @@ class Stage07Tests(unittest.TestCase):
             "python3 -m unittest discover -s .github/scripts/tests",
             "python3 -m unittest discover -s .github/scripts/codex-review/tests -p test_stage07.py",
             "python3 .github/scripts/tests/test_codex_pr_review_workflow.py",
+            "cargo test --workspace --all-features",
+            "cargo clippy --workspace --all-targets --all-features -- -D warnings",
         ]
 
         for command in commands:

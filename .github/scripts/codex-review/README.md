@@ -79,9 +79,10 @@ may include `tests`. Stage06 deduplicates those entries into
 Stage07 requires non-empty `validation_commands`. After applying the candidate
 patch and running `git diff --check`, the trusted push job runs each validation
 command from a narrow allowlist of trusted-ref workflow helper commands or fixed
-safe commands before committing or pushing. It does not run PR-head Python test
-discovery paths in the privileged write job. Missing, unsupported, or failing
-validation commands block the push.
+safe commands before committing or pushing. The privileged write job must not run
+PR-head-controlled code, including Python test discovery, `cargo test`, or
+`cargo clippy`. Missing, unsupported, or failing validation commands block the
+push.
 
 The trusted push job rechecks the changed file set after validation and before
 commit. The staged diff must still match the Stage06 `touched_files` list, and
