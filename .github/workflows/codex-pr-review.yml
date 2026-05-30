@@ -476,7 +476,7 @@ jobs:
                   "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["id", "action", "reason"],
+                    "required": ["id", "action", "primary_root_cause_key", "reason"],
                     "properties": {
                       "id": {
                         "type": "string",
@@ -487,7 +487,7 @@ jobs:
                         "enum": ["publish_and_fix_now", "summary_only_fix_now", "defer_to_issue", "deny_false_positive", "needs_human"]
                       },
                       "primary_root_cause_key": {
-                        "type": "string",
+                        "type": ["string", "null"],
                         "minLength": 1,
                         "maxLength": 120
                       },
