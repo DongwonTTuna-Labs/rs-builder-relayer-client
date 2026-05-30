@@ -62,6 +62,12 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]", self.workflow_text)
         self.assertIn('expected="c36946ed34d86ecd40b4805e1427c031b34c8a2b5f3018085b45a048e07bcf09"', self.workflow_text)
 
+    def test_codex_model_jobs_share_relay_codex_home(self):
+        for stage in ("stage01", "stage03", "stage04", "stage05"):
+            with self.subTest(stage=stage):
+                home = "codex-home: ${{ runner.temp }}/codex-home-" + stage
+                self.assertEqual(2, self.workflow_text.count(home))
+
     def test_trusted_push_job_has_the_only_contents_write_permission(self):
         write_permissions = re.findall(r"^\s{6}contents: write$", self.workflow_text, flags=re.MULTILINE)
 
