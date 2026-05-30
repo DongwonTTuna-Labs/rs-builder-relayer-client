@@ -38,6 +38,7 @@ def _validate_task(raw_task: Any) -> dict[str, Any]:
     return {
         "task_id": _require_string(raw_task.get("task_id"), "task_id"),
         "allowed_files": _string_list(raw_task.get("allowed_files"), "allowed_files", allow_empty=False),
+        "test_plan": _string_list(raw_task.get("test_plan") or [], "test_plan"),
     }
 
 
@@ -149,6 +150,25 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
         for output in outputs
         if output["status"] == "completed"
     )
+    validation_commands = list(
+        dict.fromkeys(
+            command
+            for task in dispatch["tasks"]
+            for command in task["test_plan"]
+        )
+    )
+    validation_commands = list(
+        dict.fromkeys(
+            [
+                *validation_commands,
+                *[
+                    command
+                    for output in outputs
+                    for command in output["tests"]
+                ],
+            ]
+        )
+    )
     return {
         "schema_version": FIX_MERGE_SCHEMA,
         "stage": "stage06-fix-merge",
@@ -161,6 +181,7 @@ def build_fix_merge_result(dispatch_payload: dict[str, Any], fix_outputs_payload
         "head_sha": dispatch["head_sha"],
         "task_ids": dispatch["task_ids"],
         "touched_files": touched_files,
+        "validation_commands": validation_commands,
         "candidate_patch": "" if conflicts else candidate_patch + "\n",
         "conflicts": conflicts,
     }

@@ -32,7 +32,7 @@ def dispatch():
                 "instructions": "Change the value source and keep the existing return type.",
                 "allowed_files": ["src/lib.rs", "tests/lib.rs"],
                 "target_finding_ids": ["REV-001"],
-                "test_plan": ["Run the existing Rust test suite."],
+                "test_plan": ["cargo fmt --all --check"],
             }
         ],
     }
@@ -74,6 +74,33 @@ class Stage06Tests(unittest.TestCase):
         self.assertEqual(["src/lib.rs"], result["touched_files"])
         self.assertIn("diff --git", result["candidate_patch"])
         self.assertEqual([], result["conflicts"])
+        self.assertEqual(
+            ["cargo fmt --all --check", "cargo test --workspace --all-features"],
+            result["validation_commands"],
+        )
+
+    def test_validation_commands_are_deduped_across_dispatch_and_outputs(self):
+        payload = dispatch()
+        payload["tasks"][0]["test_plan"] = [
+            "python3 -m unittest discover -s setup/codex-review/tests",
+            "git diff --check",
+        ]
+        outputs = fix_outputs()
+        outputs["outputs"][0]["tests"] = [
+            "git diff --check",
+            "actionlint .github/workflows/codex-pr-review.yml",
+        ]
+
+        result = build_fix_merge_result(payload, outputs)
+
+        self.assertEqual(
+            [
+                "python3 -m unittest discover -s setup/codex-review/tests",
+                "git diff --check",
+                "actionlint .github/workflows/codex-pr-review.yml",
+            ],
+            result["validation_commands"],
+        )
 
     def test_missing_task_output_fails_closed(self):
         outputs = fix_outputs()

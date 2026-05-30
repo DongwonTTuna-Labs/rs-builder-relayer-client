@@ -121,6 +121,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         artifact_names = [
             "codex-v3-context",
             "codex-v3-stage00",
+            "codex-v3-stage00-lifecycle",
             "codex-v3-stage01-model",
             "codex-v3-stage01",
             "codex-v3-stage02",
@@ -159,6 +160,13 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertIn("python3 -m codex_review.cli stage00-context", stage00)
         self.assertNotIn('"threads": []', stage00)
 
+    def test_stage00_lifecycle_consumes_unresolved_thread_gate(self):
+        stage00 = self.workflow_text.split("stage00-resolve-gate:", 1)[1].split("stage01-review-model:", 1)[0]
+
+        self.assertIn("python3 -m codex_review.cli stage00-lifecycle", stage00)
+        self.assertIn("artifacts/stage00-lifecycle.json", stage00)
+        self.assertIn("data = json.load(open(\"artifacts/stage00-lifecycle.json\"", stage00)
+
     def test_stage05_prompt_allows_workflow_files_when_allowed(self):
         self.assertIn("Only modify files listed in allowed_files.", self.workflow_text)
         self.assertNotIn("touch workflow files", self.workflow_text)
@@ -186,6 +194,13 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
 
         self.assertIn("git -C workspace diff --name-only", trusted_push)
         self.assertIn("expected = set(data.get(\"touched_files\") or [])", trusted_push)
+
+    def test_trusted_push_runs_validation_commands_before_commit(self):
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+
+        self.assertIn("validation-commands.txt", trusted_push)
+        self.assertIn("unsupported validation command", trusted_push)
+        self.assertLess(trusted_push.index("validation-commands.txt"), trusted_push.index("git -C workspace commit"))
 
 
 if __name__ == "__main__":

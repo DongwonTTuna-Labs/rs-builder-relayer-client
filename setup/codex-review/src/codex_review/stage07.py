@@ -39,7 +39,10 @@ def _string_list(value: Any, field: str, *, allow_empty: bool = True) -> list[st
 
 def validate_fix_merge(payload: dict[str, Any]) -> dict[str, Any]:
     require_schema_version(payload, FIX_MERGE_SCHEMA)
-    require_keys(payload, ["status", "can_continue", "repository", "pr_number", "head_sha", "touched_files", "candidate_patch"])
+    require_keys(
+        payload,
+        ["status", "can_continue", "repository", "pr_number", "head_sha", "touched_files", "validation_commands", "candidate_patch"],
+    )
     if _require_string(payload.get("status"), "status") != "ready" or payload.get("can_continue") is not True:
         raise ValueError("stage07 requires ready fix_merge")
     if not str(payload.get("candidate_patch") or "").strip():
@@ -49,6 +52,7 @@ def validate_fix_merge(payload: dict[str, Any]) -> dict[str, Any]:
         "pr_number": _require_string(payload.get("pr_number"), "pr_number"),
         "head_sha": _require_sha(payload.get("head_sha"), "head_sha", 40),
         "touched_files": _string_list(payload.get("touched_files"), "touched_files", allow_empty=False),
+        "validation_commands": _string_list(payload.get("validation_commands"), "validation_commands", allow_empty=False),
     }
 
 
@@ -101,4 +105,5 @@ def build_push_result(fix_merge_payload: dict[str, Any], trusted_push_payload: d
         "merge_commit": trusted_push["merge_commit"],
         "pr_merged": trusted_push["pr_merged"],
         "touched_files": fix_merge["touched_files"],
+        "validation_commands": fix_merge["validation_commands"],
     }

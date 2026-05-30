@@ -218,6 +218,18 @@ def run_stage05_fallback_fix_outputs(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stage00_lifecycle(args: argparse.Namespace) -> int:
+    from .artifacts import read_json_artifact
+    from .stage00 import build_lifecycle_result
+
+    payload = build_lifecycle_result(read_json_artifact(args.gate), read_json_artifact(args.inventory))
+    if args.out:
+        write_json_artifact(args.out, payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex-review")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -234,6 +246,11 @@ def build_parser() -> argparse.ArgumentParser:
     context.add_argument("--out-dir", type=Path, required=True)
     context.add_argument("--github-output", type=Path, required=False)
     context.set_defaults(func=run_stage00_context)
+    lifecycle = subparsers.add_parser("stage00-lifecycle")
+    lifecycle.add_argument("--gate", type=Path, required=True)
+    lifecycle.add_argument("--inventory", type=Path, required=True)
+    lifecycle.add_argument("--out", type=Path, required=False)
+    lifecycle.set_defaults(func=run_stage00_lifecycle)
     fallback = subparsers.add_parser("stage05-fallback-fix-outputs")
     fallback.add_argument("--dispatch", type=Path, required=True)
     fallback.add_argument("--reason", required=True)

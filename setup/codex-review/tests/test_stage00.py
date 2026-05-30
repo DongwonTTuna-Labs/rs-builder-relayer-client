@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_review.stage00 import build_context_artifacts, build_resolve_gate_result
+from codex_review.stage00 import build_context_artifacts, build_lifecycle_result, build_resolve_gate_result
 
 
 def inventory(threads):
@@ -133,6 +133,28 @@ class Stage00Tests(unittest.TestCase):
         self.assertEqual(["thread-1"], result["thread_ids"])
         self.assertEqual([], result["needs_human_thread_ids"])
 
+    def test_lifecycle_result_consumes_unresolved_threads_and_allows_review(self):
+        gate = build_resolve_gate_result(inventory([thread("thread-1")]))
+
+        result = build_lifecycle_result(gate, inventory([thread("thread-1")]))
+
+        self.assertEqual("codex.stage00.lifecycle.v1", result["schema_version"])
+        self.assertEqual("stage00-lifecycle", result["stage"])
+        self.assertEqual("classified", result["status"])
+        self.assertTrue(result["can_continue"])
+        self.assertEqual(["thread-1"], result["deferred_thread_ids"])
+        self.assertEqual([], result["needs_human_thread_ids"])
+
+    def test_lifecycle_result_does_not_override_needs_human_gate(self):
+        payload = inventory([thread("thread-1", forced_state="needs_human", needs_human_hint="missing root metadata")])
+        gate = build_resolve_gate_result(payload)
+
+        result = build_lifecycle_result(gate, payload)
+
+        self.assertEqual("needs_human", result["status"])
+        self.assertFalse(result["can_continue"])
+        self.assertEqual(["thread-1"], result["needs_human_thread_ids"])
+
     def test_forced_needs_human_stops_pipeline(self):
         result = build_resolve_gate_result(
             inventory([thread("thread-1", forced_state="needs_human", needs_human_hint="missing root metadata")])
@@ -191,6 +213,43 @@ class Stage00Tests(unittest.TestCase):
             self.assertEqual(0, result.returncode)
             payload = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual("needs_lifecycle_review", payload["status"])
+
+    def test_cli_reads_gate_and_inventory_then_writes_lifecycle_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            inventory_path = tmp_path / "inventory.json"
+            gate_path = tmp_path / "gate.json"
+            out_path = tmp_path / "lifecycle.json"
+            payload = inventory([thread("thread-1")])
+            inventory_path.write_text(json.dumps(payload), encoding="utf-8")
+            gate_path.write_text(json.dumps(build_resolve_gate_result(payload)), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "codex_review.cli",
+                    "stage00-lifecycle",
+                    "--gate",
+                    str(gate_path),
+                    "--inventory",
+                    str(inventory_path),
+                    "--out",
+                    str(out_path),
+                ],
+                cwd=ROOT,
+                env={"PYTHONPATH": str(ROOT / "src")},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual("", result.stderr)
+            self.assertEqual(0, result.returncode)
+            payload = json.loads(out_path.read_text(encoding="utf-8"))
+            self.assertEqual("classified", payload["status"])
+            self.assertTrue(payload["can_continue"])
 
     def test_cli_writes_context_artifacts_and_github_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,16 +4,15 @@ This directory contains the implementation surface for the v3 Codex review workf
 
 The live workflow should stay thin. It should call commands from this package, pass artifacts between jobs, and keep privileged GitHub write operations outside model jobs.
 
-## Phase 1 Scope
+## Current Scope
 
-Phase 1 provides:
+V3 provides:
 
 - deterministic JSON artifact IO
 - fail-closed contract validation helpers
 - an explicit OIDC relay action contract representation
-- dry-run CLI entrypoints for stage00 through stage08
-
-Phase 1 does not replace `.github/workflows/codex-pr-review.yml` yet.
+- CLI entrypoints for stage00 through stage08
+- a thin GitHub Actions workflow that passes JSON artifacts between stages
 
 ## OIDC Contract
 
@@ -33,6 +32,7 @@ The intended stage command names are:
 
 ```text
 stage00-resolve-gate
+stage00-lifecycle
 stage01-review
 stage02-techlead
 stage03-design
@@ -43,7 +43,28 @@ stage07-push
 stage08-reentry
 ```
 
-In Phase 1 these commands support only `--dry-run`.
+## Stage00 Lifecycle Gate
+
+`stage00-resolve-gate` writes the initial unresolved-thread gate. `stage00-lifecycle`
+then consumes that gate with `thread-inventory.json` and writes
+`stage00-lifecycle.json`.
+
+Unforced unresolved threads are recorded as `deferred_thread_ids` and keep
+`can_continue` true so stage01 can review them as normal work. Forced or
+human-blocking gates stay blocking and keep `can_continue` false.
+
+The workflow uploads this artifact as `codex-v3-stage00-lifecycle`.
+
+## Validation Command Contract
+
+Stage05 fix dispatch tasks may include a `test_plan`, and individual fix outputs
+may include `tests`. Stage06 deduplicates those entries into
+`validation_commands` in `stage06-fix-merge.json`.
+
+Stage07 requires non-empty `validation_commands`. After applying the candidate
+patch and running `git diff --check`, the trusted push job runs each validation
+command from an allowlist before committing or pushing. Missing, unsupported, or
+failing validation commands block the push.
 
 ## Non-Negotiable Rules
 

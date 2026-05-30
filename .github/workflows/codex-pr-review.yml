@@ -36,6 +36,7 @@ jobs:
       head_ref: ${{ steps.meta.outputs.head_ref }}
       head_repo: ${{ steps.meta.outputs.head_repo }}
       can_continue: ${{ steps.result.outputs.can_continue }}
+      status: ${{ steps.result.outputs.status }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -82,11 +83,14 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage00-resolve-gate --inventory artifacts/thread-inventory.json --out artifacts/stage00-resolve-gate.json
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage00-lifecycle --gate artifacts/stage00-resolve-gate.json --inventory artifacts/thread-inventory.json --out artifacts/stage00-lifecycle.json
           python3 - <<'PY'
           import json, os
-          data = json.load(open("artifacts/stage00-resolve-gate.json", encoding="utf-8"))
+          gate = json.load(open("artifacts/stage00-resolve-gate.json", encoding="utf-8"))
+          data = json.load(open("artifacts/stage00-lifecycle.json", encoding="utf-8"))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+              print(f"status={gate['status']}", file=output)
           PY
         id: result
       - uses: actions/upload-artifact@v7
@@ -101,6 +105,11 @@ jobs:
         with:
           name: codex-v3-stage00
           path: artifacts/stage00-resolve-gate.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage00-lifecycle
+          path: artifacts/stage00-lifecycle.json
           if-no-files-found: error
 
   stage01-review-model:
@@ -566,6 +575,20 @@ jobs:
               raise SystemExit(f"applied patch files mismatch: expected {sorted(expected)}, got {sorted(actual)}")
           PY
           git -C workspace diff --check
+          python3 - <<'PY' > artifacts/validation-commands.txt
+          import json
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          for command in data.get("validation_commands") or []:
+              print(command)
+          PY
+          test -s artifacts/validation-commands.txt
+          while IFS= read -r command; do
+            case "$command" in
+              python3\ -m\ unittest*|python3\ .github/scripts/tests/*|actionlint*|ruby\ -e*|git\ diff\ --check|cargo\ fmt*|cargo\ clippy*|cargo\ test*) ;;
+              *) echo "unsupported validation command: $command" >&2; exit 1 ;;
+            esac
+            (cd workspace && bash -lc "$command")
+          done < artifacts/validation-commands.txt
           git -C workspace config user.name "codex-reviewer-for-dongwonttuna[bot]"
           git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"
           git -C workspace add --all

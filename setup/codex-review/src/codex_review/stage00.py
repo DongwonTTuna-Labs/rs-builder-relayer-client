@@ -10,6 +10,7 @@ from .validators import require_keys, require_schema_version
 
 THREAD_INVENTORY_SCHEMA = "codex.stage00.thread_inventory.v1"
 RESOLVE_GATE_SCHEMA = "codex.stage00.resolve_gate.v1"
+LIFECYCLE_SCHEMA = "codex.stage00.lifecycle.v1"
 
 
 def _require_string(value: Any, field: str) -> str:
@@ -208,4 +209,30 @@ def build_resolve_gate_result(payload: dict[str, Any]) -> dict[str, Any]:
         "thread_ids": thread_ids,
         "needs_human_thread_ids": needs_human,
         "stop_reasons": stop_reasons,
+    }
+
+
+def build_lifecycle_result(gate_payload: dict[str, Any], inventory_payload: dict[str, Any]) -> dict[str, Any]:
+    require_schema_version(gate_payload, RESOLVE_GATE_SCHEMA)
+    require_keys(gate_payload, ["status", "thread_ids", "needs_human_thread_ids", "stop_reasons"])
+    status = _require_string(gate_payload.get("status"), "status")
+    if status not in {"clear", "needs_lifecycle_review", "needs_human"}:
+        raise ValueError(f"unknown resolve gate status: {status}")
+    threads = validate_thread_inventory(inventory_payload)
+    thread_ids = [str(thread["thread_id"]) for thread in threads]
+    gate_thread_ids = [str(thread_id) for thread_id in gate_payload.get("thread_ids") or []]
+    if sorted(thread_ids) != sorted(gate_thread_ids):
+        raise ValueError("lifecycle thread_ids must match resolve gate")
+    needs_human = [str(thread_id) for thread_id in gate_payload.get("needs_human_thread_ids") or []]
+    deferred = thread_ids if status == "needs_lifecycle_review" else []
+    can_continue = status in {"clear", "needs_lifecycle_review"}
+    return {
+        "schema_version": LIFECYCLE_SCHEMA,
+        "stage": "stage00-lifecycle",
+        "status": "classified" if status == "needs_lifecycle_review" else status,
+        "can_continue": can_continue,
+        "thread_count": len(thread_ids),
+        "deferred_thread_ids": deferred,
+        "needs_human_thread_ids": needs_human,
+        "stop_reasons": [str(reason) for reason in gate_payload.get("stop_reasons") or []],
     }
