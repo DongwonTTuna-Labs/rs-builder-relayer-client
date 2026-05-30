@@ -30,6 +30,9 @@ def _add_stage_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     parser.add_argument("--out", type=Path, required=False)
     if name == "stage00-resolve-gate":
         parser.add_argument("--inventory", type=Path, required=False)
+    if name == "stage01-review":
+        parser.add_argument("--request", type=Path, required=False)
+        parser.add_argument("--model-output", type=Path, required=False)
     parser.set_defaults(func=lambda args, stage=name: run_stage(stage, args))
 
 
@@ -39,6 +42,16 @@ def run_stage(stage: str, args: argparse.Namespace) -> int:
         from .stage00 import build_resolve_gate_result
 
         payload = build_resolve_gate_result(read_json_artifact(args.inventory))
+        if args.out:
+            write_json_artifact(args.out, payload)
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    if stage == "stage01-review" and getattr(args, "request", None) and getattr(args, "model_output", None):
+        from .artifacts import read_json_artifact
+        from .stage01 import build_review_result
+
+        payload = build_review_result(read_json_artifact(args.request), read_json_artifact(args.model_output))
         if args.out:
             write_json_artifact(args.out, payload)
         else:
