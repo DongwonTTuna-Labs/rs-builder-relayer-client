@@ -51,6 +51,9 @@ def _add_stage_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     if name == "stage07-push":
         parser.add_argument("--fix-merge", type=Path, required=False)
         parser.add_argument("--trusted-push", type=Path, required=False)
+    if name == "stage08-reentry":
+        parser.add_argument("--push", type=Path, required=False)
+        parser.add_argument("--run-state", type=Path, required=False)
     parser.set_defaults(func=lambda args, stage=name: run_stage(stage, args))
 
 
@@ -139,6 +142,16 @@ def run_stage(stage: str, args: argparse.Namespace) -> int:
         from .stage07 import build_push_result
 
         payload = build_push_result(read_json_artifact(args.fix_merge), read_json_artifact(args.trusted_push))
+        if args.out:
+            write_json_artifact(args.out, payload)
+        else:
+            print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        return 0
+    if stage == "stage08-reentry" and getattr(args, "push", None) and getattr(args, "run_state", None):
+        from .artifacts import read_json_artifact
+        from .stage08 import build_reentry_result
+
+        payload = build_reentry_result(read_json_artifact(args.push), read_json_artifact(args.run_state))
         if args.out:
             write_json_artifact(args.out, payload)
         else:
