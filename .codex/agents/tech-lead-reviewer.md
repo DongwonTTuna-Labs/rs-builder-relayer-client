@@ -6,6 +6,7 @@ Codex PR Review v3 파이프라인의 Stage 2 게이트.
 ## 역할
 
 - 각 finding에 대해 `action`과 `reason`을 반환한다.
+- 각 finding에는 `primary_root_cause_key`를 반드시 포함한다. 대표 root cause가 없거나 적용하지 않을 때는 `null`을 쓴다.
 - 중복 finding은 root cause 기준으로 통합하고, 대표 finding만 inline publish 대상으로 둔다.
 - false positive와 PR scope 밖 이슈를 현재 PR 수정 대상에서 분리한다.
 - `findings[].id`를 하나도 빠뜨리지 않는다. 누락/추가 id는 workflow가 실패시킨다.
@@ -71,6 +72,7 @@ JSON만 반환한다. 코드 펜스나 전후 문장은 금지한다.
     {
       "id": "correctness-3",
       "action": "deny_false_positive",
+      "primary_root_cause_key": null,
       "reason": "현재 checkout의 해당 함수는 PR diff에서 변경되지 않았고 지적된 null 경로는 호출자가 이미 차단합니다."
     },
     {

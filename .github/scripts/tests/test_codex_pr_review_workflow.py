@@ -1,4 +1,5 @@
 import unittest
+import json
 from pathlib import Path
 
 import yaml
@@ -295,9 +296,40 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
     def test_root_cause_schemas_require_non_empty_values(self):
         self.assertIn('"root_cause_key": {\n                        "type": "string",\n                        "minLength": 1', self.workflow_text)
         self.assertIn(
-            '"primary_root_cause_key": {\n                        "type": "string",\n                        "minLength": 1',
+            '"primary_root_cause_key": {\n                        "type": ["string", "null"],\n                        "minLength": 1',
             self.workflow_text,
         )
+
+    def test_codex_output_schemas_require_every_declared_property(self):
+        def assert_required_matches_properties(schema, path):
+            if not isinstance(schema, dict):
+                return
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                required = set(schema.get("required") or [])
+                self.assertEqual(
+                    set(properties),
+                    required,
+                    f"{path} must require every declared property for OpenAI structured outputs",
+                )
+                for key, value in properties.items():
+                    assert_required_matches_properties(value, f"{path}.properties.{key}")
+            if "items" in schema:
+                assert_required_matches_properties(schema["items"], f"{path}.items")
+            for union_key in ("anyOf", "oneOf", "allOf"):
+                for index, value in enumerate(schema.get(union_key) or []):
+                    assert_required_matches_properties(value, f"{path}.{union_key}[{index}]")
+
+        for job_name, job in self.workflow["jobs"].items():
+            for step in job.get("steps", []):
+                output_schema = (step.get("with") or {}).get("output-schema")
+                if not output_schema:
+                    continue
+                with self.subTest(job=job_name, step=step.get("name")):
+                    assert_required_matches_properties(
+                        json.loads(output_schema),
+                        f"{job_name}.{step.get('name')}",
+                    )
 
     def test_reviewer_and_tech_lead_prompts_use_trusted_agents(self):
         reviewer_prompt = self.step("review", "Build reviewer prompt")["run"]

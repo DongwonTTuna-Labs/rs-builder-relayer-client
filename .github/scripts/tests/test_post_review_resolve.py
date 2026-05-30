@@ -635,6 +635,34 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             post_review.validate_decision_coverage(findings, decisions)
 
+    def test_null_tech_lead_primary_root_cause_key_is_absent(self):
+        findings = [{"id": "correctness-1", "root_cause_key": "deposit-wallet-submit-state"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "decisions.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "decisions": [
+                            {
+                                "id": "correctness-1",
+                                "action": "needs_human",
+                                "primary_root_cause_key": None,
+                                "reason": "human review needed",
+                            }
+                        ],
+                        "judgment": None,
+                        "merge_notes": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            decisions = post_review.load_decisions(path)
+            post_review.validate_decision_coverage(findings, decisions)
+
+        self.assertFalse(decisions["by_id"]["correctness-1"]["primary_root_cause_key_present"])
+        self.assertEqual("", decisions["by_id"]["correctness-1"]["primary_root_cause_key"])
+
     def test_thread_inventory_skips_existing_terminal_lifecycle_marker(self):
         thread = review_thread(author=post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0], commit_oid="old-sha")
         thread["comments"]["nodes"].append(

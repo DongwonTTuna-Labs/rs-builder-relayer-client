@@ -585,12 +585,13 @@ def load_decisions(path: Path) -> dict[str, Any]:
             continue
         decision_id = str(decision.get("id") or "")
         if decision_id:
+            primary_root_present = decision.get("primary_root_cause_key") is not None
             raw_primary_root = trim_text(decision.get("primary_root_cause_key"), 120).strip()
             by_id[decision_id] = {
                 "action": normalize_tech_lead_action(decision),
                 "reason": trim_text(decision.get("reason"), 300).strip() or "No decision reason provided.",
                 "primary_root_cause_key": raw_primary_root,
-                "primary_root_cause_key_present": "primary_root_cause_key" in decision,
+                "primary_root_cause_key_present": primary_root_present,
             }
     judgment = payload.get("judgment") if isinstance(payload.get("judgment"), dict) else None
     merge_notes = payload.get("merge_notes") if isinstance(payload.get("merge_notes"), list) else []
