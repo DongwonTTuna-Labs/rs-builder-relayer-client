@@ -60,6 +60,10 @@ AUTOFIX_MANIFEST_SCHEMA = "codex.autofix_manifest.v1"
 AUTOFIX_MAX_FILES = 8
 AUTOFIX_MAX_PATCH_BYTES = 120000
 AUTOFIX_MAX_COMMITS = 2
+AUTOFIX_LINE_WINDOW_RADIUS = 30
+AUTOFIX_MAX_HUNKS_PER_FILE = 4
+AUTOFIX_MAX_CHANGED_LINES_PER_FILE = 80
+AUTOFIX_MAX_DELETED_LINES_PER_FILE = 40
 AUTOFIX_ALLOWED_PREFIXES = (".github/scripts/", "docs/", "src/", "tests/")
 AUTOFIX_FORBIDDEN_PREFIXES = (".codex/", ".github/actions/", ".github/workflows/")
 AUTOFIX_FORBIDDEN_FILES = {"Cargo.lock", "Cargo.toml"}
@@ -270,6 +274,8 @@ def skipped_current_review() -> dict[str, str]:
         "pr_number": "",
         "head_sha": "",
         "head_ref": "",
+        "head_repo": "",
+        "pr_author": "",
         "base_ref": "",
         "base_sha": "",
         "trigger": "",
@@ -332,6 +338,8 @@ def resolve_current_review_event(
             "pr_number": str(pr["number"]),
             "head_sha": str(pr["head"]["sha"]),
             "head_ref": str((pr.get("head") or {}).get("ref") or ""),
+            "head_repo": str(head_repo),
+            "pr_author": str(author),
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
             "trigger": f"{event_name}:{event.get('action', '')}",
@@ -359,6 +367,8 @@ def resolve_current_review_event(
             "pr_number": pr_number,
             "head_sha": str(pr["head"]["sha"]),
             "head_ref": str((pr.get("head") or {}).get("ref") or ""),
+            "head_repo": str(head_repo),
+            "pr_author": str(author),
             "base_ref": "main",
             "base_sha": str(pr["base"]["sha"]),
             "trigger": "issue_comment:/codex-review",
@@ -650,6 +660,8 @@ def autofix_block_reason(finding: dict[str, Any], action: str) -> str | None:
         return f"finding scope is {finding.get('scope')}"
     if not finding.get("file"):
         return "cross-cutting finding is not eligible for bounded autofix"
+    if not isinstance(finding.get("line"), int):
+        return "autofix requires an exact line"
     if finding.get("public_api_risk"):
         return "public API risk requires human review"
     if not finding.get("autofix_eligible_hint"):
@@ -686,6 +698,12 @@ def build_autofix_manifest(findings: list[dict[str, Any]], decisions: dict[str, 
                 "type": finding["type"],
                 "file": finding.get("file"),
                 "line": finding.get("line"),
+                "allowed_line_windows": [
+                    {
+                        "start": max(1, int(finding["line"]) - AUTOFIX_LINE_WINDOW_RADIUS),
+                        "end": int(finding["line"]) + AUTOFIX_LINE_WINDOW_RADIUS,
+                    }
+                ],
                 "title": finding["title"],
                 "reason": finding["reason"],
                 "root_cause_key": root,
@@ -725,6 +743,83 @@ def patch_changed_files(patch_text: str) -> list[str]:
     return files
 
 
+def _parse_hunk_header(line: str) -> tuple[int, int] | None:
+    match = re.match(r"^@@ -([0-9]+)(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@", line)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _line_allowed(line: int, windows: list[dict[str, Any]]) -> bool:
+    for window in windows:
+        try:
+            start = int(window.get("start"))
+            end = int(window.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if start <= line <= end:
+            return True
+    return False
+
+
+def validate_autofix_hunk_locality(patch_text: str, manifest: dict[str, Any]) -> None:
+    windows_by_file: dict[str, list[dict[str, Any]]] = {}
+    for item in manifest.get("eligible") or []:
+        path = str(item.get("file") or "")
+        windows = item.get("allowed_line_windows")
+        if path and isinstance(windows, list) and windows:
+            windows_by_file.setdefault(path, []).extend(windows)
+    if not windows_by_file:
+        raise SystemExit("autofix manifest has no allowed line windows")
+
+    current_file = ""
+    old_line = 0
+    new_line = 0
+    hunk_counts: dict[str, int] = {}
+    changed_counts: dict[str, int] = {}
+    deleted_counts: dict[str, int] = {}
+    for line in patch_text.splitlines():
+        file_match = re.match(r"^diff --git a/(.*?) b/(.*?)$", line)
+        if file_match:
+            current_file = file_match.group(2)
+            old_line = new_line = 0
+            continue
+        hunk = _parse_hunk_header(line)
+        if hunk:
+            if not current_file:
+                raise SystemExit("autofix patch hunk appears before file header")
+            hunk_counts[current_file] = hunk_counts.get(current_file, 0) + 1
+            if hunk_counts[current_file] > AUTOFIX_MAX_HUNKS_PER_FILE:
+                raise SystemExit(f"autofix patch has too many hunks for {current_file}")
+            old_line, new_line = hunk
+            continue
+        if not current_file or not line or line.startswith(("+++", "---")):
+            continue
+        if line.startswith("+"):
+            changed_counts[current_file] = changed_counts.get(current_file, 0) + 1
+            if not _line_allowed(new_line, windows_by_file.get(current_file, [])):
+                raise SystemExit(f"autofix patch changes {current_file}:{new_line} outside allowed autofix windows")
+            new_line += 1
+        elif line.startswith("-"):
+            changed_counts[current_file] = changed_counts.get(current_file, 0) + 1
+            deleted_counts[current_file] = deleted_counts.get(current_file, 0) + 1
+            if not _line_allowed(old_line, windows_by_file.get(current_file, [])):
+                raise SystemExit(f"autofix patch changes {current_file}:{old_line} outside allowed autofix windows")
+            old_line += 1
+        elif line.startswith("\\"):
+            continue
+        else:
+            old_line += 1
+            new_line += 1
+
+    for path, count in changed_counts.items():
+        if count > AUTOFIX_MAX_CHANGED_LINES_PER_FILE:
+            raise SystemExit(f"autofix patch changes too many lines in {path}: {count}")
+    for path, count in deleted_counts.items():
+        if count > AUTOFIX_MAX_DELETED_LINES_PER_FILE:
+            raise SystemExit(f"autofix patch deletes too many lines in {path}: {count}")
+
+
 def validate_autofix_patch_text(patch_text: str, manifest: dict[str, Any]) -> None:
     if manifest.get("schema_version") != AUTOFIX_MANIFEST_SCHEMA:
         raise SystemExit(f"invalid autofix manifest schema: {manifest.get('schema_version')}")
@@ -751,6 +846,7 @@ def validate_autofix_patch_text(patch_text: str, manifest: dict[str, Any]) -> No
             raise SystemExit(f"autofix patch touches forbidden path: {path}")
         if not any(path.startswith(prefix) for prefix in AUTOFIX_ALLOWED_PREFIXES):
             raise SystemExit(f"autofix patch touches unsupported path: {path}")
+    validate_autofix_hunk_locality(patch_text, manifest)
     for line in patch_text.splitlines():
         if line.startswith(("GIT binary patch", "Binary files ")):
             raise SystemExit("autofix patch contains binary changes")
@@ -883,6 +979,7 @@ def command_post_current(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
     head_sha = require_env("HEAD_SHA")
+    validate_current_pr_state(repo, pr_number, current_pr_manifest_from_env())
     findings = load_current_findings(Path(args.artifacts))
     decisions = load_decisions(Path(args.decisions))
     validate_decision_coverage(findings, decisions)
@@ -1742,13 +1839,112 @@ def issue_body_with_marker(request: dict[str, Any]) -> str:
     )
 
 
-def find_issue_by_key(repo: str, key: str) -> dict[str, Any] | None:
+def issue_label_names(issue: dict[str, Any]) -> set[str]:
+    labels: set[str] = set()
+    for label in issue.get("labels") or []:
+        if isinstance(label, dict):
+            name = label.get("name")
+        else:
+            name = label
+        if name:
+            labels.add(str(name))
+    return labels
+
+
+def extract_issue_machine_json(body: str) -> dict[str, Any] | None:
+    marker_index = body.rfind("## Machine-readable")
+    if marker_index < 0:
+        return None
+    match = re.search(r"```json\s*(\{.*?\})\s*```", body[marker_index:], flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        machine = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return machine if isinstance(machine, dict) else None
+
+
+def root_cause_compatible(actual: Any, expected: dict[str, Any] | None) -> bool:
+    if expected is None:
+        return True
+    if not isinstance(actual, dict):
+        return False
+    for key in ("key", "failure_kind"):
+        expected_value = str(expected.get(key) or "")
+        if expected_value and str(actual.get(key) or "") != expected_value:
+            return False
+    return True
+
+
+def source_threads_compatible(actual: Any, expected: list[str] | None) -> bool:
+    if expected is None:
+        return True
+    if not isinstance(actual, list):
+        return False
+    actual_set = {str(item) for item in actual if str(item).strip()}
+    return all(str(item) in actual_set for item in expected if str(item).strip())
+
+
+def is_codex_deferred_issue(
+    issue: dict[str, Any],
+    *,
+    expected_key: str | None = None,
+    expected_root_cause: dict[str, Any] | None = None,
+    expected_source_threads: list[str] | None = None,
+    require_open: bool = True,
+) -> bool:
+    if "pull_request" in issue:
+        return False
+    if require_open and issue.get("state") != "open":
+        return False
+    author = str(((issue.get("user") or {}).get("login")) or "")
+    if not is_trusted_codex_review_author(author):
+        return False
+    if "codex/deferred" not in issue_label_names(issue):
+        return False
+    body = str(issue.get("body") or "")
+    if "<!-- codex-issue-schema: v3 -->" not in body:
+        return False
+    machine = extract_issue_machine_json(body)
+    if not machine:
+        return False
+    if machine.get("schema_version") != "codex.issue.v3":
+        return False
+    key = str(expected_key or machine.get("idempotency_key") or "").strip()
+    if not key or machine.get("idempotency_key") != key:
+        return False
+    if f"{ISSUE_KEY_MARKER} {key}" not in body:
+        return False
+    if not root_cause_compatible(machine.get("root_cause"), expected_root_cause):
+        return False
+    if not source_threads_compatible(machine.get("source_threads"), expected_source_threads):
+        return False
+    return True
+
+
+def find_issue_by_key(
+    repo: str,
+    key: str,
+    *,
+    expected_root_cause: dict[str, Any] | None = None,
+    expected_source_threads: list[str] | None = None,
+    list_issues: Any = github_paginated,
+) -> dict[str, Any] | None:
     marker = f"{ISSUE_KEY_MARKER} {key}"
-    issues = github_paginated(f"/repos/{repo}/issues?state=all&per_page=100")
+    issues = list_issues(f"/repos/{repo}/issues?state=all&per_page=100")
     for issue in issues:
         if "pull_request" in issue:
             continue
-        if marker in str(issue.get("body") or ""):
+        if marker not in str(issue.get("body") or ""):
+            continue
+        if is_codex_deferred_issue(
+            issue,
+            expected_key=key,
+            expected_root_cause=expected_root_cause,
+            expected_source_threads=expected_source_threads,
+            require_open=False,
+        ):
             return issue
     return None
 
@@ -1781,10 +1977,7 @@ def trusted_deferred_issue_request(repo: str, thread: dict[str, Any], request: d
         "failure_kind": thread.get("root_cause_failure_kind"),
         "file": thread.get("file"),
     }
-    labels = [str(label) for label in (request.get("labels") or []) if str(label).strip()]
-    if "codex/deferred" not in labels:
-        labels.insert(0, "codex/deferred")
-    trusted["labels"] = labels
+    trusted["labels"] = ["codex/deferred"]
     return trusted
 
 
@@ -1802,31 +1995,9 @@ def get_same_repo_issue_by_url(repo: str, issue_url: str) -> dict[str, Any] | No
     return github_api(f"/repos/{repo}/issues/{number}")
 
 
-def is_codex_deferred_issue(issue: dict[str, Any]) -> bool:
-    if "pull_request" in issue or issue.get("state") != "open":
-        return False
-    labels: set[str] = set()
-    for label in issue.get("labels") or []:
-        if isinstance(label, dict):
-            name = label.get("name")
-        else:
-            name = label
-        if name:
-            labels.add(str(name))
-    body = str(issue.get("body") or "")
-    return "codex/deferred" in labels or ISSUE_KEY_MARKER in body
-
-
 def extract_issue_source_threads(body: str) -> list[str]:
-    marker_index = body.rfind("## Machine-readable")
-    if marker_index < 0:
-        return []
-    match = re.search(r"```json\s*(\{.*?\})\s*```", body[marker_index:], flags=re.DOTALL)
-    if not match:
-        return []
-    try:
-        machine = json.loads(match.group(1))
-    except json.JSONDecodeError:
+    machine = extract_issue_machine_json(body)
+    if not machine:
         return []
     source_threads = machine.get("source_threads")
     if not isinstance(source_threads, list):
@@ -1852,7 +2023,13 @@ def create_or_update_deferred_issue(*, repo: str, request: dict[str, Any]) -> di
     key = str(request.get("key") or "").strip()
     if not key:
         raise SystemExit("deferred issue request requires key")
-    existing = find_issue_by_key(repo, key)
+    source_threads = [str(item) for item in (request.get("source_threads") or []) if str(item).strip()]
+    existing = find_issue_by_key(
+        repo,
+        key,
+        expected_root_cause=request.get("root_cause") if isinstance(request.get("root_cause"), dict) else None,
+        expected_source_threads=None,
+    )
     if existing:
         if existing.get("state") == "closed":
             return existing
@@ -1867,7 +2044,7 @@ def create_or_update_deferred_issue(*, repo: str, request: dict[str, Any]) -> di
     payload = {
         "title": redact_secrets(str(request["title"])),
         "body": body,
-        "labels": request.get("labels") or ["codex/deferred"],
+        "labels": ["codex/deferred"],
     }
     return github_api(f"/repos/{repo}/issues", method="POST", payload=payload)
 
@@ -1929,6 +2106,24 @@ def validate_current_pr_state(repo: str, pr_number: str, manifest: dict[str, Any
     expected_author = str(manifest.get("pr_author") or "")
     if current_author != expected_author or current_author != TRUSTED_USER:
         raise SystemExit(f"PR author changed since collection: expected {expected_author}, got {current_author}")
+
+
+def current_pr_manifest_from_env() -> dict[str, Any]:
+    return {
+        "base_ref": require_env("BASE_REF"),
+        "base_sha": require_env("BASE_SHA"),
+        "head_sha": require_env("HEAD_SHA"),
+        "head_repo": require_env("HEAD_REPO"),
+        "pr_author": require_env("PR_AUTHOR"),
+    }
+
+
+def command_validate_current_pr_state(args: argparse.Namespace) -> None:
+    del args
+    repo = require_env("GITHUB_REPOSITORY")
+    pr_number = require_env("PR_NUMBER")
+    validate_current_pr_state(repo, pr_number, current_pr_manifest_from_env())
+    print("current PR state matches trusted review metadata")
 
 
 def validate_resolution_artifact_contract(
@@ -2173,7 +2368,13 @@ def apply_lifecycle_resolutions(
                     )
                 )
                 continue
-            if not is_codex_deferred_issue(issue):
+            if not is_codex_deferred_issue(
+                issue,
+                expected_root_cause={
+                    "key": thread.get("root_cause_key"),
+                    "failure_kind": thread.get("root_cause_failure_kind"),
+                },
+            ):
                 unresolved.append(
                     (
                         thread,
@@ -2238,7 +2439,12 @@ def render_lifecycle_resolution_body(
 
 
 def latest_marker_comment(comments: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
-    matches = [comment for comment in comments if marker in str(comment.get("body") or "")]
+    matches = [
+        comment
+        for comment in comments
+        if marker in str(comment.get("body") or "")
+        and is_trusted_codex_review_author(str(((comment.get("user") or {}).get("login")) or ""))
+    ]
     if not matches:
         return None
     return sorted(matches, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""))[-1]
@@ -2568,6 +2774,7 @@ def upsert_design_comment(
 def command_post_design_plan(args: argparse.Namespace) -> None:
     repo = require_env("GITHUB_REPOSITORY")
     pr_number = require_env("PR_NUMBER")
+    validate_current_pr_state(repo, pr_number, current_pr_manifest_from_env())
     body = Path(args.body).read_text(encoding="utf-8")
     if DESIGN_MARKER not in body:
         raise SystemExit("design plan body is missing sticky marker")
@@ -2594,6 +2801,9 @@ def build_parser() -> argparse.ArgumentParser:
     validate_autofix.add_argument("--manifest", required=True)
     validate_autofix.add_argument("--patch", required=True)
     validate_autofix.set_defaults(func=command_validate_autofix_patch)
+
+    validate_current = subparsers.add_parser("validate-current-pr-state")
+    validate_current.set_defaults(func=command_validate_current_pr_state)
 
     resolve_current = subparsers.add_parser("resolve-current")
     resolve_current.set_defaults(func=command_resolve_current)

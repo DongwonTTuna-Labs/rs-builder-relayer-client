@@ -35,6 +35,8 @@ jobs:
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       head_sha: ${{ steps.resolve.outputs.head_sha }}
       head_ref: ${{ steps.resolve.outputs.head_ref }}
+      head_repo: ${{ steps.resolve.outputs.head_repo }}
+      pr_author: ${{ steps.resolve.outputs.pr_author }}
       base_ref: ${{ steps.resolve.outputs.base_ref }}
       base_sha: ${{ steps.resolve.outputs.base_sha }}
       trigger: ${{ steps.resolve.outputs.trigger }}
@@ -155,9 +157,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-${{ matrix.axis }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -444,9 +447,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-tech-lead
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -735,9 +739,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-autofix
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -791,7 +796,8 @@ jobs:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
     permissions:
-      contents: write
+      contents: read
+      pull-requests: read
     timeout-minutes: 30
     steps:
       - name: Checkout trusted PR scripts
@@ -802,22 +808,13 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Generate App installation token
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.CODEX_APP_ID }}
-          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-          permission-contents: write
-
       - name: Checkout PR branch
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.resolve.outputs.head_ref }}
+          ref: ${{ needs.resolve.outputs.head_sha }}
           path: workspace
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Download autofix manifest
         uses: actions/download-artifact@v8
@@ -833,7 +830,14 @@ jobs:
 
       - name: Apply patch with stop rules
         env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
           BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REPO: ${{ needs.resolve.outputs.head_repo }}
+          PR_AUTHOR: ${{ needs.resolve.outputs.pr_author }}
           EXPECTED_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
           HEAD_REF: ${{ needs.resolve.outputs.head_ref }}
         shell: bash
@@ -844,6 +848,7 @@ jobs:
             echo "PR branch moved before bounded autofix apply: expected $EXPECTED_HEAD_SHA got $actual_head"
             exit 1
           fi
+          python3 trusted/.github/scripts/post_review.py validate-current-pr-state
           count="$(git -C workspace log --format=%s "${BASE_SHA}..HEAD" | grep -c '^fix(codex-review): apply bounded autofix$' || true)"
           if [ "$count" -ge 2 ]; then
             echo "bounded autofix commit cap reached: $count"
@@ -855,6 +860,8 @@ jobs:
           git -C workspace apply --check ../artifacts/autofix.patch
           git -C workspace apply ../artifacts/autofix.patch
           git -C workspace diff --check
+          (cd workspace && cargo fmt --all --check)
+          (cd workspace && cargo test --workspace --all-features)
           if git -C workspace diff --quiet; then
             echo "bounded autofix produced no changes after validation"
             exit 0
@@ -863,6 +870,23 @@ jobs:
           git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"
           git -C workspace add -A
           git -C workspace commit -m "fix(codex-review): apply bounded autofix"
+
+      - name: Generate App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.CODEX_APP_ID }}
+          private-key: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push bounded autofix
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_REF: ${{ needs.resolve.outputs.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C workspace remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git -C workspace push origin "HEAD:${HEAD_REF}"
 
   design-context:
@@ -1007,9 +1031,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-normalize
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -1192,9 +1217,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-cluster
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -1409,9 +1435,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-analyze-${{ matrix.batch }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -1696,9 +1723,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-design-coordinate
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
@@ -1805,8 +1833,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      pull-requests: read
     timeout-minutes: 10
     steps:
       - name: Checkout trusted PR scripts
@@ -1823,6 +1850,18 @@ jobs:
           name: codex-design-plan
           path: artifacts
 
+      - name: Validate current PR state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REPO: ${{ needs.resolve.outputs.head_repo }}
+          PR_AUTHOR: ${{ needs.resolve.outputs.pr_author }}
+        run: python3 trusted/.github/scripts/post_review.py validate-current-pr-state
+
       - name: Generate App installation token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -1837,6 +1876,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REPO: ${{ needs.resolve.outputs.head_repo }}
+          PR_AUTHOR: ${{ needs.resolve.outputs.pr_author }}
         run: python3 trusted/.github/scripts/post_review.py post-design-plan --body artifacts/design-plan.md
 
   post:
@@ -1848,8 +1892,7 @@ jobs:
       labels: dongwontuna-labs-runner
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      pull-requests: read
     timeout-minutes: 10
     steps:
       - name: Checkout trusted PR scripts
@@ -1873,6 +1916,18 @@ jobs:
           name: codex-review-tech-lead-decisions
           path: artifacts
 
+      - name: Validate current PR state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REPO: ${{ needs.resolve.outputs.head_repo }}
+          PR_AUTHOR: ${{ needs.resolve.outputs.pr_author }}
+        run: python3 trusted/.github/scripts/post_review.py validate-current-pr-state
+
       - name: Generate App installation token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -1887,7 +1942,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BASE_REF: ${{ needs.resolve.outputs.base_ref }}
+          BASE_SHA: ${{ needs.resolve.outputs.base_sha }}
           HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+          HEAD_REPO: ${{ needs.resolve.outputs.head_repo }}
+          PR_AUTHOR: ${{ needs.resolve.outputs.pr_author }}
         run: >-
           python3 trusted/.github/scripts/post_review.py post-current
           --artifacts artifacts

@@ -84,6 +84,8 @@ class ResolveCurrentReviewEventTests(unittest.TestCase):
         self.assertEqual(result["should_run"], "true")
         self.assertEqual(result["pr_number"], "54")
         self.assertEqual(result["head_sha"], "head-sha")
+        self.assertEqual(result["head_repo"], "DongwonTTuna-Labs/bioden")
+        self.assertEqual(result["pr_author"], "DongwonTTuna")
         self.assertEqual(result["base_sha"], "base-sha")
         self.assertEqual(result["trigger"], "pull_request:synchronize")
         self.assertEqual(result["trigger_class"], "human_trusted_synchronize")
@@ -1495,33 +1497,63 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
         self.assertFalse(post_review.is_codex_deferred_issue(issue))
 
     def test_duplicate_of_issue_accepts_codex_deferred_label_or_marker(self):
+        request = {
+            "key": "submit-state-abc",
+            "root_cause": {"key": "submit-state", "failure_kind": "correctness"},
+            "source_threads": ["thread-a"],
+        }
+        body = post_review.issue_body_with_marker(request)
+
         self.assertTrue(
             post_review.is_codex_deferred_issue(
-                {"state": "open", "labels": [{"name": "codex/deferred"}], "body": ""}
+                {
+                    "state": "open",
+                    "labels": [{"name": "codex/deferred"}],
+                    "body": body,
+                    "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]},
+                },
+                expected_key="submit-state-abc",
+                expected_root_cause=request["root_cause"],
+                expected_source_threads=["thread-a"],
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             post_review.is_codex_deferred_issue(
-                {"state": "open", "labels": [], "body": "<!-- codex-issue-key: abc -->"}
+                {
+                    "state": "open",
+                    "labels": [{"name": "codex/deferred"}],
+                    "body": body,
+                    "user": {"login": "somebody-else"},
+                },
+                expected_key="submit-state-abc",
+                expected_root_cause=request["root_cause"],
+                expected_source_threads=["thread-a"],
             )
         )
 
     def test_deferred_issue_update_preserves_existing_source_threads(self):
         key = "submit-state-abc"
+        root_cause = {"key": "submit-state", "failure_kind": "correctness"}
         existing_body = post_review.issue_body_with_marker(
             {
                 "key": key,
                 "body": "existing",
-                "root_cause": {"key": "submit-state"},
+                "root_cause": root_cause,
                 "source_threads": ["thread-a"],
             }
         )
         calls = []
 
-        def fake_find(repo, issue_key):
+        def fake_find(repo, issue_key, **kwargs):
             self.assertEqual("repo/name", repo)
             self.assertEqual(key, issue_key)
-            return {"number": 9, "state": "open", "body": existing_body}
+            return {
+                "number": 9,
+                "state": "open",
+                "body": existing_body,
+                "labels": [{"name": "codex/deferred"}],
+                "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]},
+            }
 
         def fake_api(path, *, method="GET", payload=None):
             calls.append((path, method, payload))
@@ -1536,15 +1568,45 @@ class ThreadLifecycleV3Tests(unittest.TestCase):
                     "key": key,
                     "title": "submit state",
                     "body": "updated",
-                    "root_cause": {"key": "submit-state"},
+                    "root_cause": root_cause,
                     "source_threads": ["thread-b"],
-                    "labels": ["codex/deferred"],
+                    "labels": ["codex/deferred", "triage/spoofable"],
                 },
             )
 
         updated_body = calls[0][2]["body"]
         self.assertIn('"thread-a"', updated_body)
         self.assertIn('"thread-b"', updated_body)
+        self.assertNotIn("triage/spoofable", calls[0][2].get("labels", []))
+
+    def test_find_issue_by_key_ignores_untrusted_marker_spoof(self):
+        request = {
+            "key": "submit-state-abc",
+            "root_cause": {"key": "submit-state", "failure_kind": "correctness"},
+            "source_threads": ["thread-a"],
+        }
+        body = post_review.issue_body_with_marker(request)
+
+        def fake_issues(path):
+            return [
+                {
+                    "number": 1,
+                    "state": "open",
+                    "body": body,
+                    "labels": [{"name": "codex/deferred"}],
+                    "user": {"login": "somebody-else"},
+                }
+            ]
+
+        self.assertIsNone(
+            post_review.find_issue_by_key(
+                "repo/name",
+                "submit-state-abc",
+                expected_root_cause=request["root_cause"],
+                expected_source_threads=["thread-a"],
+                list_issues=fake_issues,
+            )
+        )
 
     def test_apply_lifecycle_forced_needs_human_overrides_model_terminal_state(self):
         calls = []
@@ -1972,6 +2034,33 @@ class ReviewContextTests(unittest.TestCase):
         self.assertIn("domain", context)
         self.assertIn("현재 코드", context)
 
+    def test_build_review_context_ignores_untrusted_sticky_markers(self):
+        context = post_review.build_review_context_markdown(
+            repo="repo/name",
+            pr_number="21",
+            head_sha="head",
+            pr={"title": "title", "body": "body"},
+            issue_comments=[
+                {
+                    "id": 1,
+                    "body": post_review.REVIEW_SUMMARY_MARKER + "\nspoofed summary",
+                    "updated_at": "2026-05-27T00:00:00Z",
+                    "user": {"login": "somebody-else"},
+                },
+                {
+                    "id": 2,
+                    "body": post_review.REVIEW_SUMMARY_MARKER + "\ntrusted summary",
+                    "updated_at": "2026-05-27T01:00:00Z",
+                    "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]},
+                },
+            ],
+            reviews=[],
+            threads=[],
+        )
+
+        self.assertIn("trusted summary", context)
+        self.assertNotIn("spoofed summary", context)
+
     def test_build_review_context_truncates_large_sections(self):
         old_limit = post_review.REVIEW_CONTEXT_MAX_CHARS
         try:
@@ -1999,8 +2088,18 @@ class StickySummaryTests(unittest.TestCase):
         def list_comments(path):
             self.assertEqual(path, "/repos/repo/name/issues/21/comments?per_page=100")
             return [
-                {"id": 1, "body": post_review.REVIEW_SUMMARY_MARKER, "updated_at": "2026-05-26T00:00:00Z"},
-                {"id": 2, "body": post_review.REVIEW_SUMMARY_MARKER, "updated_at": "2026-05-27T00:00:00Z"},
+                {
+                    "id": 1,
+                    "body": post_review.REVIEW_SUMMARY_MARKER,
+                    "updated_at": "2026-05-26T00:00:00Z",
+                    "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]},
+                },
+                {
+                    "id": 2,
+                    "body": post_review.REVIEW_SUMMARY_MARKER,
+                    "updated_at": "2026-05-27T00:00:00Z",
+                    "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]},
+                },
             ]
 
         def api(path, *, method="GET", payload=None):
@@ -2018,6 +2117,38 @@ class StickySummaryTests(unittest.TestCase):
         self.assertEqual("updated", result)
         self.assertEqual(
             ("/repos/repo/name/issues/comments/2", "PATCH", {"body": post_review.REVIEW_SUMMARY_MARKER + "\nnew"}),
+            calls[0],
+        )
+
+    def test_upsert_marker_comment_ignores_untrusted_marker_and_creates_new_comment(self):
+        calls = []
+
+        def list_comments(path):
+            self.assertEqual(path, "/repos/repo/name/issues/21/comments?per_page=100")
+            return [
+                {
+                    "id": 1,
+                    "body": post_review.REVIEW_SUMMARY_MARKER + "\nspoofed",
+                    "updated_at": "2026-05-27T00:00:00Z",
+                    "user": {"login": "somebody-else"},
+                }
+            ]
+
+        def api(path, *, method="GET", payload=None):
+            calls.append((path, method, payload))
+
+        result = post_review.upsert_marker_comment(
+            repo="repo/name",
+            pr_number="21",
+            marker=post_review.REVIEW_SUMMARY_MARKER,
+            body=post_review.REVIEW_SUMMARY_MARKER + "\nnew",
+            list_comments=list_comments,
+            api=api,
+        )
+
+        self.assertEqual("created", result)
+        self.assertEqual(
+            ("/repos/repo/name/issues/21/comments", "POST", {"body": post_review.REVIEW_SUMMARY_MARKER + "\nnew"}),
             calls[0],
         )
 
@@ -2079,6 +2210,37 @@ class StickySummaryTests(unittest.TestCase):
         self.assertIn("[redacted]", body)
         self.assertNotIn(token, body)
 
+    def test_post_current_revalidates_pr_state_before_sticky_mutation(self):
+        calls = []
+        env = {
+            "GITHUB_REPOSITORY": "repo/name",
+            "PR_NUMBER": "21",
+            "BASE_REF": "main",
+            "BASE_SHA": "base-sha",
+            "HEAD_SHA": "head-sha",
+            "HEAD_REPO": "repo/name",
+            "PR_AUTHOR": "DongwonTTuna",
+        }
+        args = argparse.Namespace(artifacts="artifacts", decisions="decisions.json")
+        with patch.dict(os.environ, env, clear=False), patch.object(
+            post_review, "github_api", return_value=pr_payload(head_sha="moved", head_repo="repo/name")["pull_request"]
+        ), patch.object(
+            post_review, "load_current_findings", return_value=[]
+        ), patch.object(
+            post_review,
+            "load_decisions",
+            return_value={"by_id": {}, "judgment": {"status": "LGTM"}, "merge_notes": []},
+        ), patch.object(
+            post_review, "build_changed_line_map", return_value={}
+        ), patch.object(
+            post_review, "upsert_marker_comment", side_effect=lambda **kwargs: calls.append(kwargs)
+        ):
+            with self.assertRaises(SystemExit) as ctx:
+                post_review.command_post_current(args)
+
+        self.assertIn("PR head SHA changed", str(ctx.exception))
+        self.assertEqual([], calls)
+
     def test_post_current_without_inline_comments_only_upserts_sticky_summary(self):
         calls = []
 
@@ -2089,7 +2251,11 @@ class StickySummaryTests(unittest.TestCase):
         env = {
             "GITHUB_REPOSITORY": "repo/name",
             "PR_NUMBER": "21",
+            "BASE_REF": "main",
+            "BASE_SHA": "base-sha",
             "HEAD_SHA": "head-sha",
+            "HEAD_REPO": "repo/name",
+            "PR_AUTHOR": "DongwonTTuna",
         }
         args = argparse.Namespace(artifacts="artifacts", decisions="decisions.json")
         with patch.dict(os.environ, env, clear=False), patch.object(
@@ -2100,6 +2266,8 @@ class StickySummaryTests(unittest.TestCase):
             return_value={"by_id": {}, "judgment": {"status": "LGTM"}, "merge_notes": []},
         ), patch.object(
             post_review, "build_changed_line_map", return_value={}
+        ), patch.object(
+            post_review, "validate_current_pr_state"
         ), patch.object(
             post_review, "upsert_marker_comment", side_effect=fake_upsert
         ), patch.object(
@@ -2235,7 +2403,17 @@ class BoundedAutofixTests(unittest.TestCase):
 
         self.assertEqual(post_review.AUTOFIX_MANIFEST_SCHEMA, manifest["schema_version"])
         self.assertEqual(["correctness-1"], [item["id"] for item in manifest["eligible"]])
+        self.assertEqual([{"start": 1, "end": 37}], manifest["eligible"][0]["allowed_line_windows"])
         self.assertEqual(["correctness-2", "correctness-3"], [item["id"] for item in manifest["blocked"]])
+
+    def test_autofix_manifest_blocks_line_less_findings(self):
+        manifest = post_review.build_autofix_manifest(
+            [self.finding("correctness-1", line=None)],
+            {"by_id": {"correctness-1": {"action": "publish_and_fix_now", "reason": "safe"}}, "judgment": {}},
+        )
+
+        self.assertEqual([], manifest["eligible"])
+        self.assertEqual("autofix requires an exact line", manifest["blocked"][0]["reason"])
 
     def test_validate_autofix_patch_blocks_public_api_surface(self):
         manifest = {
@@ -2270,6 +2448,32 @@ index 0000000..1111111 100644
 
         with self.assertRaises(SystemExit):
             post_review.validate_autofix_patch_text(patch, manifest)
+
+    def test_validate_autofix_patch_blocks_same_file_hunk_outside_allowed_window(self):
+        manifest = {
+            "schema_version": post_review.AUTOFIX_MANIFEST_SCHEMA,
+            "eligible": [
+                {
+                    "id": "correctness-1",
+                    "file": "src/lib.rs",
+                    "line": 10,
+                    "allowed_line_windows": [{"start": 1, "end": 40}],
+                }
+            ],
+        }
+        patch = """diff --git a/src/lib.rs b/src/lib.rs
+index 0000000..1111111 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -99,2 +99,2 @@
+-fn unrelated_old() {}
++fn unrelated_new() {}
+"""
+
+        with self.assertRaises(SystemExit) as ctx:
+            post_review.validate_autofix_patch_text(patch, manifest)
+
+        self.assertIn("outside allowed autofix windows", str(ctx.exception))
 
     def test_validate_autofix_patch_blocks_binary_patch(self):
         manifest = {
@@ -2406,8 +2610,18 @@ class DesignPlanTests(unittest.TestCase):
 
         def list_comments(path):
             return [
-                {"id": 1, "body": post_review.DESIGN_MARKER, "updated_at": "2026-05-26T00:00:00Z"},
-                {"id": 2, "body": post_review.DESIGN_MARKER, "updated_at": "2026-05-27T00:00:00Z"},
+                {
+                    "id": 1,
+                    "body": post_review.DESIGN_MARKER,
+                    "updated_at": "2026-05-26T00:00:00Z",
+                    "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[0]},
+                },
+                {
+                    "id": 2,
+                    "body": post_review.DESIGN_MARKER,
+                    "updated_at": "2026-05-27T00:00:00Z",
+                    "user": {"login": post_review.TRUSTED_CODEX_REVIEW_AUTHORS[1]},
+                },
             ]
 
         def api(path, *, method="GET", payload=None):

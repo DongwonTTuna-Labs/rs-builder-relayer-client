@@ -229,9 +229,10 @@ jobs:
 
       - name: Setup Codex relay
         id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@89cf1baa0f3cec8c3283123ac52430cdd8851ef9
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@303c5cf108ee5c0cb56035023fc7342f76e1e8cb
         with:
           codex-home: ${{ runner.temp }}/codex-home-resolve-${{ matrix.batch }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
 
       - name: Validate Codex relay args
         env:
