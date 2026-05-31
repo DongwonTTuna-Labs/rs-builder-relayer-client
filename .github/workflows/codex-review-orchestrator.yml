@@ -1,0 +1,821 @@
+name: Codex Review Orchestrator
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-review-orchestrator-v3-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CODEX_REVIEW_ROOT: setup/codex-review
+  CODEX_PYTHONPATH: ${{ github.workspace }}/setup/codex-review/src
+
+jobs:
+  stage00-resolve-gate:
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.meta.outputs.pr_number }}
+      base_sha: ${{ steps.meta.outputs.base_sha }}
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+      head_ref: ${{ steps.meta.outputs.head_ref }}
+      head_repo: ${{ steps.meta.outputs.head_repo }}
+      can_continue: ${{ steps.result.outputs.can_continue }}
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PR_NUMBER"
+          gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefName,headRefName,headRefOid,headRepository,files > pr.json
+          BASE_REF="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          print(json.loads(Path("pr.json").read_text())["baseRefName"])
+          PY
+          )"
+          BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BASE_REF}" --jq '.object.sha')"
+          export BASE_SHA
+          graphql_query="$(cat <<'GRAPHQL'
+          query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first: 100){pageInfo{hasNextPage}nodes{id isResolved path line originalLine comments(first: 50){pageInfo{hasNextPage}nodes{id databaseId body}}}}}}}
+          GRAPHQL
+          )"
+          gh api graphql \
+            -F owner="$GITHUB_REPOSITORY_OWNER" \
+            -F name="${GITHUB_REPOSITORY#*/}" \
+            -F number="$PR_NUMBER" \
+            -f query="$graphql_query" \
+            > review-threads.json
+          setup/codex-review/bin/codex-review stage00-context \
+            --pr-json pr.json \
+            --review-threads review-threads.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --base-sha "$BASE_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --out-dir artifacts \
+            --github-output "$GITHUB_OUTPUT"
+          gh pr diff "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --patch > artifacts/pr-diff.patch
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage00-resolve-gate --inventory artifacts/thread-inventory.json --out artifacts/stage00-resolve-gate.json
+          setup/codex-review/bin/codex-review stage00-lifecycle --gate artifacts/stage00-resolve-gate.json --inventory artifacts/thread-inventory.json --out artifacts/stage00-lifecycle.json
+          python3 - <<'PY'
+          import json, os
+          gate = json.load(open("artifacts/stage00-resolve-gate.json", encoding="utf-8"))
+          data = json.load(open("artifacts/stage00-lifecycle.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+              print(f"status={gate['status']}", file=output)
+          PY
+        id: result
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-context
+          path: |
+            artifacts/review-request.json
+            artifacts/run-state.json
+            artifacts/thread-inventory.json
+            artifacts/pr-diff.patch
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage00
+          path: artifacts/stage00-resolve-gate.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage00-lifecycle
+          path: artifacts/stage00-lifecycle.json
+          if-no-files-found: error
+
+  stage01-review-model:
+    needs: stage00-resolve-gate
+    if: needs.stage00-resolve-gate.outputs.can_continue == 'true'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-context
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage00-lifecycle
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review render-prompt \
+            --stage stage01_review \
+            --out artifacts/stage01-prompt.md \
+            --append artifacts/stage00-lifecycle.json \
+            --append artifacts/thread-inventory.json \
+            --append artifacts/pr-diff.patch \
+            --append artifacts/review-request.json
+      - id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-stage01
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - id: codex-args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized="$(setup/codex-review/bin/codex-review normalize-codex-args --raw "$CODEX_ARGS")"
+          test -n "$normalized"
+          printf 'codex_args=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
+      - id: output-schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'schema<<EOF'
+            setup/codex-review/bin/codex-review schema --name stage01-model-review.v1.schema.json
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: artifacts/stage01-prompt.md
+          output-file: artifacts/stage01-model-review.json
+          codex-home: ${{ runner.temp }}/codex-home-stage01
+          codex-args: ${{ steps.codex-args.outputs.codex_args }}
+          sandbox: danger-full-access
+          output-schema: ${{ steps.output-schema.outputs.schema }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage01-model
+          path: artifacts/stage01-model-review.json
+          if-no-files-found: error
+
+  stage01-stage02:
+    needs: [stage00-resolve-gate, stage01-review-model]
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      requires_design: ${{ steps.result.outputs.requires_design }}
+      requires_fix: ${{ steps.result.outputs.requires_fix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-context
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage01-model
+          path: artifacts
+      - id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.stage00-resolve-gate.outputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage01-review --request artifacts/review-request.json --model-output artifacts/stage01-model-review.json --out artifacts/stage01-review.json
+          setup/codex-review/bin/codex-review stage02-techlead --review artifacts/stage01-review.json --out artifacts/stage02-techlead.json
+          setup/codex-review/bin/codex-review stage02-comment --review artifacts/stage01-review.json --techlead artifacts/stage02-techlead.json --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --out artifacts/stage02-comment.md
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          body = Path("artifacts/stage02-comment.md").read_text(encoding="utf-8")
+          Path("artifacts/stage02-comment-payload.json").write_text(json.dumps({"body": body}), encoding="utf-8")
+          PY
+          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" --jq '.[] | select(.body | contains("<!-- codex-review-v3-stage02 -->")) | .id' | tail -n 1)"
+          if [[ -n "$comment_id" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/$comment_id" --input artifacts/stage02-comment-payload.json >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input artifacts/stage02-comment-payload.json >/dev/null
+          fi
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open("artifacts/stage02-techlead.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"requires_design={str(data['requires_design']).lower()}", file=output)
+              print(f"requires_fix={str(data['requires_fix']).lower()}", file=output)
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage01
+          path: artifacts/stage01-review.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage02
+          path: artifacts/stage02-techlead.json
+          if-no-files-found: error
+
+  stage03-design-model:
+    needs: [stage00-resolve-gate, stage01-stage02]
+    if: needs.stage01-stage02.outputs.requires_design == 'true'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage01
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage02
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review render-prompt \
+            --stage stage03_design \
+            --out artifacts/stage03-prompt.md \
+            --append artifacts/stage01-review.json \
+            --append artifacts/stage02-techlead.json
+      - id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-stage03
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - id: codex-args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized="$(setup/codex-review/bin/codex-review normalize-codex-args --raw "$CODEX_ARGS")"
+          test -n "$normalized"
+          printf 'codex_args=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
+      - id: output-schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'schema<<EOF'
+            setup/codex-review/bin/codex-review schema --name stage03-model-design.v1.schema.json
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: artifacts/stage03-prompt.md
+          output-file: artifacts/stage03-model-design.json
+          codex-home: ${{ runner.temp }}/codex-home-stage03
+          codex-args: ${{ steps.codex-args.outputs.codex_args }}
+          sandbox: danger-full-access
+          output-schema: ${{ steps.output-schema.outputs.schema }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage03-model
+          path: artifacts/stage03-model-design.json
+          if-no-files-found: error
+
+  stage03-design:
+    needs: [stage00-resolve-gate, stage01-stage02, stage03-design-model]
+    if: needs.stage01-stage02.outputs.requires_design == 'true'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage01
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage02
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage03-model
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage03-design --review artifacts/stage01-review.json --techlead artifacts/stage02-techlead.json --model-design artifacts/stage03-model-design.json --out artifacts/stage03-design.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage03
+          path: artifacts/stage03-design.json
+          if-no-files-found: error
+
+  stage04-design-chief-model:
+    needs: [stage00-resolve-gate, stage03-design]
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage03
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review render-prompt \
+            --stage stage04_design_chief \
+            --out artifacts/stage04-prompt.md \
+            --append artifacts/stage03-design.json
+      - id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-stage04
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - id: codex-args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized="$(setup/codex-review/bin/codex-review normalize-codex-args --raw "$CODEX_ARGS")"
+          test -n "$normalized"
+          printf 'codex_args=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
+      - id: output-schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'schema<<EOF'
+            setup/codex-review/bin/codex-review schema --name stage04-model-design-chief.v1.schema.json
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: artifacts/stage04-prompt.md
+          output-file: artifacts/stage04-model-approval.json
+          codex-home: ${{ runner.temp }}/codex-home-stage04
+          codex-args: ${{ steps.codex-args.outputs.codex_args }}
+          sandbox: danger-full-access
+          output-schema: ${{ steps.output-schema.outputs.schema }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage04-model
+          path: artifacts/stage04-model-approval.json
+          if-no-files-found: error
+
+  stage04-stage05:
+    needs: [stage00-resolve-gate, stage03-design, stage04-design-chief-model]
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    outputs:
+      can_continue: ${{ steps.result.outputs.can_continue }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage03
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage04-model
+          path: artifacts
+      - id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage04-design-chief --design artifacts/stage03-design.json --model-approval artifacts/stage04-model-approval.json --out artifacts/stage04-design-chief.json
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open("artifacts/stage04-design-chief.json", encoding="utf-8"))
+          if data["can_continue"]:
+              rc = os.system('setup/codex-review/bin/codex-review stage05-fix-dispatch --design artifacts/stage03-design.json --design-chief artifacts/stage04-design-chief.json --out artifacts/stage05-fix-dispatch.json')
+              if rc != 0:
+                  raise SystemExit(rc >> 8)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage04
+          path: artifacts/stage04-design-chief.json
+          if-no-files-found: error
+      - if: steps.result.outputs.can_continue == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage05
+          path: artifacts/stage05-fix-dispatch.json
+          if-no-files-found: error
+
+  stage05-fix-agent:
+    needs: [stage00-resolve-gate, stage04-stage05]
+    if: needs.stage04-stage05.outputs.can_continue == 'true'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage05
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review render-prompt \
+            --stage stage05_fix_dispatch \
+            --out artifacts/stage05-fix-prompt.md \
+            --append artifacts/stage05-fix-dispatch.json
+      - id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-home-stage05
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - id: codex-args
+        env:
+          CODEX_ARGS: ${{ steps.relay-token.outputs.codex_args }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized="$(setup/codex-review/bin/codex-review normalize-codex-args --raw "$CODEX_ARGS")"
+          test -n "$normalized"
+          printf 'codex_args=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
+      - id: output-schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'schema<<EOF'
+            setup/codex-review/bin/codex-review schema --name stage06-fix-outputs.v1.schema.json
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - id: fix-agent
+        continue-on-error: true
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: artifacts/stage05-fix-prompt.md
+          output-file: artifacts/fix-outputs.json
+          codex-home: ${{ runner.temp }}/codex-home-stage05
+          codex-args: ${{ steps.codex-args.outputs.codex_args }}
+          sandbox: danger-full-access
+          output-schema: ${{ steps.output-schema.outputs.schema }}
+      - shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.fix-agent.outcome }}" != "success" || ! -s artifacts/fix-outputs.json ]]; then
+            setup/codex-review/bin/codex-review stage05-fallback-fix-outputs --dispatch artifacts/stage05-fix-dispatch.json --reason "stage05 codex action did not produce fix-outputs.json" --out artifacts/fix-outputs.json
+          fi
+          if ! setup/codex-review/bin/codex-review stage06-fix-merge --dispatch artifacts/stage05-fix-dispatch.json --fix-outputs artifacts/fix-outputs.json --out /tmp/stage06-fix-merge-validate.json; then
+            setup/codex-review/bin/codex-review stage05-fallback-fix-outputs --dispatch artifacts/stage05-fix-dispatch.json --reason "stage05 codex action produced invalid fix-outputs.json" --out artifacts/fix-outputs.json
+            setup/codex-review/bin/codex-review stage06-fix-merge --dispatch artifacts/stage05-fix-dispatch.json --fix-outputs artifacts/fix-outputs.json --out /tmp/stage06-fix-merge-validate.json
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-fix-outputs
+          path: artifacts/fix-outputs.json
+          if-no-files-found: error
+
+  stage06-fix-merge:
+    needs: [stage00-resolve-gate, stage04-stage05, stage05-fix-agent]
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    outputs:
+      can_continue: ${{ steps.result.outputs.can_continue }}
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage05
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-fix-outputs
+          path: artifacts
+      - id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage06-fix-merge --dispatch artifacts/stage05-fix-dispatch.json --fix-outputs artifacts/fix-outputs.json --out artifacts/stage06-fix-merge.json
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+              print(f"status={data['status']}", file=output)
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage06-initial
+          path: artifacts/stage06-fix-merge.json
+          if-no-files-found: error
+
+  stage06-deferred-validation:
+    needs: [stage00-resolve-gate, stage06-fix-merge]
+    if: needs.stage06-fix-merge.outputs.status == 'needs_validation' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06-initial
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage06-run-deferred-validation --fix-merge artifacts/stage06-fix-merge.json --workspace workspace --out artifacts/stage06-deferred-validation.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage06-deferred-validation
+          path: artifacts/stage06-deferred-validation.json
+          if-no-files-found: error
+
+  stage06-finalize:
+    needs: [stage00-resolve-gate, stage06-fix-merge, stage06-deferred-validation]
+    if: always() && needs.stage06-fix-merge.result == 'success'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+    outputs:
+      can_continue: ${{ steps.result.outputs.can_continue }}
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06-initial
+          path: artifacts-initial
+      - if: needs.stage06-fix-merge.outputs.status == 'needs_validation'
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06-deferred-validation
+          path: artifacts-validation
+      - id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          if [[ "${{ needs.stage06-fix-merge.outputs.status }}" == "needs_validation" ]]; then
+            test "${{ needs.stage06-deferred-validation.result }}" = "success"
+            setup/codex-review/bin/codex-review stage06-finalize-validation --fix-merge artifacts-initial/stage06-fix-merge.json --validation artifacts-validation/stage06-deferred-validation.json --out artifacts/stage06-fix-merge.json
+          else
+            cp artifacts-initial/stage06-fix-merge.json artifacts/stage06-fix-merge.json
+          fi
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+              print(f"status={data['status']}", file=output)
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage06
+          path: artifacts/stage06-fix-merge.json
+          if-no-files-found: error
+
+  stage07-trusted-push:
+    needs: [stage00-resolve-gate, stage06-finalize]
+    if: needs.stage06-finalize.outputs.can_continue == 'true' && needs.stage06-finalize.outputs.status == 'ready' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_ref }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06
+          path: artifacts
+      - shell: bash
+        env:
+          HEAD_SHA: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          HEAD_REF: ${{ needs.stage00-resolve-gate.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          test "$(git -C workspace rev-parse HEAD)" = "$HEAD_SHA"
+          python3 - <<'PY' > artifacts/candidate.patch
+          import json
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          print(data["candidate_patch"], end="")
+          PY
+          patch_hash="$(sha256sum artifacts/candidate.patch | awk '{print $1}')"
+          test -s artifacts/candidate.patch
+          git -C workspace apply --index "$GITHUB_WORKSPACE/artifacts/candidate.patch"
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from codex_review.stages.stage07_push import assert_workspace_changes_match
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          actual = assert_workspace_changes_match(Path("workspace"), data.get("touched_files") or [])
+          Path("artifacts/applied-files.txt").write_text("\n".join(actual) + "\n", encoding="utf-8")
+          PY
+          git -C workspace diff --cached --check
+          python3 - <<'PY' > artifacts/validation-commands.txt
+          import json
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          for command in data.get("validation_commands") or []:
+              print(command)
+          PY
+          test -s artifacts/validation-commands.txt
+          setup/codex-review/bin/codex-review stage07-run-validation --commands artifacts/validation-commands.txt --workspace workspace
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from codex_review.stages.stage07_push import assert_workspace_changes_match
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          actual = assert_workspace_changes_match(Path("workspace"), data.get("touched_files") or [])
+          Path("artifacts/revalidated-files.txt").write_text("\n".join(actual) + "\n", encoding="utf-8")
+          PY
+          git -C workspace config user.name "codex-reviewer-for-dongwonttuna[bot]"
+          git -C workspace config user.email "codex-reviewer-for-dongwonttuna[bot]@users.noreply.github.com"
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 - <<'PY'
+          from pathlib import Path
+          from codex_review.stages.stage07_push import stage_workspace_files
+          files = Path("artifacts/revalidated-files.txt").read_text(encoding="utf-8").splitlines()
+          stage_workspace_files(Path("workspace"), files)
+          PY
+          git -C workspace commit -m "fix: apply codex review v3 patch"
+          git -C workspace push origin "HEAD:${HEAD_REF}"
+          pushed_sha="$(git -C workspace rev-parse HEAD)"
+          python3 - <<PY
+          import json
+          from pathlib import Path
+          Path("artifacts/trusted-push.json").write_text(json.dumps({
+              "schema_version": "codex.stage07.trusted_push.v1",
+              "trusted_job": True,
+              "trusted_ref": "${{ github.ref }}",
+              "actor": "${{ github.actor }}",
+              "target_branch": "$HEAD_REF",
+              "pushed_head_sha": "$pushed_sha",
+              "applied_patch_sha256": "$patch_hash",
+              "merge_commit": False,
+              "pr_merged": False,
+          }, indent=2) + "\n")
+          PY
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage07-push --fix-merge artifacts/stage06-fix-merge.json --trusted-push artifacts/trusted-push.json --out artifacts/stage07-push.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage07
+          path: artifacts/stage07-push.json
+          if-no-files-found: error
+  stage08-reentry:
+    needs: [stage00-resolve-gate, stage07-trusted-push]
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-context
+          path: artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage07
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          setup/codex-review/bin/codex-review stage08-reentry --push artifacts/stage07-push.json --run-state artifacts/run-state.json --out artifacts/stage08-reentry.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage08
+          path: artifacts/stage08-reentry.json
+          if-no-files-found: error

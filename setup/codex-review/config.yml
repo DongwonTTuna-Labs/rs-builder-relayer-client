@@ -1,0 +1,6 @@
+version: codex-review-orchestrator.v3
+entrypoint: setup/codex-review/bin/codex-review
+pythonpath: setup/codex-review/src
+workflow: .github/workflows/codex-review-orchestrator.yml
+legacy_wrappers: false
+security_review_scope: trusted_write_boundaries_only
