@@ -92,13 +92,16 @@ validation is deferred, Stage06 falls back to `git diff --check` for push-safety
 diagnostics only. That fallback is workspace hygiene validation, not replacement
 evidence for full PR-head validation.
 
-If any `deferred_validation_commands` remain, the same workflow run is not
-Stage07-push-ready. Stage06 records a non-ready status with `can_continue:
-false` while preserving `candidate_patch`, `touched_files`,
-`validation_commands`, and `deferred_validation_commands` for diagnosis and
-follow-up validation. Automatic push requires separate non-privileged validation
-success evidence for the deferred commands before a later Stage07 attempt.
-Missing, unsupported, or failing Stage07 validation commands block the push.
+If any `deferred_validation_commands` remain, the initial
+`stage06-fix-merge.json` is not Stage07-push-ready. The workflow uploads that
+artifact as `codex-v3-stage06-initial`, then a non-write
+`stage06-deferred-validation` job checks out the exact PR head SHA, applies the
+candidate patch, and runs only exact allowlisted deferred commands with
+`shell=False`. `stage06-finalize` verifies the validation artifact against the
+repository, PR number, head SHA, candidate patch hash, and command list before
+rewriting the final `codex-v3-stage06` artifact with
+`deferred_validation_commands: []`. Missing, unsupported, mismatched, or failing
+deferred validation keeps the final artifact non-ready and blocks Stage07.
 
 The trusted push job rechecks the changed file set after validation and before
 commit. The staged diff must still match the Stage06 `touched_files` list, and

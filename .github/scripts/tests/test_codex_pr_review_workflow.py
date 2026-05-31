@@ -17,6 +17,8 @@ STAGES = [
     "stage04-design-chief",
     "stage05-fix-dispatch",
     "stage06-fix-merge",
+    "stage06-run-deferred-validation",
+    "stage06-finalize-validation",
     "stage07-push",
     "stage08-reentry",
 ]
@@ -36,7 +38,7 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
     def test_uses_one_codex_orchestrator_workflow(self):
         self.assertTrue(WORKFLOW_PATH.exists())
         self.assertFalse(RESOLVE_WORKFLOW_PATH.exists(), "resolve-checker.yml must be folded into the v3 orchestrator")
-        self.assertLess(len(self.workflow_text.splitlines()), 720)
+        self.assertLess(len(self.workflow_text.splitlines()), 900)
 
     def test_orchestrator_calls_all_stage_cli_contracts(self):
         for stage in STAGES:
@@ -139,6 +141,8 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
             "codex-v3-stage04",
             "codex-v3-stage05",
             "codex-v3-fix-outputs",
+            "codex-v3-stage06-initial",
+            "codex-v3-stage06-deferred-validation",
             "codex-v3-stage06",
             "codex-v3-stage07",
             "codex-v3-stage08",
@@ -280,12 +284,45 @@ class CodexPrReviewWorkflowTests(unittest.TestCase):
         self.assertNotIn("git -C workspace add --all\n", trusted_push)
 
     def test_stage07_requires_stage06_ready_status(self):
-        stage06 = self.workflow_text.split("stage06-fix-merge:", 1)[1].split("stage07-trusted-push:", 1)[0]
+        stage06_initial = self.workflow_text.split("stage06-fix-merge:", 1)[1].split("stage06-deferred-validation:", 1)[0]
+        stage06_final = self.workflow_text.split("stage06-finalize:", 1)[1].split("stage07-trusted-push:", 1)[0]
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
 
-        self.assertIn("status: ${{ steps.result.outputs.status }}", stage06)
-        self.assertIn("print(f\"status={data['status']}\", file=output)", stage06)
-        self.assertIn("needs.stage06-fix-merge.outputs.status == 'ready'", trusted_push)
+        self.assertIn("status: ${{ steps.result.outputs.status }}", stage06_initial)
+        self.assertIn("status: ${{ steps.result.outputs.status }}", stage06_final)
+        self.assertIn("print(f\"status={data['status']}\", file=output)", stage06_final)
+        self.assertIn("needs: [stage00-resolve-gate, stage06-finalize]", trusted_push)
+        self.assertIn("needs.stage06-finalize.outputs.status == 'ready'", trusted_push)
+
+    def test_deferred_validation_job_is_non_write_and_uses_head_sha_workspace(self):
+        stage06_deferred = self.workflow_text.split("stage06-deferred-validation:", 1)[1].split("stage06-finalize:", 1)[0]
+
+        self.assertIn("needs: [stage00-resolve-gate, stage06-fix-merge]", stage06_deferred)
+        self.assertIn("needs.stage06-fix-merge.outputs.status == 'needs_validation'", stage06_deferred)
+        self.assertIn("contents: read", stage06_deferred)
+        self.assertNotIn("contents: write", stage06_deferred)
+        self.assertLess(stage06_deferred.index("ref: ${{ github.sha }}"), stage06_deferred.index("path: workspace"))
+        self.assertIn("persist-credentials: false", stage06_deferred.split("path: workspace", 1)[0])
+        self.assertIn("repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}", stage06_deferred)
+        self.assertIn("ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}", stage06_deferred)
+        self.assertIn("path: workspace", stage06_deferred)
+        self.assertNotIn("persist-credentials: true", stage06_deferred)
+        self.assertIn("name: codex-v3-stage06-initial", stage06_deferred)
+        self.assertIn("stage06-run-deferred-validation", stage06_deferred)
+        self.assertIn("name: codex-v3-stage06-deferred-validation", stage06_deferred)
+
+    def test_stage06_finalize_consumes_deferred_validation_before_stage07(self):
+        stage06_initial = self.workflow_text.split("stage06-fix-merge:", 1)[1].split("stage06-deferred-validation:", 1)[0]
+        stage06_final = self.workflow_text.split("stage06-finalize:", 1)[1].split("stage07-trusted-push:", 1)[0]
+        trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]
+
+        self.assertIn("name: codex-v3-stage06-initial", stage06_initial)
+        self.assertIn("needs: [stage00-resolve-gate, stage06-fix-merge, stage06-deferred-validation]", stage06_final)
+        self.assertIn("name: codex-v3-stage06-initial", stage06_final)
+        self.assertIn("name: codex-v3-stage06-deferred-validation", stage06_final)
+        self.assertIn("stage06-finalize-validation", stage06_final)
+        self.assertIn("name: codex-v3-stage06", stage06_final)
+        self.assertIn("name: codex-v3-stage06", trusted_push)
 
     def test_trusted_push_uses_trusted_root_scripts_and_workspace_pr_checkout(self):
         trusted_push = self.workflow_text.split("stage07-trusted-push:", 1)[1].split("stage08-reentry:", 1)[0]

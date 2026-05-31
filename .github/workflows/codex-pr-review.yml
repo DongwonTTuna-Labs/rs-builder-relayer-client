@@ -588,12 +588,96 @@ jobs:
           PY
       - uses: actions/upload-artifact@v7
         with:
+          name: codex-v3-stage06-initial
+          path: artifacts/stage06-fix-merge.json
+          if-no-files-found: error
+
+  stage06-deferred-validation:
+    needs: [stage00-resolve-gate, stage06-fix-merge]
+    if: needs.stage06-fix-merge.outputs.status == 'needs_validation' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ needs.stage00-resolve-gate.outputs.head_repo }}
+          ref: ${{ needs.stage00-resolve-gate.outputs.head_sha }}
+          fetch-depth: 0
+          path: workspace
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06-initial
+          path: artifacts
+      - shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage06-run-deferred-validation --fix-merge artifacts/stage06-fix-merge.json --workspace workspace --out artifacts/stage06-deferred-validation.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codex-v3-stage06-deferred-validation
+          path: artifacts/stage06-deferred-validation.json
+          if-no-files-found: error
+
+  stage06-finalize:
+    needs: [stage00-resolve-gate, stage06-fix-merge, stage06-deferred-validation]
+    if: always() && needs.stage06-fix-merge.result == 'success'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+    outputs:
+      can_continue: ${{ steps.result.outputs.can_continue }}
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06-initial
+          path: artifacts-initial
+      - if: needs.stage06-fix-merge.outputs.status == 'needs_validation'
+        uses: actions/download-artifact@v8
+        with:
+          name: codex-v3-stage06-deferred-validation
+          path: artifacts-validation
+      - id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          if [[ "${{ needs.stage06-fix-merge.outputs.status }}" == "needs_validation" ]]; then
+            test "${{ needs.stage06-deferred-validation.result }}" = "success"
+            PYTHONPATH="$CODEX_PYTHONPATH" python3 -m codex_review.cli stage06-finalize-validation --fix-merge artifacts-initial/stage06-fix-merge.json --validation artifacts-validation/stage06-deferred-validation.json --out artifacts/stage06-fix-merge.json
+          else
+            cp artifacts-initial/stage06-fix-merge.json artifacts/stage06-fix-merge.json
+          fi
+          python3 - <<'PY'
+          import json, os
+          data = json.load(open("artifacts/stage06-fix-merge.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"can_continue={str(data['can_continue']).lower()}", file=output)
+              print(f"status={data['status']}", file=output)
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
           name: codex-v3-stage06
           path: artifacts/stage06-fix-merge.json
           if-no-files-found: error
+
   stage07-trusted-push:
-    needs: [stage00-resolve-gate, stage06-fix-merge]
-    if: needs.stage06-fix-merge.outputs.can_continue == 'true' && needs.stage06-fix-merge.outputs.status == 'ready' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
+    needs: [stage00-resolve-gate, stage06-finalize]
+    if: needs.stage06-finalize.outputs.can_continue == 'true' && needs.stage06-finalize.outputs.status == 'ready' && needs.stage00-resolve-gate.outputs.head_repo == github.repository
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner

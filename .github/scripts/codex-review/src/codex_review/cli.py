@@ -219,6 +219,43 @@ def run_stage05_fallback_fix_outputs(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_stage06_deferred_validation(args: argparse.Namespace) -> int:
+    from .artifacts import read_json_artifact
+    from .stage06 import run_deferred_validation
+
+    try:
+        payload = run_deferred_validation(read_json_artifact(args.fix_merge), args.workspace)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        return int(exc.returncode)
+    if args.out:
+        write_json_artifact(args.out, payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def run_stage06_finalize_validation(args: argparse.Namespace) -> int:
+    from .artifacts import read_json_artifact
+    from .stage06 import build_validated_fix_merge_result
+
+    try:
+        payload = build_validated_fix_merge_result(
+            read_json_artifact(args.fix_merge),
+            read_json_artifact(args.validation),
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.out:
+        write_json_artifact(args.out, payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def run_stage00_lifecycle(args: argparse.Namespace) -> int:
     from .artifacts import read_json_artifact
     from .stage00 import build_lifecycle_result
@@ -293,6 +330,16 @@ def build_parser() -> argparse.ArgumentParser:
     fallback.add_argument("--reason", required=True)
     fallback.add_argument("--out", type=Path, required=False)
     fallback.set_defaults(func=run_stage05_fallback_fix_outputs)
+    deferred = subparsers.add_parser("stage06-run-deferred-validation")
+    deferred.add_argument("--fix-merge", type=Path, required=True)
+    deferred.add_argument("--workspace", type=Path, required=True)
+    deferred.add_argument("--out", type=Path, required=False)
+    deferred.set_defaults(func=run_stage06_deferred_validation)
+    finalize = subparsers.add_parser("stage06-finalize-validation")
+    finalize.add_argument("--fix-merge", type=Path, required=True)
+    finalize.add_argument("--validation", type=Path, required=True)
+    finalize.add_argument("--out", type=Path, required=False)
+    finalize.set_defaults(func=run_stage06_finalize_validation)
     validation = subparsers.add_parser("stage07-run-validation")
     validation.add_argument("--commands", type=Path, required=True)
     validation.add_argument("--workspace", type=Path, required=True)

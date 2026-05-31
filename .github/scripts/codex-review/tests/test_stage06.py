@@ -3,12 +3,19 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from codex_review.stage06 import build_conflict_fix_outputs, build_fix_merge_result
+from codex_review.stage06 import (
+    build_conflict_fix_outputs,
+    build_fix_merge_result,
+    build_validated_fix_merge_result,
+    deferred_validation_command_argv,
+    run_deferred_validation,
+)
 
 
 def dispatch():
@@ -242,6 +249,172 @@ class Stage06Tests(unittest.TestCase):
         self.assertFalse(result["can_continue"])
         self.assertEqual(["cargo fmt --all --check", "git diff --check"], result["validation_commands"])
         self.assertEqual(["cargo test --workspace --all-features"], result["deferred_validation_commands"])
+
+    def test_deferred_validation_command_argv_allows_exact_pr_head_commands(self):
+        cases = {
+            "git diff --check": ["git", "diff", "--check"],
+            "cargo test --workspace --all-features": ["cargo", "test", "--workspace", "--all-features"],
+            "cargo clippy --workspace --all-targets --all-features -- -D warnings": [
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            "python3 -m unittest discover -s .github/scripts/codex-review/tests": [
+                "python3",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                ".github/scripts/codex-review/tests",
+            ],
+            "python3 -m unittest discover -s .github/scripts/tests": [
+                "python3",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                ".github/scripts/tests",
+            ],
+        }
+
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(expected, deferred_validation_command_argv(command))
+
+    def test_deferred_validation_command_argv_rejects_shell_suffixes(self):
+        with self.assertRaises(ValueError) as ctx:
+            deferred_validation_command_argv("cargo test --workspace --all-features && echo injected")
+
+        self.assertIn("unsupported deferred validation command", str(ctx.exception))
+
+    def test_run_deferred_validation_applies_candidate_patch_at_exact_head_sha(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+            (repo / "src").mkdir()
+            (repo / "src/lib.rs").write_text("old\n", encoding="utf-8")
+            subprocess.run(["git", "add", "src/lib.rs"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            head_sha = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.strip()
+            patch = (
+                "diff --git a/src/lib.rs b/src/lib.rs\n"
+                "--- a/src/lib.rs\n"
+                "+++ b/src/lib.rs\n"
+                "@@ -1 +1 @@\n"
+                "-old\n"
+                "+new\n"
+            )
+            fix_merge = {
+                "schema_version": "codex.stage06.fix_merge.v1",
+                "stage": "stage06-fix-merge",
+                "status": "needs_validation",
+                "can_continue": False,
+                "push_allowed": False,
+                "repository": "DongwonTTuna-Labs/rs-builder-relayer-client",
+                "pr_number": "36",
+                "base_sha": "a" * 40,
+                "head_sha": head_sha,
+                "task_ids": ["FIX-DES-001"],
+                "touched_files": ["src/lib.rs"],
+                "validation_commands": ["git diff --check"],
+                "deferred_validation_commands": ["git diff --check"],
+                "candidate_patch": patch,
+                "conflicts": [],
+            }
+
+            validation = run_deferred_validation(fix_merge, repo)
+            staged = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=repo,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            ).stdout.splitlines()
+
+        self.assertEqual("codex.stage06.deferred_validation.v1", validation["schema_version"])
+        self.assertEqual("validated", validation["status"])
+        self.assertEqual(["git diff --check"], validation["deferred_validation_commands"])
+        self.assertEqual(["src/lib.rs"], staged)
+
+    def test_successful_deferred_validation_finalizes_ready_fix_merge(self):
+        result = build_fix_merge_result(dispatch(), fix_outputs())
+        patch_hash = hashlib.sha256(result["candidate_patch"].encode("utf-8")).hexdigest()
+        validation = {
+            "schema_version": "codex.stage06.deferred_validation.v1",
+            "stage": "stage06-deferred-validation",
+            "status": "validated",
+            "can_continue": True,
+            "repository": result["repository"],
+            "pr_number": result["pr_number"],
+            "head_sha": result["head_sha"],
+            "candidate_patch_sha256": patch_hash,
+            "deferred_validation_commands": result["deferred_validation_commands"],
+            "command_results": [
+                {"command": command, "argv": deferred_validation_command_argv(command), "returncode": 0}
+                for command in result["deferred_validation_commands"]
+            ],
+        }
+
+        finalized = build_validated_fix_merge_result(result, validation)
+
+        self.assertEqual("ready", finalized["status"])
+        self.assertTrue(finalized["can_continue"])
+        self.assertEqual([], finalized["deferred_validation_commands"])
+        self.assertEqual(result["candidate_patch"], finalized["candidate_patch"])
+        self.assertEqual(result["validation_commands"], finalized["validation_commands"])
+
+    def test_deferred_validation_finalize_rejects_mismatched_patch_hash(self):
+        result = build_fix_merge_result(dispatch(), fix_outputs())
+        validation = {
+            "schema_version": "codex.stage06.deferred_validation.v1",
+            "stage": "stage06-deferred-validation",
+            "status": "validated",
+            "can_continue": True,
+            "repository": result["repository"],
+            "pr_number": result["pr_number"],
+            "head_sha": result["head_sha"],
+            "candidate_patch_sha256": "0" * 64,
+            "deferred_validation_commands": result["deferred_validation_commands"],
+            "command_results": [],
+        }
+
+        with self.assertRaises(ValueError) as ctx:
+            build_validated_fix_merge_result(result, validation)
+
+        self.assertIn("candidate_patch_sha256 mismatch", str(ctx.exception))
+
+    def test_deferred_validation_finalize_rejects_command_mismatch(self):
+        result = build_fix_merge_result(dispatch(), fix_outputs())
+        validation = {
+            "schema_version": "codex.stage06.deferred_validation.v1",
+            "stage": "stage06-deferred-validation",
+            "status": "validated",
+            "can_continue": True,
+            "repository": result["repository"],
+            "pr_number": result["pr_number"],
+            "head_sha": result["head_sha"],
+            "candidate_patch_sha256": hashlib.sha256(result["candidate_patch"].encode("utf-8")).hexdigest(),
+            "deferred_validation_commands": ["cargo test --workspace --all-features"],
+            "command_results": [],
+        }
+
+        with self.assertRaises(ValueError) as ctx:
+            build_validated_fix_merge_result(result, validation)
+
+        self.assertIn("deferred_validation_commands mismatch", str(ctx.exception))
 
     def test_missing_task_output_fails_closed(self):
         outputs = fix_outputs()
