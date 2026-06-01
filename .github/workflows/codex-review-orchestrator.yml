@@ -154,12 +154,16 @@ jobs:
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build lifecycle prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage00 build-prompt --inventory codex-review-artifacts/stage00/thread-inventory.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage00/lifecycle-prompt.md
+      - name: Prepare lifecycle schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage00-lifecycle-result.v1 --out codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
       - name: Run Codex lifecycle model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: codex-review-artifacts/stage00/lifecycle-prompt.md
           output-file: codex-review-artifacts/stage00/lifecycle-result.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage00-lifecycle-result.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -286,12 +290,16 @@ jobs:
         run: |
           mkdir -p codex-review-artifacts/stage01/${{ matrix.axis }}
           workflow-helper/setup/codex-review/bin/codex-review stage01 build-review-prompt --axis ${{ matrix.axis }} --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
+      - name: Prepare axis schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage01-axis-findings.v1 --out codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
       - name: Run Codex axis model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
           output-file: codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage01-axis-findings.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -394,12 +402,16 @@ jobs:
         run: |
           mkdir -p codex-review-artifacts/stage02
           workflow-helper/setup/codex-review/bin/codex-review stage02 build-techlead-prompt --in codex-review-artifacts/stage01/combined-findings.json --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage02/prompt.md
+      - name: Prepare techlead schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage02-techlead-decision.v1 --out codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
       - name: Run Codex techlead model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: codex-review-artifacts/stage02/prompt.md
           output-file: codex-review-artifacts/stage02/techlead-decision.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage02-techlead-decision.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -580,12 +592,19 @@ jobs:
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build inventory prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-inventory-prompt --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.prompt.md
+      - name: Prepare design schemas
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-inventory.v1 --out codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-clusters.v1 --out codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-cluster-analysis.v1 --out codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-plan.v1 --out codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
       - name: Run Codex inventory model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: codex-review-artifacts/stage03/design-inventory.prompt.md
           output-file: codex-review-artifacts/stage03/design-inventory.raw.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage03-design-inventory.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -604,7 +623,7 @@ jobs:
         with:
           prompt-file: codex-review-artifacts/stage03/design-clusters.prompt.md
           output-file: codex-review-artifacts/stage03/design-clusters.raw.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage03-design-clusters.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -623,7 +642,7 @@ jobs:
         with:
           prompt-file: codex-review-artifacts/stage03/cluster-analysis.prompt.md
           output-file: codex-review-artifacts/stage03/cluster-analysis.raw.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage03-cluster-analysis.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -642,7 +661,7 @@ jobs:
         with:
           prompt-file: codex-review-artifacts/stage03/design-plan.prompt.md
           output-file: codex-review-artifacts/stage03/design-plan.raw.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage03-design-plan.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -700,12 +719,16 @@ jobs:
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build design chief prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage04 build-chief-prompt --in codex-review-artifacts/stage03/design-plan.json --inventory codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage04/prompt.md
+      - name: Prepare design chief schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage04-design-chief-decision.v1 --out codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
       - name: Run Codex design chief model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: codex-review-artifacts/stage04/prompt.md
           output-file: codex-review-artifacts/stage04/chief-decision.json
-          output-schema-file: workflow-helper/setup/codex-review/schemas/stage04-design-chief-decision.v1.schema.json
+          output-schema-file: codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
@@ -891,12 +914,16 @@ jobs:
         with:
           codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.task_path }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Prepare fix agent schema
+        run: |
+          mkdir -p trusted/codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage05-fix-agent-result.v1 --out trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
       - name: Run Codex fix agent model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
-          output-schema-file: ${{ github.workspace }}/workflow-helper/setup/codex-review/schemas/stage05-fix-agent-result.v1.schema.json
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only
@@ -984,13 +1011,18 @@ jobs:
         with:
           codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Prepare merged fix schema
+        if: steps.merge_route.outputs.needs_model == 'true'
+        run: |
+          mkdir -p trusted/codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage06-merged-fix.v1 --out trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
       - name: Run Codex merged fix model
         if: steps.merge_route.outputs.needs_model == 'true'
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merge-prompt.md
           output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merged-fix.raw.json
-          output-schema-file: ${{ github.workspace }}/workflow-helper/setup/codex-review/schemas/stage06-merged-fix.v1.schema.json
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only

@@ -18,7 +18,7 @@
 
 ## 모델 실행 연결
 
-workflow model stages는 `openai/codex-action`을 사용한다. 각 stage는 먼저 helper CLI로 prompt를 만들고, action이 `output-schema-file`과 함께 JSON artifact를 쓴 뒤, helper validator가 그 artifact를 다시 검증한다.
+workflow model stages는 `openai/codex-action`을 사용한다. 각 stage는 먼저 helper CLI로 prompt를 만들고, base schema를 OpenAI Structured Outputs strict schema로 변환해 `output-schema-file`에 넘긴다. action이 JSON artifact를 쓴 뒤에는 helper validator가 원래 stage schema와 stage별 business rule로 결과를 다시 검증한다.
 
 로컬 테스트나 별도 consumer가 필요한 경우 provider-neutral `CODEX_REVIEW_MODEL_COMMAND` adapter는 CLI 하위호환 경로로 남아 있지만, repository workflow는 이 adapter나 runner script에 의존하지 않는다.
 

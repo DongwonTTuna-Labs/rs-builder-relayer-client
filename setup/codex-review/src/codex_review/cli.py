@@ -123,6 +123,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--work-dir", default=None)
     p.add_argument("--model-cwd", default=os.environ.get("CODEX_REVIEW_MODEL_CWD") or os.environ.get("CODEX_REVIEW_TRUSTED_CHECKOUT"))
     p.add_argument("--validation", default=None)
+    p.add_argument("--schema", default=None)
 
 
 def _model_or_fallback(args: argparse.Namespace, *, stage: str, expected_schema: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -729,9 +730,18 @@ def _handle_auth(args: argparse.Namespace) -> tuple[Any, str | None]:
     return {"schema_version":"github-app-token.v1", "token_created": True, "owner": owner, "repo": repo, "permissions": permissions, "permissions_json": permissions_json, "repository_scoped": True}, None
 
 
+def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
+    if args.command not in {"openai-strict", "openai-structured-output"}:
+        raise ValueError(f"unknown schema command: {args.command}")
+    if not args.schema:
+        raise ValidationError("schema openai-strict requires --schema")
+    from .schema import load_schema_json, make_openai_structured_output_schema
+    return make_openai_structured_output_schema(load_schema_json(args.schema)), None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review")
-    parser.add_argument("area", choices=["auth", "event", "context", "loop", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08"])
+    parser.add_argument("area", choices=["auth", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08"])
     _add_common(parser)
     args = parser.parse_args(argv)
     try:
@@ -740,6 +750,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.area == "event": payload, schema = _handle_event(args)
         elif args.area == "context": payload, schema = _handle_context(args, config)
         elif args.area == "loop": payload, schema = _handle_loop(args)
+        elif args.area == "schema": payload, schema = _handle_schema(args)
         elif args.area == "stage00": payload, schema = _handle_stage00(args, config)
         elif args.area == "stage01": payload, schema = _handle_stage01(args, config)
         elif args.area == "stage02": payload, schema = _handle_stage02(args, config)

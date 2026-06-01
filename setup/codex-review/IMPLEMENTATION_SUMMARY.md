@@ -8,7 +8,7 @@ This package is no longer a spec-only skeleton. It now includes runnable helpers
 - context: diff parser, changed-line map, PR/review/docs/file inventory context builders
 - loop: route decisions, loop state, audit events
 - stage00 through stage08: resolve gate, review, techlead, design, design chief, fix dispatch, fix merge, trusted push, reentry recording
-- model execution: prompt/schema helpers for pinned `openai/codex-action` plus validator commands for every model output artifact
+- model execution: prompt helpers, OpenAI strict schema generation, and validator commands for every pinned `openai/codex-action` output artifact
 - workflow: one orchestrator workflow with Codex Action model jobs separated from trusted write jobs, explicit route gates, and no inline schema/Python bloat
 - tests: unit/workflow coverage for lifecycle, review validation, techlead, design, patch policy, dry-run publishing, fix collection, model adapter, push guards, routing, and event helpers
 
@@ -29,7 +29,7 @@ setup/codex-review/bin/codex-review --help
 
 ## External integrations
 
-The GitHub API, Codex Action model path, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, relay binding, workflow secrets, and repository-specific test commands before enabling non-dry-run writes. Model jobs write schema-constrained artifacts through `openai/codex-action`; trusted jobs validate those artifacts again before any side effect gate can run.
+The GitHub API, Codex Action model path, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, relay binding, workflow secrets, and repository-specific test commands before enabling non-dry-run writes. Model jobs write OpenAI strict schema-constrained artifacts through `openai/codex-action`; trusted jobs validate those artifacts again before any side effect gate can run.
 
 ## GitHub specification hardening applied
 

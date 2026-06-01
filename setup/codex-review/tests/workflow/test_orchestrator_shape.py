@@ -118,9 +118,18 @@ def test_workflow_uses_codex_action_for_model_execution():
         assert with_inputs["allow-bot-users"] == "codex-reviewer-for-dongwonttuna[bot]", job_name
         assert with_inputs["prompt-file"], job_name
         assert with_inputs["output-file"], job_name
-        assert with_inputs["output-schema-file"].endswith(".schema.json"), job_name
-        assert "workflow-helper/setup/codex-review/schemas/" in with_inputs["output-schema-file"], job_name
+        assert with_inputs["output-schema-file"].endswith(".openai.schema.json"), job_name
+        assert "codex-review-artifacts/schemas/" in with_inputs["output-schema-file"], job_name
         assert with_inputs["working-directory"], job_name
+
+
+def test_workflow_generates_openai_strict_schemas_for_codex_action():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert text.count("schema openai-strict --schema") >= len(codex_action_steps())
+    for _, step in codex_action_steps():
+        schema_file = step["with"]["output-schema-file"]
+        schema_name = Path(schema_file).name.removesuffix(".openai.schema.json")
+        assert f"schema openai-strict --schema {schema_name}" in text
 
 
 def test_workflow_has_no_model_runner_default_or_codex_cli_env_contract():
