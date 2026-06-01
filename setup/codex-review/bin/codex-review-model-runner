@@ -61,15 +61,26 @@ tmp_output="$(mktemp "${RUNNER_TEMP:-/tmp}/codex-review-model.XXXXXX.json")"
 trap 'rm -f "$tmp_output"' EXIT
 
 codex_bin="${CODEX_REVIEW_CODEX_BIN:-codex}"
-"$codex_bin" exec \
-  "${codex_args[@]}" \
-  --sandbox read-only \
-  --ask-for-approval never \
-  --ephemeral \
-  -C "$model_cwd" \
-  --output-schema "$schema_path" \
-  --output-last-message "$tmp_output" \
-  < "$CODEX_REVIEW_PROMPT_PATH"
+if "$codex_bin" exec --help 2>&1 | grep -q -- "--ask-for-approval"; then
+  "$codex_bin" exec \
+    "${codex_args[@]}" \
+    --sandbox read-only \
+    --ask-for-approval never \
+    --ephemeral \
+    -C "$model_cwd" \
+    --output-schema "$schema_path" \
+    --output-last-message "$tmp_output" \
+    < "$CODEX_REVIEW_PROMPT_PATH"
+else
+  "$codex_bin" exec \
+    "${codex_args[@]}" \
+    --sandbox read-only \
+    --ephemeral \
+    -C "$model_cwd" \
+    --output-schema "$schema_path" \
+    --output-last-message "$tmp_output" \
+    < "$CODEX_REVIEW_PROMPT_PATH"
+fi
 
 python3 - "$tmp_output" "$CODEX_REVIEW_OUTPUT_PATH" <<'PY'
 import json
