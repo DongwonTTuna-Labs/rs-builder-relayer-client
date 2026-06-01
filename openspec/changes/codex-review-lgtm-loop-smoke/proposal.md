@@ -19,14 +19,14 @@ token path.
 - Make the PR body link to that OpenSpec change so `openspec-context.json` is populated.
 - Leave `docs/CODEX_REVIEW_LGTM_LOOP.md` absent in the initial PR on purpose.
 - Require Codex Review to create that missing docs file as the safe implementation fix.
-- Keep the smoke docs-only so public Rust APIs, workflow behavior, signing logic, and
+- Keep the smoke docs-only so exported Rust interfaces, workflow behavior, and
   venue-facing behavior remain unchanged.
 
 ## Non-Goals
 
 - Do not change GitHub Actions workflow logic in this smoke PR.
-- Do not change Rust public API, generated fixtures, signing logic, nonce logic, or
-  deposit-wallet live execution gates.
+- Do not change exported Rust interfaces, generated fixtures, venue-facing execution
+  logic, or deposit-wallet live execution gates.
 - Do not enable push or issue side-effect gates from repository contents.
 - Do not merge the smoke PR automatically.
 

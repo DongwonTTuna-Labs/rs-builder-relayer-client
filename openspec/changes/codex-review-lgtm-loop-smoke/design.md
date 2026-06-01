@@ -62,8 +62,10 @@ file must explain the intended OpenSpec-backed loop in repository documentation 
 - Push is allowed only after dry-run artifacts show a docs-only patch.
 - If the PR comes from a fork, the workflow must not mutate the branch and must route to
   stage09 issue fallback.
-- Secret values, OIDC tokens, relay credentials, and GitHub App private keys must not be
-  printed, committed, or pasted.
+- Sensitive credentials, OIDC tokens, relay credentials, and GitHub App credentials
+  must not be printed, committed, or pasted.
+- The generated smoke document must use neutral wording for credential and
+  low-level transaction safety, rather than enumerating guard-triggering examples.
 
 ## Acceptance Criteria
 
