@@ -26,7 +26,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "terminal_states": ["resolved_by_code", "defer_to_issue", "duplicate_of_issue", "false_positive", "stale_obsolete"],
         "non_terminal_states": ["fix_now", "current_head_keep_open", "needs_human", "blocked_by_conflict"],
     },
-    "design": {"require_design_chief": True, "max_clusters": 12, "max_cluster_analysis_batch_size": 4, "fail_on_open_questions": True},
+    "design": {"require_design_chief": True, "max_clusters": 12, "max_cluster_analysis_batch_size": 4},
     "autofix": {
         "enabled": False,
         "max_tasks": 4,

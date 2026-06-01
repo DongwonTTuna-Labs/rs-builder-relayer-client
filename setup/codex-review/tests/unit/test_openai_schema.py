@@ -67,6 +67,14 @@ def test_openai_action_schemas_are_strict_structured_outputs():
                 assert "null" in enum_types, (name, path)
 
 
+def test_stage03_design_plan_schema_does_not_expose_open_questions():
+    schema = load_schema_json("stage03-design-plan.v1")
+    assert "open_questions" not in schema["properties"]
+
+    strict = make_openai_structured_output_schema(schema)
+    assert "open_questions" not in strict["properties"]
+
+
 def test_openai_strict_schema_keeps_defer_issue_payload_shape():
     schema = make_openai_structured_output_schema(load_schema_json("stage00-lifecycle-result.v1"))
     issue = schema["properties"]["decisions"]["items"]["properties"]["issue_request"]

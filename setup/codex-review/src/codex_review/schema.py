@@ -166,7 +166,6 @@ def _default_array_item_schema(path: tuple[str, ...]) -> dict[str, Any]:
         return _task_item_schema()
     if name in {
         "tests",
-        "open_questions",
         "risk_flags",
         "files",
         "allowed_files",

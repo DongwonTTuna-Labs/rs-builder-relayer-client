@@ -6,9 +6,6 @@
     "edit_sequence": {
       "type": "array"
     },
-    "open_questions": {
-      "type": "array"
-    },
     "plan_hash": {
       "type": "string"
     },

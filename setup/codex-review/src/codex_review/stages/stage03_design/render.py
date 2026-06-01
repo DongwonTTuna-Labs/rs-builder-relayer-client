@@ -11,6 +11,3 @@ def render_design_plan_markdown(plan: dict[str, Any]) -> str:
 
 def render_design_step_summary(plan: dict[str, Any], validation: dict[str, Any]) -> str:
     return f"## Stage03 design\n\nPlan hash: `{plan.get('plan_hash')}`\nValidation: {validation}\n"
-
-def render_open_questions(plan: dict[str, Any]) -> str:
-    return "\n".join(f"- {q}" for q in plan.get("open_questions", [])) or "No open questions."

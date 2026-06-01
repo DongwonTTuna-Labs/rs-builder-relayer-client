@@ -36,6 +36,34 @@ def test_stage03_prompt_only_commands_write_model_prompts(tmp_path):
         assert expected in out.read_text(encoding="utf-8")
 
 
+def test_stage03_plan_prompt_keeps_human_routing_in_stage04(tmp_path):
+    context = tmp_path / "design-context.json"
+    clusters = tmp_path / "design-clusters.json"
+    analysis = tmp_path / "cluster-analysis.json"
+    write_json(context, {"schema_version": "stage03-design-context.v1", "findings": [{"finding_id": "f1"}]})
+    write_json(clusters, {"schema_version": "stage03-design-clusters.v1", "clusters": [{"cluster_id": "c1"}]})
+    write_json(analysis, {"schema_version": "stage03-cluster-analysis.v1", "analyses": [{"cluster_id": "c1"}]})
+
+    out = tmp_path / "prompt.md"
+    assert main([
+        "stage03",
+        "build-plan-prompt",
+        "--pr-context",
+        str(context),
+        "--inventory",
+        str(clusters),
+        "--result",
+        str(analysis),
+        "--out",
+        str(out),
+    ]) == 0
+
+    prompt = out.read_text(encoding="utf-8")
+    assert "candidate design plan" in prompt
+    assert "stage04" in prompt
+    assert "open_questions" not in prompt
+
+
 def test_stage05_prepare_agents_writes_prompts_matrix_and_github_outputs(tmp_path, monkeypatch):
     manifest = tmp_path / "manifest.json"
     design_plan = tmp_path / "design-plan.json"

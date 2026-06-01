@@ -8,16 +8,20 @@ from codex_review.errors import ValidationError
 
 
 def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, Any], analyses: list[dict[str, Any]]) -> str:
-    return "Coordinate a final design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n" + str({"context":design_context,"clusters":clusters,"analyses":analyses})
+    instructions = (
+        "Coordinate a candidate design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n"
+        "Do not include human-routing fields in this artifact. stage04 design chief decides whether the "
+        "candidate is approved_for_fix, needs_human, rejected_plan, or no_fix_needed.\n"
+    )
+    return instructions + str({"context":design_context,"clusters":clusters,"analyses":analyses})
 
 
 def validate_design_plan(plan: dict[str, Any], design_context: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    if "open_questions" in plan:
+        raise ValidationError("stage03 design plan does not accept open_questions; use stage04 needs_human routing")
     out=dict(plan); out["schema_version"]="stage03-design-plan.v1"
-    out.setdefault("open_questions", [])
     out.setdefault("edit_sequence", out.get("tasks") or [])
     out.setdefault("tests", [])
-    if config.get("design", {}).get("fail_on_open_questions", True) and out.get("open_questions"):
-        raise ValidationError("design plan has open questions")
     if not out.get("edit_sequence") and design_context.get("findings"):
         raise ValidationError("design plan needs edit_sequence for design findings")
     if not out.get("tests") and design_context.get("findings"):

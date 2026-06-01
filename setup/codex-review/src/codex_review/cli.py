@@ -446,7 +446,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage03_design.coordinate import validate_design_plan
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         findings = ctx.get("findings", [])
-        plan = {"schema_version": "stage03-design-plan.v1", "edit_sequence": [], "tests": [], "open_questions": [], "defaulted": True}
+        plan = {"schema_version": "stage03-design-plan.v1", "edit_sequence": [], "tests": [], "defaulted": True}
         if findings:
             # Keep the fallback artifact valid, but make the following chief stage route to needs_human.
             plan["requires_human_review"] = True
@@ -488,7 +488,7 @@ def _handle_stage04(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     cmd = args.command
     if cmd in {"default-result", "noop-result", "model-result"}:
         plan = _maybe_json(args.design_plan or args.in_path, {})
-        status = "needs_human" if plan.get("open_questions") else ("no_fix_needed" if not plan.get("edit_sequence") else "needs_human")
+        status = "needs_human" if plan.get("requires_human_review") else ("no_fix_needed" if not plan.get("edit_sequence") else "needs_human")
         fallback = {"schema_version": "stage04-design-chief-decision.v1", "status": status, "reason": "safe deterministic default", "defaulted": True}
         if cmd == "model-result":
             return _model_or_fallback(args, stage="stage04", expected_schema="stage04-design-chief-decision.v1", fallback=fallback), "stage04-design-chief-decision.v1"

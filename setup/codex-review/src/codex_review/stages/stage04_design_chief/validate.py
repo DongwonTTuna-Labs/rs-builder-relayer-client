@@ -24,16 +24,16 @@ def validate_task_hints(task_hints: list[dict[str, Any]], design_plan: dict[str,
             raise ValidationError(f"task_hint references unknown task: {hint.get('task_id')}")
 
 
-def block_approval_on_open_questions(decision: dict[str, Any], design_plan: dict[str, Any]) -> None:
-    if decision.get("status") == "approved_for_fix" and design_plan.get("open_questions"):
-        raise ValidationError("cannot approve fix with open design questions")
+def block_approval_when_human_review_required(decision: dict[str, Any], design_plan: dict[str, Any]) -> None:
+    if decision.get("status") == "approved_for_fix" and design_plan.get("requires_human_review"):
+        raise ValidationError("cannot approve fix when design plan requires human review")
 
 
 def validate_chief_decision(decision: dict[str, Any], design_plan: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     out=dict(decision); out["schema_version"]="stage04-design-chief-decision.v1"
     status=out.get("status")
     if status not in VALID_STATUSES: raise ValidationError(f"invalid chief status: {status}")
-    block_approval_on_open_questions(out, design_plan)
+    block_approval_when_human_review_required(out, design_plan)
     if status == "approved_for_fix":
         out.setdefault("fix_policy", {})
         # Merge config defaults while letting chief constrain more tightly.
