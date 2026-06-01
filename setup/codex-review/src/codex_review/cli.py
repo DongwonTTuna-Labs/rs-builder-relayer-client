@@ -77,6 +77,11 @@ def _artifact_paths(values: list[str] | None, *, names: tuple[str, ...] = ("*.js
     return deduped
 
 
+def _preferred_artifact_paths(values: list[str] | None, *, primary: str, fallback: str) -> list[str]:
+    paths = _artifact_paths(values, names=(primary,))
+    return paths or _artifact_paths(values, names=(fallback,))
+
+
 def _safe_path_component(value: Any) -> str:
     text = str(value or "").strip()
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
@@ -331,7 +336,7 @@ def _handle_stage01(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return validate_axis_findings(args.axis or payload.get("axis"), payload, _maybe_json(args.pr_context, {}), changed, config), "stage01-axis-findings.v1"
     if cmd == "combine":
         from .stages.stage01_review.combine import combine_axis_findings
-        paths = _artifact_paths(args.artifacts, names=("findings.validated.json", "findings.json"))
+        paths = _preferred_artifact_paths(args.artifacts, primary="findings.validated.json", fallback="findings.json")
         return combine_axis_findings(paths), "stage01-combined-findings.v1"
     if cmd == "render":
         from .stages.stage01_review.render import render_combined_summary
