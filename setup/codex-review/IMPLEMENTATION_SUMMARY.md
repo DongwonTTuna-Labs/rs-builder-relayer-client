@@ -1,0 +1,47 @@
+# Codex Review v3 Implementation Summary
+
+This package is no longer a spec-only skeleton. It now includes runnable helpers for the full Codex Review v3 flow:
+
+- foundation: config, artifact IO, schema loading, paths, CLI, GitHub Actions outputs
+- GitHub boundary: REST/GraphQL client, PR/review-thread/comment/issue/review helpers, markers, App-token helper
+- security: provenance checks, checkout guards, secret redaction, patch policy, permissions checks
+- context: diff parser, changed-line map, PR/review/docs/file inventory context builders
+- loop: route decisions, loop state, audit events
+- stage00 through stage08: resolve gate, review, techlead, design, design chief, fix dispatch, fix merge, trusted push, reentry recording
+- model adapter: provider-neutral `CODEX_REVIEW_MODEL_COMMAND` runner with prompt/output/schema environment contract and safe fallback artifacts
+- workflow: one orchestrator workflow with model jobs separated from trusted write jobs, explicit route gates, and no inline schema/Python bloat
+- tests: unit/workflow coverage for lifecycle, review validation, techlead, design, patch policy, dry-run publishing, fix collection, model adapter, push guards, routing, and event helpers
+
+## Verification
+
+Run from the repository root:
+
+```bash
+PYTHONPATH=setup/codex-review/src python3 -m compileall -q setup/codex-review/src/codex_review
+PYTHONPATH=setup/codex-review/src pytest -q setup/codex-review/tests
+```
+
+The helper CLI is available through:
+
+```bash
+setup/codex-review/bin/codex-review --help
+```
+
+## External integrations
+
+The GitHub API, model command adapter, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, workflow secrets, and repository-specific test commands before enabling non-dry-run writes. Without `CODEX_REVIEW_MODEL_COMMAND`, model jobs intentionally produce safe fallback JSON and do not autofix or push.
+
+## GitHub specification hardening applied
+
+The orchestrator and helpers have been hardened against the GitHub Actions/API issues called out in the final review:
+
+- trusted write/push stages now obtain a GitHub App installation token through `codex-review auth app-token`
+- actual stage00/stage02/stage04/stage07 writes actively verify the token through the installation-token-only `/installation/repositories` endpoint
+- stage07 push no longer relies on `actions/checkout` persisted credentials; it sets an authenticated remote with the installation token only for the push and restores the original remote afterward
+- every checkout step sets `persist-credentials: false`
+- stage02 review creation validates current PR head drift and sends `commit_id` for inline reviews
+- deferred issue search uses `GITHUB_API_URL` and URL-encoded Search API queries
+- `workflow_dispatch.inputs.pr_number` is threaded through event/context resolution via `CODEX_REVIEW_PR_NUMBER`
+- stage03 model planning is followed by explicit `stage03 validate-plan`
+- record-reentry is read-only because it only records artifacts in this implementation
+- first-party GitHub Actions are SHA-pinned in the orchestrator workflow

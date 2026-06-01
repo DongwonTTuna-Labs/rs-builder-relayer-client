@@ -1,0 +1,29 @@
+{
+  "$id": "https://example.invalid/codex-review/stage03-design-plan.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "edit_sequence": {
+      "type": "array"
+    },
+    "open_questions": {
+      "type": "array"
+    },
+    "plan_hash": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "tests": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "edit_sequence",
+    "tests"
+  ],
+  "title": "stage03-design-plan.v1",
+  "type": "object"
+}

@@ -1,0 +1,19 @@
+{
+  "$id": "https://example.invalid/codex-review/stage03-cluster-analysis.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "analyses": {
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "analyses"
+  ],
+  "title": "stage03-cluster-analysis.v1",
+  "type": "object"
+}

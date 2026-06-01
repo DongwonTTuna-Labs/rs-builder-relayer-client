@@ -1,0 +1,22 @@
+{
+  "$id": "https://example.invalid/codex-review/stage03-design-clusters.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "cluster_count": {
+      "type": "integer"
+    },
+    "clusters": {
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "clusters"
+  ],
+  "title": "stage03-design-clusters.v1",
+  "type": "object"
+}

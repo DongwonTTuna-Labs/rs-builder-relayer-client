@@ -1,0 +1,30 @@
+{
+  "$id": "https://example.invalid/codex-review/stage04-design-chief-decision.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "fix_policy": {
+      "type": "object"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "approved_for_fix",
+        "needs_human",
+        "rejected_plan",
+        "no_fix_needed"
+      ]
+    },
+    "task_hints": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "status"
+  ],
+  "title": "stage04-design-chief-decision.v1",
+  "type": "object"
+}

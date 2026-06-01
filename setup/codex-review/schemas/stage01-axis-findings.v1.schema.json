@@ -1,0 +1,26 @@
+{
+  "$id": "https://example.invalid/codex-review/stage01-axis-findings.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "axis": {
+      "type": "string"
+    },
+    "finding_count": {
+      "type": "integer"
+    },
+    "findings": {
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "axis",
+    "findings"
+  ],
+  "title": "stage01-axis-findings.v1",
+  "type": "object"
+}

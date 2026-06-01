@@ -1,0 +1,33 @@
+{
+  "$id": "https://example.invalid/codex-review/stage05-fix-agent-result.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "patch": {
+      "type": "string"
+    },
+    "policy_report": {
+      "type": "object"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "patched",
+        "no_safe_fix",
+        "failed"
+      ]
+    },
+    "task_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "task_id",
+    "status"
+  ],
+  "title": "stage05-fix-agent-result.v1",
+  "type": "object"
+}
