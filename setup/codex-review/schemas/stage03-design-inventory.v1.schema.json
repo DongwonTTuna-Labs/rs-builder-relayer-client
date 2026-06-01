@@ -1,0 +1,22 @@
+{
+  "$id": "https://example.invalid/codex-review/stage03-design-inventory.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "item_count": {
+      "type": "integer"
+    },
+    "items": {
+      "type": "array"
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "items"
+  ],
+  "title": "stage03-design-inventory.v1",
+  "type": "object"
+}
