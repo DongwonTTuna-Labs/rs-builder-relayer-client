@@ -150,7 +150,7 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build lifecycle prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage00 build-prompt --inventory codex-review-artifacts/stage00/thread-inventory.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage00/lifecycle-prompt.md
@@ -165,7 +165,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -280,7 +280,7 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build axis prompt
         run: |
@@ -297,7 +297,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-${{ matrix.axis }}
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-${{ matrix.axis }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -388,7 +388,7 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build techlead prompt
         run: |
@@ -405,7 +405,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -576,7 +576,7 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build inventory prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-inventory-prompt --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.prompt.md
@@ -591,7 +591,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-inventory
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-inventory
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -610,7 +610,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-clusters
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-clusters
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -629,7 +629,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-analysis
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-analysis
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -648,7 +648,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-plan
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-plan
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -696,7 +696,7 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Build design chief prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage04 build-chief-prompt --in codex-review-artifacts/stage03/design-plan.json --inventory codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage04/prompt.md
@@ -711,7 +711,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -889,7 +889,7 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-${{ matrix.task_path }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.task_path }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Run Codex fix agent model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
@@ -902,7 +902,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}-${{ matrix.task_path }}
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-${{ matrix.task_path }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -982,7 +982,7 @@ jobs:
         if: steps.merge_route.outputs.needs_model == 'true'
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
       - name: Run Codex merged fix model
         if: steps.merge_route.outputs.needs_model == 'true'
@@ -996,7 +996,7 @@ jobs:
           safety-strategy: read-only
           openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]

@@ -78,6 +78,7 @@ def test_model_jobs_use_oidc_relay_without_write_permissions():
         ]
         assert len(relay_steps) == 1
         assert relay_steps[0]["with"]["trusted-actors"] == "DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]"
+        assert "codex-relay-home-" in relay_steps[0]["with"]["codex-home"]
 
         action_steps = [step for step in steps if step.get("uses") == CODEX_ACTION]
         assert action_steps
@@ -85,3 +86,5 @@ def test_model_jobs_use_oidc_relay_without_write_permissions():
             assert step["with"]["openai-api-key"] == "${{ steps.relay-token.outputs.relay_token }}"
             assert step["with"]["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses"
             assert step["with"]["output-schema-file"]
+            assert "codex-action-home-" in step["with"]["codex-home"]
+            assert step["with"]["codex-home"] != relay_steps[0]["with"]["codex-home"]
