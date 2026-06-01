@@ -77,6 +77,17 @@ def _artifact_paths(values: list[str] | None, *, names: tuple[str, ...] = ("*.js
     return deduped
 
 
+def _preferred_artifact_paths(values: list[str] | None, *, primary: str, fallback: str) -> list[str]:
+    paths = _artifact_paths(values, names=(primary,))
+    return paths or _artifact_paths(values, names=(fallback,))
+
+
+def _safe_path_component(value: Any) -> str:
+    text = str(value or "").strip()
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
+    return safe.strip("._") or "task"
+
+
 def _repo_parts_from_context(ctx: dict[str, Any]) -> tuple[str | None, str | None]:
     owner = ctx.get("owner")
     repo = ctx.get("repo")
@@ -96,6 +107,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--pr-context", default=None)
     p.add_argument("--review-context", default=None)
     p.add_argument("--docs-context", default=None)
+    p.add_argument("--openspec-context", default=None)
     p.add_argument("--changed-lines", default=None)
     p.add_argument("--axis", default=None)
     p.add_argument("--artifacts", nargs="*", default=None)
@@ -111,10 +123,13 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--mode", default=None)
     p.add_argument("--stage", default=None)
     p.add_argument("--prompt", default=None)
+    p.add_argument("--prompt-out", default=None)
+    p.add_argument("--raw-out", default=None)
     p.add_argument("--model-command", default=os.environ.get("CODEX_REVIEW_MODEL_COMMAND"))
     p.add_argument("--work-dir", default=None)
     p.add_argument("--model-cwd", default=os.environ.get("CODEX_REVIEW_MODEL_CWD") or os.environ.get("CODEX_REVIEW_TRUSTED_CHECKOUT"))
     p.add_argument("--validation", default=None)
+    p.add_argument("--schema", default=None)
 
 
 def _model_or_fallback(args: argparse.Namespace, *, stage: str, expected_schema: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -144,6 +159,7 @@ def register_stage05_commands(parser: argparse.ArgumentParser) -> None: return N
 def register_stage06_commands(parser: argparse.ArgumentParser) -> None: return None
 def register_stage07_commands(parser: argparse.ArgumentParser) -> None: return None
 def register_stage08_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_stage09_commands(parser: argparse.ArgumentParser) -> None: return None
 
 
 def _handle_event(args: argparse.Namespace) -> tuple[Any, str | None]:
@@ -179,6 +195,18 @@ def _handle_event(args: argparse.Namespace) -> tuple[Any, str | None]:
         else:
             out["same_repo"] = None
         return out, "event-context.v1"
+    if args.command in {"write-outputs", "github-outputs"}:
+        payload = _maybe_json(args.in_path or args.pr_context, {})
+        keys = ["same_repo", "head_sha", "head_repo_full_name", "head_ref", "base_sha", "base_repo_full_name", "pr_number"]
+        outputs: dict[str, str] = {}
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            text = str(value).lower() if isinstance(value, bool) else str(value)
+            outputs[key] = text
+            write_output(key, text)
+        return {"outputs": outputs}, None
     raise ValueError(f"unknown event command: {args.command}")
 
 
@@ -217,6 +245,23 @@ def _handle_context(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .context.docs_context import find_repository_docs, read_docs_with_budget, render_docs_context
         docs = read_docs_with_budget(find_repository_docs(args.repo_path), int(config.get("docs_context_budget", 20000)))
         return render_docs_context(docs), None
+    if cmd in {"openspec", "openspec-context"}:
+        from .context.openspec_context import collect_openspec_context
+        pr = _json_or_default(args.pr_context or args.in_path, {})
+        return collect_openspec_context(pr, args.repo_path, args.token), "openspec-context.v1"
+    if cmd in {"openspec-markdown", "render-openspec"}:
+        from .context.openspec_context import render_openspec_context_markdown
+        return render_openspec_context_markdown(_maybe_json(args.in_path or args.openspec_context, {})), None
+    if cmd in {"openspec-outputs", "openspec-github-outputs"}:
+        payload = _maybe_json(args.in_path or args.openspec_context, {})
+        outputs = {
+            "openspec_present": str(bool(payload.get("present"))).lower(),
+            "openspec_status": str(payload.get("status") or ""),
+            "openspec_decision": str(payload.get("decision") or ""),
+        }
+        for key, value in outputs.items():
+            write_output(key, value)
+        return {"outputs": outputs}, None
     if cmd in {"review", "review-context"}:
         from .context.review_context import build_review_context_markdown
         pr = _json_or_default(args.pr_context, {})
@@ -322,7 +367,7 @@ def _handle_stage01(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return validate_axis_findings(args.axis or payload.get("axis"), payload, _maybe_json(args.pr_context, {}), changed, config), "stage01-axis-findings.v1"
     if cmd == "combine":
         from .stages.stage01_review.combine import combine_axis_findings
-        paths = _artifact_paths(args.artifacts, names=("findings.validated.json", "findings.json"))
+        paths = _preferred_artifact_paths(args.artifacts, primary="findings.validated.json", fallback="findings.json")
         return combine_axis_findings(paths), "stage01-combined-findings.v1"
     if cmd == "render":
         from .stages.stage01_review.render import render_combined_summary
@@ -366,7 +411,10 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     cmd = args.command
     if cmd == "context":
         from .stages.stage03_design.context import build_design_context
-        return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None), "stage03-design-context.v1"
+        return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None, _json_or_default(args.openspec_context, {})), "stage03-design-context.v1"
+    if cmd in {"build-inventory-prompt", "inventory-prompt"}:
+        from .stages.stage03_design.normalize import build_normalize_prompt
+        return build_normalize_prompt(_maybe_json(args.in_path or args.inventory, {})), None
     if cmd in {"default-inventory", "default-result", "model-inventory"}:
         ctx = _maybe_json(args.in_path, {})
         items = []
@@ -385,6 +433,9 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         tech = ctx.get("techlead_decision", ctx)
         return validate_design_inventory(_maybe_json(args.in_path, {}), tech), "stage03-design-inventory.v1"
+    if cmd in {"build-clusters-prompt", "clusters-prompt"}:
+        from .stages.stage03_design.cluster import build_cluster_prompt
+        return build_cluster_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
     if cmd in {"default-clusters", "model-clusters"}:
         inv = _maybe_json(args.inventory or args.in_path, {})
         clusters = []
@@ -404,6 +455,9 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "batch":
         from .stages.stage03_design.batch import make_cluster_batches
         return {"batches": make_cluster_batches(_maybe_json(args.in_path, {}), config)}, None
+    if cmd in {"build-analysis-prompt", "analysis-prompt"}:
+        from .stages.stage03_design.analyze import build_cluster_analysis_prompt
+        return build_cluster_analysis_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
     if cmd in {"default-analysis", "model-analysis"}:
         clusters = _maybe_json(args.inventory or args.in_path, {})
         analyses = [{"cluster_id": c.get("cluster_id"), "status": "needs_human", "recommendation": "model analysis not provided"} for c in clusters.get("clusters", [])]
@@ -423,20 +477,22 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage03_design.coordinate import validate_design_plan
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         findings = ctx.get("findings", [])
-        plan = {"schema_version": "stage03-design-plan.v1", "edit_sequence": [], "tests": [], "open_questions": [], "defaulted": True}
+        plan = {"schema_version": "stage03-design-plan.v1", "edit_sequence": [], "tests": [], "defaulted": True}
         if findings:
-            # Keep the fallback artifact valid, but make the following chief stage route to needs_human.
-            plan["requires_human_review"] = True
+            plan["openspec_backed"] = bool(ctx.get("openspec_backed"))
             plan["edit_sequence"] = [
                 {
-                    "task_id": f"manual-design-{idx}",
+                    "task_id": f"openspec-fallback-{idx}" if ctx.get("openspec_backed") else f"manual-design-{idx}",
                     "finding_ids": [finding.get("finding_id") or finding.get("id")],
-                    "summary": "Model design plan was not provided; human review is required before autofix.",
-                    "allowed_files": [],
+                    "summary": finding.get("summary") or "Implement the OpenSpec-backed finding conservatively.",
+                    "allowed_files": finding.get("files") or ([finding.get("file")] if finding.get("file") else []),
+                    "acceptance_criteria": ["OpenSpec tasks and affected tests pass"] if ctx.get("openspec_backed") else [],
                 }
                 for idx, finding in enumerate(findings, 1)
             ]
-            plan["tests"] = ["Human design review required before automated tests are selected"]
+            plan["tests"] = ["cargo fmt --all --check", "cargo test --workspace --all-features"] if ctx.get("openspec_backed") else ["Human design review required before automated tests are selected"]
+            if not ctx.get("openspec_backed"):
+                plan["requires_human_review"] = True
             fallback = validate_design_plan(plan, ctx, config)
         else:
             fallback = validate_design_plan(plan, ctx, config)
@@ -447,6 +503,11 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
                 args.prompt = str(write_prompt_if_needed(build_coordinate_prompt(ctx, _maybe_json(args.inventory, {}), []), args.out))
             return _model_or_fallback(args, stage="stage03_plan", expected_schema="stage03-design-plan.v1", fallback=fallback), "stage03-design-plan.v1"
         return fallback, "stage03-design-plan.v1"
+    if cmd in {"build-plan-prompt", "plan-prompt"}:
+        from .stages.stage03_design.coordinate import build_coordinate_prompt
+        analyses_payload = _json_or_default(args.result, {})
+        analyses = analyses_payload.get("analyses", analyses_payload if isinstance(analyses_payload, list) else [])
+        return build_coordinate_prompt(_maybe_json(args.pr_context, {}), _maybe_json(args.inventory, {}), analyses), None
     if cmd in {"coordinate", "validate-plan"}:
         from .stages.stage03_design.coordinate import validate_design_plan
         return validate_design_plan(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config), "stage03-design-plan.v1"
@@ -460,7 +521,7 @@ def _handle_stage04(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     cmd = args.command
     if cmd in {"default-result", "noop-result", "model-result"}:
         plan = _maybe_json(args.design_plan or args.in_path, {})
-        status = "needs_human" if plan.get("open_questions") else ("no_fix_needed" if not plan.get("edit_sequence") else "needs_human")
+        status = "needs_human" if plan.get("requires_human_review") else ("no_fix_needed" if not plan.get("edit_sequence") else "needs_human")
         fallback = {"schema_version": "stage04-design-chief-decision.v1", "status": status, "reason": "safe deterministic default", "defaulted": True}
         if cmd == "model-result":
             return _model_or_fallback(args, stage="stage04", expected_schema="stage04-design-chief-decision.v1", fallback=fallback), "stage04-design-chief-decision.v1"
@@ -495,11 +556,46 @@ def _handle_stage05(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
         task = _maybe_json(args.in_path, {})
         return build_fix_agent_prompt(task, _maybe_json(args.inventory, {}), _maybe_json(args.result, {}), _maybe_text(args.docs_context), config), None
+    if cmd in {"prepare-agents", "prepare-agent-matrix"}:
+        from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
+        manifest = _maybe_json(args.inventory or args.in_path, {})
+        design_plan = _maybe_json(args.design_plan, {})
+        chief = _maybe_json(args.chief_decision or args.result, {})
+        docs = _maybe_text(args.docs_context)
+        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/stage05/agents")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        include = []
+        for task in manifest.get("tasks", []):
+            task_id = str(task.get("task_id") or f"task-{len(include) + 1}")
+            task_path = _safe_path_component(task_id)
+            task_dir = base_dir / task_path
+            task_dir.mkdir(parents=True, exist_ok=True)
+            task_file = task_dir / "task.json"
+            prompt_file = task_dir / "prompt.md"
+            output_file = task_dir / "result.json"
+            validated_file = task_dir / "result.validated.json"
+            write_json(task_file, task, None)
+            write_text(prompt_file, build_fix_agent_prompt(task, design_plan, chief, docs, config))
+            include.append(
+                {
+                    "task_id": task_id,
+                    "task_path": task_path,
+                    "task_file": task_file.as_posix(),
+                    "prompt_file": prompt_file.as_posix(),
+                    "output_file": output_file.as_posix(),
+                    "validated_file": validated_file.as_posix(),
+                    "working_directory": args.repo_path,
+                }
+            )
+        matrix = {"include": include}
+        if os.environ.get("GITHUB_OUTPUT"):
+            write_output("has_agent_tasks", "true" if include else "false")
+            write_output("agent_matrix", json.dumps(matrix, sort_keys=True, separators=(",", ":")))
+        return matrix, None
     if cmd in {"default-agent-result", "noop-result"}:
         task = _maybe_json(args.inventory or args.in_path, {})
         return {"schema_version": "stage05-fix-agent-result.v1", "task_id": task.get("task_id"), "status": "no_safe_fix", "reason": "model fix result was not provided", "defaulted": True}, "stage05-fix-agent-result.v1"
     if cmd in {"run-agents", "model-agents"}:
-        from .artifacts import write_json, write_text
         from .model_adapter import run_model_or_fallback
         from .stages.stage05_fix_dispatch.collect import build_fix_collection_result
         from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
@@ -563,6 +659,29 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"build-merge-prompt", "prompt"}:
         from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
         return build_fix_merge_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), _maybe_json(args.result, {}), {}, _maybe_text(args.docs_context)), None
+    if cmd in {"prepare-merge-model", "prepare-model-merge"}:
+        from .stages.stage06_fix_merge.premerge import create_merged_fix_from_premerge
+        from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
+        pre = _maybe_json(args.inventory, {})
+        collection = _maybe_json(args.in_path, {})
+        pr = _maybe_json(args.pr_context, {})
+        raw_out = args.raw_out or args.result
+        prompt_out = args.prompt_out or args.prompt
+        if pre.get("clean") or not collection.get("results"):
+            merged = create_merged_fix_from_premerge(pre, collection, pr, raw_out)
+            if raw_out and not Path(raw_out).exists():
+                write_json(raw_out, merged, "stage06-merged-fix.v1")
+            route = {"needs_model": False, "raw_output": raw_out, "status": merged.get("status")}
+            if os.environ.get("GITHUB_OUTPUT"):
+                write_output("needs_model", "false")
+            return route, None
+        if not prompt_out:
+            raise ValidationError("prepare-merge-model requires --prompt-out when model merge is needed")
+        write_text(prompt_out, build_fix_merge_prompt(pre, collection, {}, {}, {"pr_context": pr, "docs_context": _maybe_text(args.docs_context)}))
+        route = {"needs_model": True, "prompt": prompt_out, "raw_output": raw_out}
+        if os.environ.get("GITHUB_OUTPUT"):
+            write_output("needs_model", "true")
+        return route, None
     if cmd == "default-merged-fix":
         pre = _maybe_json(args.inventory or args.in_path, {})
         return {"schema_version": "stage06-merged-fix.v1", "status": "no_fix", "patch": "", "premerge_clean": pre.get("clean", False), "defaulted": True}, "stage06-merged-fix.v1"
@@ -601,6 +720,11 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"push", "run"}:
         from .stages.stage07_push.orchestrate import run_push_flow
         return run_push_flow(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "stage07-push-result.v1"
+    if cmd in {"write-outputs", "github-outputs"}:
+        payload = _maybe_json(args.in_path, {})
+        status = str(payload.get("status") or "unknown")
+        write_output("push_status", status)
+        return {"push_status": status}, None
     if cmd == "render":
         from .stages.stage07_push.render import render_push_summary
         return render_push_summary(_maybe_json(args.in_path, {})), None
@@ -629,6 +753,25 @@ def _handle_stage08(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     raise ValueError(f"unknown stage08 command: {cmd}")
 
 
+def _handle_stage09(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+    cmd = args.command
+    if cmd in {"plan", "build-plan"}:
+        from .stages.stage09_issue_fallback.issue import build_issue_fallback_plan
+        payload = _json_or_default(args.in_path, {})
+        reason = args.mode or payload.get("reason") or payload.get("route") or payload.get("status") or "manual_fallback"
+        attempted = payload.get("attempted_stages") if isinstance(payload.get("attempted_stages"), list) else []
+        return build_issue_fallback_plan(
+            reason=str(reason),
+            pr_context=_maybe_json(args.pr_context, {}),
+            openspec_context=_json_or_default(args.openspec_context, {}),
+            attempted_stages=attempted,
+        ), "stage09-issue-fallback.v1"
+    if cmd in {"apply", "publish"}:
+        from .stages.stage09_issue_fallback.issue import apply_issue_fallback
+        return apply_issue_fallback(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.token, dry_run=args.dry_run), "stage09-issue-fallback.v1"
+    raise ValueError(f"unknown stage09 command: {cmd}")
+
+
 def _handle_auth(args: argparse.Namespace) -> tuple[Any, str | None]:
     from .github.app_token import create_installation_token_for_repo, permissions_for_write_mode
     if args.command not in {"app-token", "github-app-token"}:
@@ -649,9 +792,18 @@ def _handle_auth(args: argparse.Namespace) -> tuple[Any, str | None]:
     return {"schema_version":"github-app-token.v1", "token_created": True, "owner": owner, "repo": repo, "permissions": permissions, "permissions_json": permissions_json, "repository_scoped": True}, None
 
 
+def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
+    if args.command not in {"openai-strict", "openai-structured-output"}:
+        raise ValueError(f"unknown schema command: {args.command}")
+    if not args.schema:
+        raise ValidationError("schema openai-strict requires --schema")
+    from .schema import load_schema_json, make_openai_structured_output_schema
+    return make_openai_structured_output_schema(load_schema_json(args.schema)), None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review")
-    parser.add_argument("area", choices=["auth", "event", "context", "loop", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08"])
+    parser.add_argument("area", choices=["auth", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
     _add_common(parser)
     args = parser.parse_args(argv)
     try:
@@ -660,6 +812,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.area == "event": payload, schema = _handle_event(args)
         elif args.area == "context": payload, schema = _handle_context(args, config)
         elif args.area == "loop": payload, schema = _handle_loop(args)
+        elif args.area == "schema": payload, schema = _handle_schema(args)
         elif args.area == "stage00": payload, schema = _handle_stage00(args, config)
         elif args.area == "stage01": payload, schema = _handle_stage01(args, config)
         elif args.area == "stage02": payload, schema = _handle_stage02(args, config)
@@ -669,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.area == "stage06": payload, schema = _handle_stage06(args, config)
         elif args.area == "stage07": payload, schema = _handle_stage07(args, config)
         elif args.area == "stage08": payload, schema = _handle_stage08(args, config)
+        elif args.area == "stage09": payload, schema = _handle_stage09(args, config)
         else: raise ValueError(args.area)
         _emit(payload, args.out, schema)
         if args.summary and isinstance(payload, str):

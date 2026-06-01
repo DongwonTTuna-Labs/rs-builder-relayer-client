@@ -34,9 +34,27 @@ def include_current_source_windows(context: dict[str, Any], files: list[dict[str
     return context
 
 
-def build_design_context(pr_context: dict[str, Any], techlead_decision: dict[str, Any], review_context: str, docs_context: str, file_inventory: dict[str, Any] | list[str] | None = None) -> dict[str, Any]:
+def build_design_context(
+    pr_context: dict[str, Any],
+    techlead_decision: dict[str, Any],
+    review_context: str,
+    docs_context: str,
+    file_inventory: dict[str, Any] | list[str] | None = None,
+    openspec_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     relevant = file_inventory if file_inventory is not None else select_design_relevant_files(techlead_decision, pr_context)
-    return {"schema_version":"stage03-design-context.v1","pr_context":pr_context,"techlead_decision":techlead_decision,"review_context":review_context,"docs_context":docs_context,"relevant_files":relevant,"findings":_design_findings(techlead_decision)}
+    open_ctx = openspec_context or {}
+    return {
+        "schema_version":"stage03-design-context.v1",
+        "pr_context":pr_context,
+        "techlead_decision":techlead_decision,
+        "review_context":review_context,
+        "docs_context":docs_context,
+        "openspec_context":open_ctx,
+        "openspec_backed": bool(open_ctx.get("present")),
+        "relevant_files":relevant,
+        "findings":_design_findings(techlead_decision),
+    }
 
 
 def write_design_context(context: dict[str, Any], out_path: str | Path) -> Path:

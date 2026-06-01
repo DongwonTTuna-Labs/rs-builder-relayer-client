@@ -15,7 +15,7 @@ cluster별 설계 분석 깊이와 evidence 기준.
 ## 반드시 지킬 규칙
 - 역할을 벗어난 결정을 하지 않는다.
 - 출력 schema field 이름을 바꾸지 않는다.
-- 불확실성은 숨기지 않고 open_questions에 둔다.
+- 불확실성은 stage03 plan field로 만들지 않고, evidence와 stage04 needs_human 판단 근거로 분리한다.
 
 ## 구현 시 채워야 할 섹션
 - System role statement

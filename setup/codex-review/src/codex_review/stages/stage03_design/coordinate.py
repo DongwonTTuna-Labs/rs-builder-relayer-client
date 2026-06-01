@@ -8,16 +8,43 @@ from codex_review.errors import ValidationError
 
 
 def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, Any], analyses: list[dict[str, Any]]) -> str:
-    return "Coordinate a final design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n" + str({"context":design_context,"clusters":clusters,"analyses":analyses})
+    openspec_line = ""
+    if design_context.get("openspec_backed"):
+        openspec_line = (
+            "This is an OpenSpec-backed implementation plan. Treat proposal.md, design.md, "
+            "tasks.md, specs/**/*.md, and OpenSpec config included in context as source of truth. "
+            "Produce a closed candidate plan with edit_sequence, tests, acceptance_criteria, "
+            "allowed_files, openspec_backed=true, and openspec_sources. Approval and fallback routing "
+            "belong to stage04/stage09, not this plan.\n"
+        )
+    instructions = (
+        "Coordinate a candidate design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n"
+        "Do not include human-routing fields in this artifact. stage04 design chief decides whether the "
+        "candidate is approved_for_fix, needs_human, rejected_plan, or no_fix_needed.\n"
+    )
+    return instructions + openspec_line + str({"context":design_context,"clusters":clusters,"analyses":analyses})
 
 
 def validate_design_plan(plan: dict[str, Any], design_context: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    if "open_questions" in plan:
+        raise ValidationError("stage03 design plan does not accept open_questions; use stage04 needs_human routing")
     out=dict(plan); out["schema_version"]="stage03-design-plan.v1"
-    out.setdefault("open_questions", [])
     out.setdefault("edit_sequence", out.get("tasks") or [])
     out.setdefault("tests", [])
-    if config.get("design", {}).get("fail_on_open_questions", True) and out.get("open_questions"):
-        raise ValidationError("design plan has open questions")
+    out.setdefault("acceptance_criteria", [])
+    out.setdefault("execution_blockers", [])
+    open_ctx = design_context.get("openspec_context") or {}
+    if out.get("openspec_backed") or design_context.get("openspec_backed"):
+        out["openspec_backed"] = True
+        out.setdefault("openspec_sources", open_ctx.get("source_summary") or [])
+        if not out.get("acceptance_criteria"):
+            criteria = []
+            for task in out.get("edit_sequence", []):
+                criteria.extend(task.get("acceptance_criteria") or [])
+            out["acceptance_criteria"] = criteria or ["OpenSpec tasks and referenced specs are satisfied"]
+    else:
+        out.setdefault("openspec_backed", False)
+        out.setdefault("openspec_sources", [])
     if not out.get("edit_sequence") and design_context.get("findings"):
         raise ValidationError("design plan needs edit_sequence for design findings")
     if not out.get("tests") and design_context.get("findings"):

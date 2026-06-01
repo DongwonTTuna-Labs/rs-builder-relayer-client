@@ -21,8 +21,6 @@ concurrency:
 env:
   CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/codex-review-artifacts
   CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}
-  CODEX_REVIEW_MODEL_COMMAND: ${{ vars.CODEX_REVIEW_MODEL_COMMAND || 'setup/codex-review/bin/codex-review-model-runner' }}
-  CODEX_REVIEW_MODEL_TIMEOUT: ${{ vars.CODEX_REVIEW_MODEL_TIMEOUT || '1800' }}
   CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
 
 jobs:
@@ -36,26 +34,47 @@ jobs:
       pull-requests: read
     outputs:
       event_context: ${{ steps.paths.outputs.event_context }}
+      same_repo: ${{ steps.paths.outputs.same_repo }}
+      head_sha: ${{ steps.paths.outputs.head_sha }}
+      head_ref: ${{ steps.paths.outputs.head_ref }}
+      head_repo_full_name: ${{ steps.paths.outputs.head_repo_full_name }}
+      openspec_present: ${{ steps.paths.outputs.openspec_present }}
+      openspec_status: ${{ steps.paths.outputs.openspec_status }}
+      openspec_decision: ${{ steps.paths.outputs.openspec_decision }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - id: paths
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p codex-review-artifacts/event
-          setup/codex-review/bin/codex-review event resolve-current --out codex-review-artifacts/event/event-context.json
-          setup/codex-review/bin/codex-review context pr --event "$GITHUB_EVENT_PATH" --pr-context codex-review-artifacts/event/event-context.json --out codex-review-artifacts/event/pr-context.json
-          setup/codex-review/bin/codex-review context changed-lines --in codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/event/changed-lines.json
-          setup/codex-review/bin/codex-review context docs --repo-path . --out codex-review-artifacts/event/docs-context.md
+          workflow-helper/setup/codex-review/bin/codex-review event resolve-current --out codex-review-artifacts/event/event-context.json
+          workflow-helper/setup/codex-review/bin/codex-review context pr --event "$GITHUB_EVENT_PATH" --pr-context codex-review-artifacts/event/event-context.json --out codex-review-artifacts/event/pr-context.json
+          workflow-helper/setup/codex-review/bin/codex-review context changed-lines --in codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/event/changed-lines.json
+          workflow-helper/setup/codex-review/bin/codex-review context docs --repo-path . --out codex-review-artifacts/event/docs-context.md
+          workflow-helper/setup/codex-review/bin/codex-review context openspec --pr-context codex-review-artifacts/event/pr-context.json --repo-path . --out codex-review-artifacts/event/openspec-context.json
+          workflow-helper/setup/codex-review/bin/codex-review context openspec-markdown --in codex-review-artifacts/event/openspec-context.json --out codex-review-artifacts/event/openspec-context.md
+          printf '\n' >> codex-review-artifacts/event/docs-context.md
+          cat codex-review-artifacts/event/openspec-context.md >> codex-review-artifacts/event/docs-context.md
+          workflow-helper/setup/codex-review/bin/codex-review event write-outputs --in codex-review-artifacts/event/pr-context.json
+          workflow-helper/setup/codex-review/bin/codex-review context openspec-outputs --in codex-review-artifacts/event/openspec-context.json
           echo "event_context=codex-review-artifacts/event/event-context.json" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -77,19 +96,27 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
           path: codex-review-artifacts/event
       - env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: setup/codex-review/bin/codex-review stage00 collect --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/thread-inventory.json
+        run: workflow-helper/setup/codex-review/bin/codex-review stage00 collect --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/thread-inventory.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage00-collect
@@ -110,12 +137,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -128,14 +163,30 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-          CODEX_REVIEW_CODEX_ARGS_JSON: ${{ steps.relay-token.outputs.codex_args }}
+      - name: Build lifecycle prompt
+        run: workflow-helper/setup/codex-review/bin/codex-review stage00 build-prompt --inventory codex-review-artifacts/stage00/thread-inventory.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage00/lifecycle-prompt.md
+      - name: Prepare lifecycle schema
         run: |
-          setup/codex-review/bin/codex-review stage00 build-prompt --inventory codex-review-artifacts/stage00/thread-inventory.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage00/lifecycle-prompt.md
-          setup/codex-review/bin/codex-review stage00 model-result --prompt codex-review-artifacts/stage00/lifecycle-prompt.md --inventory codex-review-artifacts/stage00/thread-inventory.json --out codex-review-artifacts/stage00/lifecycle-result.json
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage00-lifecycle-result.v1 --out codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
+      - name: Run Codex lifecycle model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage00/lifecycle-prompt.md
+          output-file: codex-review-artifacts/stage00/lifecycle-result.json
+          output-schema-file: codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage00-model
@@ -158,12 +209,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -179,19 +238,19 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
-        run: setup/codex-review/bin/codex-review auth app-token --mode stage00 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage00 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
         run: |
-          setup/codex-review/bin/codex-review stage00 validate --inventory codex-review-artifacts/stage00/thread-inventory.json --in codex-review-artifacts/stage00/lifecycle-result.json --out codex-review-artifacts/stage00/lifecycle-result.validated.json
+          workflow-helper/setup/codex-review/bin/codex-review stage00 validate --inventory codex-review-artifacts/stage00/thread-inventory.json --in codex-review-artifacts/stage00/lifecycle-result.json --out codex-review-artifacts/stage00/lifecycle-result.validated.json
           if [ "${{ vars.CODEX_REVIEW_ENABLE_STAGE00_APPLY }}" = "true" ]; then
-            setup/codex-review/bin/codex-review stage00 apply --result codex-review-artifacts/stage00/lifecycle-result.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/apply-report.json
+            workflow-helper/setup/codex-review/bin/codex-review stage00 apply --result codex-review-artifacts/stage00/lifecycle-result.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/apply-report.json
           else
-            setup/codex-review/bin/codex-review stage00 apply --dry-run --result codex-review-artifacts/stage00/lifecycle-result.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/apply-report.json
+            workflow-helper/setup/codex-review/bin/codex-review stage00 apply --dry-run --result codex-review-artifacts/stage00/lifecycle-result.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/apply-report.json
           fi
       - id: route
-        run: setup/codex-review/bin/codex-review stage00 route --inventory codex-review-artifacts/stage00/thread-inventory.json --result codex-review-artifacts/stage00/lifecycle-result.validated.json --artifacts codex-review-artifacts/stage00/apply-report.json --out codex-review-artifacts/stage00/gate-result.json
+        run: workflow-helper/setup/codex-review/bin/codex-review stage00 route --inventory codex-review-artifacts/stage00/thread-inventory.json --result codex-review-artifacts/stage00/lifecycle-result.validated.json --artifacts codex-review-artifacts/stage00/apply-report.json --out codex-review-artifacts/stage00/gate-result.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage00
@@ -217,12 +276,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -231,16 +298,34 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-          CODEX_REVIEW_CODEX_ARGS_JSON: ${{ steps.relay-token.outputs.codex_args }}
+      - name: Build axis prompt
         run: |
           mkdir -p codex-review-artifacts/stage01/${{ matrix.axis }}
-          setup/codex-review/bin/codex-review stage01 build-review-prompt --axis ${{ matrix.axis }} --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
-          setup/codex-review/bin/codex-review stage01 model-result --axis ${{ matrix.axis }} --prompt codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md --out codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json
-          setup/codex-review/bin/codex-review stage01 validate --axis ${{ matrix.axis }} --in codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json --pr-context codex-review-artifacts/event/pr-context.json --changed-lines codex-review-artifacts/event/changed-lines.json --out codex-review-artifacts/stage01/${{ matrix.axis }}/findings.validated.json
+          workflow-helper/setup/codex-review/bin/codex-review stage01 build-review-prompt --axis ${{ matrix.axis }} --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
+      - name: Prepare axis schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage01-axis-findings.v1 --out codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
+      - name: Run Codex axis model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
+          output-file: codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json
+          output-schema-file: codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate axis result
+        run: workflow-helper/setup/codex-review/bin/codex-review stage01 validate --axis ${{ matrix.axis }} --in codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json --pr-context codex-review-artifacts/event/pr-context.json --changed-lines codex-review-artifacts/event/changed-lines.json --out codex-review-artifacts/stage01/${{ matrix.axis }}/findings.validated.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage01-${{ matrix.axis }}
@@ -260,18 +345,26 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: codex-review-stage01-*
           path: codex-review-artifacts/stage01-downloads
           merge-multiple: false
-      - run: setup/codex-review/bin/codex-review stage01 combine --artifacts codex-review-artifacts/stage01-downloads --out codex-review-artifacts/stage01/combined-findings.json
+      - run: workflow-helper/setup/codex-review/bin/codex-review stage01 combine --artifacts codex-review-artifacts/stage01-downloads --out codex-review-artifacts/stage01/combined-findings.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage01-combined
@@ -292,12 +385,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -310,16 +411,34 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-          CODEX_REVIEW_CODEX_ARGS_JSON: ${{ steps.relay-token.outputs.codex_args }}
+      - name: Build techlead prompt
         run: |
           mkdir -p codex-review-artifacts/stage02
-          setup/codex-review/bin/codex-review stage02 build-techlead-prompt --in codex-review-artifacts/stage01/combined-findings.json --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage02/prompt.md
-          setup/codex-review/bin/codex-review stage02 model-result --prompt codex-review-artifacts/stage02/prompt.md --inventory codex-review-artifacts/stage01/combined-findings.json --out codex-review-artifacts/stage02/techlead-decision.json
-          setup/codex-review/bin/codex-review stage02 validate --inventory codex-review-artifacts/stage01/combined-findings.json --in codex-review-artifacts/stage02/techlead-decision.json --out codex-review-artifacts/stage02/techlead-decision.validated.json
+          workflow-helper/setup/codex-review/bin/codex-review stage02 build-techlead-prompt --in codex-review-artifacts/stage01/combined-findings.json --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage02/prompt.md
+      - name: Prepare techlead schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage02-techlead-decision.v1 --out codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
+      - name: Run Codex techlead model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage02/prompt.md
+          output-file: codex-review-artifacts/stage02/techlead-decision.json
+          output-schema-file: codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate techlead decision
+        run: workflow-helper/setup/codex-review/bin/codex-review stage02 validate --inventory codex-review-artifacts/stage01/combined-findings.json --in codex-review-artifacts/stage02/techlead-decision.json --out codex-review-artifacts/stage02/techlead-decision.validated.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage02-model
@@ -342,12 +461,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -367,19 +494,19 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
-        run: setup/codex-review/bin/codex-review auth app-token --mode stage02 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage02/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage02 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage02/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
         run: |
-          setup/codex-review/bin/codex-review stage02 classify --in codex-review-artifacts/stage02/techlead-decision.validated.json --artifacts codex-review-artifacts/stage01/combined-findings.json --out codex-review-artifacts/stage02/review-publication.json
+          workflow-helper/setup/codex-review/bin/codex-review stage02 classify --in codex-review-artifacts/stage02/techlead-decision.validated.json --artifacts codex-review-artifacts/stage01/combined-findings.json --out codex-review-artifacts/stage02/review-publication.json
           if [ "${{ vars.CODEX_REVIEW_ENABLE_REVIEW_POSTING }}" = "true" ]; then
-            setup/codex-review/bin/codex-review stage02 publish --in codex-review-artifacts/stage02/review-publication.json --pr-context codex-review-artifacts/event/pr-context.json --changed-lines codex-review-artifacts/event/changed-lines.json --out codex-review-artifacts/stage02/publish-report.json
+            workflow-helper/setup/codex-review/bin/codex-review stage02 publish --in codex-review-artifacts/stage02/review-publication.json --pr-context codex-review-artifacts/event/pr-context.json --changed-lines codex-review-artifacts/event/changed-lines.json --out codex-review-artifacts/stage02/publish-report.json
           else
-            setup/codex-review/bin/codex-review stage02 publish --dry-run --in codex-review-artifacts/stage02/review-publication.json --pr-context codex-review-artifacts/event/pr-context.json --changed-lines codex-review-artifacts/event/changed-lines.json --out codex-review-artifacts/stage02/publish-report.json
+            workflow-helper/setup/codex-review/bin/codex-review stage02 publish --dry-run --in codex-review-artifacts/stage02/review-publication.json --pr-context codex-review-artifacts/event/pr-context.json --changed-lines codex-review-artifacts/event/changed-lines.json --out codex-review-artifacts/stage02/publish-report.json
           fi
       - id: route
-        run: setup/codex-review/bin/codex-review loop route-after-stage02 --in codex-review-artifacts/stage02/techlead-decision.validated.json --out codex-review-artifacts/stage02/route.json
+        run: workflow-helper/setup/codex-review/bin/codex-review loop route-after-stage02 --in codex-review-artifacts/stage02/techlead-decision.validated.json --out codex-review-artifacts/stage02/route.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage02
@@ -400,12 +527,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -426,7 +561,7 @@ jobs:
           else
             DESIGN_INPUT=codex-review-artifacts/stage00/lifecycle-result.validated.json
           fi
-          setup/codex-review/bin/codex-review stage03 context --in "$DESIGN_INPUT" --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage03/design-context.json
+          workflow-helper/setup/codex-review/bin/codex-review stage03 context --in "$DESIGN_INPUT" --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage03/design-context.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage03-context
@@ -447,12 +582,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-stage03-context
@@ -461,20 +604,95 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-          CODEX_REVIEW_CODEX_ARGS_JSON: ${{ steps.relay-token.outputs.codex_args }}
+      - name: Build inventory prompt
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-inventory-prompt --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.prompt.md
+      - name: Prepare design schemas
         run: |
-          setup/codex-review/bin/codex-review stage03 model-inventory --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.raw.json
-          setup/codex-review/bin/codex-review stage03 normalize --in codex-review-artifacts/stage03/design-inventory.raw.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.json
-          setup/codex-review/bin/codex-review stage03 model-clusters --inventory codex-review-artifacts/stage03/design-inventory.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-clusters.raw.json
-          setup/codex-review/bin/codex-review stage03 cluster --in codex-review-artifacts/stage03/design-clusters.raw.json --inventory codex-review-artifacts/stage03/design-inventory.json --out codex-review-artifacts/stage03/design-clusters.json
-          setup/codex-review/bin/codex-review stage03 model-analysis --inventory codex-review-artifacts/stage03/design-clusters.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/cluster-analysis.raw.json
-          setup/codex-review/bin/codex-review stage03 analyze --in codex-review-artifacts/stage03/cluster-analysis.raw.json --inventory codex-review-artifacts/stage03/design-clusters.json --out codex-review-artifacts/stage03/cluster-analysis.json
-          setup/codex-review/bin/codex-review stage03 model-plan --pr-context codex-review-artifacts/stage03/design-context.json --inventory codex-review-artifacts/stage03/design-clusters.json --out codex-review-artifacts/stage03/design-plan.raw.json
-          setup/codex-review/bin/codex-review stage03 validate-plan --in codex-review-artifacts/stage03/design-plan.raw.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-plan.json
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-inventory.v1 --out codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-clusters.v1 --out codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-cluster-analysis.v1 --out codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-plan.v1 --out codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
+      - name: Run Codex inventory model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage03/design-inventory.prompt.md
+          output-file: codex-review-artifacts/stage03/design-inventory.raw.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate design inventory
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 normalize --in codex-review-artifacts/stage03/design-inventory.raw.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.json
+      - name: Build cluster prompt
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-clusters-prompt --inventory codex-review-artifacts/stage03/design-inventory.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-clusters.prompt.md
+      - name: Run Codex cluster model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage03/design-clusters.prompt.md
+          output-file: codex-review-artifacts/stage03/design-clusters.raw.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate design clusters
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 cluster --in codex-review-artifacts/stage03/design-clusters.raw.json --inventory codex-review-artifacts/stage03/design-inventory.json --out codex-review-artifacts/stage03/design-clusters.json
+      - name: Build analysis prompt
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-analysis-prompt --inventory codex-review-artifacts/stage03/design-clusters.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/cluster-analysis.prompt.md
+      - name: Run Codex analysis model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage03/cluster-analysis.prompt.md
+          output-file: codex-review-artifacts/stage03/cluster-analysis.raw.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate cluster analysis
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 analyze --in codex-review-artifacts/stage03/cluster-analysis.raw.json --inventory codex-review-artifacts/stage03/design-clusters.json --out codex-review-artifacts/stage03/cluster-analysis.json
+      - name: Build design plan prompt
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-plan-prompt --pr-context codex-review-artifacts/stage03/design-context.json --inventory codex-review-artifacts/stage03/design-clusters.json --result codex-review-artifacts/stage03/cluster-analysis.json --out codex-review-artifacts/stage03/design-plan.prompt.md
+      - name: Run Codex design plan model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage03/design-plan.prompt.md
+          output-file: codex-review-artifacts/stage03/design-plan.raw.json
+          output-schema-file: codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate design plan
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 validate-plan --in codex-review-artifacts/stage03/design-plan.raw.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-plan.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage03
@@ -495,12 +713,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-stage03
@@ -509,15 +735,32 @@ jobs:
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-          CODEX_REVIEW_CODEX_ARGS_JSON: ${{ steps.relay-token.outputs.codex_args }}
+      - name: Build design chief prompt
+        run: workflow-helper/setup/codex-review/bin/codex-review stage04 build-chief-prompt --in codex-review-artifacts/stage03/design-plan.json --inventory codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage04/prompt.md
+      - name: Prepare design chief schema
         run: |
-          setup/codex-review/bin/codex-review stage04 build-chief-prompt --in codex-review-artifacts/stage03/design-plan.json --inventory codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage04/prompt.md
-          setup/codex-review/bin/codex-review stage04 model-result --prompt codex-review-artifacts/stage04/prompt.md --design-plan codex-review-artifacts/stage03/design-plan.json --out codex-review-artifacts/stage04/chief-decision.json
-          setup/codex-review/bin/codex-review stage04 validate --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.json --out codex-review-artifacts/stage04/chief-decision.validated.json
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage04-design-chief-decision.v1 --out codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
+      - name: Run Codex design chief model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: codex-review-artifacts/stage04/prompt.md
+          output-file: codex-review-artifacts/stage04/chief-decision.json
+          output-schema-file: codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate design chief decision
+        run: workflow-helper/setup/codex-review/bin/codex-review stage04 validate --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.json --out codex-review-artifacts/stage04/chief-decision.validated.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage04-model
@@ -540,12 +783,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -565,52 +816,56 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
-        run: setup/codex-review/bin/codex-review auth app-token --mode stage04 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage04 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
         run: |
           if [ "${{ vars.CODEX_REVIEW_ENABLE_DESIGN_POSTING }}" = "true" ]; then
-            setup/codex-review/bin/codex-review stage04 publish --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/publish-report.json
+            workflow-helper/setup/codex-review/bin/codex-review stage04 publish --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/publish-report.json
           else
-            setup/codex-review/bin/codex-review stage04 publish --dry-run --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/publish-report.json
+            workflow-helper/setup/codex-review/bin/codex-review stage04 publish --dry-run --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/publish-report.json
           fi
       - id: route
-        run: setup/codex-review/bin/codex-review stage04 route --in codex-review-artifacts/stage04/chief-decision.validated.json --out codex-review-artifacts/stage04/route.json
+        run: workflow-helper/setup/codex-review/bin/codex-review stage04 route --in codex-review-artifacts/stage04/chief-decision.validated.json --out codex-review-artifacts/stage04/route.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage04
           path: codex-review-artifacts/stage04
 
-  fix_dispatch_and_merge:
-    name: 05-06 fix dispatch and merge
+  fix_prepare:
+    name: 05 fix prepare
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [design_publish_trusted]
-    if: needs.design_publish_trusted.outputs.route == 'run_stage05' && github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+    needs: [bootstrap_event, design_publish_trusted]
+    if: needs.design_publish_trusted.outputs.route == 'run_stage05' && needs.bootstrap_event.outputs.same_repo == 'true'
     permissions:
       contents: read
       pull-requests: read
-      id-token: write
+    outputs:
+      agent_matrix: ${{ steps.prepare.outputs.agent_matrix }}
+      has_agent_tasks: ${{ steps.prepare.outputs.has_agent_tasks }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           path: trusted
           persist-credentials: false
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          path: pr-head
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install trusted codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e trusted/setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -623,25 +878,185 @@ jobs:
         with:
           name: codex-review-stage04
           path: trusted/codex-review-artifacts/stage04
+      - id: prepare
+        env:
+          CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
+          CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}/trusted
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review stage05 plan --in trusted/codex-review-artifacts/stage03/design-plan.json --inventory trusted/codex-review-artifacts/stage04/chief-decision.validated.json --out trusted/codex-review-artifacts/stage05/manifest.json
+          workflow-helper/setup/codex-review/bin/codex-review stage05 prepare-agents --inventory trusted/codex-review-artifacts/stage05/manifest.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --work-dir trusted/codex-review-artifacts/stage05/agents --out trusted/codex-review-artifacts/stage05/agent-matrix.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-review-stage05-prepare
+          path: trusted/codex-review-artifacts/stage05
+
+  fix_agent_model:
+    name: 05 fix agent model
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    needs: [bootstrap_event, fix_prepare]
+    if: needs.fix_prepare.outputs.has_agent_tasks == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.fix_prepare.outputs.agent_matrix) }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install trusted codex-review helper
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-stage05-prepare
+          path: trusted/codex-review-artifacts/stage05
       - name: Setup Codex relay
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
-          codex-home: ${{ runner.temp }}/codex-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.task_path }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - env:
+      - name: Prepare fix agent schema
+        run: |
+          mkdir -p trusted/codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage05-fix-agent-result.v1 --out trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
+      - name: Run Codex fix agent model
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
-          CODEX_REVIEW_CODEX_ARGS_JSON: ${{ steps.relay-token.outputs.codex_args }}
+        with:
+          prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
+          output-file: ${{ github.workspace }}/${{ matrix.output_file }}
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}/pr-head
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.task_path }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate fix agent result
+        run: workflow-helper/setup/codex-review/bin/codex-review stage05 validate-agent-result --inventory "${{ github.workspace }}/${{ matrix.task_file }}" --in "${{ github.workspace }}/${{ matrix.output_file }}" --out "${{ github.workspace }}/${{ matrix.validated_file }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-review-stage05-agent-${{ matrix.task_path }}
+          path: ${{ github.workspace }}/trusted/codex-review-artifacts/stage05/agents/${{ matrix.task_path }}
+
+  fix_collect_and_merge:
+    name: 05-06 fix collect and merge
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    needs: [bootstrap_event, fix_prepare, fix_agent_model]
+    if: always() && needs.fix_prepare.result == 'success' && (needs.fix_agent_model.result == 'success' || needs.fix_agent_model.result == 'skipped')
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          persist-credentials: false
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install trusted codex-review helper
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-event
+          path: trusted/codex-review-artifacts/event
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-stage04
+          path: trusted/codex-review-artifacts/stage04
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-stage05-prepare
+          path: trusted/codex-review-artifacts/stage05
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.fix_prepare.outputs.has_agent_tasks == 'true'
+        with:
+          pattern: codex-review-stage05-agent-*
+          path: trusted/codex-review-artifacts/stage05-agent-downloads
+          merge-multiple: false
+      - id: merge_route
+        env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
           CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}/trusted
-          CODEX_REVIEW_MODEL_CWD: ${{ github.workspace }}/trusted
-          CODEX_REVIEW_TARGET_REPO_PATH: ${{ github.workspace }}/pr-head
         run: |
-          trusted/setup/codex-review/bin/codex-review stage05 plan --in trusted/codex-review-artifacts/stage03/design-plan.json --inventory trusted/codex-review-artifacts/stage04/chief-decision.validated.json --out trusted/codex-review-artifacts/stage05/manifest.json
-          trusted/setup/codex-review/bin/codex-review stage05 run-agents --inventory trusted/codex-review-artifacts/stage05/manifest.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --out trusted/codex-review-artifacts/stage05/collection.json
-          trusted/setup/codex-review/bin/codex-review stage06 premerge --in trusted/codex-review-artifacts/stage05/collection.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/premerge-report.json
-          trusted/setup/codex-review/bin/codex-review stage06 model-merged-fix --inventory trusted/codex-review-artifacts/stage06/premerge-report.json --in trusted/codex-review-artifacts/stage05/collection.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/merged-fix.raw.json
-          trusted/setup/codex-review/bin/codex-review stage06 validate --inventory trusted/codex-review-artifacts/stage06/premerge-report.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --in trusted/codex-review-artifacts/stage06/merged-fix.raw.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/merged-fix.json
+          mkdir -p trusted/codex-review-artifacts/stage05-agent-downloads trusted/codex-review-artifacts/stage06
+          workflow-helper/setup/codex-review/bin/codex-review stage05 collect --inventory trusted/codex-review-artifacts/stage05/manifest.json --artifacts trusted/codex-review-artifacts/stage05-agent-downloads --out trusted/codex-review-artifacts/stage05/collection.json
+          workflow-helper/setup/codex-review/bin/codex-review stage06 premerge --in trusted/codex-review-artifacts/stage05/collection.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/premerge-report.json
+          workflow-helper/setup/codex-review/bin/codex-review stage06 prepare-merge-model --inventory trusted/codex-review-artifacts/stage06/premerge-report.json --in trusted/codex-review-artifacts/stage05/collection.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --prompt-out trusted/codex-review-artifacts/stage06/merge-prompt.md --raw-out trusted/codex-review-artifacts/stage06/merged-fix.raw.json --out trusted/codex-review-artifacts/stage06/merge-route.json
+      - name: Setup Codex relay
+        id: relay-token
+        if: steps.merge_route.outputs.needs_model == 'true'
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Prepare merged fix schema
+        if: steps.merge_route.outputs.needs_model == 'true'
+        run: |
+          mkdir -p trusted/codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage06-merged-fix.v1 --out trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
+      - name: Run Codex merged fix model
+        if: steps.merge_route.outputs.needs_model == 'true'
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merge-prompt.md
+          output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merged-fix.raw.json
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}/pr-head
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Validate merged fix
+        run: workflow-helper/setup/codex-review/bin/codex-review stage06 validate --inventory trusted/codex-review-artifacts/stage06/premerge-report.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --in trusted/codex-review-artifacts/stage06/merged-fix.raw.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/merged-fix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage05-06
@@ -652,7 +1067,7 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [fix_dispatch_and_merge]
+    needs: [bootstrap_event, fix_collect_and_merge]
     permissions:
       contents: read
       pull-requests: read
@@ -665,16 +1080,24 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}
           path: pr-head
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install trusted codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e trusted/setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -687,9 +1110,9 @@ jobs:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
         run: |
           if [ "${{ vars.CODEX_REVIEW_ENABLE_PUSH }}" = "true" ]; then
-            trusted/setup/codex-review/bin/codex-review stage07 validate-fix --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json
+            workflow-helper/setup/codex-review/bin/codex-review stage07 validate-fix --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json
           else
-            trusted/setup/codex-review/bin/codex-review stage07 validate-fix --dry-run --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json
+            workflow-helper/setup/codex-review/bin/codex-review stage07 validate-fix --dry-run --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -701,11 +1124,13 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [push_validate_no_token]
+    needs: [bootstrap_event, push_validate_no_token]
     permissions:
       contents: read
       pull-requests: read
       issues: read
+    outputs:
+      push_status: ${{ steps.push_result.outputs.push_status }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -714,16 +1139,24 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}
           path: pr-head
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install trusted codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e trusted/setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -743,17 +1176,19 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
-        run: trusted/setup/codex-review/bin/codex-review auth app-token --mode push --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode push --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
         run: |
           if [ "${{ vars.CODEX_REVIEW_ENABLE_PUSH }}" = "true" ]; then
-            trusted/setup/codex-review/bin/codex-review stage07 commit-push --in trusted/codex-review-artifacts/stage06/merged-fix.json --validation trusted/codex-review-artifacts/stage07/validated-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/push-result.json
+            workflow-helper/setup/codex-review/bin/codex-review stage07 commit-push --in trusted/codex-review-artifacts/stage06/merged-fix.json --validation trusted/codex-review-artifacts/stage07/validated-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/push-result.json
           else
-            trusted/setup/codex-review/bin/codex-review stage07 push --dry-run --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/push-result.json
+            workflow-helper/setup/codex-review/bin/codex-review stage07 push --dry-run --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/push-result.json
           fi
+      - id: push_result
+        run: workflow-helper/setup/codex-review/bin/codex-review stage07 write-outputs --in trusted/codex-review-artifacts/stage07/push-result.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage07
@@ -774,12 +1209,20 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
-        run: python3 -m pip install --disable-pip-version-check -e setup/codex-review
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-event
@@ -795,18 +1238,99 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
-        run: setup/codex-review/bin/codex-review auth app-token --mode stage08 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage08/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage08 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage08/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
         run: |
           if [ "${{ vars.CODEX_REVIEW_ENABLE_PUSH }}" = "true" ]; then
-            setup/codex-review/bin/codex-review stage08 record --in codex-review-artifacts/stage07/push-result.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage08/reentry.json
+            workflow-helper/setup/codex-review/bin/codex-review stage08 record --in codex-review-artifacts/stage07/push-result.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage08/reentry.json
           else
-            setup/codex-review/bin/codex-review stage08 record --in codex-review-artifacts/stage07/push-result.json --out codex-review-artifacts/stage08/reentry.json
+            workflow-helper/setup/codex-review/bin/codex-review stage08 record --in codex-review-artifacts/stage07/push-result.json --out codex-review-artifacts/stage08/reentry.json
           fi
-          setup/codex-review/bin/codex-review stage08 validate --in codex-review-artifacts/stage08/reentry.json --out codex-review-artifacts/stage08/reentry.validated.json
+          workflow-helper/setup/codex-review/bin/codex-review stage08 validate --in codex-review-artifacts/stage08/reentry.json --out codex-review-artifacts/stage08/reentry.validated.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage08
           path: codex-review-artifacts/stage08
+
+  issue_fallback_trusted:
+    name: 09 issue fallback trusted
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    needs: [bootstrap_event, design_publish_trusted, push_trusted]
+    if: |
+      always() &&
+      needs.bootstrap_event.result == 'success' &&
+      (
+        needs.bootstrap_event.outputs.openspec_decision == 'missing_openspec_spec' ||
+        (needs.design_publish_trusted.outputs.route == 'run_stage05' && needs.bootstrap_event.outputs.same_repo != 'true') ||
+        needs.design_publish_trusted.outputs.route == 'stop_needs_human' ||
+        needs.push_trusted.outputs.push_status == 'no_fix' ||
+        needs.push_trusted.outputs.push_status == 'blocked' ||
+        needs.push_trusted.outputs.push_status == 'push_failed' ||
+        needs.push_trusted.outputs.push_status == 'failed'
+      )
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install codex-review helper
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-event
+          path: codex-review-artifacts/event
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: codex-review-stage04
+          path: codex-review-artifacts/stage04
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: codex-review-stage07
+          path: codex-review-artifacts/stage07
+      - run: |
+          mkdir -p codex-review-artifacts/stage09
+          REASON="${{ needs.bootstrap_event.outputs.openspec_decision == 'missing_openspec_spec' && 'missing_openspec_spec' || (needs.design_publish_trusted.outputs.route == 'run_stage05' && needs.bootstrap_event.outputs.same_repo != 'true' && 'fork_pr_push_blocked') || needs.push_trusted.outputs.push_status || needs.design_publish_trusted.outputs.route || 'issue_fallback' }}"
+          workflow-helper/setup/codex-review/bin/codex-review stage09 plan --mode "$REASON" --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --out codex-review-artifacts/stage09/issue-fallback-plan.json
+      - id: app_token
+        if: vars.CODEX_REVIEW_ENABLE_ISSUE_FALLBACK == 'true'
+        env:
+          CODEX_REVIEW_GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_GITHUB_APP_ID }}
+          CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage09 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/app-token.json
+      - env:
+          GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
+          CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
+        run: |
+          if [ "${{ vars.CODEX_REVIEW_ENABLE_ISSUE_FALLBACK }}" = "true" ]; then
+            workflow-helper/setup/codex-review/bin/codex-review stage09 apply --in codex-review-artifacts/stage09/issue-fallback-plan.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/issue-fallback-result.json
+          else
+            workflow-helper/setup/codex-review/bin/codex-review stage09 apply --dry-run --in codex-review-artifacts/stage09/issue-fallback-plan.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/issue-fallback-result.json
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-review-stage09
+          path: codex-review-artifacts/stage09

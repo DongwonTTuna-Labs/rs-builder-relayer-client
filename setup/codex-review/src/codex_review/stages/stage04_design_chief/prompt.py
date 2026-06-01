@@ -5,7 +5,7 @@ from typing import Any
 from codex_review.artifacts import write_text
 
 def include_approval_contract(prompt: str) -> str:
-    return prompt + "\nReturn status approved_for_fix, needs_human, rejected_plan, or no_fix_needed."
+    return prompt + "\nReturn status approved_for_fix, needs_human, rejected_plan, or no_fix_needed. If the plan is OpenSpec-backed, has edit_sequence/tests, and has no execution_blockers, return approved_for_fix. Use needs_human only for secret/live credential needs, unsafe fork mutation, missing OpenSpec source, or other non-executable blockers."
 
 def include_fix_policy_requirements(prompt: str) -> str:
     return prompt + "\nIf approved_for_fix, include fix_policy with allowed_files/allowed_prefixes, forbidden_files, max_tasks, max_patch_bytes."

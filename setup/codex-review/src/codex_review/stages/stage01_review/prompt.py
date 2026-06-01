@@ -16,6 +16,7 @@ def build_axis_prompt(axis: str, pr_context: dict[str, Any], review_context: str
     prompt=f"""You are the {axis} reviewer. Focus on {include_axis_specific_focus(axis)}.
 Return JSON schema_version stage01-axis-findings.v1 with axis and findings.
 Each finding needs finding_id, severity, file, line, root_cause_key, title, summary, recommendation.
+Review the PR against its title/body and any OpenSpec context in the repository docs. Treat OpenSpec proposal, design, tasks, and specs as source of truth. Look for missing implementation, spec mismatch, incomplete tasks, and regression risk.
 
 {docs_context}
 

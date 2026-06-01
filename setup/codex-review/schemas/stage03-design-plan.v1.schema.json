@@ -6,7 +6,16 @@
     "edit_sequence": {
       "type": "array"
     },
-    "open_questions": {
+    "acceptance_criteria": {
+      "type": "array"
+    },
+    "execution_blockers": {
+      "type": "array"
+    },
+    "openspec_backed": {
+      "type": "boolean"
+    },
+    "openspec_sources": {
       "type": "array"
     },
     "plan_hash": {

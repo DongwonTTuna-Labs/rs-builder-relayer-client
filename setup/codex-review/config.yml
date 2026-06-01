@@ -41,12 +41,11 @@ design:
   require_design_chief: true
   max_clusters: 12
   max_cluster_analysis_batch_size: 4
-  fail_on_open_questions: true
 
 autofix:
   enabled: true
   max_tasks: 4
-  max_commits: 2
+  max_commits: 0
   max_files: 8
   max_patch_bytes: 120000
   allowed_prefixes:
