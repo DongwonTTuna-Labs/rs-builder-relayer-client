@@ -9,6 +9,12 @@ def load_workflow():
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
+def iter_job_steps():
+    for job_name, job in load_workflow()["jobs"].items():
+        for step in job.get("steps", []):
+            yield job_name, step
+
+
 def test_single_orchestrator_workflow_exists():
     workflows = list((ROOT / ".github" / "workflows").glob("*.yml")) + list((ROOT / ".github" / "workflows").glob("*.yaml"))
     assert [p.name for p in workflows] == ["codex-review-orchestrator.yml"]
@@ -41,7 +47,7 @@ def test_no_inline_python_or_schema_bloat():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "python - <<" not in text
     assert "json-schema.org" not in text
-    assert text.count("setup/codex-review/bin/codex-review") >= 8
+    assert text.count("workflow-helper/setup/codex-review/bin/codex-review") >= 8
 
 
 def test_no_placeholder_echo_json_or_error_suppression():
@@ -89,7 +95,7 @@ def test_workflow_dispatch_pr_number_is_threaded_into_context():
 
 def test_default_model_command_uses_oidc_codex_runner():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "CODEX_REVIEW_MODEL_COMMAND: ${{ vars.CODEX_REVIEW_MODEL_COMMAND || 'setup/codex-review/bin/codex-review-model-runner' }}" in text
+    assert "CODEX_REVIEW_MODEL_COMMAND: ${{ vars.CODEX_REVIEW_MODEL_COMMAND || format('{0}/workflow-helper/setup/codex-review/bin/codex-review-model-runner', github.workspace) }}" in text
     assert (ROOT / "setup" / "codex-review" / "bin" / "codex-review-model-runner").is_file()
 
 
@@ -113,8 +119,50 @@ def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405" in text
     assert "python-version: '3.11'" in text
-    assert "pip install --disable-pip-version-check -e setup/codex-review" in text
-    assert "pip install --disable-pip-version-check -e trusted/setup/codex-review" in text
+    assert "pip install --disable-pip-version-check -e workflow-helper/setup/codex-review" in text
+    assert "pip install --disable-pip-version-check -e trusted/setup/codex-review" not in text
+
+
+def test_workflow_helper_checkout_uses_workflow_sha_without_changing_base_ref():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "ref: ${{ github.event.pull_request.base.sha || github.sha }}" in text
+    assert "repository: ${{ github.repository }}" in text
+    assert "ref: ${{ github.workflow_sha }}" in text
+    assert "path: workflow-helper" in text
+
+    jobs = load_workflow()["jobs"]
+    for job_name, job in jobs.items():
+        helper_steps = [
+            step
+            for step in job.get("steps", [])
+            if step.get("name") == "Checkout workflow helper"
+        ]
+        assert len(helper_steps) == 1, job_name
+        helper = helper_steps[0]
+        assert helper["uses"] == "actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955"
+        assert helper["with"]["repository"] == "${{ github.repository }}"
+        assert helper["with"]["ref"] == "${{ github.workflow_sha }}"
+        assert helper["with"]["path"] == "workflow-helper"
+        assert helper["with"]["persist-credentials"] is False
+
+
+def test_setup_python_pip_cache_uses_workflow_helper_dependency_file():
+    setup_steps = [
+        (job_name, step)
+        for job_name, step in iter_job_steps()
+        if step.get("uses") == "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405"
+    ]
+    assert setup_steps
+    for job_name, step in setup_steps:
+        assert step["with"]["python-version"] == "3.11", job_name
+        assert step["with"]["cache"] == "pip", job_name
+        assert step["with"]["cache-dependency-path"] == "workflow-helper/setup/codex-review/pyproject.toml", job_name
+
+
+def test_workflow_never_executes_helper_from_pr_head_or_stale_trusted_tree():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "pr-head/setup/codex-review" not in text
+    assert "trusted/setup/codex-review" not in text
 
 
 def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
