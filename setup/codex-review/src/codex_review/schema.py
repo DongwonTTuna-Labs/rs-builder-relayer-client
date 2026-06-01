@@ -211,9 +211,16 @@ def _add_null_type(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ensure_enum_type(schema: dict[str, Any]) -> None:
-    if "enum" not in schema or "type" in schema:
+    if "enum" not in schema:
         return
     values = schema.get("enum") or []
+    if "type" in schema:
+        existing = schema["type"]
+        types = list(existing) if isinstance(existing, list) else [existing]
+        if any(value is None for value in values) and "null" not in types:
+            types.append("null")
+            schema["type"] = types[0] if len(types) == 1 else types
+        return
     non_null = [value for value in values if value is not None]
     inferred: set[str] = set()
     for value in non_null:

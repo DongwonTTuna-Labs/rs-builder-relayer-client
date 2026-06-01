@@ -61,6 +61,10 @@ def test_openai_action_schemas_are_strict_structured_outputs():
             assert "items" in arr, (name, path)
         for path, enum_schema in iter_enum_schemas(schema):
             assert "type" in enum_schema, (name, path)
+            if None in enum_schema.get("enum", []):
+                enum_type = enum_schema["type"]
+                enum_types = enum_type if isinstance(enum_type, list) else [enum_type]
+                assert "null" in enum_types, (name, path)
 
 
 def test_openai_strict_schema_keeps_defer_issue_payload_shape():
