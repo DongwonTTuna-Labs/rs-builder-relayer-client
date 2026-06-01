@@ -29,7 +29,13 @@ def build_changed_line_map(pr_files: list[dict[str, Any]] | dict[str, Any] | str
             continue
         if patch and not patch.startswith("diff --git"):
             patch = f"diff --git a/{filename} b/{filename}\n--- a/{filename}\n+++ b/{filename}\n{patch}"
-        lines = extract_changed_right_lines(parse_unified_diff(patch)) if patch else set()
+        if patch:
+            extracted = extract_changed_right_lines(parse_unified_diff(patch))
+            lines = extracted.get(str(filename), set())
+            if not lines and len(extracted) == 1:
+                lines = next(iter(extracted.values()))
+        else:
+            lines = set()
         if not lines and f.get("changed_lines"):
             lines = _normalize_lines(f["changed_lines"])
         changed[str(filename)] = lines
