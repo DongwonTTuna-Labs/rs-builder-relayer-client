@@ -64,6 +64,42 @@ def test_stage03_plan_prompt_keeps_human_routing_in_stage04(tmp_path):
     assert "open_questions" not in prompt
 
 
+def test_openspec_backed_prompts_drive_closed_implementation_plan(tmp_path):
+    context = tmp_path / "design-context.json"
+    clusters = tmp_path / "design-clusters.json"
+    analysis = tmp_path / "cluster-analysis.json"
+    write_json(
+        context,
+        {
+            "schema_version": "stage03-design-context.v1",
+            "openspec_backed": True,
+            "openspec_context": {"source_summary": ["openspec/changes/demo/tasks.md"]},
+            "findings": [{"finding_id": "f1"}],
+        },
+    )
+    write_json(clusters, {"schema_version": "stage03-design-clusters.v1", "clusters": [{"cluster_id": "c1"}]})
+    write_json(analysis, {"schema_version": "stage03-cluster-analysis.v1", "analyses": [{"cluster_id": "c1"}]})
+
+    out = tmp_path / "prompt.md"
+    assert main([
+        "stage03",
+        "build-plan-prompt",
+        "--pr-context",
+        str(context),
+        "--inventory",
+        str(clusters),
+        "--result",
+        str(analysis),
+        "--out",
+        str(out),
+    ]) == 0
+
+    prompt = out.read_text(encoding="utf-8")
+    assert "OpenSpec-backed implementation" in prompt
+    assert "acceptance_criteria" in prompt
+    assert "questions" not in prompt.lower()
+
+
 def test_stage05_prepare_agents_writes_prompts_matrix_and_github_outputs(tmp_path, monkeypatch):
     manifest = tmp_path / "manifest.json"
     design_plan = tmp_path / "design-plan.json"

@@ -6,7 +6,7 @@ from codex_review.artifacts import write_text
 
 
 def include_decision_action_contract(prompt: str) -> str:
-    return prompt + "\nActions: publish_and_fix_now, summary_only_fix_now, defer_to_issue, deny_false_positive, needs_human, needs_design, publish_only, drop_duplicate. Cover every finding_id exactly once."
+    return prompt + "\nActions: publish_and_fix_now, summary_only_fix_now, defer_to_issue, deny_false_positive, needs_human, needs_design, publish_only, drop_duplicate. Cover every finding_id exactly once. Do not use needs_human as a generic uncertainty escape. For implementable OpenSpec-backed findings, choose needs_design or publish_and_fix_now. Use defer_to_issue for work outside this PR, missing OpenSpec source, fork push limits, or non-executable blockers."
 
 def include_design_required_contract(prompt: str) -> str:
     return prompt + "\nSet needs_design=true for findings that require coordinated edits or autofix."

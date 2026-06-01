@@ -50,6 +50,7 @@ def test_workflow_declares_expected_stage_order():
         "push_validate_no_token",
         "push_trusted",
         "record_reentry",
+        "issue_fallback_trusted",
     ]
     assert jobs == expected
 
@@ -102,6 +103,16 @@ def test_workflow_dispatch_pr_number_is_threaded_into_context():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "github.event.inputs.pr_number" in text
     assert "CODEX_REVIEW_PR_NUMBER" in text
+
+
+def test_bootstrap_collects_openspec_context_artifacts():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    section = text.split("bootstrap_event:", 1)[1].split("resolve_collect:", 1)[0]
+    assert "context openspec --pr-context codex-review-artifacts/event/pr-context.json" in section
+    assert "context openspec-markdown --in codex-review-artifacts/event/openspec-context.json" in section
+    assert "openspec-context.json" in section
+    assert "openspec-context.md" in section
+    assert "docs-context.md" in section and "openspec-context.md >> codex-review-artifacts/event/docs-context.md" in section
 
 
 def test_workflow_uses_codex_action_for_model_execution():
@@ -226,8 +237,22 @@ def test_workflow_never_executes_helper_from_pr_head_or_stale_trusted_tree():
 
 def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name" in text
-    assert "repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}" in text
+    section = text.split("fix_prepare:", 1)[1].split("fix_agent_model:", 1)[0]
+    assert "github.event_name == 'pull_request_target'" not in section
+    assert "needs.bootstrap_event.outputs.same_repo == 'true'" in section
+    assert "repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}" in text
+    assert "ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}" in text
+
+
+def test_stage09_issue_fallback_uses_app_token_and_never_github_token_write():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "issue_fallback_trusted:" in text
+    section = text.split("issue_fallback_trusted:", 1)[1]
+    assert "auth app-token --mode stage09" in section
+    assert "CODEX_REVIEW_ENABLE_ISSUE_FALLBACK" in section
+    assert "stage09 plan" in section
+    assert "stage09 apply" in section
+    assert "issues: write" not in section
 
 
 def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():

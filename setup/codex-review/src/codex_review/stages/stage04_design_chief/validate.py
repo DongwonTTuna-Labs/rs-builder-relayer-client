@@ -29,8 +29,26 @@ def block_approval_when_human_review_required(decision: dict[str, Any], design_p
         raise ValidationError("cannot approve fix when design plan requires human review")
 
 
+def _has_execution_blocker(design_plan: dict[str, Any]) -> bool:
+    return bool(design_plan.get("requires_human_review") or design_plan.get("execution_blockers"))
+
+
+def promote_openspec_backed_plan(decision: dict[str, Any], design_plan: dict[str, Any]) -> dict[str, Any]:
+    if decision.get("status") != "needs_human":
+        return decision
+    if not design_plan.get("openspec_backed"):
+        return decision
+    if _has_execution_blocker(design_plan) or not design_plan.get("edit_sequence"):
+        return decision
+    out = dict(decision)
+    out["status"] = "approved_for_fix"
+    out["reason"] = "OpenSpec-backed design plan is executable; needs_human was normalized to approved_for_fix."
+    return out
+
+
 def validate_chief_decision(decision: dict[str, Any], design_plan: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    out=dict(decision); out["schema_version"]="stage04-design-chief-decision.v1"
+    out=promote_openspec_backed_plan(dict(decision), design_plan)
+    out["schema_version"]="stage04-design-chief-decision.v1"
     status=out.get("status")
     if status not in VALID_STATUSES: raise ValidationError(f"invalid chief status: {status}")
     block_approval_when_human_review_required(out, design_plan)

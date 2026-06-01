@@ -30,7 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "autofix": {
         "enabled": False,
         "max_tasks": 4,
-        "max_commits": 2,
+        "max_commits": 0,
         "max_files": 8,
         "max_patch_bytes": 120000,
         "allowed_prefixes": ["src/", "tests/", "docs/"],

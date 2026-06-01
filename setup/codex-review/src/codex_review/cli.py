@@ -107,6 +107,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--pr-context", default=None)
     p.add_argument("--review-context", default=None)
     p.add_argument("--docs-context", default=None)
+    p.add_argument("--openspec-context", default=None)
     p.add_argument("--changed-lines", default=None)
     p.add_argument("--axis", default=None)
     p.add_argument("--artifacts", nargs="*", default=None)
@@ -158,6 +159,7 @@ def register_stage05_commands(parser: argparse.ArgumentParser) -> None: return N
 def register_stage06_commands(parser: argparse.ArgumentParser) -> None: return None
 def register_stage07_commands(parser: argparse.ArgumentParser) -> None: return None
 def register_stage08_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_stage09_commands(parser: argparse.ArgumentParser) -> None: return None
 
 
 def _handle_event(args: argparse.Namespace) -> tuple[Any, str | None]:
@@ -193,6 +195,18 @@ def _handle_event(args: argparse.Namespace) -> tuple[Any, str | None]:
         else:
             out["same_repo"] = None
         return out, "event-context.v1"
+    if args.command in {"write-outputs", "github-outputs"}:
+        payload = _maybe_json(args.in_path or args.pr_context, {})
+        keys = ["same_repo", "head_sha", "head_repo_full_name", "head_ref", "base_sha", "base_repo_full_name", "pr_number"]
+        outputs: dict[str, str] = {}
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            text = str(value).lower() if isinstance(value, bool) else str(value)
+            outputs[key] = text
+            write_output(key, text)
+        return {"outputs": outputs}, None
     raise ValueError(f"unknown event command: {args.command}")
 
 
@@ -231,6 +245,23 @@ def _handle_context(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .context.docs_context import find_repository_docs, read_docs_with_budget, render_docs_context
         docs = read_docs_with_budget(find_repository_docs(args.repo_path), int(config.get("docs_context_budget", 20000)))
         return render_docs_context(docs), None
+    if cmd in {"openspec", "openspec-context"}:
+        from .context.openspec_context import collect_openspec_context
+        pr = _json_or_default(args.pr_context or args.in_path, {})
+        return collect_openspec_context(pr, args.repo_path, args.token), "openspec-context.v1"
+    if cmd in {"openspec-markdown", "render-openspec"}:
+        from .context.openspec_context import render_openspec_context_markdown
+        return render_openspec_context_markdown(_maybe_json(args.in_path or args.openspec_context, {})), None
+    if cmd in {"openspec-outputs", "openspec-github-outputs"}:
+        payload = _maybe_json(args.in_path or args.openspec_context, {})
+        outputs = {
+            "openspec_present": str(bool(payload.get("present"))).lower(),
+            "openspec_status": str(payload.get("status") or ""),
+            "openspec_decision": str(payload.get("decision") or ""),
+        }
+        for key, value in outputs.items():
+            write_output(key, value)
+        return {"outputs": outputs}, None
     if cmd in {"review", "review-context"}:
         from .context.review_context import build_review_context_markdown
         pr = _json_or_default(args.pr_context, {})
@@ -380,7 +411,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     cmd = args.command
     if cmd == "context":
         from .stages.stage03_design.context import build_design_context
-        return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None), "stage03-design-context.v1"
+        return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None, _json_or_default(args.openspec_context, {})), "stage03-design-context.v1"
     if cmd in {"build-inventory-prompt", "inventory-prompt"}:
         from .stages.stage03_design.normalize import build_normalize_prompt
         return build_normalize_prompt(_maybe_json(args.in_path or args.inventory, {})), None
@@ -448,18 +479,20 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         findings = ctx.get("findings", [])
         plan = {"schema_version": "stage03-design-plan.v1", "edit_sequence": [], "tests": [], "defaulted": True}
         if findings:
-            # Keep the fallback artifact valid, but make the following chief stage route to needs_human.
-            plan["requires_human_review"] = True
+            plan["openspec_backed"] = bool(ctx.get("openspec_backed"))
             plan["edit_sequence"] = [
                 {
-                    "task_id": f"manual-design-{idx}",
+                    "task_id": f"openspec-fallback-{idx}" if ctx.get("openspec_backed") else f"manual-design-{idx}",
                     "finding_ids": [finding.get("finding_id") or finding.get("id")],
-                    "summary": "Model design plan was not provided; human review is required before autofix.",
-                    "allowed_files": [],
+                    "summary": finding.get("summary") or "Implement the OpenSpec-backed finding conservatively.",
+                    "allowed_files": finding.get("files") or ([finding.get("file")] if finding.get("file") else []),
+                    "acceptance_criteria": ["OpenSpec tasks and affected tests pass"] if ctx.get("openspec_backed") else [],
                 }
                 for idx, finding in enumerate(findings, 1)
             ]
-            plan["tests"] = ["Human design review required before automated tests are selected"]
+            plan["tests"] = ["cargo fmt --all --check", "cargo test --workspace --all-features"] if ctx.get("openspec_backed") else ["Human design review required before automated tests are selected"]
+            if not ctx.get("openspec_backed"):
+                plan["requires_human_review"] = True
             fallback = validate_design_plan(plan, ctx, config)
         else:
             fallback = validate_design_plan(plan, ctx, config)
@@ -687,6 +720,11 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"push", "run"}:
         from .stages.stage07_push.orchestrate import run_push_flow
         return run_push_flow(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "stage07-push-result.v1"
+    if cmd in {"write-outputs", "github-outputs"}:
+        payload = _maybe_json(args.in_path, {})
+        status = str(payload.get("status") or "unknown")
+        write_output("push_status", status)
+        return {"push_status": status}, None
     if cmd == "render":
         from .stages.stage07_push.render import render_push_summary
         return render_push_summary(_maybe_json(args.in_path, {})), None
@@ -713,6 +751,25 @@ def _handle_stage08(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage08_reentry.render import render_reentry_summary
         return render_reentry_summary(_maybe_json(args.in_path, {})), None
     raise ValueError(f"unknown stage08 command: {cmd}")
+
+
+def _handle_stage09(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+    cmd = args.command
+    if cmd in {"plan", "build-plan"}:
+        from .stages.stage09_issue_fallback.issue import build_issue_fallback_plan
+        payload = _json_or_default(args.in_path, {})
+        reason = args.mode or payload.get("reason") or payload.get("route") or payload.get("status") or "manual_fallback"
+        attempted = payload.get("attempted_stages") if isinstance(payload.get("attempted_stages"), list) else []
+        return build_issue_fallback_plan(
+            reason=str(reason),
+            pr_context=_maybe_json(args.pr_context, {}),
+            openspec_context=_json_or_default(args.openspec_context, {}),
+            attempted_stages=attempted,
+        ), "stage09-issue-fallback.v1"
+    if cmd in {"apply", "publish"}:
+        from .stages.stage09_issue_fallback.issue import apply_issue_fallback
+        return apply_issue_fallback(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.token, dry_run=args.dry_run), "stage09-issue-fallback.v1"
+    raise ValueError(f"unknown stage09 command: {cmd}")
 
 
 def _handle_auth(args: argparse.Namespace) -> tuple[Any, str | None]:
@@ -746,7 +803,7 @@ def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review")
-    parser.add_argument("area", choices=["auth", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08"])
+    parser.add_argument("area", choices=["auth", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
     _add_common(parser)
     args = parser.parse_args(argv)
     try:
@@ -765,6 +822,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.area == "stage06": payload, schema = _handle_stage06(args, config)
         elif args.area == "stage07": payload, schema = _handle_stage07(args, config)
         elif args.area == "stage08": payload, schema = _handle_stage08(args, config)
+        elif args.area == "stage09": payload, schema = _handle_stage09(args, config)
         else: raise ValueError(args.area)
         _emit(payload, args.out, schema)
         if args.summary and isinstance(payload, str):

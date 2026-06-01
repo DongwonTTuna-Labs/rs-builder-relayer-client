@@ -23,7 +23,7 @@ def test_model_jobs_have_no_repo_write_permissions():
 
 
 def test_trusted_write_jobs_keep_github_token_read_only():
-    write_jobs = ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "push_trusted", "record_reentry"]
+    write_jobs = ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "push_trusted", "record_reentry", "issue_fallback_trusted"]
     for name in write_jobs:
         perms = jobs()[name].get("permissions", {})
         assert perms.get("contents") == "read"
@@ -47,8 +47,9 @@ def test_write_jobs_use_app_token_not_github_token_write_permissions():
     assert "auth app-token --mode stage04" in text
     assert "auth app-token --mode push" in text
     assert "auth app-token --mode stage08" in text
+    assert "auth app-token --mode stage09" in text
     assert "GITHUB_TOKEN: ${{ github.token }}" not in text.split("resolve_apply_trusted:", 1)[1]
-    for name in ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "push_trusted", "record_reentry"]:
+    for name in ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "push_trusted", "record_reentry", "issue_fallback_trusted"]:
         section = text.split(f"  {name}:", 1)[1].split("\n  ", 1)[0]
         assert "write" not in section
 
