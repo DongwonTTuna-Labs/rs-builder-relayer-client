@@ -3,6 +3,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
+CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
 
 
 def load_workflow():
@@ -13,6 +14,14 @@ def iter_job_steps():
     for job_name, job in load_workflow()["jobs"].items():
         for step in job.get("steps", []):
             yield job_name, step
+
+
+def codex_action_steps():
+    return [
+        (job_name, step)
+        for job_name, step in iter_job_steps()
+        if step.get("uses") == CODEX_ACTION
+    ]
 
 
 def test_single_orchestrator_workflow_exists():
@@ -35,7 +44,9 @@ def test_workflow_declares_expected_stage_order():
         "design_model_chain",
         "design_chief_model",
         "design_publish_trusted",
-        "fix_dispatch_and_merge",
+        "fix_prepare",
+        "fix_agent_model",
+        "fix_collect_and_merge",
         "push_validate_no_token",
         "push_trusted",
         "record_reentry",
@@ -56,9 +67,9 @@ def test_no_placeholder_echo_json_or_error_suppression():
     assert "echo '{\"schema_version\"" not in text
     assert " default-result " not in text
     assert " default-" not in text
-    assert "model-result" in text
-    assert "run-agents" in text
-    assert "model-merged-fix" in text
+    assert "model-result" not in text
+    assert "run-agents" not in text
+    assert "model-merged-fix" not in text
     assert "stage07 validate-fix" in text
     assert "stage07 commit-push" in text
     assert "stage07 push" in text
@@ -82,7 +93,7 @@ def test_actions_are_pinned_and_checkout_credentials_not_persisted():
 
 def test_stage03_plan_is_validated_in_workflow():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "stage03 model-plan" in text
+    assert "stage03 build-plan-prompt" in text
     assert "stage03 validate-plan" in text
     assert "design-plan.raw.json" in text
 
@@ -93,16 +104,36 @@ def test_workflow_dispatch_pr_number_is_threaded_into_context():
     assert "CODEX_REVIEW_PR_NUMBER" in text
 
 
-def test_default_model_command_uses_oidc_codex_runner():
+def test_workflow_uses_codex_action_for_model_execution():
+    steps = codex_action_steps()
+    assert len(steps) >= 10
+    for job_name, step in steps:
+        with_inputs = step["with"]
+        assert with_inputs["openai-api-key"] == "${{ steps.relay-token.outputs.relay_token }}", job_name
+        assert with_inputs["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses", job_name
+        assert with_inputs["sandbox"] == "read-only", job_name
+        assert with_inputs["safety-strategy"] == "read-only", job_name
+        assert with_inputs["allow-users"] == "DongwonTTuna", job_name
+        assert with_inputs["allow-bots"] is True, job_name
+        assert with_inputs["allow-bot-users"] == "codex-reviewer-for-dongwonttuna[bot]", job_name
+        assert with_inputs["prompt-file"], job_name
+        assert with_inputs["output-file"], job_name
+        assert with_inputs["output-schema-file"].endswith(".schema.json"), job_name
+        assert "workflow-helper/setup/codex-review/schemas/" in with_inputs["output-schema-file"], job_name
+        assert with_inputs["working-directory"], job_name
+
+
+def test_workflow_has_no_model_runner_default_or_codex_cli_env_contract():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "CODEX_REVIEW_MODEL_COMMAND: ${{ vars.CODEX_REVIEW_MODEL_COMMAND || format('{0}/workflow-helper/setup/codex-review/bin/codex-review-model-runner', github.workspace) }}" in text
-    assert (ROOT / "setup" / "codex-review" / "bin" / "codex-review-model-runner").is_file()
+    assert "CODEX_REVIEW_MODEL_COMMAND" not in text
+    assert "CODEX_REVIEW_CODEX_ARGS_JSON" not in text
+    assert "codex-review-model-runner" not in text
 
 
 def test_fix_and_stage07_use_pr_head_worktree():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "path: pr-head" in text
-    assert "stage05 run-agents" in text and "--repo-path pr-head" in text
+    assert "stage05 prepare-agents" in text and "--repo-path pr-head" in text
     assert "stage06 premerge" in text and "--repo-path pr-head" in text
     assert "stage07 validate-fix" in text and "--repo-path pr-head" in text
 
@@ -173,6 +204,7 @@ def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
 
 def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
     text = WORKFLOW.read_text(encoding="utf-8")
-    section = text.split("fix_dispatch_and_merge:", 1)[1].split("push_validate_no_token:", 1)[0]
-    assert "CODEX_REVIEW_MODEL_CWD: ${{ github.workspace }}/trusted" in section
-    assert "CODEX_REVIEW_TARGET_REPO_PATH: ${{ github.workspace }}/pr-head" in section
+    section = text.split("fix_agent_model:", 1)[1].split("fix_collect_and_merge:", 1)[0]
+    assert "working-directory: ${{ github.workspace }}/pr-head" in section
+    assert "CODEX_REVIEW_MODEL_CWD" not in section
+    assert "CODEX_REVIEW_TARGET_REPO_PATH" not in section

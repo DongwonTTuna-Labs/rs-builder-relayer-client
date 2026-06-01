@@ -2,7 +2,7 @@
 
 이 디렉터리는 Codex PR review v3 workflow의 실제 구현 단위가 들어있는 helper package다.
 
-현재 상태는 실행 가능한 implementation이다. 공통 기반, GitHub helper, security policy, stage00-stage08 CLI, provider-neutral model adapter, trusted push orchestration, workflow guardrail test가 포함되어 있다. 모델 job은 `CODEX_REVIEW_MODEL_COMMAND`를 통해 repository별 runner를 연결할 수 있고, runner가 없을 때는 검증 가능한 안전 fallback artifact를 생성해 write/push side effect를 막는다.
+현재 상태는 실행 가능한 implementation이다. 공통 기반, GitHub helper, security policy, stage00-stage08 CLI, action-friendly prompt/schema helpers, trusted push orchestration, workflow guardrail test가 포함되어 있다. GitHub Actions model job은 pinned `openai/codex-action`이 prompt/schema/output 파일을 받아 실행하고, helper가 그 결과를 다시 stage별 validator로 검증한다.
 
 ## 구현/검증 범위
 
@@ -16,24 +16,11 @@
 8. stage08 reentry record/validation path
 9. workflow shape test로 `.github/workflows/codex-review-orchestrator.yml`을 강제
 
-## 모델 runner 연결
+## 모델 실행 연결
 
-workflow repository variable 또는 job env에 아래 값을 설정하면 각 model stage가 같은 command를 호출한다.
+workflow model stages는 `openai/codex-action`을 사용한다. 각 stage는 먼저 helper CLI로 prompt를 만들고, action이 `output-schema-file`과 함께 JSON artifact를 쓴 뒤, helper validator가 그 artifact를 다시 검증한다.
 
-```bash
-CODEX_REVIEW_MODEL_COMMAND='your-model-runner --prompt {prompt} --out {output} --schema {schema}'
-```
-
-command에는 다음 환경변수도 전달된다.
-
-```text
-CODEX_REVIEW_STAGE
-CODEX_REVIEW_PROMPT_PATH
-CODEX_REVIEW_OUTPUT_PATH
-CODEX_REVIEW_EXPECTED_SCHEMA
-```
-
-stage별 override가 필요하면 `CODEX_REVIEW_STAGE00_MODEL_COMMAND`, `CODEX_REVIEW_STAGE01_CORRECTNESS_MODEL_COMMAND`, `CODEX_REVIEW_STAGE06_MERGE_MODEL_COMMAND`처럼 stage 이름을 붙인 환경변수를 사용할 수 있다.
+로컬 테스트나 별도 consumer가 필요한 경우 provider-neutral `CODEX_REVIEW_MODEL_COMMAND` adapter는 CLI 하위호환 경로로 남아 있지만, repository workflow는 이 adapter나 runner script에 의존하지 않는다.
 
 ## 가장 중요한 원칙
 

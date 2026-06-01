@@ -8,8 +8,8 @@ This package is no longer a spec-only skeleton. It now includes runnable helpers
 - context: diff parser, changed-line map, PR/review/docs/file inventory context builders
 - loop: route decisions, loop state, audit events
 - stage00 through stage08: resolve gate, review, techlead, design, design chief, fix dispatch, fix merge, trusted push, reentry recording
-- model adapter: provider-neutral `CODEX_REVIEW_MODEL_COMMAND` runner with prompt/output/schema environment contract and safe fallback artifacts
-- workflow: one orchestrator workflow with model jobs separated from trusted write jobs, explicit route gates, and no inline schema/Python bloat
+- model execution: prompt/schema helpers for pinned `openai/codex-action` plus validator commands for every model output artifact
+- workflow: one orchestrator workflow with Codex Action model jobs separated from trusted write jobs, explicit route gates, and no inline schema/Python bloat
 - tests: unit/workflow coverage for lifecycle, review validation, techlead, design, patch policy, dry-run publishing, fix collection, model adapter, push guards, routing, and event helpers
 
 ## Verification
@@ -29,7 +29,7 @@ setup/codex-review/bin/codex-review --help
 
 ## External integrations
 
-The GitHub API, model command adapter, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, workflow secrets, and repository-specific test commands before enabling non-dry-run writes. Without `CODEX_REVIEW_MODEL_COMMAND`, model jobs intentionally produce safe fallback JSON and do not autofix or push.
+The GitHub API, Codex Action model path, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, relay binding, workflow secrets, and repository-specific test commands before enabling non-dry-run writes. Model jobs write schema-constrained artifacts through `openai/codex-action`; trusted jobs validate those artifacts again before any side effect gate can run.
 
 ## GitHub specification hardening applied
 
@@ -42,6 +42,6 @@ The orchestrator and helpers have been hardened against the GitHub Actions/API i
 - stage02 review creation validates current PR head drift and sends `commit_id` for inline reviews
 - deferred issue search uses `GITHUB_API_URL` and URL-encoded Search API queries
 - `workflow_dispatch.inputs.pr_number` is threaded through event/context resolution via `CODEX_REVIEW_PR_NUMBER`
-- stage03 model planning is followed by explicit `stage03 validate-plan`
+- stage03 prompt/action model planning is followed by explicit `stage03 validate-plan`
 - record-reentry is read-only because it only records artifacts in this implementation
 - first-party GitHub Actions are SHA-pinned in the orchestrator workflow

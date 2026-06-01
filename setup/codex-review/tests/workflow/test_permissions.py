@@ -3,6 +3,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
+CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
 
 
 def jobs():
@@ -11,7 +12,8 @@ def jobs():
 
 def test_model_jobs_have_no_repo_write_permissions():
     for name, job in jobs().items():
-        if "model" not in name:
+        uses_model = any(step.get("uses") == CODEX_ACTION for step in job.get("steps", []))
+        if "model" not in name and not uses_model:
             continue
         perms = job.get("permissions", {})
         assert perms.get("contents") == "read"
@@ -64,7 +66,8 @@ def test_model_jobs_use_oidc_relay_without_write_permissions():
         "techlead_model",
         "design_model_chain",
         "design_chief_model",
-        "fix_dispatch_and_merge",
+        "fix_agent_model",
+        "fix_collect_and_merge",
     ]
     for name in model_jobs:
         job = jobs()[name]
@@ -76,9 +79,9 @@ def test_model_jobs_use_oidc_relay_without_write_permissions():
         assert len(relay_steps) == 1
         assert relay_steps[0]["with"]["trusted-actors"] == "DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]"
 
-        env_steps = [step for step in steps if isinstance(step.get("env"), dict)]
-        assert any(
-            step["env"].get("AI_RELAY_API_KEY") == "${{ steps.relay-token.outputs.relay_token }}"
-            and step["env"].get("CODEX_REVIEW_CODEX_ARGS_JSON") == "${{ steps.relay-token.outputs.codex_args }}"
-            for step in env_steps
-        )
+        action_steps = [step for step in steps if step.get("uses") == CODEX_ACTION]
+        assert action_steps
+        for step in action_steps:
+            assert step["with"]["openai-api-key"] == "${{ steps.relay-token.outputs.relay_token }}"
+            assert step["with"]["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses"
+            assert step["with"]["output-schema-file"]

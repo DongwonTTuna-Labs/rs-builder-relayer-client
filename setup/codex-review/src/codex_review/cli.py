@@ -77,6 +77,12 @@ def _artifact_paths(values: list[str] | None, *, names: tuple[str, ...] = ("*.js
     return deduped
 
 
+def _safe_path_component(value: Any) -> str:
+    text = str(value or "").strip()
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
+    return safe.strip("._") or "task"
+
+
 def _repo_parts_from_context(ctx: dict[str, Any]) -> tuple[str | None, str | None]:
     owner = ctx.get("owner")
     repo = ctx.get("repo")
@@ -111,6 +117,8 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--mode", default=None)
     p.add_argument("--stage", default=None)
     p.add_argument("--prompt", default=None)
+    p.add_argument("--prompt-out", default=None)
+    p.add_argument("--raw-out", default=None)
     p.add_argument("--model-command", default=os.environ.get("CODEX_REVIEW_MODEL_COMMAND"))
     p.add_argument("--work-dir", default=None)
     p.add_argument("--model-cwd", default=os.environ.get("CODEX_REVIEW_MODEL_CWD") or os.environ.get("CODEX_REVIEW_TRUSTED_CHECKOUT"))
@@ -367,6 +375,9 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "context":
         from .stages.stage03_design.context import build_design_context
         return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None), "stage03-design-context.v1"
+    if cmd in {"build-inventory-prompt", "inventory-prompt"}:
+        from .stages.stage03_design.normalize import build_normalize_prompt
+        return build_normalize_prompt(_maybe_json(args.in_path or args.inventory, {})), None
     if cmd in {"default-inventory", "default-result", "model-inventory"}:
         ctx = _maybe_json(args.in_path, {})
         items = []
@@ -385,6 +396,9 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         tech = ctx.get("techlead_decision", ctx)
         return validate_design_inventory(_maybe_json(args.in_path, {}), tech), "stage03-design-inventory.v1"
+    if cmd in {"build-clusters-prompt", "clusters-prompt"}:
+        from .stages.stage03_design.cluster import build_cluster_prompt
+        return build_cluster_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
     if cmd in {"default-clusters", "model-clusters"}:
         inv = _maybe_json(args.inventory or args.in_path, {})
         clusters = []
@@ -404,6 +418,9 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "batch":
         from .stages.stage03_design.batch import make_cluster_batches
         return {"batches": make_cluster_batches(_maybe_json(args.in_path, {}), config)}, None
+    if cmd in {"build-analysis-prompt", "analysis-prompt"}:
+        from .stages.stage03_design.analyze import build_cluster_analysis_prompt
+        return build_cluster_analysis_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
     if cmd in {"default-analysis", "model-analysis"}:
         clusters = _maybe_json(args.inventory or args.in_path, {})
         analyses = [{"cluster_id": c.get("cluster_id"), "status": "needs_human", "recommendation": "model analysis not provided"} for c in clusters.get("clusters", [])]
@@ -447,6 +464,11 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
                 args.prompt = str(write_prompt_if_needed(build_coordinate_prompt(ctx, _maybe_json(args.inventory, {}), []), args.out))
             return _model_or_fallback(args, stage="stage03_plan", expected_schema="stage03-design-plan.v1", fallback=fallback), "stage03-design-plan.v1"
         return fallback, "stage03-design-plan.v1"
+    if cmd in {"build-plan-prompt", "plan-prompt"}:
+        from .stages.stage03_design.coordinate import build_coordinate_prompt
+        analyses_payload = _json_or_default(args.result, {})
+        analyses = analyses_payload.get("analyses", analyses_payload if isinstance(analyses_payload, list) else [])
+        return build_coordinate_prompt(_maybe_json(args.pr_context, {}), _maybe_json(args.inventory, {}), analyses), None
     if cmd in {"coordinate", "validate-plan"}:
         from .stages.stage03_design.coordinate import validate_design_plan
         return validate_design_plan(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config), "stage03-design-plan.v1"
@@ -495,11 +517,46 @@ def _handle_stage05(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
         task = _maybe_json(args.in_path, {})
         return build_fix_agent_prompt(task, _maybe_json(args.inventory, {}), _maybe_json(args.result, {}), _maybe_text(args.docs_context), config), None
+    if cmd in {"prepare-agents", "prepare-agent-matrix"}:
+        from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
+        manifest = _maybe_json(args.inventory or args.in_path, {})
+        design_plan = _maybe_json(args.design_plan, {})
+        chief = _maybe_json(args.chief_decision or args.result, {})
+        docs = _maybe_text(args.docs_context)
+        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/stage05/agents")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        include = []
+        for task in manifest.get("tasks", []):
+            task_id = str(task.get("task_id") or f"task-{len(include) + 1}")
+            task_path = _safe_path_component(task_id)
+            task_dir = base_dir / task_path
+            task_dir.mkdir(parents=True, exist_ok=True)
+            task_file = task_dir / "task.json"
+            prompt_file = task_dir / "prompt.md"
+            output_file = task_dir / "result.json"
+            validated_file = task_dir / "result.validated.json"
+            write_json(task_file, task, None)
+            write_text(prompt_file, build_fix_agent_prompt(task, design_plan, chief, docs, config))
+            include.append(
+                {
+                    "task_id": task_id,
+                    "task_path": task_path,
+                    "task_file": task_file.as_posix(),
+                    "prompt_file": prompt_file.as_posix(),
+                    "output_file": output_file.as_posix(),
+                    "validated_file": validated_file.as_posix(),
+                    "working_directory": args.repo_path,
+                }
+            )
+        matrix = {"include": include}
+        if os.environ.get("GITHUB_OUTPUT"):
+            write_output("has_agent_tasks", "true" if include else "false")
+            write_output("agent_matrix", json.dumps(matrix, sort_keys=True, separators=(",", ":")))
+        return matrix, None
     if cmd in {"default-agent-result", "noop-result"}:
         task = _maybe_json(args.inventory or args.in_path, {})
         return {"schema_version": "stage05-fix-agent-result.v1", "task_id": task.get("task_id"), "status": "no_safe_fix", "reason": "model fix result was not provided", "defaulted": True}, "stage05-fix-agent-result.v1"
     if cmd in {"run-agents", "model-agents"}:
-        from .artifacts import write_json, write_text
         from .model_adapter import run_model_or_fallback
         from .stages.stage05_fix_dispatch.collect import build_fix_collection_result
         from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
@@ -563,6 +620,29 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"build-merge-prompt", "prompt"}:
         from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
         return build_fix_merge_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), _maybe_json(args.result, {}), {}, _maybe_text(args.docs_context)), None
+    if cmd in {"prepare-merge-model", "prepare-model-merge"}:
+        from .stages.stage06_fix_merge.premerge import create_merged_fix_from_premerge
+        from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
+        pre = _maybe_json(args.inventory, {})
+        collection = _maybe_json(args.in_path, {})
+        pr = _maybe_json(args.pr_context, {})
+        raw_out = args.raw_out or args.result
+        prompt_out = args.prompt_out or args.prompt
+        if pre.get("clean") or not collection.get("results"):
+            merged = create_merged_fix_from_premerge(pre, collection, pr, raw_out)
+            if raw_out and not Path(raw_out).exists():
+                write_json(raw_out, merged, "stage06-merged-fix.v1")
+            route = {"needs_model": False, "raw_output": raw_out, "status": merged.get("status")}
+            if os.environ.get("GITHUB_OUTPUT"):
+                write_output("needs_model", "false")
+            return route, None
+        if not prompt_out:
+            raise ValidationError("prepare-merge-model requires --prompt-out when model merge is needed")
+        write_text(prompt_out, build_fix_merge_prompt(pre, collection, {}, {}, {"pr_context": pr, "docs_context": _maybe_text(args.docs_context)}))
+        route = {"needs_model": True, "prompt": prompt_out, "raw_output": raw_out}
+        if os.environ.get("GITHUB_OUTPUT"):
+            write_output("needs_model", "true")
+        return route, None
     if cmd == "default-merged-fix":
         pre = _maybe_json(args.inventory or args.in_path, {})
         return {"schema_version": "stage06-merged-fix.v1", "status": "no_fix", "patch": "", "premerge_clean": pre.get("clean", False), "defaulted": True}, "stage06-merged-fix.v1"
