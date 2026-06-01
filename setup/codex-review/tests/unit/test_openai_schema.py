@@ -39,6 +39,17 @@ def iter_array_schemas(node, path=()):
             yield from iter_array_schemas(value, (*path, str(index)))
 
 
+def iter_enum_schemas(node, path=()):
+    if isinstance(node, dict):
+        if "enum" in node:
+            yield path, node
+        for key, value in node.items():
+            yield from iter_enum_schemas(value, (*path, str(key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from iter_enum_schemas(value, (*path, str(index)))
+
+
 def test_openai_action_schemas_are_strict_structured_outputs():
     for name in ACTION_SCHEMA_NAMES:
         schema = make_openai_structured_output_schema(load_schema_json(name))
@@ -48,6 +59,8 @@ def test_openai_action_schemas_are_strict_structured_outputs():
             assert set(obj.get("required", [])) == set(properties), (name, path)
         for path, arr in iter_array_schemas(schema):
             assert "items" in arr, (name, path)
+        for path, enum_schema in iter_enum_schemas(schema):
+            assert "type" in enum_schema, (name, path)
 
 
 def test_openai_strict_schema_keeps_defer_issue_payload_shape():

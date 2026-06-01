@@ -196,6 +196,7 @@ def _add_null_type(schema: dict[str, Any]) -> dict[str, Any]:
         if None not in values:
             values.append(None)
         out["enum"] = values
+        _ensure_enum_type(out)
         return out
     value_type = out.get("type")
     if isinstance(value_type, list):
@@ -207,6 +208,29 @@ def _add_null_type(schema: dict[str, Any]) -> dict[str, Any]:
     else:
         out["type"] = ["object", "null"] if "properties" in out else ["string", "null"]
     return out
+
+
+def _ensure_enum_type(schema: dict[str, Any]) -> None:
+    if "enum" not in schema or "type" in schema:
+        return
+    values = schema.get("enum") or []
+    non_null = [value for value in values if value is not None]
+    inferred: set[str] = set()
+    for value in non_null:
+        if isinstance(value, bool):
+            inferred.add("boolean")
+        elif isinstance(value, int) and not isinstance(value, bool):
+            inferred.add("integer")
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            inferred.add("number")
+        else:
+            inferred.add("string")
+    if not inferred:
+        inferred.add("string")
+    ordered = [kind for kind in ("string", "integer", "number", "boolean") if kind in inferred]
+    if any(value is None for value in values):
+        ordered.append("null")
+    schema["type"] = ordered[0] if len(ordered) == 1 else ordered
 
 
 def _is_object_schema(schema: dict[str, Any]) -> bool:
@@ -248,6 +272,8 @@ def make_openai_structured_output_schema(schema: dict[str, Any]) -> dict[str, An
 
         if current.get("type") == "array":
             current["items"] = convert(current.get("items", {}), (*path, "items"))
+
+        _ensure_enum_type(current)
 
         if optional:
             current = _add_null_type(current)
