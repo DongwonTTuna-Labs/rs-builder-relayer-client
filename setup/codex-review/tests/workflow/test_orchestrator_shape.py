@@ -109,8 +109,10 @@ def test_workflow_uses_codex_action_for_model_execution():
     assert len(steps) >= 10
     for job_name, step in steps:
         with_inputs = step["with"]
-        assert with_inputs["openai-api-key"] == "${{ steps.relay-token.outputs.relay_token }}", job_name
-        assert with_inputs["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses", job_name
+        assert "openai-api-key" not in with_inputs, job_name
+        assert "responses-api-endpoint" not in with_inputs, job_name
+        assert with_inputs["codex-args"] == "${{ steps.relay-token.outputs.codex_args }}", job_name
+        assert step["env"]["AI_RELAY_API_KEY"] == "${{ steps.relay-token.outputs.relay_token }}", job_name
         assert with_inputs["sandbox"] == "read-only", job_name
         assert with_inputs["safety-strategy"] == "read-only", job_name
         assert with_inputs["allow-users"] == "DongwonTTuna", job_name
@@ -121,6 +123,23 @@ def test_workflow_uses_codex_action_for_model_execution():
         assert with_inputs["output-schema-file"].endswith(".openai.schema.json"), job_name
         assert "codex-review-artifacts/schemas/" in with_inputs["output-schema-file"], job_name
         assert with_inputs["working-directory"], job_name
+
+
+def test_codex_action_reuses_relay_home_for_rootless_server_info_placeholder():
+    jobs = load_workflow()["jobs"]
+    for job_name, job in jobs.items():
+        relay_steps = [
+            step
+            for step in job.get("steps", [])
+            if step.get("uses") == "DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main"
+        ]
+        action_steps = [step for step in job.get("steps", []) if step.get("uses") == CODEX_ACTION]
+        if not action_steps:
+            continue
+        assert len(relay_steps) == 1, job_name
+        relay_home = relay_steps[0]["with"]["codex-home"]
+        for step in action_steps:
+            assert step["with"]["codex-home"] == relay_home, job_name
 
 
 def test_workflow_generates_openai_strict_schemas_for_codex_action():

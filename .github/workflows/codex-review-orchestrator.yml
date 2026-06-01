@@ -160,6 +160,8 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage00-lifecycle-result.v1 --out codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
       - name: Run Codex lifecycle model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage00/lifecycle-prompt.md
           output-file: codex-review-artifacts/stage00/lifecycle-result.json
@@ -167,9 +169,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -296,6 +297,8 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage01-axis-findings.v1 --out codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
       - name: Run Codex axis model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
           output-file: codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json
@@ -303,9 +306,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-${{ matrix.axis }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -408,6 +410,8 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage02-techlead-decision.v1 --out codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
       - name: Run Codex techlead model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage02/prompt.md
           output-file: codex-review-artifacts/stage02/techlead-decision.json
@@ -415,9 +419,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -601,6 +604,8 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-plan.v1 --out codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
       - name: Run Codex inventory model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage03/design-inventory.prompt.md
           output-file: codex-review-artifacts/stage03/design-inventory.raw.json
@@ -608,9 +613,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-inventory
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -620,6 +624,8 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-clusters-prompt --inventory codex-review-artifacts/stage03/design-inventory.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-clusters.prompt.md
       - name: Run Codex cluster model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage03/design-clusters.prompt.md
           output-file: codex-review-artifacts/stage03/design-clusters.raw.json
@@ -627,9 +633,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-clusters
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -639,6 +644,8 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-analysis-prompt --inventory codex-review-artifacts/stage03/design-clusters.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/cluster-analysis.prompt.md
       - name: Run Codex analysis model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage03/cluster-analysis.prompt.md
           output-file: codex-review-artifacts/stage03/cluster-analysis.raw.json
@@ -646,9 +653,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-analysis
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -658,6 +664,8 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-plan-prompt --pr-context codex-review-artifacts/stage03/design-context.json --inventory codex-review-artifacts/stage03/design-clusters.json --result codex-review-artifacts/stage03/cluster-analysis.json --out codex-review-artifacts/stage03/design-plan.prompt.md
       - name: Run Codex design plan model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage03/design-plan.prompt.md
           output-file: codex-review-artifacts/stage03/design-plan.raw.json
@@ -665,9 +673,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-plan
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -725,6 +732,8 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage04-design-chief-decision.v1 --out codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
       - name: Run Codex design chief model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: codex-review-artifacts/stage04/prompt.md
           output-file: codex-review-artifacts/stage04/chief-decision.json
@@ -732,9 +741,8 @@ jobs:
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -920,6 +928,8 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage05-fix-agent-result.v1 --out trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
       - name: Run Codex fix agent model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
@@ -927,9 +937,8 @@ jobs:
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}-${{ matrix.task_path }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.task_path }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -1019,6 +1028,8 @@ jobs:
       - name: Run Codex merged fix model
         if: steps.merge_route.outputs.needs_model == 'true'
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
           prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merge-prompt.md
           output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merged-fix.raw.json
@@ -1026,9 +1037,8 @@ jobs:
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only
-          openai-api-key: ${{ steps.relay-token.outputs.relay_token }}
-          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-action-home-${{ github.job }}
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
