@@ -67,7 +67,7 @@ def test_app_token_steps_include_current_codex_app_secret_fallbacks():
             if "codex-review auth app-token" in str(step.get("run", "")):
                 app_token_steps.append(step)
 
-    assert len(app_token_steps) == 5
+    assert len(app_token_steps) == 6
     for step in app_token_steps:
         env = step.get("env", {})
         assert env.get("CODEX_APP_ID") == "${{ secrets.CODEX_APP_ID }}"

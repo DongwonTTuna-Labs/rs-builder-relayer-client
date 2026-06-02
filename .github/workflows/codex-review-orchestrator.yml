@@ -68,6 +68,7 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review event resolve-current --out codex-review-artifacts/event/event-context.json
           workflow-helper/setup/codex-review/bin/codex-review context pr --event "$GITHUB_EVENT_PATH" --pr-context codex-review-artifacts/event/event-context.json --out codex-review-artifacts/event/pr-context.json
           workflow-helper/setup/codex-review/bin/codex-review context changed-lines --in codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/event/changed-lines.json
+          workflow-helper/setup/codex-review/bin/codex-review loop read-state --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/event/loop-state.json
           workflow-helper/setup/codex-review/bin/codex-review context docs --repo-path . --out codex-review-artifacts/event/docs-context.md
           workflow-helper/setup/codex-review/bin/codex-review context openspec --pr-context codex-review-artifacts/event/pr-context.json --repo-path . --out codex-review-artifacts/event/openspec-context.json
           workflow-helper/setup/codex-review/bin/codex-review context openspec-markdown --in codex-review-artifacts/event/openspec-context.json --out codex-review-artifacts/event/openspec-context.md
@@ -1380,9 +1381,16 @@ jobs:
         with:
           name: codex-review-stage06-semantic-safety
           path: trusted/codex-review-artifacts/stage06
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: codex-review-stage03
+          path: trusted/codex-review-artifacts/stage03
       - env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
         run: workflow-helper/setup/codex-review/bin/codex-review stage07 validate-fix --in trusted/codex-review-artifacts/stage06/merged-fix.json --semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json
+      - name: Check autofix loop budget (oscillation / round cap)
+        run: workflow-helper/setup/codex-review/bin/codex-review stage07 check-loop-budget --in trusted/codex-review-artifacts/stage07/validated-fix.json --result trusted/codex-review-artifacts/stage06/merged-fix.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --out trusted/codex-review-artifacts/stage07/validated-fix.json
       - id: validation_result
         run: workflow-helper/setup/codex-review/bin/codex-review stage07 write-validation-outputs --in trusted/codex-review-artifacts/stage07/validated-fix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -1414,7 +1422,9 @@ jobs:
         needs.push_validate_no_token.outputs.validation_status == 'validation_failed' ||
         needs.push_validate_no_token.outputs.validation_status == 'semantic_safety_missing' ||
         needs.push_validate_no_token.outputs.validation_status == 'semantic_safety_rejected' ||
-        needs.push_validate_no_token.outputs.validation_status == 'semantic_safety_hash_mismatch'
+        needs.push_validate_no_token.outputs.validation_status == 'semantic_safety_hash_mismatch' ||
+        needs.push_validate_no_token.outputs.validation_status == 'oscillation_detected' ||
+        needs.push_validate_no_token.outputs.validation_status == 'max_rounds_reached'
       )
     permissions:
       contents: read
@@ -1535,6 +1545,11 @@ jobs:
         with:
           name: codex-review-stage07-validation
           path: trusted/codex-review-artifacts/stage07
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: codex-review-stage03
+          path: trusted/codex-review-artifacts/stage03
       - id: app_token
         env:
           CODEX_REVIEW_GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_GITHUB_APP_ID }}
@@ -1551,6 +1566,22 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review stage07 commit-push --in trusted/codex-review-artifacts/stage06/merged-fix.json --validation trusted/codex-review-artifacts/stage07/validated-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/push-result.json
       - id: push_result
         run: workflow-helper/setup/codex-review/bin/codex-review stage07 write-outputs --in trusted/codex-review-artifacts/stage07/push-result.json
+      - id: app_token_loop_state
+        if: steps.push_result.outputs.push_status == 'pushed'
+        env:
+          CODEX_REVIEW_GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_GITHUB_APP_ID }}
+          CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode loop-state --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/loop-state-token.json
+      - name: Record push into loop state history
+        if: steps.push_result.outputs.push_status == 'pushed'
+        env:
+          GITHUB_TOKEN: ${{ steps.app_token_loop_state.outputs.token }}
+          CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token_loop_state.outputs.permissions_json }}
+        run: workflow-helper/setup/codex-review/bin/codex-review stage07 record-push --in trusted/codex-review-artifacts/stage07/push-result.json --result trusted/codex-review-artifacts/stage06/merged-fix.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/loop-state-record.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage07
