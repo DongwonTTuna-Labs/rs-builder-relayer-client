@@ -350,6 +350,18 @@ def _handle_stage00(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             threads = raw.get("threads") or raw.get("review_threads") if isinstance(raw, dict) else raw
         inv = collect_thread_inventory(pr, threads or [], [], config)
         return inv, "stage00-thread-inventory.v1"
+    if cmd in {"collect-resolved", "resolved-memory"}:
+        from .github.review_threads import collect_review_threads
+        from .stages.stage00_resolve_gate.collect import build_resolved_memory
+        pr = _maybe_json(args.pr_context, {})
+        raw = _json_or_default(args.in_path, None)
+        if raw is None:
+            owner, repo = _repo_parts_from_context(pr)
+            pr_number = pr.get("pr_number")
+            threads = collect_review_threads(owner, repo, int(pr_number), args.token) if owner and repo and pr_number and args.token else []
+        else:
+            threads = raw.get("threads") or raw.get("review_threads") if isinstance(raw, dict) else raw
+        return build_resolved_memory(pr, threads or [], config), "stage00-resolved-memory.v1"
     if cmd in {"default-result", "noop-result", "model-result"}:
         inv = _maybe_json(args.inventory or args.in_path, {})
         decisions = []
@@ -435,6 +447,14 @@ def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if cmd == "model-result":
             return _model_or_fallback(args, stage="stage02", expected_schema="stage02-techlead-decision.v1", fallback=fallback), "stage02-techlead-decision.v1"
         return fallback, "stage02-techlead-decision.v1"
+    if cmd in {"filter-resolved", "filter-against-resolved"}:
+        from .stages.stage02_techlead.filter_resolved import filter_findings_against_resolved
+        combined = _maybe_json(args.in_path, {"findings": []})
+        resolved_memory = _json_or_default(args.inventory, {})
+        pr = _json_or_default(args.pr_context, {})
+        changed_line_map = pr.get("changed_line_map") or {}
+        filtered, _ = filter_findings_against_resolved(combined, resolved_memory, changed_line_map, config)
+        return filtered, "stage01-combined-findings.v1"
     if cmd in {"build-techlead-prompt", "prompt"}:
         from .stages.stage02_techlead.prompt import build_techlead_prompt
         return build_techlead_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), config), None

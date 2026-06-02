@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_review.artifacts import write_json
-from codex_review.github.markers import extract_root_cause_metadata, has_marker
+from codex_review.github.markers import extract_root_cause_metadata, has_marker, parse_marker
 from codex_review.github.review_threads import is_thread_resolved, normalize_thread_node
 from codex_review.security.provenance import is_trusted_codex_review_author
 
@@ -117,3 +117,57 @@ def collect_thread_inventory(pr_context: dict[str, Any], threads: list[dict[str,
 
 def write_thread_inventory(inventory: dict[str, Any], out_path: str | Path) -> Path:
     return write_json(out_path, inventory, "stage00-thread-inventory.v1")
+
+
+def collect_resolved_memory(threads: list[dict[str, Any]], policy: dict[str, Any]) -> list[dict[str, Any]]:
+    """Harvest ALREADY-resolved Codex threads so later runs can avoid re-flagging them.
+
+    This is the inverse of ``filter_eligible_threads`` (which skips resolved threads).
+    For each resolved Codex thread we recover the issue identity (``root_cause_key`` from
+    the original inline marker) and the lifecycle ``state`` (from the ``codex-review:resolved``
+    marker the resolve reply now embeds), plus the human-readable reason.
+    """
+    out: list[dict[str, Any]] = []
+    for raw in threads or []:
+        thread = normalize_thread_node(raw) if "thread_id" not in raw and "comments" in raw else raw
+        if not is_thread_resolved(thread):
+            continue
+        comments = _comments(thread)
+        if not any(is_trusted_codex_review_author(_author(c), policy) and "codex-review" in (c.get("body") or "") for c in comments):
+            continue
+        root_cause_key = path = line = state = reason = head_sha = None
+        for c in comments:
+            body = c.get("body", "")
+            if root_cause_key is None:
+                meta = extract_root_cause_metadata(body)
+                if meta.get("valid") and meta.get("root_cause_key") and meta.get("marker") in {"codex-review:inline", "codex-review:lifecycle", "text"}:
+                    root_cause_key = meta["root_cause_key"]
+                    path = c.get("path") or thread.get("path")
+                    line = c.get("line") or thread.get("line")
+            resolved = parse_marker(body, "codex-review:resolved")
+            if resolved and not resolved.get("_invalid"):
+                state = resolved.get("state") or state
+                head_sha = resolved.get("head_sha") or head_sha
+                reason = body
+                if root_cause_key is None and resolved.get("root_cause_key"):
+                    root_cause_key = resolved["root_cause_key"]
+        out.append({
+            "thread_id": thread.get("thread_id") or thread.get("id"),
+            "root_cause_key": root_cause_key,
+            "state": state,
+            "reason": reason,
+            "path": path,
+            "line": line,
+            "head_sha": head_sha,
+        })
+    return out
+
+
+def build_resolved_memory(pr_context: dict[str, Any], threads: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    policy = config.get("trusted", config)
+    items = collect_resolved_memory(threads, policy)
+    return {"schema_version": "stage00-resolved-memory.v1", "head_sha": pr_context.get("head_sha"), "pr_number": pr_context.get("pr_number"), "items": items, "count": len(items)}
+
+
+def write_resolved_memory(memory: dict[str, Any], out_path: str | Path) -> Path:
+    return write_json(out_path, memory, "stage00-resolved-memory.v1")

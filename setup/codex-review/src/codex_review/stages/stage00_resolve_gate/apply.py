@@ -99,7 +99,7 @@ def apply_lifecycle_result(result: dict[str, Any], pr_context: dict[str, Any], t
                     issue_url = planned["result"].get("html_url")
             issues.append(planned)
         if state in TERMINAL_LIFECYCLE_STATES:
-            body = render_resolve_reply(decision, issue_url)
+            body = render_resolve_reply(decision, issue_url, head_sha=pr_context.get("head_sha"))
             reply = {"thread_id": decision.get("thread_id"), "body": body}
             if not dry_run and token:
                 reply["result"] = reply_to_thread(str(decision.get("thread_id")), body, token)

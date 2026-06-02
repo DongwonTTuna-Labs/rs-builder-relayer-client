@@ -116,7 +116,9 @@ jobs:
           path: codex-review-artifacts/event
       - env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: workflow-helper/setup/codex-review/bin/codex-review stage00 collect --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/thread-inventory.json
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review stage00 collect --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/thread-inventory.json
+          workflow-helper/setup/codex-review/bin/codex-review stage00 collect-resolved --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/resolved-memory.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage00-collect
@@ -423,16 +425,21 @@ jobs:
         with:
           name: codex-review-stage01-combined
           path: codex-review-artifacts/stage01
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-stage00-collect
+          path: codex-review-artifacts/stage00
       - name: Setup Codex relay
         id: relay-token
         uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
         with:
           codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
-      - name: Build techlead prompt
+      - name: Filter resolved findings and build techlead prompt
         run: |
           mkdir -p codex-review-artifacts/stage02
-          workflow-helper/setup/codex-review/bin/codex-review stage02 build-techlead-prompt --in codex-review-artifacts/stage01/combined-findings.json --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage02/prompt.md
+          workflow-helper/setup/codex-review/bin/codex-review stage02 filter-resolved --in codex-review-artifacts/stage01/combined-findings.json --inventory codex-review-artifacts/stage00/resolved-memory.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage02/combined-findings.filtered.json
+          workflow-helper/setup/codex-review/bin/codex-review stage02 build-techlead-prompt --in codex-review-artifacts/stage02/combined-findings.filtered.json --pr-context codex-review-artifacts/event/pr-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage02/prompt.md
       - name: Prepare techlead schema
         run: |
           mkdir -p codex-review-artifacts/schemas
@@ -454,7 +461,7 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate techlead decision
-        run: workflow-helper/setup/codex-review/bin/codex-review stage02 validate --inventory codex-review-artifacts/stage01/combined-findings.json --in codex-review-artifacts/stage02/techlead-decision.json --repo-path pr-head --out codex-review-artifacts/stage02/techlead-decision.validated.json
+        run: workflow-helper/setup/codex-review/bin/codex-review stage02 validate --inventory codex-review-artifacts/stage02/combined-findings.filtered.json --in codex-review-artifacts/stage02/techlead-decision.json --repo-path pr-head --out codex-review-artifacts/stage02/techlead-decision.validated.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage02-model

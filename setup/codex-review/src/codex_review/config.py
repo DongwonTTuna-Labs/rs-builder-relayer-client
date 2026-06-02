@@ -19,6 +19,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_inline_comments": 12,
         "max_inline_comments_per_file": 3,
         "require_changed_right_line": True,
+        "suppress_resolved_states": ["false_positive", "stale_obsolete", "duplicate_of_issue", "defer_to_issue"],
+        "resolved_by_code_recheck_changed": True,
     },
     "context": {
         "model_token_budget": 180000,

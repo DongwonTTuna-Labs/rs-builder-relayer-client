@@ -21,6 +21,15 @@ review:
   max_inline_comments: 12
   max_inline_comments_per_file: 3
   require_changed_right_line: true
+  # Anti re-flag: findings matching a thread previously resolved in one of these
+  # states are suppressed before techlead triage. resolved_by_code is re-allowed
+  # only if the resolved location changed since resolution (recheck below).
+  suppress_resolved_states:
+    - false_positive
+    - stale_obsolete
+    - duplicate_of_issue
+    - defer_to_issue
+  resolved_by_code_recheck_changed: true
 
 # Token budgets for model prompt assembly. The model context window is ~240k tokens;
 # model_token_budget is the per-prompt safety ceiling and the others bound the
