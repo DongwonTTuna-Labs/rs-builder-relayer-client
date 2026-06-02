@@ -28,12 +28,14 @@ def load_app_credentials_from_env() -> dict[str, str]:
         os.environ.get("CODEX_REVIEW_GITHUB_APP_ID")
         or os.environ.get("CODEX_REVIEW_APP_ID")
         or os.environ.get("GITHUB_APP_ID")
+        or os.environ.get("CODEX_APP_ID")
         or os.environ.get("APP_ID")
     )
     key = (
         os.environ.get("CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY")
         or os.environ.get("CODEX_REVIEW_APP_PRIVATE_KEY")
         or os.environ.get("GITHUB_APP_PRIVATE_KEY")
+        or os.environ.get("CODEX_APP_PRIVATE_KEY")
         or os.environ.get("APP_PRIVATE_KEY")
     )
     if not app_id or not key:

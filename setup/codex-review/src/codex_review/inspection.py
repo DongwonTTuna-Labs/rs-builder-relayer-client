@@ -33,16 +33,19 @@ def validate_inspection_evidence(
             assert_no_secret_patterns(value, f"{context}.inspection_evidence[{index}].{key}")
             item[key] = value
 
-        evidence_path = Path(item["path"])
-        if evidence_path.is_absolute() or ".." in evidence_path.parts:
-            raise ValidationError(f"{context} inspection_evidence path must be repo-relative: {item['path']}")
         if root is not None:
-            candidate = (root / evidence_path).resolve()
+            raw_evidence_path = Path(item["path"])
+            candidate = raw_evidence_path.resolve() if raw_evidence_path.is_absolute() else (root / raw_evidence_path).resolve()
             try:
-                candidate.relative_to(root)
+                evidence_path = candidate.relative_to(root)
             except ValueError as exc:
                 raise ValidationError(f"{context} inspection_evidence path escapes repo: {item['path']}") from exc
             if not candidate.is_file():
                 raise ValidationError(f"{context} inspection_evidence path does not exist: {item['path']}")
+            item["path"] = evidence_path.as_posix()
+        else:
+            evidence_path = Path(item["path"])
+            if evidence_path.is_absolute() or ".." in evidence_path.parts:
+                raise ValidationError(f"{context} inspection_evidence path must be repo-relative: {item['path']}")
         items.append(item)
     return items
