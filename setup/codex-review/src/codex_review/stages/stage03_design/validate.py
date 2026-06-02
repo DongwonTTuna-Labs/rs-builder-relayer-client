@@ -21,10 +21,23 @@ def validate_plan_tests(plan: dict[str, Any]) -> None:
         raise ValidationError("design plan missing tests")
 
 
+def collect_semantic_design_warnings(plan: dict[str, Any], config: dict[str, Any]) -> list[str]:
+    text = str(plan).lower()
+    dangerous = [k.lower() for k in config.get("autofix", {}).get("dangerous_keywords", [])]
+    return sorted({k for k in dangerous if k and k in text})
+
+
 def validate_no_unsafe_design(plan: dict[str, Any], config: dict[str, Any]) -> None:
-    text=str(plan).lower(); dangerous=[k.lower() for k in config.get("autofix", {}).get("dangerous_keywords", [])]
-    if any(k and k in text for k in dangerous) and not plan.get("requires_human_override"):
-        raise ValidationError("design plan includes dangerous keyword and requires human review")
+    """Backward-compatible non-blocking semantic-risk hook.
+
+    Older callers import this function expecting a validation hook. OpenSpec-backed
+    design plans must not be hard-stopped by words such as auth/nonce/signing;
+    semantic risks belong in the plan's risk/test criteria and in the model
+    review, while trusted scripts enforce mechanical invariants later.
+    """
+    warnings = collect_semantic_design_warnings(plan, config)
+    if warnings and isinstance(plan, dict):
+        plan.setdefault("semantic_risk_hints", warnings)
 
 
 def validate_stage03_artifact_chain(context: dict[str, Any], inventory: dict[str, Any], clusters: dict[str, Any], analyses: list[dict[str, Any]], plan: dict[str, Any]) -> dict[str, Any]:

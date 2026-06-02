@@ -10,8 +10,8 @@ loop from the current `main` workflow.
 
 The smoke must prove that the review automation can treat OpenSpec artifacts as the
 source of truth, find a missing docs-only implementation task, design a bounded fix,
-prepare an autofix patch, and either dry-run or push the fix through the GitHub App
-token path.
+prepare an autofix patch, and push the fix through the GitHub App
+token path without a manual enable variable.
 
 ## Goals
 
@@ -27,7 +27,7 @@ token path.
 - Do not change GitHub Actions workflow logic in this smoke PR.
 - Do not change exported Rust interfaces, generated fixtures, venue-facing execution
   logic, or deposit-wallet live execution gates.
-- Do not enable push or issue side-effect gates from repository contents.
+- Do not require push or issue-fallback enable variables in repository contents.
 - Do not merge the smoke PR automatically.
 
 ## Expected Initial Gap

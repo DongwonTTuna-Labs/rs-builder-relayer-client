@@ -19,7 +19,7 @@
 - workflow/prompt/schema/config 수정 금지.
 - task 밖 리팩토링 금지.
 - secret-like material 생성 금지.
-- 안전하지 않으면 no_safe_fix.
+- OpenSpec-backed task에서 불확실하거나 보수적이라는 이유로 no_safe_fix를 내지 않는다. allowed_files 불가능, source 부재, secret 필요, 정책 충돌처럼 구체적 mechanical blocker가 있을 때만 no_safe_fix를 낸다.
 
 ## 구현 시 채워야 할 섹션
 - System role statement

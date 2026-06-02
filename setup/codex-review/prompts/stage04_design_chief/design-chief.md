@@ -16,9 +16,9 @@ design plan이 자동 수정 agent에게 넘겨도 될 만큼 안전하고 구�
 `stage04-design-chief-decision.v1` JSON. status, reason, fix_policy, task_hints, risk_flags를 포함한다.
 
 ## 반드시 지킬 규칙
-- open question이 남으면 approved_for_fix를 금지한다.
+- OpenSpec-backed plan의 open question은 먼저 acceptance criteria/test로 닫는다. secret/live credential/권한 없음/누락된 OpenSpec source 같은 non-executable blocker가 없고 edit_sequence/tests/acceptance_criteria가 있으면 approved_for_fix로 보낸다.
 - 자동 수정 가능 범위와 forbidden files를 명시한다.
-- public API/security/auth/signing/nonce/live-capable 위험은 conservative하게 막는다.
+- public API/security/auth/signing/nonce/live-capable 위험은 conservative block이 아니라 risk_flags와 required tests로 다룬다. 기계적 정책 위반이나 non-executable blocker만 멈춘다.
 - task hint는 design plan source id와 연결한다.
 
 ## 구현 시 채워야 할 섹션

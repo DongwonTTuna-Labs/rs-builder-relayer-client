@@ -14,7 +14,8 @@ and now collects OpenSpec context into:
 Model jobs use `openai/codex-action` with relay-provided `codex-args` and
 `AI_RELAY_API_KEY`. They do not use `openai-api-key`, `responses-api-endpoint`, or the
 Responses proxy path that required sudo hardening. Trusted write stages mint GitHub App
-installation tokens only when side-effect gates are enabled.
+installation tokens directly when a write-capable stage is reached; push and issue
+fallback are default actual write paths rather than repo-variable-gated dry-runs.
 
 ## Smoke Flow
 
@@ -34,11 +35,12 @@ installation tokens only when side-effect gates are enabled.
    non-executable blocker exists.
 7. Stage05 prepares agent tasks and prompts.
 8. Stage06 merges model patch output.
-9. Stage07 validates the patch without any write token and, if `CODEX_REVIEW_ENABLE_PUSH`
-   is true, pushes only through a GitHub App token.
+9. Stage07 validates the patch without any write token, then the trusted push job
+   always mints a GitHub App token and attempts the same-repository PR push.
 10. Stage08 records reentry after a successful push.
-11. Stage09 creates or dry-runs an idempotent issue fallback only for missing OpenSpec,
-    fork mutation, human-only blockers, or no-diff repeat failures.
+11. Stage09 creates or updates an idempotent issue fallback, without a separate
+    enable flag, for missing OpenSpec, fork mutation, human-only blockers, or
+    no-diff repeat failures.
 
 ## Required Fix Artifact
 
@@ -50,7 +52,7 @@ file must explain the intended OpenSpec-backed loop in repository documentation 
 - Implementable OpenSpec-backed findings must flow to stage05 instead of stopping at
   generic human approval.
 - Actual branch mutation is limited to same-repository PRs and GitHub App token writes.
-- Side-effect gates remain off by default.
+- Push and issue fallback are default write paths once the trusted stage is reached; no separate enable variable is required.
 - Rootless Codex action execution must avoid proxy sudo paths.
 - Issue fallback is the terminal path for non-executable work.
 
@@ -59,7 +61,7 @@ file must explain the intended OpenSpec-backed loop in repository documentation 
 - The smoke PR must not modify `.github/workflows`, `setup/codex-review`, `src`, or test
   fixtures.
 - The only expected autofix target is `docs/CODEX_REVIEW_LGTM_LOOP.md`.
-- Push is allowed only after dry-run artifacts show a docs-only patch.
+- Push is allowed only through a repository-scoped GitHub App installation token and same-repository PR head validation.
 - If the PR comes from a fork, the workflow must not mutate the branch and must route to
   stage09 issue fallback.
 - Sensitive credentials, OIDC tokens, relay credentials, and GitHub App credentials
@@ -72,6 +74,7 @@ file must explain the intended OpenSpec-backed loop in repository documentation 
 - `openspec-context.json` has `present: true` and includes this change directory.
 - Stage04 produces or validates `approved_for_fix` for the docs-only plan.
 - Stage05 prepare is not skipped for a same-repository PR.
-- Stage07 dry-run patch touches only `docs/CODEX_REVIEW_LGTM_LOOP.md`.
-- With push enabled after review, the bot commits the missing docs file and the follow-up
-  run terminates as LGTM, noop, or no-fix rather than repeating the same patch.
+- Stage07 validation confirms the patch touches only `docs/CODEX_REVIEW_LGTM_LOOP.md`.
+- After validation, the bot commits the missing docs file through the GitHub App
+  token path and the follow-up run terminates as LGTM, noop, or no-fix rather than
+  repeating the same patch.

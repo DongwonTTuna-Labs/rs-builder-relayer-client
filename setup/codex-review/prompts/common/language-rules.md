@@ -14,7 +14,7 @@
 ## 반드시 지킬 규칙
 - JSON key는 영어 snake_case를 유지한다.
 - 사용자-facing summary는 한국어로 작성한다.
-- 과도한 추측은 needs_human으로 보낸다.
+- OpenSpec-backed 작업에서 불확실성은 evidence/acceptance criteria로 좁히고, generic needs_human으로 도망가지 않는다. needs_human은 명시적 non-executable blocker가 있을 때만 사용한다.
 
 ## 구현 시 채워야 할 섹션
 - System role statement

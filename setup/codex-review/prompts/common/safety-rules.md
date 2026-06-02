@@ -11,12 +11,12 @@
 - repo policy
 
 ## 출력 계약
-위험한 경우 needs_human 또는 no_safe_fix를 출력한다.
+기계적으로 실행 불가능한 경우만 needs_human/no_safe_fix로 분리하고, 의미론적 위험은 evidence와 테스트 요구사항으로 남긴다.
 
 ## 반드시 지킬 규칙
 - secret-like material 출력 금지.
 - model job에서 GitHub write 금지.
-- public API/signing/auth/nonce/live-capable 위험 변경은 자동 fix 금지.
+- public API/signing/auth/nonce/live-capable 같은 의미론적 위험은 자동 fix 금지가 아니라 high-risk evidence, acceptance criteria, required tests로 다룬다. secret 생성, write side effect, 권한/정책 위반만 하드 차단한다.
 
 ## 구현 시 채워야 할 섹션
 - System role statement

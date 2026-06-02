@@ -43,23 +43,25 @@ tests, acceptance criteria, and no real execution blocker.
 
 ### Requirement: Same-repository autofix remains bounded
 
-Codex Review SHALL prepare and validate autofix work for same-repository PRs only.
-The smoke fix SHALL be limited to `docs/CODEX_REVIEW_LGTM_LOOP.md`.
+Codex Review SHALL prepare, validate, commit, and push autofix work for
+same-repository PRs once an executable OpenSpec-backed plan reaches stage07. The smoke
+fix SHALL be limited to `docs/CODEX_REVIEW_LGTM_LOOP.md`.
 
-#### Scenario: Side-effect gates are disabled
+#### Scenario: Stage07 reaches a same-repository docs-only fix
 
-- **GIVEN** `CODEX_REVIEW_ENABLE_PUSH` is not `true`
-- **WHEN** stage07 validates the merged fix
-- **THEN** no commit is pushed
-- **AND** the artifact shows a dry-run patch for `docs/CODEX_REVIEW_LGTM_LOOP.md`
-
-#### Scenario: Push gate is enabled after dry-run review
-
-- **GIVEN** the dry-run patch only touches `docs/CODEX_REVIEW_LGTM_LOOP.md`
-- **AND** `CODEX_REVIEW_ENABLE_PUSH` is temporarily set to `true`
-- **WHEN** stage07 commit and push runs
+- **GIVEN** the patch only touches `docs/CODEX_REVIEW_LGTM_LOOP.md`
+- **AND** the PR head repository is the same as the base repository
+- **WHEN** stage07 validate, commit, and push runs
 - **THEN** it uses a GitHub App installation token
+- **AND** it does not require a push enable variable
 - **AND** it does not rely on `GITHUB_TOKEN` write permissions
+
+#### Scenario: Issue fallback writes without an enable variable
+
+- **GIVEN** stage09 is reached for missing OpenSpec, fork mutation, no-diff repeat, or another terminal fallback reason
+- **WHEN** stage09 apply runs
+- **THEN** it uses a GitHub App installation token to create or update the idempotent issue
+- **AND** it does not require an issue-fallback enable variable
 
 ### Requirement: Rootless model execution is preserved
 
@@ -78,11 +80,12 @@ requires sudo hardening.
 ### Requirement: Non-executable work routes to issue fallback
 
 Codex Review SHALL use stage09 issue fallback when automation cannot safely mutate the
-PR branch or when OpenSpec context is missing.
+PR branch or when OpenSpec context is missing. Stage09 SHALL create or update the
+idempotent issue through a GitHub App installation token without requiring a manual issue-fallback-enable variable.
 
 #### Scenario: Fork PR cannot be mutated
 
 - **GIVEN** the PR head repository differs from the base repository
 - **WHEN** an OpenSpec-backed fix is required
 - **THEN** Codex Review does not push to the fork branch
-- **AND** stage09 prepares an idempotent issue fallback
+- **AND** stage09 creates or updates an idempotent issue fallback

@@ -14,6 +14,7 @@
 
 - [ ] Codex Review detects the missing docs file from this OpenSpec change.
 - [ ] Codex Review creates a stage03 plan that only allows `docs/CODEX_REVIEW_LGTM_LOOP.md`.
-- [ ] Codex Review dry-runs a docs-only patch while side-effect gates are disabled.
-- [ ] After human inspection, a controlled push run may add the docs file through the GitHub App token path.
+- [ ] Codex Review validates a docs-only patch before the trusted push job.
+- [ ] Codex Review pushes the docs file through the GitHub App token path without requiring a manual push-enable variable.
+- [ ] Issue fallback creates or updates the idempotent GitHub issue without requiring a manual issue-fallback-enable variable.
 - [ ] A follow-up run stops without repeating the same docs patch.

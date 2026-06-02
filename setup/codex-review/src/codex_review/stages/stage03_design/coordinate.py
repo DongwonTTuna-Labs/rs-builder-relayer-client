@@ -20,7 +20,9 @@ def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, 
     instructions = (
         "Coordinate a candidate design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n"
         "Do not include human-routing fields in this artifact. stage04 design chief decides whether the "
-        "candidate is approved_for_fix, needs_human, rejected_plan, or no_fix_needed.\n"
+        "candidate is approved_for_fix, needs_human, rejected_plan, or no_fix_needed. For OpenSpec-backed "
+        "work, needs_human must be reserved for explicit non-executable blockers; otherwise close the plan "
+        "with edit_sequence, tests, and acceptance_criteria.\n"
     )
     return instructions + openspec_line + str({"context":design_context,"clusters":clusters,"analyses":analyses})
 

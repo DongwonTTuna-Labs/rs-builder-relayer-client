@@ -130,6 +130,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model-cwd", default=os.environ.get("CODEX_REVIEW_MODEL_CWD") or os.environ.get("CODEX_REVIEW_TRUSTED_CHECKOUT"))
     p.add_argument("--validation", default=None)
     p.add_argument("--schema", default=None)
+    p.add_argument("--semantic-safety", default=None)
 
 
 def _model_or_fallback(args: argparse.Namespace, *, stage: str, expected_schema: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -395,6 +396,12 @@ def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage02_techlead.classify import build_review_publication
         combined = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
         return build_review_publication(_maybe_json(args.in_path, {}), combined, config), "stage02-review-publication.v1"
+    if cmd in {"write-deferred-outputs", "deferred-outputs"}:
+        payload = _maybe_json(args.in_path, {})
+        count = len(payload.get("deferred_items") or [])
+        write_output("has_deferred_issue_items", "true" if count else "false")
+        write_output("deferred_issue_count", str(count))
+        return {"has_deferred_issue_items": bool(count), "deferred_issue_count": count}, None
     if cmd == "publish":
         from .stages.stage02_techlead.publish import publish_review
         changed_payload = _json_or_default(args.changed_lines, {})
@@ -690,6 +697,21 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         pre = _maybe_json(args.inventory, {})
         chief = _maybe_json(args.result or args.chief_decision, {})
         return validate_merged_fix(_maybe_json(args.in_path, {}), pre, chief, config.get("autofix", {}), args.repo_path), "stage06-merged-fix.v1"
+    if cmd in {"build-semantic-safety-prompt", "semantic-safety-prompt"}:
+        from .stages.stage06_fix_merge.semantic_safety import build_semantic_patch_safety_prompt
+        prompt = build_semantic_patch_safety_prompt(
+            _maybe_json(args.in_path, {}),
+            _maybe_json(args.pr_context, {}),
+            _maybe_text(args.docs_context, ""),
+            repo_path=args.repo_path,
+        )
+        return prompt, None
+    if cmd in {"validate-semantic-safety", "semantic-safety-validate"}:
+        from .stages.stage06_fix_merge.semantic_safety import validate_semantic_patch_safety_result
+        return validate_semantic_patch_safety_result(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {})), "stage06-semantic-patch-safety.v1"
+    if cmd in {"write-semantic-safety-outputs", "semantic-safety-outputs"}:
+        from .stages.stage06_fix_merge.semantic_safety import write_semantic_safety_outputs
+        return write_semantic_safety_outputs(_maybe_json(args.in_path, {})), None
     if cmd == "render":
         from .stages.stage06_fix_merge.render import render_merged_fix_summary
         return render_merged_fix_summary(_maybe_json(args.in_path, {})), None
@@ -710,7 +732,14 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return run_required_tests(select_test_commands(_maybe_json(args.in_path, {}), config), args.repo_path), None
     if cmd in {"validate-fix", "test-apply", "validate-and-test"}:
         from .stages.stage07_push.orchestrate import validate_and_test_fix
-        return validate_and_test_fix(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, dry_run=args.dry_run), "stage07-validated-fix.v1"
+        return validate_and_test_fix(
+            _maybe_json(args.in_path, {}),
+            _maybe_json(args.pr_context, {}),
+            config,
+            args.repo_path,
+            dry_run=args.dry_run,
+            semantic_safety=_json_or_default(args.semantic_safety, {}),
+        ), "stage07-validated-fix.v1"
     if cmd == "commit":
         from .stages.stage07_push.orchestrate import commit_validated_fix
         return commit_validated_fix(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path), None
@@ -720,6 +749,13 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"push", "run"}:
         from .stages.stage07_push.orchestrate import run_push_flow
         return run_push_flow(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "stage07-push-result.v1"
+    if cmd in {"write-validation-outputs", "validation-outputs"}:
+        payload = _maybe_json(args.in_path, {})
+        status = str(payload.get("status") or "unknown")
+        requires_push_token = bool(payload.get("validated"))
+        write_output("validation_status", status)
+        write_output("requires_push_token", str(requires_push_token).lower())
+        return {"validation_status": status, "requires_push_token": requires_push_token}, None
     if cmd in {"write-outputs", "github-outputs"}:
         payload = _maybe_json(args.in_path, {})
         status = str(payload.get("status") or "unknown")
@@ -760,11 +796,15 @@ def _handle_stage09(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         payload = _json_or_default(args.in_path, {})
         reason = args.mode or payload.get("reason") or payload.get("route") or payload.get("status") or "manual_fallback"
         attempted = payload.get("attempted_stages") if isinstance(payload.get("attempted_stages"), list) else []
+        deferred_items = payload.get("deferred_items") if isinstance(payload.get("deferred_items"), list) else []
+        if deferred_items and not attempted:
+            attempted = ["stage02_defer_to_issue"]
         return build_issue_fallback_plan(
             reason=str(reason),
             pr_context=_maybe_json(args.pr_context, {}),
             openspec_context=_json_or_default(args.openspec_context, {}),
             attempted_stages=attempted,
+            deferred_items=deferred_items,
         ), "stage09-issue-fallback.v1"
     if cmd in {"apply", "publish"}:
         from .stages.stage09_issue_fallback.issue import apply_issue_fallback
