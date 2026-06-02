@@ -1,13 +1,22 @@
 from pathlib import Path
 import yaml
 
+from _pipeline import all_jobs as pipeline_jobs
+from _pipeline import all_text as pipeline_text
+from _pipeline import codex_action_steps as pipeline_codex_action_steps
+
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
+REVIEW = ROOT / ".github" / "workflows" / "codex-review.yml"
 CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
 
 
 def load_workflow():
     return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+
+
+def load_review():
+    return yaml.safe_load(REVIEW.read_text(encoding="utf-8"))
 
 
 def iter_job_steps():
@@ -24,15 +33,27 @@ def codex_action_steps():
     ]
 
 
-def test_single_orchestrator_workflow_exists():
+def test_codex_pipeline_workflow_files_present():
     workflows = list((ROOT / ".github" / "workflows").glob("*.yml")) + list((ROOT / ".github" / "workflows").glob("*.yaml"))
-    assert [p.name for p in workflows] == ["codex-review-orchestrator.yml"]
+    names = {p.name for p in workflows}
+    # Review is split into its own label-driven workflow; the orchestrator still
+    # hosts design/fix/issue during the migration.
+    assert "codex-review.yml" in names
+    assert "codex-review-orchestrator.yml" in names
+    known = {
+        "codex-review.yml",
+        "codex-design.yml",
+        "codex-fix.yml",
+        "codex-issue.yml",
+        "codex-review-orchestrator.yml",
+    }
+    assert names <= known
 
 
 def test_workflow_declares_expected_stage_order():
-    jobs = list(load_workflow()["jobs"].keys())
-    expected = [
-        "bootstrap_event",
+    review_jobs = list(load_review()["jobs"].keys())
+    assert review_jobs == [
+        "guard_and_event",
         "resolve_collect",
         "resolve_triage_model",
         "resolve_apply_trusted",
@@ -40,6 +61,10 @@ def test_workflow_declares_expected_stage_order():
         "review_combine",
         "techlead_model",
         "review_publish_trusted",
+        "finalize_labels",
+    ]
+    orchestrator_jobs = list(load_workflow()["jobs"].keys())
+    assert orchestrator_jobs == [
         "design_context",
         "design_prepare",
         "design_analysis_model",
@@ -54,7 +79,6 @@ def test_workflow_declares_expected_stage_order():
         "issue_fallback_trusted",
         "push_trusted",
     ]
-    assert jobs == expected
 
 
 def test_workflow_cancels_human_stale_runs_but_not_bot_autofix_push_runs():
@@ -116,8 +140,8 @@ def test_workflow_dispatch_pr_number_is_threaded_into_context():
 
 
 def test_bootstrap_collects_openspec_context_artifacts():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    section = text.split("bootstrap_event:", 1)[1].split("resolve_collect:", 1)[0]
+    text = REVIEW.read_text(encoding="utf-8")
+    section = text.split("guard_and_event:", 1)[1].split("resolve_collect:", 1)[0]
     assert "context openspec --pr-context codex-review-artifacts/event/pr-context.json" in section
     assert "context openspec-markdown --in codex-review-artifacts/event/openspec-context.json" in section
     assert "openspec-context.json" in section
@@ -126,7 +150,7 @@ def test_bootstrap_collects_openspec_context_artifacts():
 
 
 def test_workflow_uses_codex_action_for_model_execution():
-    steps = codex_action_steps()
+    steps = pipeline_codex_action_steps()
     assert len(steps) >= 10
     for job_name, step in steps:
         with_inputs = step["with"]
@@ -146,41 +170,40 @@ def test_workflow_uses_codex_action_for_model_execution():
         assert with_inputs["working-directory"], job_name
 
 
-def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
-    jobs = load_workflow()["jobs"]
-    stage_jobs = [
-        "review_axes_model",
-        "techlead_model",
-        "design_context",
-        "design_prepare",
-        "design_analysis_model",
-        "design_plan_model",
-        "design_chief_model",
+def _assert_pr_head_worktree(job, job_name, head_job):
+    checkout_steps = [
+        step
+        for step in job.get("steps", [])
+        if step.get("uses", "").startswith("actions/checkout@")
+        and (step.get("with") or {}).get("path") == "pr-head"
     ]
-    for job_name in stage_jobs:
-        job = jobs[job_name]
-        checkout_steps = [
-            step
-            for step in job.get("steps", [])
-            if step.get("uses", "").startswith("actions/checkout@")
-            and (step.get("with") or {}).get("path") == "pr-head"
-        ]
-        assert checkout_steps, job_name
-        head_checkout = checkout_steps[0]["with"]
-        assert head_checkout["repository"] == "${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}"
-        assert head_checkout["ref"] == "${{ needs.bootstrap_event.outputs.head_sha || github.sha }}"
-        assert head_checkout["persist-credentials"] is False
-        for step in job.get("steps", []):
-            if step.get("uses") == CODEX_ACTION:
-                with_inputs = step["with"]
-                assert with_inputs["working-directory"] == "${{ github.workspace }}/pr-head", job_name
-                assert with_inputs["prompt-file"].startswith("${{ github.workspace }}/"), job_name
-                assert with_inputs["output-file"].startswith("${{ github.workspace }}/"), job_name
-                assert with_inputs["output-schema-file"].startswith("${{ github.workspace }}/"), job_name
+    assert checkout_steps, job_name
+    head_checkout = checkout_steps[0]["with"]
+    assert head_checkout["repository"] == "${{ needs." + head_job + ".outputs.head_repo_full_name || github.repository }}"
+    assert head_checkout["ref"] == "${{ needs." + head_job + ".outputs.head_sha || github.sha }}"
+    assert head_checkout["persist-credentials"] is False
+    for step in job.get("steps", []):
+        if step.get("uses") == CODEX_ACTION:
+            with_inputs = step["with"]
+            assert with_inputs["working-directory"] == "${{ github.workspace }}/pr-head", job_name
+            assert with_inputs["prompt-file"].startswith("${{ github.workspace }}/"), job_name
+            assert with_inputs["output-file"].startswith("${{ github.workspace }}/"), job_name
+            assert with_inputs["output-schema-file"].startswith("${{ github.workspace }}/"), job_name
+
+
+def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
+    # Review-stage model jobs moved to codex-review.yml and source the PR head
+    # from guard_and_event; design-stage jobs remain in the orchestrator.
+    review_jobs = load_review()["jobs"]
+    for job_name in ["review_axes_model", "techlead_model"]:
+        _assert_pr_head_worktree(review_jobs[job_name], job_name, "guard_and_event")
+    orchestrator_jobs = load_workflow()["jobs"]
+    for job_name in ["design_context", "design_prepare", "design_analysis_model", "design_plan_model", "design_chief_model"]:
+        _assert_pr_head_worktree(orchestrator_jobs[job_name], job_name, "bootstrap_event")
 
 
 def test_stage01_to_stage04_validators_receive_pr_head_repo_path():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     for command in [
         "stage01 validate",
         "stage02 validate",
@@ -274,7 +297,8 @@ def test_push_and_issue_fallback_are_default_actual_write_paths():
     assert push_flag not in text
     assert issue_flag not in text
 
-    assert "stage02 write-deferred-outputs" in text
+    # stage02 deferred-output emission now lives in the split review workflow.
+    assert "stage02 write-deferred-outputs" in pipeline_text()
 
     validate_section = text.split("push_validate_no_token:", 1)[1].split("issue_fallback_trusted:", 1)[0]
     assert "stage07 validate-fix --dry-run" not in validate_section

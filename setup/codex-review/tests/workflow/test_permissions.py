@@ -1,13 +1,8 @@
-from pathlib import Path
-import yaml
-
-ROOT = Path(__file__).resolve().parents[4]
-WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
-CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
+from _pipeline import CODEX_ACTION, all_jobs, all_text
 
 
 def jobs():
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    return all_jobs()
 
 
 def test_model_jobs_have_no_repo_write_permissions():
@@ -41,7 +36,7 @@ def test_no_token_validation_job_is_read_only():
 
 
 def test_write_jobs_use_app_token_not_github_token_write_permissions():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = all_text()
     assert "auth app-token --mode stage00" in text
     assert "auth app-token --mode stage02" in text
     assert "auth app-token --mode stage04" in text
@@ -55,7 +50,7 @@ def test_write_jobs_use_app_token_not_github_token_write_permissions():
 
 
 def test_app_token_permission_metadata_is_threaded_to_write_commands():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = all_text()
     assert "write_output(\"permissions_json\"" not in text  # helper code stays outside workflow
     assert text.count("CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}") >= 4
 
@@ -67,7 +62,8 @@ def test_app_token_steps_include_current_codex_app_secret_fallbacks():
             if "codex-review auth app-token" in str(step.get("run", "")):
                 app_token_steps.append(step)
 
-    assert len(app_token_steps) == 6
+    # review file: stage00, stage02, label-ops; orchestrator: stage04, push, loop-state, stage09.
+    assert len(app_token_steps) == 7
     for step in app_token_steps:
         env = step.get("env", {})
         assert env.get("CODEX_APP_ID") == "${{ secrets.CODEX_APP_ID }}"
