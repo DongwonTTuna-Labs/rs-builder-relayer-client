@@ -3,7 +3,7 @@ import pytest
 from codex_review.github import app_token
 from codex_review.stages.stage02_techlead import publish as review_publish
 from codex_review.stages.stage04_design_chief import publish as design_publish
-from codex_review.stages.stage07_push.orchestrate import run_push_flow
+from codex_review.stages.stage07_push.orchestrate import commit_and_push_validated_fix
 
 
 def test_assert_installation_token_rejects_non_installation_response(monkeypatch):
@@ -27,6 +27,7 @@ def test_stage04_actual_publish_requires_app_token(monkeypatch):
 
 def test_stage07_actual_push_without_token_fails(tmp_path):
     merged = {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":"diff --git a/a b/a\nnew file mode 100644\nindex 0000000..7898192\n--- /dev/null\n+++ b/a\n@@ -0,0 +1 @@\n+x\n", "expected_head_sha":"h"}
+    validation = {"schema_version":"stage07-validated-fix.v1", "status":"validated", "validated": True, "patch_hash": None, "semantic_safety_approved": True, "semantic_safety": {"status": "approved", "approved": True}}
     pr = {"head_sha":"h", "same_repo": True, "head_ref":"branch", "owner":"o", "repo":"r", "pr_number":1}
-    with pytest.raises(Exception):
-        run_push_flow(merged, pr, {}, tmp_path, None, dry_run=False)
+    with pytest.raises(Exception, match="GitHub App installation token"):
+        commit_and_push_validated_fix(merged, validation, pr, {}, tmp_path, None, dry_run=False)

@@ -29,7 +29,7 @@ setup/codex-review/bin/codex-review --help
 
 ## External integrations
 
-The GitHub API, Codex Action model path, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, relay binding, workflow secrets, and repository-specific test commands before enabling non-dry-run writes. Model jobs write OpenAI strict schema-constrained artifacts through `openai/codex-action`; trusted jobs validate those artifacts again before any side effect gate can run.
+The GitHub API, Codex Action model path, and final branch push paths are implemented as guarded helpers. A real repository still needs the correct GitHub App credentials, relay binding, workflow secrets, and repository-specific test commands before trusted writes can succeed. Model jobs write OpenAI strict schema-constrained artifacts through `openai/codex-action`; trusted jobs validate those artifacts again before minting a GitHub App token for push or issue fallback.
 
 ## GitHub specification hardening applied
 
@@ -43,5 +43,5 @@ The orchestrator and helpers have been hardened against the GitHub Actions/API i
 - deferred issue search uses `GITHUB_API_URL` and URL-encoded Search API queries
 - `workflow_dispatch.inputs.pr_number` is threaded through event/context resolution via `CODEX_REVIEW_PR_NUMBER`
 - stage03 prompt/action model planning is followed by explicit `stage03 validate-plan`
-- record-reentry is read-only because it only records artifacts in this implementation
+- record-reentry persists loop state through the GitHub App token only after an actual push
 - first-party GitHub Actions are SHA-pinned in the orchestrator workflow

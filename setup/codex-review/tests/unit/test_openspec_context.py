@@ -30,6 +30,20 @@ def test_extracts_openspec_sources_from_pr_text():
     assert any(source.get("path") == "openspec/changes/deposit-wallet/design.md" for source in sources)
 
 
+
+def test_extracts_external_fission_ai_openspec_sources():
+    text = """
+    Implement according to https://github.com/Fission-AI/OpenSpec/pull/41
+    and https://github.com/Fission-AI/OpenSpec/tree/main/openspec/changes/codex-review-lgtm-loop-smoke
+    """
+
+    sources = extract_openspec_sources(text, owner="DongwonTTuna-Labs", repo="rs-builder-relayer-client")
+
+    assert any(source.get("type") == "github_pr" and source.get("owner") == "Fission-AI" and source.get("repo") == "OpenSpec" for source in sources)
+    tree_source = next(source for source in sources if source.get("type") == "github_file" and source.get("owner") == "Fission-AI")
+    assert tree_source["path"] == "openspec/changes/codex-review-lgtm-loop-smoke"
+    assert tree_source["ref"] == "main"
+
 def test_collects_local_openspec_change_documents(tmp_path):
     _write(tmp_path / "openspec/changes/deposit-wallet/proposal.md", "# Proposal\nShip deposit wallet")
     _write(tmp_path / "openspec/changes/deposit-wallet/design.md", "# Design\nUse official SDK parity")

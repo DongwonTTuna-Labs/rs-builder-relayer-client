@@ -18,7 +18,7 @@ PR 변경사항을 correctness 관점에서 검토하고 actionable finding arti
 ## 반드시 지킬 규칙
 - GitHub comment를 직접 작성하지 않는다.
 - changed RIGHT line 밖에는 inline finding을 만들지 않는다.
-- 불확실하면 finding 대신 notes 또는 needs_human reason으로 남긴다.
+- OpenSpec task/spec mismatch는 evidence-backed finding으로 만든다. 불확실성만으로 needs_human reason을 만들지 말고, 구체적 evidence가 없으면 notes로 낮춘다.
 - 동일 root cause는 하나의 대표 finding으로 묶는다.
 
 ## 구현 시 채워야 할 섹션

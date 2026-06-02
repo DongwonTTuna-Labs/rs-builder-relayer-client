@@ -6,29 +6,72 @@ from codex_review.artifacts import write_json
 from codex_review.errors import ValidationError
 
 
+def _task_files(task: dict[str, Any]) -> set[str]:
+    return set(task.get("allowed_files") or task.get("files") or [])
+
+
 def merge_tasks_touching_same_files(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups=[]
+    groups: list[dict[str, Any]] = []
     for task in tasks:
-        files=set(task.get("allowed_files") or task.get("files") or [])
+        files=_task_files(task)
         merged=False
-        for g in groups:
-            if files & set(g.get("allowed_files", [])):
-                g["allowed_files"]=sorted(set(g.get("allowed_files", [])) | files)
-                g["steps"].extend(task.get("steps", [task.get("summary")]))
-                merged=True; break
+        for group in groups:
+            if files & set(group.get("allowed_files", [])):
+                group["allowed_files"]=sorted(set(group.get("allowed_files", [])) | files)
+                group["steps"].extend(task.get("steps", [task.get("summary")]))
+                group["tests"]=sorted(set(group.get("tests", [])) | set(task.get("tests", [])))
+                group["acceptance_criteria"].extend(c for c in task.get("acceptance_criteria", []) if c not in group["acceptance_criteria"])
+                group["source_finding_ids"].extend(i for i in task.get("source_finding_ids", []) if i not in group["source_finding_ids"])
+                merged=True
+                break
         if not merged:
-            groups.append({"task_id": task.get("task_id") or task.get("id") or f"fix-{len(groups)+1}", "summary": task.get("summary", "Apply design step"), "allowed_files": sorted(files), "steps": task.get("steps", [task.get("summary")])})
+            groups.append(
+                {
+                    "task_id": task.get("task_id") or task.get("id") or f"fix-{len(groups)+1}",
+                    "summary": task.get("summary", "Apply design step"),
+                    "allowed_files": sorted(files),
+                    "steps": task.get("steps", [task.get("summary")]),
+                    "tests": list(task.get("tests", [])),
+                    "acceptance_criteria": list(task.get("acceptance_criteria", [])),
+                    "source_finding_ids": list(task.get("source_finding_ids", [])),
+                    "openspec_sources": list(task.get("openspec_sources", [])),
+                    "openspec_backed": bool(task.get("openspec_backed")),
+                }
+            )
     return groups
 
 
 def plan_fix_tasks(design_plan: dict[str, Any], chief_decision: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     tasks=[]
+    plan_tests = design_plan.get("tests", [])
+    plan_criteria = design_plan.get("acceptance_criteria", [])
+    plan_sources = design_plan.get("openspec_sources", [])
     for idx, step in enumerate(design_plan.get("edit_sequence", []), 1):
         files=step.get("files") or step.get("allowed_files") or chief_decision.get("fix_policy", {}).get("allowed_files") or []
-        tasks.append({"task_id": step.get("task_id") or step.get("id") or f"fix-{idx}", "summary": step.get("summary") or str(step), "allowed_files": files, "tests": step.get("tests") or design_plan.get("tests", [])})
+        criteria = step.get("acceptance_criteria") or plan_criteria
+        finding_ids = step.get("finding_ids") or ([step.get("finding_id")] if step.get("finding_id") else [])
+        tasks.append(
+            {
+                "task_id": step.get("task_id") or step.get("id") or f"fix-{idx}",
+                "summary": step.get("summary") or str(step),
+                "allowed_files": files,
+                "tests": step.get("tests") or plan_tests,
+                "acceptance_criteria": criteria,
+                "source_finding_ids": finding_ids,
+                "openspec_sources": step.get("openspec_sources") or plan_sources,
+                "openspec_backed": bool(step.get("openspec_backed") or design_plan.get("openspec_backed")),
+            }
+        )
     if not tasks and chief_decision.get("status") == "approved_for_fix":
         raise ValidationError("approved design has no fix tasks")
-    manifest={"schema_version":"stage05-fix-task-manifest.v1","tasks":merge_tasks_touching_same_files(tasks),"plan_hash":design_plan.get("plan_hash"),"fix_policy":chief_decision.get("fix_policy", config.get("autofix", {}))}
+    manifest={
+        "schema_version":"stage05-fix-task-manifest.v1",
+        "tasks":merge_tasks_touching_same_files(tasks),
+        "plan_hash":design_plan.get("plan_hash"),
+        "fix_policy":chief_decision.get("fix_policy", config.get("autofix", {})),
+        "openspec_backed": bool(design_plan.get("openspec_backed")),
+        "openspec_sources": plan_sources,
+    }
     validate_task_manifest(manifest, chief_decision, config)
     return manifest
 
@@ -41,6 +84,8 @@ def validate_task_manifest(manifest: dict[str, Any], chief_decision: dict[str, A
     if len(ids)!=len(set(ids)): raise ValidationError("duplicate task_id in manifest")
     for t in tasks:
         if not t.get("allowed_files"): raise ValidationError(f"task missing allowed_files: {t.get('task_id')}")
+        if manifest.get("openspec_backed") and not t.get("acceptance_criteria"):
+            raise ValidationError(f"OpenSpec-backed task missing acceptance_criteria: {t.get('task_id')}")
 
 
 def write_fix_task_manifest(manifest: dict[str, Any], out_path: str | Path) -> Path:

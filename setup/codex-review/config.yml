@@ -1,5 +1,5 @@
 # Codex Review v3 runtime configuration.
-# Repository-specific values may be adjusted before enabling trusted write/push stages.
+# Repository-specific values may be adjusted before running trusted write/push stages.
 
 base_branch: main
 

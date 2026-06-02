@@ -82,18 +82,14 @@ def _extract_github_source(url: str, owner: str | None, repo: str | None) -> dic
     parts = [urllib.parse.unquote(part) for part in parsed.path.strip("/").split("/") if part]
     if host == "github.com" and len(parts) >= 4:
         url_owner, url_repo = parts[0], parts[1]
-        if owner and repo and (url_owner, url_repo) != (owner, repo):
-            return None
         if parts[2] == "pull" and len(parts) >= 4 and parts[3].isdigit():
             return {"type": "github_pr", "owner": url_owner, "repo": url_repo, "pr_number": int(parts[3]), "url": url}
-        if parts[2] in {"blob", "raw"}:
+        if parts[2] in {"blob", "raw", "tree"}:
             path, ref_prefix = _openspec_path_from_parts(parts[3:])
             if path and _is_openspec_path(path):
                 return {"type": "github_file", "owner": url_owner, "repo": url_repo, "ref": ref_prefix, "path": path, "url": url}
     if host == "raw.githubusercontent.com" and len(parts) >= 4:
         url_owner, url_repo = parts[0], parts[1]
-        if owner and repo and (url_owner, url_repo) != (owner, repo):
-            return None
         path, ref_prefix = _openspec_path_from_parts(parts[2:])
         if path and _is_openspec_path(path):
             return {"type": "github_file", "owner": url_owner, "repo": url_repo, "ref": ref_prefix, "path": path, "url": url}
@@ -183,6 +179,8 @@ def _read_github_file(source: dict[str, Any], token: str | None, budget: int) ->
     return [
         {
             "source_type": source.get("type"),
+            "owner": owner,
+            "repo": repo,
             "path": path,
             "ref": ref,
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -249,10 +247,27 @@ def _sources_from_github_pr(source: dict[str, Any], token: str | None) -> list[d
     return nested
 
 
+def _summary_value(item: dict[str, Any]) -> str:
+    path = item.get("path")
+    owner = item.get("owner")
+    repo = item.get("repo")
+    if path and owner and repo:
+        return f"{owner}/{repo}:{path}"
+    if path:
+        return str(path)
+    if item.get("url"):
+        return str(item["url"])
+    if item.get("pr_number") and owner and repo:
+        return f"{owner}/{repo}#PR {item.get('pr_number')}"
+    if item.get("pr_number"):
+        return f"PR #{item.get('pr_number')}"
+    return "OpenSpec source"
+
+
 def _source_summary(documents: list[dict[str, Any]], sources: list[dict[str, Any]]) -> list[str]:
-    values = [str(doc.get("path")) for doc in documents if doc.get("path")]
+    values = [_summary_value(doc) for doc in documents if doc.get("path")]
     if not values:
-        values = [str(src.get("path") or src.get("url") or f"PR #{src.get('pr_number')}") for src in sources]
+        values = [_summary_value(src) for src in sources]
     seen: set[str] = set()
     out: list[str] = []
     for value in values:

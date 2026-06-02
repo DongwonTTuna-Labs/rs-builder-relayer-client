@@ -17,7 +17,7 @@ approved design plan과 chief policy를 작은 fix task manifest로 나눈다.
 ## 반드시 지킬 규칙
 - 같은 invariant는 같은 task로 묶는다.
 - 같은 파일을 여러 task가 동시에 수정하지 않도록 줄인다.
-- max_tasks를 넘기면 needs_human route를 요청한다.
+- max_tasks를 넘기면 같은 파일/root cause/acceptance criteria 기준으로 task를 병합한다. 그래도 정책상 불가능하면 stage09가 추적할 blocker reason을 남긴다.
 - chief가 허용하지 않은 파일은 task에 넣지 않는다.
 
 ## 구현 시 채워야 할 섹션

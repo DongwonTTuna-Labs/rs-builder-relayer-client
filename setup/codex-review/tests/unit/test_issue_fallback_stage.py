@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from codex_review.stages.stage09_issue_fallback.issue import build_issue_fallback_plan, render_issue_fallback_body
+import pytest
+
+from codex_review.stages.stage09_issue_fallback.issue import apply_issue_fallback, build_issue_fallback_plan, render_issue_fallback_body
 
 
 def test_issue_fallback_plan_is_idempotent_and_openspec_aware():
@@ -43,3 +45,57 @@ def test_issue_fallback_body_names_required_follow_up():
     assert "Required follow-up" in body
     assert "Create an OpenSpec change" in body
     assert "Source PR: #41" in body
+
+
+def test_issue_fallback_plan_includes_stage02_deferred_items():
+    plan = build_issue_fallback_plan(
+        reason="stage02_defer_to_issue",
+        pr_context={"owner":"o", "repo":"r", "repository":"o/r", "pr_number":7},
+        openspec_context={"present": True, "source_summary": ["openspec/changes/demo/tasks.md"]},
+        deferred_items=[{
+            "finding_id": "F-1",
+            "root_cause_key": "outside-pr-scope",
+            "title": "Move unrelated migration to a follow-up",
+            "file": "src/lib.rs",
+            "line": 12,
+            "recommendation": "Track this outside the current PR branch.",
+        }],
+    )
+
+    assert plan["deferred_count"] == 1
+    assert "Deferred items" in plan["body"]
+    assert "F-1" in plan["body"]
+    assert "outside-pr-scope" in plan["body"]
+    assert "stage02_defer_to_issue" in plan["title"]
+
+
+def test_issue_fallback_actual_apply_requires_app_token():
+    plan = {
+        "idempotency_key": "abc",
+        "title": "Codex review fallback: demo",
+        "body": "body",
+    }
+    with pytest.raises(Exception, match="GitHub App installation token"):
+        apply_issue_fallback(plan, {"owner": "o", "repo": "r"}, None, dry_run=False)
+
+
+def test_issue_fallback_dry_run_remains_explicit():
+    plan = {
+        "idempotency_key": "abc",
+        "title": "Codex review fallback: demo",
+        "body": "body",
+    }
+    result = apply_issue_fallback(plan, {"owner": "o", "repo": "r"}, None, dry_run=True)
+    assert result["status"] == "dry_run"
+
+
+def test_issue_fallback_no_diff_repeat_uses_specific_follow_up():
+    plan = build_issue_fallback_plan(
+        reason="no_diff_repeat",
+        pr_context={"owner":"o", "repo":"r", "repository":"o/r", "pr_number":7},
+        openspec_context={"present": True, "source_summary": ["openspec/changes/demo/tasks.md"]},
+        attempted_stages=["stage07"],
+    )
+
+    assert "non-empty patch" in plan["required_follow_up"]
+    assert "no_diff_repeat" in plan["title"]

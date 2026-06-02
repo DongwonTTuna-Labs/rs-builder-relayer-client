@@ -13,7 +13,7 @@
 - current source
 
 ## 출력 계약
-`stage06-merged-fix.v1` JSON과 merged.patch. ready_to_push 또는 needs_human을 출력한다.
+`stage06-merged-fix.v1` JSON과 merged.patch. ready_to_push, no_fix, 또는 blocked를 출력한다. generic needs_human으로 멈추지 않는다.
 
 ## 반드시 지킬 규칙
 - 충돌 해결 외 새 문제를 임의로 고치지 않는다.

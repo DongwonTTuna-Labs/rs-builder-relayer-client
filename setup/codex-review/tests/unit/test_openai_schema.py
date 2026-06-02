@@ -14,6 +14,7 @@ ACTION_SCHEMA_NAMES = [
     "stage04-design-chief-decision.v1",
     "stage05-fix-agent-result.v1",
     "stage06-merged-fix.v1",
+    "stage06-semantic-patch-safety.v1",
 ]
 
 

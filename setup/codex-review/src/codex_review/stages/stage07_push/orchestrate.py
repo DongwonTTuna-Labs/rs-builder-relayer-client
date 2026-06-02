@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from codex_review.errors import ValidationError
+from codex_review.errors import CodexReviewError, ValidationError
 from codex_review.github.app_token import assert_installation_token_for_repo, permissions_for_write_mode
 from codex_review.security.patch_policy import validate_patch_policy
 from .apply_patch import apply_merged_patch, collect_applied_diff, run_diff_check
@@ -60,6 +60,84 @@ def _git(repo_path: str | Path, *args: str, check: bool = True) -> subprocess.Co
     return proc
 
 
+def _patch_already_applied(patch_text: str, repo_path: str | Path) -> bool:
+    proc = subprocess.run(["git", "apply", "--reverse", "--check", "-"], input=patch_text, text=True, cwd=Path(repo_path), capture_output=True, env=sanitized_env())
+    return proc.returncode == 0
+
+
+def _terminal_nonpush_result(
+    merged_fix: dict[str, Any],
+    patch: str,
+    head: str | None,
+    status: str,
+    reason: str,
+    *,
+    schema_version: str = "stage07-validated-fix.v1",
+    error: BaseException | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "schema_version": schema_version,
+        "status": status,
+        "validated": False,
+        "pushed": False,
+        "commit_sha": None,
+        "head_sha": head,
+        "patch_hash": _sha256_text(patch),
+        "reason": reason,
+        "plan_hash": merged_fix.get("plan_hash") or merged_fix.get("design_plan_hash"),
+    }
+    if error is not None:
+        result["error_type"] = error.__class__.__name__
+    return result
+
+
+def _no_diff_repeat_result(merged_fix: dict[str, Any], patch: str, head: str | None, reason: str, *, schema_version: str = "stage07-validated-fix.v1") -> dict[str, Any]:
+    return _terminal_nonpush_result(merged_fix, patch, head, "no_diff_repeat", reason, schema_version=schema_version)
+
+
+def _validation_failed_result(merged_fix: dict[str, Any], patch: str, head: str | None, error: BaseException, *, schema_version: str = "stage07-validated-fix.v1") -> dict[str, Any]:
+    return _terminal_nonpush_result(merged_fix, patch, head, "validation_failed", str(error), schema_version=schema_version, error=error)
+
+
+def _semantic_safety_status(semantic_safety: dict[str, Any] | None) -> str:
+    if not semantic_safety:
+        return "missing"
+    return str(semantic_safety.get("status") or "unknown")
+
+
+def _semantic_safety_gate_result(
+    merged_fix: dict[str, Any],
+    patch: str,
+    head: str | None,
+    semantic_safety: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Require AI semantic approval for the exact merged patch hash before push validation succeeds."""
+    if not patch:
+        return None
+    expected_hash = _sha256_text(patch)
+    if not semantic_safety:
+        return _terminal_nonpush_result(
+            merged_fix,
+            patch,
+            head,
+            "semantic_safety_missing",
+            "stage06 semantic patch safety approval artifact is missing",
+        )
+    reviewed_hash = semantic_safety.get("patch_hash")
+    if reviewed_hash != expected_hash:
+        return _terminal_nonpush_result(
+            merged_fix,
+            patch,
+            head,
+            "semantic_safety_hash_mismatch",
+            f"stage06 semantic patch safety reviewed {reviewed_hash}, expected {expected_hash}",
+        )
+    if semantic_safety.get("status") != "approved" or semantic_safety.get("approved") is not True:
+        reason = str(semantic_safety.get("blocking_reason") or semantic_safety.get("summary") or "stage06 semantic patch safety did not approve the patch")
+        return _terminal_nonpush_result(merged_fix, patch, head, "semantic_safety_rejected", reason)
+    return None
+
+
 def _configure_git_author(repo_path: str | Path, policy: dict[str, Any]) -> None:
     name = policy.get("git_author_name", "Codex Review Bot")
     email = policy.get("git_author_email", "codex-review@example.invalid")
@@ -81,13 +159,21 @@ def _validate_local_expected_head(repo_path: str | Path, pr_context: dict[str, A
 
 def _ready_or_noop(merged_fix: dict[str, Any], patch: str) -> dict[str, Any] | None:
     status = merged_fix.get("status")
-    if status in {"no_fix", "blocked"} or not patch:
+    if status in {"no_fix", "blocked"}:
         return {
             "schema_version": "stage07-push-result.v1",
-            "status": status or "no_fix",
+            "status": status,
             "pushed": False,
             "commit_sha": None,
             "reason": "no merged patch is ready to push",
+        }
+    if not patch:
+        return {
+            "schema_version": "stage07-push-result.v1",
+            "status": "empty_patch",
+            "pushed": False,
+            "commit_sha": None,
+            "reason": "merged fix did not contain a patch",
         }
     return None
 
@@ -99,62 +185,93 @@ def validate_and_test_fix(
     repo_path: str | Path,
     *,
     dry_run: bool = False,
+    semantic_safety: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply and test a patch without any write token.
 
     The caller must run this in a PR-head checkout with no persisted credentials.
+    Validation-stage failures are returned as structured ``validation_failed``
+    artifacts instead of raising, so the workflow can continue into the
+    duplicate issue / fallback stage instead of silently skipping it.
     """
-    patch = _patch_text(merged_fix)
-    noop = _ready_or_noop(merged_fix, patch)
-    if noop:
-        return {**noop, "schema_version": "stage07-validated-fix.v1", "validated": False}
-
-    validate_ready_to_push({**merged_fix, "patch": patch})
-    head = _validate_local_expected_head(repo_path, pr_context, merged_fix)
-    policy = _policy(config, merged_fix)
-    policy_report = validate_patch_policy(patch, policy, {"repo_path": repo_path})
-    tests = select_test_commands(merged_fix, config)
-
-    if dry_run:
-        return {
-            "schema_version": "stage07-validated-fix.v1",
-            "status": "dry_run",
-            "validated": False,
-            "pushed": False,
-            "commit_sha": None,
-            "head_sha": head,
-            "patch_hash": _sha256_text(patch),
-            "policy_report": policy_report,
-            "tests": tests,
-        }
-
-    validate_worktree_clean(repo_path)
-    patch_path = _write_temp_patch(patch)
+    patch = ""
+    head: str | None = None
     try:
-        apply_report = apply_merged_patch(patch_path, repo_path)
-        run_diff_check(repo_path)
-        applied_diff = collect_applied_diff(repo_path)
-        applied_policy_report = validate_patch_policy(applied_diff, policy, {})
-        test_report = run_required_tests(tests, repo_path)
-        status = "validated" if test_report.get("passed", True) else "tests_failed"
-        return {
-            "schema_version": "stage07-validated-fix.v1",
-            "status": status,
-            "validated": status == "validated",
-            "pushed": False,
-            "commit_sha": None,
-            "head_sha": head,
-            "patch_hash": _sha256_text(patch),
-            "applied_diff_hash": _sha256_text(applied_diff),
-            "apply_report": apply_report,
-            "policy_report": applied_policy_report,
-            "test_report": test_report,
-        }
-    finally:
+        patch = _patch_text(merged_fix)
+        noop = _ready_or_noop(merged_fix, patch)
+        if noop:
+            return {**noop, "schema_version": "stage07-validated-fix.v1", "validated": False}
+
+        validate_ready_to_push({**merged_fix, "patch": patch})
+        head = _validate_local_expected_head(repo_path, pr_context, merged_fix)
+        policy = _policy(config, merged_fix)
+        policy_report = validate_patch_policy(patch, policy, {})
+        tests = select_test_commands(merged_fix, config)
+
+        if dry_run:
+            return {
+                "schema_version": "stage07-validated-fix.v1",
+                "status": "dry_run",
+                "validated": False,
+                "pushed": False,
+                "commit_sha": None,
+                "head_sha": head,
+                "patch_hash": _sha256_text(patch),
+                "policy_report": policy_report,
+                "tests": tests,
+            }
+
+        validate_worktree_clean(repo_path)
+        patch_path = _write_temp_patch(patch)
         try:
-            patch_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+            try:
+                apply_report = apply_merged_patch(patch_path, repo_path)
+            except ValidationError as exc:
+                if _patch_already_applied(patch, repo_path):
+                    return _no_diff_repeat_result(merged_fix, patch, head, f"patch is already present on the PR head: {exc}")
+                raise
+            try:
+                run_diff_check(repo_path)
+            except ValidationError as exc:
+                return _no_diff_repeat_result(merged_fix, patch, head, str(exc))
+            applied_diff = collect_applied_diff(repo_path)
+            applied_policy_report = validate_patch_policy(applied_diff, policy, {})
+            semantic_block = _semantic_safety_gate_result(merged_fix, patch, head, semantic_safety)
+            if semantic_block:
+                return {
+                    **semantic_block,
+                    "applied_diff_hash": _sha256_text(applied_diff),
+                    "apply_report": apply_report,
+                    "policy_report": applied_policy_report,
+                    "semantic_safety": semantic_safety or {},
+                    "semantic_safety_status": _semantic_safety_status(semantic_safety),
+                    "semantic_safety_approved": False,
+                }
+            test_report = run_required_tests(tests, repo_path)
+            status = "validated" if test_report.get("passed", True) else "tests_failed"
+            return {
+                "schema_version": "stage07-validated-fix.v1",
+                "status": status,
+                "validated": status == "validated",
+                "pushed": False,
+                "commit_sha": None,
+                "head_sha": head,
+                "patch_hash": _sha256_text(patch),
+                "applied_diff_hash": _sha256_text(applied_diff),
+                "apply_report": apply_report,
+                "policy_report": applied_policy_report,
+                "test_report": test_report,
+                "semantic_safety": semantic_safety or {},
+                "semantic_safety_status": _semantic_safety_status(semantic_safety),
+                "semantic_safety_approved": True,
+            }
+        finally:
+            try:
+                patch_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except (CodexReviewError, OSError, subprocess.SubprocessError) as exc:
+        return _validation_failed_result(merged_fix, patch, head, exc)
 
 
 def commit_validated_fix(merged_fix: dict[str, Any], pr_context: dict[str, Any], config: dict[str, Any], repo_path: str | Path) -> dict[str, Any]:
@@ -189,7 +306,25 @@ def commit_and_push_validated_fix(
         return noop
 
     if not validation_result.get("validated"):
-        raise ValidationError("stage07 commit/push requires a successful no-token validation artifact")
+        status = validation_result.get("status") or "validation_failed"
+        return {
+            "schema_version": "stage07-push-result.v1",
+            "status": status,
+            "pushed": False,
+            "commit_sha": None,
+            "reason": "stage07 commit/push skipped because no-token validation did not pass",
+            "validation_result": validation_result,
+        }
+    if validation_result.get("semantic_safety_approved") is not True:
+        status = "semantic_safety_missing" if not validation_result.get("semantic_safety") else "semantic_safety_rejected"
+        return {
+            "schema_version": "stage07-push-result.v1",
+            "status": status,
+            "pushed": False,
+            "commit_sha": None,
+            "reason": "stage07 commit/push skipped because exact patch hash lacks AI semantic safety approval",
+            "validation_result": validation_result,
+        }
     if validation_result.get("patch_hash") and validation_result["patch_hash"] != _sha256_text(patch):
         raise ValidationError("merged patch changed after no-token validation")
 
@@ -206,7 +341,7 @@ def commit_and_push_validated_fix(
     policy = _policy(config, merged_fix)
     cap_report = validate_autofix_commit_cap(owner, repo, pr_number, token, policy)
     validate_worktree_clean(repo_path)
-    validate_patch_policy(patch, policy, {"repo_path": repo_path})
+    validate_patch_policy(patch, policy, {})
 
     if dry_run:
         return {
@@ -221,8 +356,16 @@ def commit_and_push_validated_fix(
     patch_path = _write_temp_patch(patch)
     old_head = pr_context.get("head_sha") or merged_fix.get("expected_head_sha") or _current_head(repo_path)
     try:
-        apply_report = apply_merged_patch(patch_path, repo_path)
-        run_diff_check(repo_path)
+        try:
+            apply_report = apply_merged_patch(patch_path, repo_path)
+        except ValidationError as exc:
+            if _patch_already_applied(patch, repo_path):
+                return {**_no_diff_repeat_result(merged_fix, patch, old_head, f"patch is already present on the PR head: {exc}", schema_version="stage07-push-result.v1"), "validation_result": validation_result}
+            raise
+        try:
+            run_diff_check(repo_path)
+        except ValidationError as exc:
+            return {**_no_diff_repeat_result(merged_fix, patch, old_head, str(exc), schema_version="stage07-push-result.v1"), "validation_result": validation_result}
         applied_diff = collect_applied_diff(repo_path)
         applied_hash = _sha256_text(applied_diff)
         expected_applied_hash = validation_result.get("applied_diff_hash")
@@ -280,7 +423,7 @@ def run_push_flow(
     """
     if dry_run:
         validation = validate_and_test_fix(merged_fix, pr_context, config, repo_path, dry_run=True)
-        status = validation.get("status") if validation.get("status") in {"no_fix", "blocked"} else "dry_run"
+        status = validation.get("status") if validation.get("status") in {"no_fix", "blocked", "no_diff_repeat", "empty_patch", "tests_failed", "validation_failed"} else "dry_run"
         return {**validation, "schema_version": "stage07-push-result.v1", "status": status, "pushed": False}
     validation = validate_and_test_fix(merged_fix, pr_context, config, repo_path, dry_run=False)
     return commit_and_push_validated_fix(merged_fix, validation, pr_context, config, repo_path, token, dry_run=False)

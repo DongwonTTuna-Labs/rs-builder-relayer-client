@@ -1,4 +1,12 @@
-"""Autofix patch policy validation."""
+"""Autofix patch policy validation.
+
+This module enforces mechanical invariants only: path allowlists, patch size,
+forbidden git operations, secret-like material, and optional ``git apply`` checks.
+Semantic risk words are emitted as advisory metadata for the AI review/fix loop;
+they are deliberately not hard blockers here. OpenSpec-backed automation must be
+able to implement spec-described work without substring or keyword vetoes in
+trusted helper code.
+"""
 from __future__ import annotations
 
 import fnmatch
@@ -78,24 +86,52 @@ def assert_no_binary_mode_rename_or_symlink(patch_text: str) -> None:
             raise PolicyViolation(f"forbidden patch operation detected: {marker.strip()}")
 
 
-def assert_no_dangerous_keyword_changes(patch_text: str, policy: dict[str, Any]) -> None:
+def _added_lines(patch_text: str) -> list[tuple[int, str]]:
+    lines: list[tuple[int, str]] = []
+    for line_no, line in enumerate((patch_text or "").splitlines(), 1):
+        if line.startswith("+") and not line.startswith("+++"):
+            lines.append((line_no, line[1:]))
+    return lines
+
+
+def collect_dangerous_keyword_warnings(patch_text: str, policy: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return advisory semantic-risk keyword hits without blocking the patch.
+
+    These keywords are prompt hints for model stages. Trusted Python helpers must
+    not reject OpenSpec implementation patches because a word like ``auth`` is a
+    substring of harmless documentation such as ``authoritative``.
+    """
     keywords=[str(k).lower() for k in policy.get("dangerous_keywords", []) or []]
-    for line in (patch_text or "").splitlines():
-        if not line.startswith("+") or line.startswith("+++"):
-            continue
+    warnings: list[dict[str, Any]] = []
+    for line_no, line in _added_lines(patch_text):
         lower=line.lower()
         for keyword in keywords:
             if keyword and keyword in lower:
-                raise PolicyViolation(f"dangerous keyword added in patch: {keyword}")
+                warnings.append({"line": line_no, "keyword": keyword, "kind": "semantic_keyword"})
+    return warnings
 
 
-def assert_no_public_api_risk(patch_text: str, source_context: dict[str, Any] | None, policy: dict[str, Any]) -> None:
+def collect_public_api_risk_warnings(patch_text: str, source_context: dict[str, Any] | None, policy: dict[str, Any]) -> list[dict[str, Any]]:
     if policy.get("allow_public_api_changes"):
-        return
+        return []
     risky=["pub fn ", "public ", "export ", "module.exports", "@api", "serde", "signature", "nonce", "signing"]
-    for line in (patch_text or "").splitlines():
-        if line.startswith("+") and not line.startswith("+++") and any(token in line.lower() for token in risky):
-            raise PolicyViolation("public API or signing-related change requires human review")
+    warnings: list[dict[str, Any]] = []
+    for line_no, line in _added_lines(patch_text):
+        lower=line.lower()
+        for token in risky:
+            if token in lower:
+                warnings.append({"line": line_no, "token": token.strip(), "kind": "public_api_or_protocol_semantic_risk"})
+    return warnings
+
+
+# Backward-compatible names kept for callers/tests that import them. They now
+# return advisory findings instead of raising policy violations.
+def assert_no_dangerous_keyword_changes(patch_text: str, policy: dict[str, Any]) -> list[dict[str, Any]]:
+    return collect_dangerous_keyword_warnings(patch_text, policy)
+
+
+def assert_no_public_api_risk(patch_text: str, source_context: dict[str, Any] | None, policy: dict[str, Any]) -> list[dict[str, Any]]:
+    return collect_public_api_risk_warnings(patch_text, source_context, policy)
 
 
 def git_apply_check(patch_text: str, repo_path: str | Path) -> None:
@@ -118,8 +154,16 @@ def validate_patch_policy(patch_text: str, policy: dict[str, Any], context: dict
     findings=scan_patch_for_secrets(patch_text)
     if findings:
         raise PolicyViolation(f"secret-like material detected in patch: {findings[:3]}")
-    assert_no_dangerous_keyword_changes(patch_text, policy)
-    assert_no_public_api_risk(patch_text, context.get("source_context"), policy)
+    semantic_warnings = [
+        *collect_dangerous_keyword_warnings(patch_text, policy),
+        *collect_public_api_risk_warnings(patch_text, context.get("source_context"), policy),
+    ]
     if context.get("repo_path"):
         git_apply_check(patch_text, context["repo_path"])
-    return {"ok": True, "touched_files": touched, "patch_bytes": len((patch_text or '').encode('utf-8'))}
+    return {
+        "ok": True,
+        "touched_files": touched,
+        "patch_bytes": len((patch_text or '').encode('utf-8')),
+        "semantic_risk_warnings": semantic_warnings,
+        "semantic_risk_warning_count": len(semantic_warnings),
+    }
