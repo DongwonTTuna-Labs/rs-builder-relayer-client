@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from codex_review.stages.stage09_issue_fallback.issue import apply_issue_fallback, build_issue_fallback_plan, render_issue_fallback_body
+from codex_review.stages.stage09_issue_fallback.issue import (
+    apply_issue_fallback,
+    build_issue_fallback_plan,
+    compose_issue_content,
+    infer_issue_reason,
+    render_issue_fallback_body,
+)
 
 
 def test_issue_fallback_plan_is_idempotent_and_openspec_aware():
@@ -42,9 +48,9 @@ def test_issue_fallback_body_names_required_follow_up():
         required_follow_up="Create an OpenSpec change or adjust the PR body link.",
     )
 
-    assert "Required follow-up" in body
+    assert "필요한 후속조치" in body
     assert "Create an OpenSpec change" in body
-    assert "Source PR: #41" in body
+    assert "원본 PR: #41" in body
 
 
 def test_issue_fallback_plan_includes_stage02_deferred_items():
@@ -63,7 +69,7 @@ def test_issue_fallback_plan_includes_stage02_deferred_items():
     )
 
     assert plan["deferred_count"] == 1
-    assert "Deferred items" in plan["body"]
+    assert "이관된 지적사항" in plan["body"]
     assert "F-1" in plan["body"]
     assert "outside-pr-scope" in plan["body"]
     assert "stage02_defer_to_issue" in plan["title"]
@@ -97,5 +103,53 @@ def test_issue_fallback_no_diff_repeat_uses_specific_follow_up():
         attempted_stages=["stage07"],
     )
 
-    assert "non-empty patch" in plan["required_follow_up"]
+    assert "비어있지 않은 패치" in plan["required_follow_up"]
     assert "no_diff_repeat" in plan["title"]
+
+
+def test_infer_reason_prioritizes_terminal_fix_loop():
+    inferred = infer_issue_reason(
+        fix_validation={"status": "blocked", "loop_terminal_reason": "oscillation_detected"},
+        design_route={"route": "run_stage05"},
+        review_publication={"deferred_items": [{"finding_id": "F-1"}]},
+    )
+    assert inferred["reason"] == "oscillation_detected"
+    assert "stage07" in inferred["attempted_stages"]
+
+
+def test_infer_reason_falls_back_to_deferred_items():
+    inferred = infer_issue_reason(
+        review_publication={"deferred_items": [{"finding_id": "F-2", "title": "x"}]},
+    )
+    assert inferred["reason"] == "stage02_defer_to_issue"
+    assert inferred["deferred_items"] and inferred["deferred_items"][0]["finding_id"] == "F-2"
+
+
+def test_infer_reason_reports_missing_artifacts():
+    inferred = infer_issue_reason()
+    assert inferred["reason"] == "artifacts_missing"
+
+
+def test_compose_keeps_deterministic_body_when_model_drops_marker():
+    plan = build_issue_fallback_plan(
+        reason="manual_fallback",
+        pr_context={"owner": "o", "repo": "r", "repository": "o/r", "pr_number": 9},
+        openspec_context={"present": True, "source_summary": ["openspec/changes/demo/tasks.md"]},
+    )
+    composed = compose_issue_content(plan, {"title": "정리된 제목", "body": "마커 없는 본문"})
+    assert composed["title"] == "정리된 제목"
+    # Marker missing -> deterministic body retained for idempotency.
+    assert "codex-review:issue-fallback" in composed["body"]
+    assert composed["body_polish_skipped"] == "missing_marker"
+
+
+def test_compose_accepts_model_body_with_marker():
+    plan = build_issue_fallback_plan(
+        reason="manual_fallback",
+        pr_context={"owner": "o", "repo": "r", "repository": "o/r", "pr_number": 9},
+        openspec_context={"present": True, "source_summary": ["openspec/changes/demo/tasks.md"]},
+    )
+    polished_body = plan["body"] + "\n\n사람이 읽기 좋은 추가 설명."
+    composed = compose_issue_content(plan, {"title": "정리된 제목", "body": polished_body})
+    assert composed["body"].endswith("추가 설명.")
+    assert "body_polish_skipped" not in composed

@@ -182,6 +182,8 @@ def create_installation_token_for_repo(owner: str, repo: str, permissions: dict[
 
 
 def permissions_for_write_mode(mode: str | None) -> dict[str, str]:
+    if mode in {"label-ops", "labels", "finalize"}:
+        return {"contents": "read", "pull_requests": "write", "issues": "read"}
     if mode in {"push", "stage07", "stage07_push"}:
         return {"contents": "write", "pull_requests": "read", "issues": "read"}
     if mode in {"stage08", "stage09", "issue-fallback", "reentry", "loop-state"}:
