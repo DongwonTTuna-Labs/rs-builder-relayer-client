@@ -51,11 +51,13 @@ jobs:
           ACTOR: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
-          PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
-          case "$PERM" in
-            admin|maintain|write) ;;
-            *) echo "proceed=false" >> "$GITHUB_OUTPUT"; echo "라벨 부착자($ACTOR) 권한 부족으로 이슈 생성을 건너뜁니다."; exit 0 ;;
-          esac
+          if [ "$ACTOR" != "codex-reviewer-for-dongwonttuna[bot]" ]; then
+            PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+            case "$PERM" in
+              admin|maintain|write) ;;
+              *) echo "proceed=false" >> "$GITHUB_OUTPUT"; echo "라벨 부착자($ACTOR) 권한 부족으로 이슈 생성을 건너뜁니다."; exit 0 ;;
+            esac
+          fi
           find_run() {
             gh run list --repo "$REPO" --workflow="$1" --limit 50 \
               --json databaseId,headSha,conclusion \

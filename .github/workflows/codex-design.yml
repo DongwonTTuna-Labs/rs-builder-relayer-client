@@ -61,11 +61,15 @@ jobs:
             reason="수정중인 PR 에 리뷰완료 라벨이 부착되었습니다."
           fi
           if [ "$proceed" = "true" ]; then
-            PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
-            case "$PERM" in
-              admin|maintain|write) ;;
-              *) proceed=false; reason="라벨 부착자($ACTOR)의 권한이 부족합니다 (write 이상 필요)." ;;
-            esac
+            if [ "$ACTOR" = "codex-reviewer-for-dongwonttuna[bot]" ]; then
+              : # 루프 전이를 구동하는 신뢰된 파이프라인 봇 — 협력자 권한 검사 불필요
+            else
+              PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+              case "$PERM" in
+                admin|maintain|write) ;;
+                *) proceed=false; reason="라벨 부착자($ACTOR)의 권한이 부족합니다 (write 이상 필요)." ;;
+              esac
+            fi
           fi
           # Locate the codex-review run that produced this commit's review artifacts.
           REVIEW_RUN_ID=""
