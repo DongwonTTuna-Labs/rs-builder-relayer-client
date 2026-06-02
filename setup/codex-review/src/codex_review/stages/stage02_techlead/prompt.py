@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from codex_review.artifacts import write_text
+from codex_review.context.budget import compact_json
 
 
 def include_decision_action_contract(prompt: str) -> str:
@@ -15,6 +16,9 @@ def include_inspection_evidence_contract(prompt: str) -> str:
     return prompt + "\nBefore routing, inspect relevant repo files under pr-head instead of relying only on the Stage01 summaries. Return top-level inspection_evidence as a non-empty array. Each item must include path, purpose, and observation. Each inspection_evidence.path must be an existing file in pr-head, not a directory and not a missing target path. If the issue is a missing file, cite the existing task, spec, proposal, design, or source file that proves the file is required, and put the missing file path in observation or routing reason."
 
 def build_techlead_prompt(combined_findings: dict[str, Any], pr_context: dict[str, Any], review_context: str, docs_context: str, config: dict[str, Any]) -> str:
+    ctx_budget = (config or {}).get("context", {}) or {}
+    findings_json = compact_json(combined_findings, max_tokens=int(ctx_budget.get("findings_tokens", 12000)))
+    pr_context_json = compact_json(pr_context)
     prompt=f"""You are the Codex Review tech lead. Reduce axis findings to actionable decisions.
 Return JSON schema_version stage02-techlead-decision.v1.
 
@@ -23,10 +27,10 @@ Return JSON schema_version stage02-techlead-decision.v1.
 {review_context}
 
 Combined findings:
-{combined_findings}
+{findings_json}
 
 PR context:
-{pr_context}
+{pr_context_json}
 """
     return include_inspection_evidence_contract(include_design_required_contract(include_decision_action_contract(prompt)))
 

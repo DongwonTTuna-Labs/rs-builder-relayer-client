@@ -17,9 +17,21 @@ review:
     - test-coverage
     - domain
   max_findings_per_axis: 13
+  max_combined_findings: 40
   max_inline_comments: 12
   max_inline_comments_per_file: 3
   require_changed_right_line: true
+
+# Token budgets for model prompt assembly. The model context window is ~240k tokens;
+# model_token_budget is the per-prompt safety ceiling and the others bound the
+# largest variable-size sections so a big PR cannot silently overflow the window.
+context:
+  model_token_budget: 180000
+  diff_summary_tokens: 4000
+  per_file_patch_tokens: 3000
+  total_patch_tokens: 24000
+  findings_tokens: 12000
+  openspec_tokens: 8000
 
 lifecycle:
   max_threads_per_triage: 16

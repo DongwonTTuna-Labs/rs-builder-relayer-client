@@ -41,7 +41,9 @@ def test_workflow_declares_expected_stage_order():
         "techlead_model",
         "review_publish_trusted",
         "design_context",
-        "design_model_chain",
+        "design_prepare",
+        "design_analysis_model",
+        "design_plan_model",
         "design_chief_model",
         "design_publish_trusted",
         "fix_prepare",
@@ -150,7 +152,9 @@ def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
         "review_axes_model",
         "techlead_model",
         "design_context",
-        "design_model_chain",
+        "design_prepare",
+        "design_analysis_model",
+        "design_plan_model",
         "design_chief_model",
     ]
     for job_name in stage_jobs:

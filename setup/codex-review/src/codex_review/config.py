@@ -15,9 +15,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "review": {
         "axes": ["correctness", "security", "performance", "test-coverage", "domain"],
         "max_findings_per_axis": 13,
+        "max_combined_findings": 40,
         "max_inline_comments": 12,
         "max_inline_comments_per_file": 3,
         "require_changed_right_line": True,
+    },
+    "context": {
+        "model_token_budget": 180000,
+        "diff_summary_tokens": 4000,
+        "per_file_patch_tokens": 3000,
+        "total_patch_tokens": 24000,
+        "findings_tokens": 12000,
+        "openspec_tokens": 8000,
     },
     "lifecycle": {
         "max_threads_per_triage": 16,
@@ -79,6 +88,10 @@ def get_autofix_policy(config: dict[str, Any]) -> dict[str, Any]:
     return dict(config.get("autofix", {}))
 
 
+def get_context_budget(config: dict[str, Any]) -> dict[str, Any]:
+    return dict(config.get("context", DEFAULT_CONFIG["context"]))
+
+
 def validate_config(config: dict[str, Any]) -> None:
     for section in ["trusted", "review", "lifecycle", "design", "autofix", "tests"]:
         if section not in config or not isinstance(config[section], dict):
@@ -94,3 +107,10 @@ def validate_config(config: dict[str, Any]) -> None:
     for prefix in auto.get("allowed_prefixes", []):
         if prefix in forbidden_prefixes:
             raise ValidationError(f"prefix cannot be both allowed and forbidden: {prefix}")
+    ctx = config.get("context")
+    if ctx is not None:
+        if not isinstance(ctx, dict):
+            raise ValidationError("config section 'context' must be a mapping")
+        for ctx_key in ["model_token_budget", "diff_summary_tokens", "per_file_patch_tokens", "total_patch_tokens", "findings_tokens", "openspec_tokens"]:
+            if ctx_key in ctx and int(ctx[ctx_key]) < 0:
+                raise ValidationError(f"context.{ctx_key} must be non-negative")

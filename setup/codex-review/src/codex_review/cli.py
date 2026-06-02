@@ -215,6 +215,32 @@ def _handle_event(args: argparse.Namespace) -> tuple[Any, str | None]:
     raise ValueError(f"unknown event command: {args.command}")
 
 
+def _signal_context_truncation(context: dict[str, Any]) -> None:
+    """Surface PR-context truncation so dropped coverage is visible, not silent."""
+    from .context.pr_context import context_truncation_evidence
+
+    evidence = context_truncation_evidence(context)
+    if not evidence:
+        return
+    write_output("context_truncated", "true")
+    write_output("context_truncated_patch_count", str(evidence["truncated_patch_count"]))
+    append_step_summary(
+        "> [!WARNING] PR context exceeded token budget and was truncated: "
+        f"diff_truncated={evidence['diff_truncated']}, "
+        f"patches_truncated={evidence['patches_truncated']} "
+        f"({evidence['truncated_patch_count']} file patches reduced to hunk headers). "
+        "Review coverage of the dropped content may be incomplete."
+    )
+    artifact_root = os.environ.get("CODEX_REVIEW_ARTIFACT_ROOT")
+    if artifact_root:
+        try:
+            from .loop.events import append_event_log, record_event
+
+            append_event_log(Path(artifact_root) / "events.jsonl", record_event("CONTEXT_TRUNCATED", "context.pr", evidence))
+        except Exception:
+            pass
+
+
 def _handle_context(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd in {"pr", "build-pr"}:
@@ -238,7 +264,9 @@ def _handle_context(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if not pr:
             pr = event_payload.get("pull_request") or event_ctx
         diff = "\n".join(str(f.get("patch") or "") for f in files)
-        return build_pr_context(event_payload if isinstance(event_payload, dict) else {}, pr, files, diff, config), "pr-context.v1"
+        context = build_pr_context(event_payload if isinstance(event_payload, dict) else {}, pr, files, diff, config)
+        _signal_context_truncation(context)
+        return context, "pr-context.v1"
     if cmd in {"changed-lines", "changed"}:
         from .context.changed_lines import build_changed_line_map, serialize_changed_line_map
         payload = _json_or_default(args.in_path, {})
@@ -255,8 +283,13 @@ def _handle_context(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         pr = _json_or_default(args.pr_context or args.in_path, {})
         return collect_openspec_context(pr, args.repo_path, args.token), "openspec-context.v1"
     if cmd in {"openspec-markdown", "render-openspec"}:
-        from .context.openspec_context import render_openspec_context_markdown
-        return render_openspec_context_markdown(_maybe_json(args.in_path or args.openspec_context, {})), None
+        from .context.openspec_context import render_openspec_context_markdown, sections_for_stage
+        budget = int((config.get("context", {}) or {}).get("openspec_tokens", 0)) or None
+        return render_openspec_context_markdown(
+            _maybe_json(args.in_path or args.openspec_context, {}),
+            sections=sections_for_stage(args.stage),
+            budget_tokens=budget,
+        ), None
     if cmd in {"openspec-outputs", "openspec-github-outputs"}:
         payload = _maybe_json(args.in_path or args.openspec_context, {})
         outputs = {
@@ -379,7 +412,7 @@ def _handle_stage01(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "combine":
         from .stages.stage01_review.combine import combine_axis_findings
         paths = _preferred_artifact_paths(args.artifacts, primary="findings.validated.json", fallback="findings.json")
-        return combine_axis_findings(paths), "stage01-combined-findings.v1"
+        return combine_axis_findings(paths, config), "stage01-combined-findings.v1"
     if cmd == "render":
         from .stages.stage01_review.render import render_combined_summary
         return render_combined_summary(_maybe_json(args.in_path, {})), None
@@ -491,6 +524,49 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "batch":
         from .stages.stage03_design.batch import make_cluster_batches
         return {"batches": make_cluster_batches(_maybe_json(args.in_path, {}), config)}, None
+    if cmd in {"prepare-analysis-matrix", "prepare-analysis"}:
+        from .stages.stage03_design.analyze import build_cluster_analysis_prompt
+        from .stages.stage03_design.batch import make_cluster_batches
+        clusters = _maybe_json(args.in_path or args.inventory, {})
+        design_context = _maybe_json(args.pr_context, {})
+        batches = make_cluster_batches(clusters, config)
+        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/stage03/batches")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        include = []
+        for batch in batches:
+            if not batch.get("clusters"):
+                continue
+            batch_index = int(batch.get("batch_index", len(include)))
+            batch_path = str(batch_index)
+            batch_dir = base_dir / batch_path
+            batch_dir.mkdir(parents=True, exist_ok=True)
+            batch_file = batch_dir / "batch.json"
+            prompt_file = batch_dir / "analysis.prompt.md"
+            output_file = batch_dir / "analysis.raw.json"
+            validated_file = batch_dir / "analysis.validated.json"
+            write_json(batch_file, batch, "stage03-cluster-batch.v1")
+            write_text(prompt_file, build_cluster_analysis_prompt(batch, design_context))
+            include.append(
+                {
+                    "batch_index": batch_index,
+                    "batch_path": batch_path,
+                    "batch_file": batch_file.as_posix(),
+                    "prompt_file": prompt_file.as_posix(),
+                    "output_file": output_file.as_posix(),
+                    "validated_file": validated_file.as_posix(),
+                    "working_directory": args.repo_path,
+                }
+            )
+        matrix = {"include": include}
+        if os.environ.get("GITHUB_OUTPUT"):
+            write_output("has_analysis_batches", "true" if include else "false")
+            write_output("analysis_matrix", json.dumps(matrix, sort_keys=True, separators=(",", ":")))
+        return matrix, None
+    if cmd in {"collect-analyses", "collect-analysis"}:
+        from .stages.stage03_design.analyze import combine_cluster_analyses
+        paths = _preferred_artifact_paths(args.artifacts, primary="analysis.validated.json", fallback="*.json")
+        analyses = combine_cluster_analyses(paths)
+        return {"schema_version": "stage03-cluster-analysis.v1", "analyses": analyses, "analysis_count": len(analyses)}, "stage03-cluster-analysis.v1"
     if cmd in {"build-analysis-prompt", "analysis-prompt"}:
         from .stages.stage03_design.analyze import build_cluster_analysis_prompt
         return build_cluster_analysis_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
@@ -750,6 +826,7 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             _maybe_json(args.pr_context, {}),
             _maybe_text(args.docs_context, ""),
             repo_path=args.repo_path,
+            token_budget=int((config.get("context", {}) or {}).get("model_token_budget", 0)) or None,
         )
         return prompt, None
     if cmd in {"validate-semantic-safety", "semantic-safety-validate"}:

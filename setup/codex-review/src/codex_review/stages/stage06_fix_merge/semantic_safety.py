@@ -10,6 +10,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from codex_review.context.budget import compact_json
+from codex_review.context.token_budget import estimate_tokens
 from codex_review.errors import ValidationError
 from codex_review.github_output import write_output
 from codex_review.commit_plan import normalize_commit_plan
@@ -26,12 +28,7 @@ def sha256_text(text: str) -> str:
 
 
 def _compact_json_like(value: Any, *, limit: int = 20000) -> str:
-    import json
-
-    text = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "\n...[truncated]"
+    return compact_json(value, max_chars=limit)
 
 
 def build_semantic_patch_safety_prompt(
@@ -40,6 +37,7 @@ def build_semantic_patch_safety_prompt(
     docs_context: str,
     *,
     repo_path: str | Path | None = None,
+    token_budget: int | None = None,
 ) -> str:
     patch = patch_text_from_merged_fix(merged_fix)
     patch_hash = sha256_text(patch)
@@ -52,7 +50,7 @@ def build_semantic_patch_safety_prompt(
     if repo_path and Path(repo_path).exists():
         repo_note = f"Repository checkout available read-only at: {Path(repo_path).resolve()}"
 
-    return f"""# Stage06 Semantic Patch Safety Review
+    prompt = f"""# Stage06 Semantic Patch Safety Review
 
 You are the semantic safety reviewer for an autonomous OpenSpec-driven PR completion loop.
 This is not a keyword blocker. Review the exact merged patch semantically against the PR intent,
@@ -107,6 +105,16 @@ use status `not_required`, approved false, the exact patch_hash, and an empty co
 
 {repo_note}
 """
+    # Fail-closed: a single-pass semantic review can only be trusted if the whole
+    # patch + context fits the model window. If it does not, refuse to emit a prompt
+    # rather than silently overflow and risk approving a patch the model never fully read.
+    if token_budget and estimate_tokens(prompt) > int(token_budget):
+        raise ValidationError(
+            "patch too large for single-pass semantic safety review: "
+            f"estimated {estimate_tokens(prompt)} tokens exceeds budget {int(token_budget)}. "
+            "Reduce the merged patch scope (split the fix) so the exact patch can be reviewed in one pass."
+        )
+    return prompt
 
 
 def validate_semantic_patch_safety_result(raw: dict[str, Any], merged_fix: dict[str, Any]) -> dict[str, Any]:
