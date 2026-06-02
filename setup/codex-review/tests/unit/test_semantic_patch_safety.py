@@ -19,6 +19,7 @@ def test_semantic_safety_prompt_contains_exact_patch_hash_and_patch():
     assert hashlib.sha256(patch.encode("utf-8")).hexdigest() in prompt
     assert patch in prompt
     assert "not a keyword blocker" in prompt
+    assert "commit_plan" in prompt
 
 
 def test_semantic_safety_validation_requires_exact_patch_hash():
@@ -56,3 +57,41 @@ def test_semantic_safety_validation_allows_rejection_for_issue_fallback():
     )
     assert result["status"] == "needs_issue"
     assert result["approved"] is False
+
+
+def test_semantic_safety_validation_requires_meaningful_commit_plan_for_approved_patch():
+    patch = "diff --git a/docs/a.md b/docs/a.md\n--- a/docs/a.md\n+++ b/docs/a.md\n"
+    with pytest.raises(ValidationError):
+        validate_semantic_patch_safety_result(
+            {
+                "schema_version": "stage06-semantic-patch-safety.v1",
+                "status": "approved",
+                "approved": True,
+                "patch_hash": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+                "summary": "ok",
+                "blocking_reason": None,
+                "reviewed_criteria": [],
+                "semantic_findings": [],
+                "commit_plan": [{"subject": "Codex Review Autofix", "body": "", "paths": ["docs/a.md"]}],
+            },
+            {"schema_version": "stage06-merged-fix.v1", "status": "ready", "patch": patch},
+        )
+
+
+def test_semantic_safety_validation_accepts_commit_plan_for_approved_patch():
+    patch = "diff --git a/docs/a.md b/docs/a.md\n--- a/docs/a.md\n+++ b/docs/a.md\n"
+    result = validate_semantic_patch_safety_result(
+        {
+            "schema_version": "stage06-semantic-patch-safety.v1",
+            "status": "approved",
+            "approved": True,
+            "patch_hash": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+            "summary": "ok",
+            "blocking_reason": None,
+            "reviewed_criteria": [],
+            "semantic_findings": [],
+            "commit_plan": [{"subject": "docs(openspec): add lgtm loop smoke guide", "body": "Add the docs-only smoke guide.", "paths": ["docs/a.md"]}],
+        },
+        {"schema_version": "stage06-merged-fix.v1", "status": "ready", "patch": patch},
+    )
+    assert result["commit_plan"][0]["subject"] == "docs(openspec): add lgtm loop smoke guide"

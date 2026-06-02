@@ -10,7 +10,8 @@
     "summary",
     "blocking_reason",
     "reviewed_criteria",
-    "semantic_findings"
+    "semantic_findings",
+    "commit_plan"
   ],
   "properties": {
     "schema_version": {"type": "string"},
@@ -30,6 +31,19 @@
           "title": {"type": "string"},
           "evidence": {"type": "string"},
           "recommendation": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "commit_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["subject", "body", "paths"],
+        "properties": {
+          "subject": {"type": "string"},
+          "body": {"type": "string"},
+          "paths": {"type": "array", "items": {"type": "string"}}
         },
         "additionalProperties": false
       }

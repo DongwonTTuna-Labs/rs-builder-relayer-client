@@ -23,7 +23,7 @@ def test_model_jobs_have_no_repo_write_permissions():
 
 
 def test_trusted_write_jobs_keep_github_token_read_only():
-    write_jobs = ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "push_trusted", "record_reentry", "issue_fallback_trusted"]
+    write_jobs = ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "issue_fallback_trusted", "push_trusted"]
     for name in write_jobs:
         perms = jobs()[name].get("permissions", {})
         assert perms.get("contents") == "read"
@@ -46,10 +46,10 @@ def test_write_jobs_use_app_token_not_github_token_write_permissions():
     assert "auth app-token --mode stage02" in text
     assert "auth app-token --mode stage04" in text
     assert "auth app-token --mode push" in text
-    assert "auth app-token --mode stage08" in text
+    assert "auth app-token --mode stage08" not in text
     assert "auth app-token --mode stage09" in text
     assert "GITHUB_TOKEN: ${{ github.token }}" not in text.split("resolve_apply_trusted:", 1)[1]
-    for name in ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "push_trusted", "record_reentry", "issue_fallback_trusted"]:
+    for name in ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "issue_fallback_trusted", "push_trusted"]:
         section = text.split(f"  {name}:", 1)[1].split("\n  ", 1)[0]
         assert "write" not in section
 
@@ -57,7 +57,7 @@ def test_write_jobs_use_app_token_not_github_token_write_permissions():
 def test_app_token_permission_metadata_is_threaded_to_write_commands():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "write_output(\"permissions_json\"" not in text  # helper code stays outside workflow
-    assert text.count("CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}") >= 5
+    assert text.count("CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}") >= 4
 
 
 def test_app_token_steps_include_current_codex_app_secret_fallbacks():
@@ -67,7 +67,7 @@ def test_app_token_steps_include_current_codex_app_secret_fallbacks():
             if "codex-review auth app-token" in str(step.get("run", "")):
                 app_token_steps.append(step)
 
-    assert len(app_token_steps) == 6
+    assert len(app_token_steps) == 5
     for step in app_token_steps:
         env = step.get("env", {})
         assert env.get("CODEX_APP_ID") == "${{ secrets.CODEX_APP_ID }}"

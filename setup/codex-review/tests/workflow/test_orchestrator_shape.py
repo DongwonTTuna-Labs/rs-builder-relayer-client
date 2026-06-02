@@ -49,17 +49,16 @@ def test_workflow_declares_expected_stage_order():
         "fix_collect_and_merge",
         "semantic_patch_safety_model",
         "push_validate_no_token",
-        "push_trusted",
-        "record_reentry",
         "issue_fallback_trusted",
+        "push_trusted",
     ]
     assert jobs == expected
 
 
-def test_workflow_cancels_stale_runs_for_same_pr():
+def test_workflow_cancels_human_stale_runs_but_not_bot_autofix_push_runs():
     workflow = load_workflow()
     assert workflow["concurrency"]["group"] == "codex-review-v3-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.run_id }}"
-    assert workflow["concurrency"]["cancel-in-progress"] is True
+    assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.actor != 'codex-reviewer-for-dongwonttuna[bot]' }}"
 
 
 def test_no_inline_python_or_schema_bloat():
@@ -83,7 +82,7 @@ def test_no_placeholder_echo_json_or_error_suppression():
     assert "stage07 validate-fix" in text
     assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in text
     assert "stage07 commit-push" in text
-    assert "stage08 validate" in text
+    assert "stage08 validate" not in text
 
 
 def test_workflow_routes_design_and_fix_stages():
@@ -240,7 +239,7 @@ def test_fix_and_stage07_use_pr_head_worktree():
 
 def test_no_token_validation_job_does_not_request_app_token():
     text = WORKFLOW.read_text(encoding="utf-8")
-    section = text.split("push_validate_no_token:", 1)[1].split("push_trusted:", 1)[0]
+    section = text.split("push_validate_no_token:", 1)[1].split("issue_fallback_trusted:", 1)[0]
     assert "auth app-token" not in section
     assert "GITHUB_TOKEN:" not in section
     assert "stage07 validate-fix" in section
@@ -273,28 +272,24 @@ def test_push_and_issue_fallback_are_default_actual_write_paths():
 
     assert "stage02 write-deferred-outputs" in text
 
-    validate_section = text.split("push_validate_no_token:", 1)[1].split("push_trusted:", 1)[0]
+    validate_section = text.split("push_validate_no_token:", 1)[1].split("issue_fallback_trusted:", 1)[0]
     assert "stage07 validate-fix --dry-run" not in validate_section
     assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in validate_section
     assert "stage07 write-validation-outputs" in validate_section
     assert "requires_push_token" in validate_section
 
-    push_section = text.split("push_trusted:", 1)[1].split("record_reentry:", 1)[0]
-    assert "if: needs.push_validate_no_token.outputs.requires_push_token == 'true'" in push_section
-    assert "auth app-token --mode push" in push_section
-    assert "stage07 commit-push --in" in push_section
-    assert "stage07 push --dry-run" not in push_section
-
-    record_section = text.split("record_reentry:", 1)[1].split("issue_fallback_trusted:", 1)[0]
-    assert "if: needs.push_trusted.outputs.push_status == 'pushed'" in record_section
-    assert "auth app-token --mode stage08" in record_section
-    assert "stage08 record --in" in record_section
-    assert "--pr-context codex-review-artifacts/event/pr-context.json" in record_section
-
-    issue_section = text.split("issue_fallback_trusted:", 1)[1]
+    issue_section = text.split("issue_fallback_trusted:", 1)[1].split("push_trusted:", 1)[0]
     assert "auth app-token --mode stage09" in issue_section
     assert "stage09 apply --in" in issue_section
     assert "stage09 apply --dry-run" not in issue_section
+
+    push_section = text.split("push_trusted:", 1)[1]
+    assert "if: always() && needs.push_validate_no_token.outputs.requires_push_token == 'true' && needs.issue_fallback_trusted.result == 'skipped'" in push_section
+    assert "auth app-token --mode push" in push_section
+    assert "stage07 commit-push --in" in push_section
+    assert "stage07 push --dry-run" not in push_section
+    assert "issue_fallback_trusted" in push_section
+    assert "record_reentry:" not in text
 
 
 def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
@@ -360,7 +355,7 @@ def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
 def test_stage09_issue_fallback_uses_app_token_and_never_github_token_write():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "issue_fallback_trusted:" in text
-    section = text.split("issue_fallback_trusted:", 1)[1]
+    section = text.split("issue_fallback_trusted:", 1)[1].split("push_trusted:", 1)[0]
     assert "auth app-token --mode stage09" in section
     issue_flag = "CODEX_REVIEW" + "_ENABLE" + "_ISSUE_FALLBACK"
     assert issue_flag not in section
@@ -370,8 +365,8 @@ def test_stage09_issue_fallback_uses_app_token_and_never_github_token_write():
     assert "has_deferred_issue_items" in section
     assert "stage02_defer_to_issue" in section
     assert "codex-review-stage02" in section
-    for status in ["no_diff_repeat", "empty_patch", "tests_failed", "validation_failed", "committed_no_head_ref"]:
-        assert f"push_status == '{status}'" in section
+    for status in ["no_diff_repeat", "empty_patch", "tests_failed", "validation_failed", "semantic_safety_rejected"]:
+        assert f"validation_status == '{status}'" in section
     assert "issues: write" not in section
 
 

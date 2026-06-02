@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import subprocess
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -39,10 +40,29 @@ def restore_remote(repo_path: str | Path, original_url: str | None) -> None:
 def push_commit(repo_path: str | Path, head_ref: str, owner: str, repo: str, token: str | None) -> dict[str, Any]:
     remote = prepare_authenticated_remote(repo_path, owner, repo, token)
     try:
-        proc=subprocess.run(["git","push","origin",f"HEAD:{head_ref}"], cwd=Path(repo_path), capture_output=True, text=True, env=sanitized_env())
-        return {"pushed": proc.returncode == 0, "returncode": proc.returncode, "stderr": proc.stderr[-2000:]}
+        repo_dir = Path(repo_path)
+        expected_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True, env=sanitized_env()).strip()
+        proc=subprocess.run(["git","push","origin",f"HEAD:{head_ref}"], cwd=repo_dir, capture_output=True, text=True, env=sanitized_env())
+        verified, remote_sha = (False, "")
+        if proc.returncode == 0:
+            verified, remote_sha = verify_remote_head_ref(repo_dir, head_ref, expected_sha)
+        return {"pushed": proc.returncode == 0, "returncode": proc.returncode, "stderr": proc.stderr[-2000:], "verified": verified, "remote_head_sha": remote_sha, "expected_head_sha": expected_sha}
     finally:
         restore_remote(repo_path, remote.get("original_url"))
+
+
+def verify_remote_head_ref(repo_path: str | Path, head_ref: str, expected_sha: str, attempts: int = 6, delay_seconds: float = 2.0) -> tuple[bool, str]:
+    remote_sha = ""
+    ref = f"refs/heads/{head_ref}"
+    for attempt in range(max(1, attempts)):
+        proc = subprocess.run(["git", "ls-remote", "origin", ref], cwd=Path(repo_path), capture_output=True, text=True, env=sanitized_env())
+        if proc.returncode == 0 and proc.stdout.strip():
+            remote_sha = proc.stdout.split()[0]
+            if remote_sha == expected_sha:
+                return True, remote_sha
+        if attempt + 1 < attempts:
+            time.sleep(delay_seconds)
+    return False, remote_sha
 
 
 def verify_pushed_head(owner: str, repo: str, pr_number: int, expected_sha: str, token: str | None) -> bool:

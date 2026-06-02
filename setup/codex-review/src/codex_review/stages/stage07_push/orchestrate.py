@@ -20,7 +20,7 @@ from codex_review.errors import CodexReviewError, ValidationError
 from codex_review.github.app_token import assert_installation_token_for_repo, permissions_for_write_mode
 from codex_review.security.patch_policy import validate_patch_policy
 from .apply_patch import apply_merged_patch, collect_applied_diff, run_diff_check
-from .commit import build_commit_message, create_commit, validate_commit_diff
+from .commit import build_commit_message, commit_plan_from_artifacts, create_commit, create_commits_from_plan, validate_commit_diff
 from .push import push_commit, verify_pushed_head
 from .run_tests import run_required_tests, select_test_commands
 from .validate import validate_autofix_commit_cap, validate_current_head, validate_push_target, validate_ready_to_push, validate_worktree_clean
@@ -279,10 +279,11 @@ def commit_validated_fix(merged_fix: dict[str, Any], pr_context: dict[str, Any],
     policy = _policy(config, merged_fix)
     old_head = pr_context.get("head_sha") or merged_fix.get("expected_head_sha") or _current_head(repo_path)
     _configure_git_author(repo_path, policy)
-    message = build_commit_message(merged_fix, str(merged_fix.get("plan_hash") or merged_fix.get("design_plan_hash") or "unknown"), str(old_head))
-    commit_sha = create_commit(repo_path, message)
-    report = validate_commit_diff(repo_path, commit_sha, policy)
-    return {"schema_version": "stage07-push-result.v1", "status": "committed", "pushed": False, "commit_sha": commit_sha, "policy_report": report}
+    applied_diff = collect_applied_diff(repo_path)
+    commit_plan = commit_plan_from_artifacts(merged_fix, {"semantic_safety": merged_fix.get("semantic_safety") or {}}, applied_diff)
+    commit_shas = create_commits_from_plan(repo_path, commit_plan, str(merged_fix.get("plan_hash") or merged_fix.get("design_plan_hash") or "unknown"), str(old_head), merged_fix)
+    reports = [validate_commit_diff(repo_path, sha, policy) for sha in commit_shas]
+    return {"schema_version": "stage07-push-result.v1", "status": "committed", "pushed": False, "commit_sha": commit_shas[-1], "commit_shas": commit_shas, "commit_plan": commit_plan, "policy_report": {"commits": reports}}
 
 
 def commit_and_push_validated_fix(
@@ -373,24 +374,27 @@ def commit_and_push_validated_fix(
             raise ValidationError("applied diff differs from no-token validation artifact")
         applied_policy_report = validate_patch_policy(applied_diff, policy, {})
         _configure_git_author(repo_path, policy)
-        message = build_commit_message(merged_fix, str(merged_fix.get("plan_hash") or merged_fix.get("design_plan_hash") or "unknown"), str(old_head))
-        commit_sha = create_commit(repo_path, message)
-        commit_policy_report = validate_commit_diff(repo_path, commit_sha, policy)
+        design_plan_hash = str(merged_fix.get("plan_hash") or merged_fix.get("design_plan_hash") or "unknown")
+        commit_plan = commit_plan_from_artifacts(merged_fix, validation_result, applied_diff)
+        commit_shas = create_commits_from_plan(repo_path, commit_plan, design_plan_hash, str(old_head), merged_fix)
+        commit_sha = commit_shas[-1]
+        commit_policy_reports = [validate_commit_diff(repo_path, sha, policy) for sha in commit_shas]
+        commit_policy_report = {"commits": commit_policy_reports, "passed": all(r.get("passed", True) for r in commit_policy_reports)}
         head_ref = pr_context.get("head_ref")
         if not head_ref:
-            return {"schema_version": "stage07-push-result.v1", "status": "committed_no_head_ref", "pushed": False, "commit_sha": commit_sha, "policy_report": commit_policy_report}
+            return {"schema_version": "stage07-push-result.v1", "status": "committed_no_head_ref", "pushed": False, "commit_sha": commit_sha, "commit_shas": commit_shas, "commit_plan": commit_plan, "policy_report": commit_policy_report}
         push_report = push_commit(repo_path, str(head_ref), owner, repo, token)
         pushed = bool(push_report.get("pushed"))
-        verified = False
-        if pushed:
+        verified = bool(push_report.get("verified"))
+        if pushed and not verified:
             verified = verify_pushed_head(owner, repo, pr_number, commit_sha, token)
-            if not verified:
-                raise ValidationError("pushed commit could not be verified as current PR head")
         return {
             "schema_version": "stage07-push-result.v1",
-            "status": "pushed" if pushed else "push_failed",
+            "status": "pushed" if pushed and verified else "pushed_unverified" if pushed else "push_failed",
             "pushed": pushed,
             "commit_sha": commit_sha,
+            "commit_shas": commit_shas,
+            "commit_plan": commit_plan,
             "verified": verified,
             "apply_report": apply_report,
             "policy_report": commit_policy_report,

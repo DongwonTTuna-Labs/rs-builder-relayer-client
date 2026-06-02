@@ -141,6 +141,9 @@ def test_ready_status_with_empty_patch_routes_to_empty_patch():
 
 def _semantic_approval_for_patch(patch: str) -> dict:
     import hashlib
+    from codex_review.commit_plan import extract_patch_paths
+
+    paths = extract_patch_paths(patch) or ["src/a.txt"]
 
     return {
         "schema_version": "stage06-semantic-patch-safety.v1",
@@ -151,6 +154,7 @@ def _semantic_approval_for_patch(patch: str) -> dict:
         "blocking_reason": None,
         "reviewed_criteria": ["OpenSpec scope", "no credential exfiltration"],
         "semantic_findings": [],
+        "commit_plan": [{"subject": "test(autofix): apply validated patch", "body": "Apply the validated test patch.", "paths": paths}],
     }
 
 
@@ -274,3 +278,116 @@ def test_commit_push_defensively_refuses_validated_artifact_without_semantic_app
     )
     assert result["status"] == "semantic_safety_missing"
     assert result["pushed"] is False
+
+
+def test_commit_push_uses_semantic_commit_plan_and_splits_logical_commits(tmp_path, monkeypatch):
+    import subprocess
+    from codex_review.stages.stage07_push import orchestrate
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    (repo / "docs").mkdir()
+    (repo / "docs/a.md").write_text("old a\n", encoding="utf-8")
+    (repo / "docs/b.md").write_text("old b\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    patch = """diff --git a/docs/a.md b/docs/a.md
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -1 +1 @@
+-old a
++new a
+diff --git a/docs/b.md b/docs/b.md
+--- a/docs/b.md
++++ b/docs/b.md
+@@ -1 +1 @@
+-old b
++new b
+"""
+    commit_plan = [
+        {"subject": "docs(a): update smoke guide section", "body": "Update the first docs task.", "paths": ["docs/a.md"]},
+        {"subject": "docs(b): update loop evidence section", "body": "Update the second docs task.", "paths": ["docs/b.md"]},
+    ]
+
+    monkeypatch.setattr(orchestrate, "assert_installation_token_for_repo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrate, "validate_current_head", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrate, "validate_autofix_commit_cap", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(orchestrate, "push_commit", lambda *args, **kwargs: {"pushed": True, "returncode": 0, "verified": True})
+    monkeypatch.setattr(orchestrate, "verify_pushed_head", lambda *args, **kwargs: True)
+
+    result = commit_and_push_validated_fix(
+        {"schema_version": "stage06-merged-fix.v1", "status": "ready_to_push", "patch": patch, "expected_head_sha": head},
+        {
+            "schema_version": "stage07-validated-fix.v1",
+            "status": "validated",
+            "validated": True,
+            "semantic_safety_approved": True,
+            "patch_hash": __import__("hashlib").sha256(patch.encode("utf-8")).hexdigest(),
+            "semantic_safety": {"commit_plan": commit_plan},
+        },
+        {"owner": "o", "repo": "r", "pr_number": 1, "head_sha": head, "head_ref": "feature/x"},
+        {"autofix": {"allowed_prefixes": ["docs/"], "max_patch_bytes": 20000}},
+        repo,
+        token="token",
+    )
+
+    subjects = subprocess.check_output(["git", "log", "--format=%s", "-2"], cwd=repo, text=True).splitlines()
+    assert subjects == ["docs(b): update loop evidence section", "docs(a): update smoke guide section"]
+    assert result["status"] == "pushed"
+    assert result["pushed"] is True
+    assert result["commit_shas"] and len(result["commit_shas"]) == 2
+    assert result["commit_plan"] == commit_plan
+
+
+def test_commit_push_treats_successful_push_with_delayed_verification_as_pushed_unverified(tmp_path, monkeypatch):
+    import hashlib
+    import subprocess
+    from codex_review.stages.stage07_push import orchestrate
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    (repo / "docs").mkdir()
+    (repo / "docs/a.md").write_text("old\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/a.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    patch = """diff --git a/docs/a.md b/docs/a.md
+--- a/docs/a.md
++++ b/docs/a.md
+@@ -1 +1 @@
+-old
++new
+"""
+
+    monkeypatch.setattr(orchestrate, "assert_installation_token_for_repo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrate, "validate_current_head", lambda *args, **kwargs: None)
+    monkeypatch.setattr(orchestrate, "validate_autofix_commit_cap", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(orchestrate, "push_commit", lambda *args, **kwargs: {"pushed": True, "returncode": 0, "verified": False})
+    monkeypatch.setattr(orchestrate, "verify_pushed_head", lambda *args, **kwargs: False)
+
+    result = commit_and_push_validated_fix(
+        {"schema_version": "stage06-merged-fix.v1", "status": "ready_to_push", "patch": patch, "expected_head_sha": head},
+        {
+            "schema_version": "stage07-validated-fix.v1",
+            "status": "validated",
+            "validated": True,
+            "semantic_safety_approved": True,
+            "patch_hash": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+            "semantic_safety": {"commit_plan": [{"subject": "docs(test): update delayed verification fixture", "body": "Exercise delayed push verification.", "paths": ["docs/a.md"]}]},
+        },
+        {"owner": "o", "repo": "r", "pr_number": 1, "head_sha": head, "head_ref": "feature/x"},
+        {"autofix": {"allowed_prefixes": ["docs/"], "max_patch_bytes": 20000}},
+        repo,
+        token="token",
+    )
+
+    assert result["pushed"] is True
+    assert result["verified"] is False
+    assert result["status"] == "pushed_unverified"
