@@ -1,0 +1,10 @@
+project: rs-builder-relayer-client
+description: OpenSpec artifacts for repository-scoped Codex Review automation changes.
+changes_dir: openspec/changes
+specs_dir: openspec/specs
+review:
+  source_of_truth:
+    - proposal.md
+    - design.md
+    - tasks.md
+    - specs/**/*.md
