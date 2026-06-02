@@ -216,7 +216,9 @@ jobs:
           printf '%s' "$THREAD_INVENTORY" > codex-review-artifacts/stage00/thread-inventory.json
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Build lifecycle prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage00 build-prompt --inventory codex-review-artifacts/stage00/thread-inventory.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage00/lifecycle-prompt.md
       - name: Prepare lifecycle schema
@@ -228,6 +230,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: codex-review-artifacts/stage00/lifecycle-prompt.md
           output-file: codex-review-artifacts/stage00/lifecycle-result.json
           output-schema-file: codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
@@ -358,7 +361,9 @@ jobs:
           path: codex-review-artifacts/event
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Build axis prompt
         run: |
           mkdir -p codex-review-artifacts/stage01/${{ matrix.axis }}
@@ -372,6 +377,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
@@ -479,7 +485,9 @@ jobs:
           printf '%s' "$RESOLVED_MEMORY" > codex-review-artifacts/stage00/resolved-memory.json
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Filter resolved findings and build techlead prompt
         run: |
           mkdir -p codex-review-artifacts/stage02
@@ -494,6 +502,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage02/prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage02/techlead-decision.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json

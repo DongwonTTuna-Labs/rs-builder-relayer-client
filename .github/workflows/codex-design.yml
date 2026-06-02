@@ -238,7 +238,9 @@ jobs:
           printf '%s' "$DESIGN_CONTEXT" > codex-review-artifacts/stage03/design-context.json
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Build inventory prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-inventory-prompt --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.prompt.md
       - name: Prepare design schemas
@@ -253,6 +255,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
@@ -271,6 +274,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
@@ -335,7 +339,9 @@ jobs:
           path: codex-review-artifacts/stage03
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare cluster analysis schema
         run: |
           mkdir -p codex-review-artifacts/schemas
@@ -345,6 +351,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
@@ -410,7 +417,9 @@ jobs:
           merge-multiple: false
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare design plan schema
         run: |
           mkdir -p codex-review-artifacts/schemas
@@ -425,6 +434,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-plan.prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-plan.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
@@ -485,7 +495,9 @@ jobs:
           path: codex-review-artifacts/stage03
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Build design chief prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage04 build-chief-prompt --in codex-review-artifacts/stage03/design-plan.json --inventory codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage04/prompt.md
       - name: Prepare design chief schema
@@ -497,6 +509,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage04/prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage04/chief-decision.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json

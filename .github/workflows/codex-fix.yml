@@ -232,7 +232,9 @@ jobs:
           path: trusted/codex-review-artifacts/stage05
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare fix agent schema
         run: |
           mkdir -p trusted/codex-review-artifacts/schemas
@@ -242,6 +244,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
           output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
@@ -321,7 +324,9 @@ jobs:
       - name: Mint Codex relay token
         id: codex_oidc
         if: steps.merge_route.outputs.needs_model == 'true'
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare merged fix schema
         if: steps.merge_route.outputs.needs_model == 'true'
         run: |
@@ -333,6 +338,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merge-prompt.md
           output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merged-fix.raw.json
           output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
@@ -399,7 +405,9 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review stage06 build-semantic-safety-prompt --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --out trusted/codex-review-artifacts/stage06/semantic-safety-prompt.md
       - name: Mint Codex relay token
         id: codex_oidc
-        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare semantic patch safety schema
         run: |
           mkdir -p trusted/codex-review-artifacts/schemas
@@ -409,6 +417,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/semantic-safety-prompt.md
           output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/semantic-safety.raw.json
           output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-semantic-patch-safety.v1.openai.schema.json
