@@ -431,6 +431,26 @@ def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
     assert "CODEX_REVIEW_TARGET_REPO_PATH" not in section
 
 
+def test_guards_allow_trusted_pipeline_bot_through_permission_check():
+    # The loop chains stages via labels attached by the trusted app bot, which is
+    # NOT a write collaborator. Every guard that enforces the collaborator
+    # write-permission check must also bypass it for that bot, or the automated
+    # review->design->fix loop dies after the first human-attached label.
+    for path in (REVIEW, DESIGN, FIX, ISSUE):
+        text = path.read_text(encoding="utf-8")
+        if "collaborators/$ACTOR/permission" not in text:
+            continue
+        assert '"$ACTOR" = "codex-reviewer-for-dongwonttuna[bot]"' in text or \
+               '"$ACTOR" != "codex-reviewer-for-dongwonttuna[bot]"' in text, path.name
+
+
+def test_review_finalize_routes_upstream_breakage_to_issue_not_lgtm():
+    # apply_threads has no route gating, so a non-success result means stage00
+    # broke; finalize must route to needs-issue rather than defaulting to lgtm.
+    text = REVIEW.read_text(encoding="utf-8")
+    assert '[ "$RESOLVE_RESULT" != "success" ]' in text
+
+
 def test_small_intra_workflow_handoffs_use_job_outputs_not_artifacts():
     # Hybrid data flow: small intra-workflow handoffs move to job outputs via
     # `io to-output`; the corresponding intra artifacts are removed. Cross-workflow,

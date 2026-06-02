@@ -68,11 +68,15 @@ jobs:
             reason="포크 PR 은 자동 수정/푸시를 지원하지 않습니다 ($HEAD_REPO)."
           fi
           if [ "$proceed" = "true" ]; then
-            PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
-            case "$PERM" in
-              admin|maintain|write) ;;
-              *) proceed=false; reason="라벨 부착자($ACTOR)의 권한이 부족합니다 (write 이상 필요)." ;;
-            esac
+            if [ "$ACTOR" = "codex-reviewer-for-dongwonttuna[bot]" ]; then
+              : # 루프 전이를 구동하는 신뢰된 파이프라인 봇 — 협력자 권한 검사 불필요
+            else
+              PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+              case "$PERM" in
+                admin|maintain|write) ;;
+                *) proceed=false; reason="라벨 부착자($ACTOR)의 권한이 부족합니다 (write 이상 필요)." ;;
+              esac
+            fi
           fi
           DESIGN_RUN_ID=""
           if [ "$proceed" = "true" ]; then
