@@ -107,6 +107,6 @@ def test_model_jobs_use_native_codex_action_relay_without_write_permissions():
             assert step["with"]["openai-api-key"] == "${{ steps.codex_oidc.outputs.relay_token }}"
             assert step["with"]["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses"
             assert "codex-args" not in step["with"]
-            assert "codex-home" not in step["with"]
+            assert step["with"]["codex-home"] == "${{ runner.temp }}/codex-home"
             assert "AI_RELAY_API_KEY" not in (step.get("env") or {})
             assert step["with"]["output-schema-file"]

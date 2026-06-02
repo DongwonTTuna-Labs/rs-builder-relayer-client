@@ -177,7 +177,9 @@ def test_workflow_uses_codex_action_for_model_execution():
         assert with_inputs["openai-api-key"] == "${{ steps.codex_oidc.outputs.relay_token }}", job_name
         assert with_inputs["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses", job_name
         assert "codex-args" not in with_inputs, job_name
-        assert "codex-home" not in with_inputs, job_name
+        # Writable Codex home so the responses-api proxy can write its server-info
+        # on the rootless self-hosted runner (default ~/.codex is not writable).
+        assert with_inputs["codex-home"] == "${{ runner.temp }}/codex-home", job_name
         assert "env" not in step or "AI_RELAY_API_KEY" not in (step.get("env") or {}), job_name
         assert with_inputs["sandbox"] == "read-only", job_name
         assert with_inputs["safety-strategy"] == "read-only", job_name
