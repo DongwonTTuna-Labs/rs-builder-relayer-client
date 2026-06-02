@@ -11,7 +11,10 @@ def build_normalize_prompt(design_context: dict[str, Any]) -> str:
     return (
         "Normalize the following design-relevant findings into invariant-oriented items. "
         "First inspect relevant files in pr-head and include top-level inspection_evidence "
-        "items with path, purpose, and observation. Return stage03-design-inventory.v1 JSON.\n"
+        "items with path, purpose, and observation. Each inspection_evidence.path must be an "
+        "existing file in pr-head, not a directory and not a missing target path. If the issue "
+        "is a missing file, cite the existing task/spec/design/proposal file that proves it is "
+        "required and put the missing file path in observation. Return stage03-design-inventory.v1 JSON.\n"
         + str(design_context)
     )
 

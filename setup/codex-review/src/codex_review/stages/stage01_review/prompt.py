@@ -10,7 +10,7 @@ def include_axis_specific_focus(axis: str) -> str:
     return focuses.get(axis, "general review")
 
 def include_inspection_evidence_contract(prompt: str) -> str:
-    return prompt + "\n\nBefore deciding findings, inspect relevant repo files under pr-head: changed files, nearby implementation, tests, docs, AGENTS.md, and OpenSpec artifacts when present. Return top-level inspection_evidence as a non-empty array. Each inspection_evidence item must include path, purpose, and observation. Stage01 needs inspection_evidence even when findings is empty."
+    return prompt + "\n\nBefore deciding findings, inspect relevant repo files under pr-head: changed files, nearby implementation, tests, docs, AGENTS.md, and OpenSpec artifacts when present. Return top-level inspection_evidence as a non-empty array. Each inspection_evidence item must include path, purpose, and observation. Each inspection_evidence.path must be an existing file in pr-head, not a directory and not a missing target path. If the issue is a missing file, cite the existing task, spec, proposal, design, or source file that proves the file is required, and put the missing file path in observation or the finding text. Stage01 needs inspection_evidence even when findings is empty."
 
 def include_changed_line_contract(prompt: str, changed_line_map: dict[str, Any]) -> str:
     return prompt + "\n\nOnly emit inline findings with file/line on changed RIGHT-side lines. If repo inspection finds PR-scope risk outside changed RIGHT-side lines, summarize it in finding context/evidence only when it can be anchored to a changed line; otherwise leave it for Stage02 defer_to_issue routing through the finding summary and inspection_evidence. Changed line map:\n" + str(changed_line_map)

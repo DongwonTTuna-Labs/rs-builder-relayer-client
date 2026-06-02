@@ -21,7 +21,10 @@ def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, 
     instructions = (
         "Coordinate a candidate design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n"
         "First inspect relevant files in pr-head. Include top-level inspection_evidence as a non-empty "
-        "array of objects with path, purpose, and observation for the repo files that informed the plan.\n"
+        "array of objects with path, purpose, and observation for the repo files that informed the plan. "
+        "Each inspection_evidence.path must be an existing file in pr-head, not a directory and not a "
+        "missing target path. If the issue is a missing file, cite the existing task/spec/design/proposal "
+        "file that proves it is required and put the missing file path in observation or edit_sequence.\n"
         "Do not include human-routing fields in this artifact. stage04 design chief decides whether the "
         "candidate is approved_for_fix, needs_human, rejected_plan, or no_fix_needed. For OpenSpec-backed "
         "work, needs_human must be reserved for explicit non-executable blockers; otherwise close the plan "
