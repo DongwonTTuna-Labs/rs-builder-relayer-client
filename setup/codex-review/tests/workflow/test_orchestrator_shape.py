@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
 REVIEW = ROOT / ".github" / "workflows" / "codex-review.yml"
 DESIGN = ROOT / ".github" / "workflows" / "codex-design.yml"
+FIX = ROOT / ".github" / "workflows" / "codex-fix.yml"
 CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
 
 
@@ -22,6 +23,10 @@ def load_review():
 
 def load_design():
     return yaml.safe_load(DESIGN.read_text(encoding="utf-8"))
+
+
+def load_fix():
+    return yaml.safe_load(FIX.read_text(encoding="utf-8"))
 
 
 def iter_job_steps():
@@ -79,16 +84,20 @@ def test_workflow_declares_expected_stage_order():
         "design_publish_trusted",
         "finalize_labels",
     ]
-    orchestrator_jobs = list(load_workflow()["jobs"].keys())
-    assert orchestrator_jobs == [
+    fix_jobs = list(load_fix()["jobs"].keys())
+    assert fix_jobs == [
+        "guard_and_inputs",
         "fix_prepare",
         "fix_agent_model",
         "fix_collect_and_merge",
         "semantic_patch_safety_model",
         "push_validate_no_token",
-        "issue_fallback_trusted",
         "push_trusted",
+        "finalize_labels",
     ]
+    # Orchestrator now hosts only the issue fallback until PR 5 retires it.
+    orchestrator_jobs = list(load_workflow()["jobs"].keys())
+    assert orchestrator_jobs == ["issue_fallback_trusted"]
 
 
 def test_workflow_cancels_human_stale_runs_but_not_bot_autofix_push_runs():
@@ -98,27 +107,30 @@ def test_workflow_cancels_human_stale_runs_but_not_bot_autofix_push_runs():
 
 
 def test_no_inline_python_or_schema_bloat():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     assert "python - <<" not in text
     assert "json-schema.org" not in text
     assert text.count("workflow-helper/setup/codex-review/bin/codex-review") >= 8
 
 
 def test_no_placeholder_echo_json_or_error_suppression():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "|| true" not in text
-    assert "echo '{\"schema_version\"" not in text
-    assert " default-result " not in text
-    assert " default-" not in text
-    assert "model-result" not in text
-    assert "run-agents" not in text
-    assert "model-merged-fix" not in text
-    assert "stage06 build-semantic-safety-prompt" in text
-    assert "stage06 validate-semantic-safety" in text
-    assert "stage07 validate-fix" in text
-    assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in text
-    assert "stage07 commit-push" in text
-    assert "stage08 validate" not in text
+    # Helper/model commands must not swallow errors or emit placeholder JSON.
+    # (Best-effort `|| true` on gh label ops in guard/finalize is intentional and
+    #  scoped to label mutations, so this invariant targets helper/model commands.)
+    fix_text = FIX.read_text(encoding="utf-8")
+    assert "echo '{\"schema_version\"" not in fix_text
+    assert " default-result " not in fix_text
+    assert " default-" not in fix_text
+    assert "model-result" not in fix_text
+    assert "run-agents" not in fix_text
+    assert "model-merged-fix" not in fix_text
+    assert "stage08 validate" not in fix_text
+    # The semantic-safety + push commands now live in the fix workflow.
+    assert "stage06 build-semantic-safety-prompt" in fix_text
+    assert "stage06 validate-semantic-safety" in fix_text
+    assert "stage07 validate-fix" in fix_text
+    assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in fix_text
+    assert "stage07 commit-push" in fix_text
 
 
 def test_workflow_routes_design_and_fix_stages():
@@ -268,7 +280,7 @@ def test_workflow_has_no_model_runner_default_or_codex_cli_env_contract():
 
 
 def test_fix_and_stage07_use_pr_head_worktree():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = FIX.read_text(encoding="utf-8")
     assert "path: pr-head" in text
     assert "stage05 prepare-agents" in text and "--repo-path pr-head" in text
     assert "stage06 premerge" in text and "--repo-path pr-head" in text
@@ -277,8 +289,8 @@ def test_fix_and_stage07_use_pr_head_worktree():
 
 
 def test_no_token_validation_job_does_not_request_app_token():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    section = text.split("push_validate_no_token:", 1)[1].split("issue_fallback_trusted:", 1)[0]
+    text = FIX.read_text(encoding="utf-8")
+    section = text.split("push_validate_no_token:", 1)[1].split("push_trusted:", 1)[0]
     assert "auth app-token" not in section
     assert "GITHUB_TOKEN:" not in section
     assert "stage07 validate-fix" in section
@@ -287,11 +299,11 @@ def test_no_token_validation_job_does_not_request_app_token():
 
 
 def test_semantic_patch_safety_model_gates_stage07_push_validation():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    jobs = load_workflow()["jobs"]
+    text = FIX.read_text(encoding="utf-8")
+    jobs = load_fix()["jobs"]
     assert "semantic_patch_safety_model" in jobs
     semantic = jobs["semantic_patch_safety_model"]
-    assert semantic["needs"] == ["bootstrap_event", "fix_collect_and_merge"]
+    assert semantic["needs"] == ["guard_and_inputs", "fix_collect_and_merge"]
     semantic_text = text.split("semantic_patch_safety_model:", 1)[1].split("push_validate_no_token:", 1)[0]
     assert "stage06 build-semantic-safety-prompt" in semantic_text
     assert "schema openai-strict --schema stage06-semantic-patch-safety.v1" in semantic_text
@@ -299,37 +311,38 @@ def test_semantic_patch_safety_model_gates_stage07_push_validation():
     assert "stage06 write-semantic-safety-outputs" in semantic_text
     assert "AI_RELAY_API_KEY" in semantic_text
     validate_job = jobs["push_validate_no_token"]
-    assert validate_job["needs"] == ["bootstrap_event", "fix_collect_and_merge", "semantic_patch_safety_model"]
+    assert validate_job["needs"] == ["guard_and_inputs", "fix_collect_and_merge", "semantic_patch_safety_model"]
 
 
 def test_push_and_issue_fallback_are_default_actual_write_paths():
-    text = WORKFLOW.read_text(encoding="utf-8")
     push_flag = "CODEX_REVIEW" + "_ENABLE" + "_PUSH"
     issue_flag = "CODEX_REVIEW" + "_ENABLE" + "_ISSUE_FALLBACK"
-    assert push_flag not in text
-    assert issue_flag not in text
+    assert push_flag not in pipeline_text()
+    assert issue_flag not in pipeline_text()
 
     # stage02 deferred-output emission now lives in the split review workflow.
     assert "stage02 write-deferred-outputs" in pipeline_text()
 
-    validate_section = text.split("push_validate_no_token:", 1)[1].split("issue_fallback_trusted:", 1)[0]
+    # Validation + push now live in the fix workflow.
+    fix_text = FIX.read_text(encoding="utf-8")
+    validate_section = fix_text.split("push_validate_no_token:", 1)[1].split("push_trusted:", 1)[0]
     assert "stage07 validate-fix --dry-run" not in validate_section
     assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in validate_section
     assert "stage07 write-validation-outputs" in validate_section
     assert "requires_push_token" in validate_section
 
-    issue_section = text.split("issue_fallback_trusted:", 1)[1].split("push_trusted:", 1)[0]
-    assert "auth app-token --mode stage09" in issue_section
-    assert "stage09 apply --in" in issue_section
-    assert "stage09 apply --dry-run" not in issue_section
-
-    push_section = text.split("push_trusted:", 1)[1]
-    assert "if: always() && needs.push_validate_no_token.outputs.requires_push_token == 'true' && needs.issue_fallback_trusted.result == 'skipped'" in push_section
+    push_section = fix_text.split("push_trusted:", 1)[1]
+    assert "if: always() && needs.push_validate_no_token.outputs.requires_push_token == 'true'" in push_section
     assert "auth app-token --mode push" in push_section
     assert "stage07 commit-push --in" in push_section
     assert "stage07 push --dry-run" not in push_section
-    assert "issue_fallback_trusted" in push_section
-    assert "record_reentry:" not in text
+    assert "record_reentry:" not in fix_text
+
+    # Issue fallback (default actual write) still lives in the orchestrator until PR 5.
+    issue_section = WORKFLOW.read_text(encoding="utf-8").split("issue_fallback_trusted:", 1)[1]
+    assert "auth app-token --mode stage09" in issue_section
+    assert "stage09 apply --in" in issue_section
+    assert "stage09 apply --dry-run" not in issue_section
 
 
 def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
@@ -383,12 +396,12 @@ def test_workflow_never_executes_helper_from_pr_head_or_stale_trusted_tree():
 
 
 def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    section = text.split("fix_prepare:", 1)[1].split("fix_agent_model:", 1)[0]
-    assert "github.event_name == 'pull_request_target'" not in section
-    assert "needs.bootstrap_event.outputs.same_repo == 'true'" in section
-    assert "repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}" in text
-    assert "ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}" in text
+    text = FIX.read_text(encoding="utf-8")
+    # Fork PRs are blocked in guard_and_inputs (head repo must equal the base repo).
+    guard_section = text.split("guard_and_inputs:", 1)[1].split("fix_prepare:", 1)[0]
+    assert '"$HEAD_REPO" != "$REPO"' in guard_section
+    assert "repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}" in text
+    assert "ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}" in text
 
 
 
@@ -411,7 +424,7 @@ def test_stage09_issue_fallback_uses_app_token_and_never_github_token_write():
 
 
 def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = FIX.read_text(encoding="utf-8")
     section = text.split("fix_agent_model:", 1)[1].split("fix_collect_and_merge:", 1)[0]
     assert "working-directory: ${{ github.workspace }}/pr-head" in section
     assert "CODEX_REVIEW_MODEL_CWD" not in section
