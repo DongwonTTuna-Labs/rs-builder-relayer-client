@@ -87,5 +87,8 @@ def graphql_request(query: str, variables: dict[str, Any] | None, token: str | N
 
 
 def github_api_url(owner: str, repo: str, path: str) -> str:
+    base = f"{api_root()}/repos/{urllib.parse.quote(owner, safe='')}/{urllib.parse.quote(repo, safe='')}"
+    if not path:
+        return base
     clean = path if path.startswith("/") else f"/{path}"
-    return f"{api_root()}/repos/{urllib.parse.quote(owner, safe='')}/{urllib.parse.quote(repo, safe='')}{clean}"
+    return f"{base}{clean}"

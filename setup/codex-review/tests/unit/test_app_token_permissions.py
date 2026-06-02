@@ -56,3 +56,24 @@ def test_app_credentials_accept_current_codex_app_secret_names(monkeypatch):
     creds = app_token.load_app_credentials_from_env()
 
     assert creds == {"app_id": "12345", "private_key": "line1\nline2"}
+
+
+def test_repo_scoped_token_checks_repo_root_without_trailing_slash(monkeypatch):
+    requested_urls = []
+
+    def fake_rest(method, url, token, body=None):
+        requested_urls.append(url)
+        if url.endswith("/installation/repositories"):
+            return {"repositories": [{"full_name": "owner/repo"}], "permissions": {}}
+        if "/installation/repositories?" in url:
+            return {"repositories": [{"full_name": "owner/repo", "permissions": {"pull": True, "push": True}}]}
+        if url.endswith("/repos/owner/repo"):
+            return {"permissions": {"pull": True, "push": True}}
+        raise AssertionError(f"unexpected GitHub API URL: {url}")
+
+    monkeypatch.setattr(app_token, "rest_request", fake_rest)
+
+    app_token.assert_installation_token_for_repo("tok", "owner", "repo", {"contents": "write"})
+
+    assert "https://api.github.com/repos/owner/repo" in requested_urls
+    assert "https://api.github.com/repos/owner/repo/" not in requested_urls
