@@ -12,6 +12,7 @@ from typing import Any
 
 from codex_review.errors import ValidationError
 from codex_review.github_output import write_output
+from codex_review.commit_plan import normalize_commit_plan
 
 
 def patch_text_from_merged_fix(merged_fix: dict[str, Any]) -> str:
@@ -69,9 +70,15 @@ Approve only when all of the following are true:
    are semantically justified by the OpenSpec/design and have adequate tests or verification.
 5. No concrete blocker requires human credentials, out-of-repo mutation, or external secrets.
 
+Also produce a semantic `commit_plan` for approved patches:
+- Group edits by coherent task/root cause, not necessarily by file and not as one generic blob.
+- Each entry must have a Conventional Commit `subject`, an explanatory `body`, and the exact repository `paths`.
+- Never use a generic subject such as `Codex Review Autofix`; the subject must describe the actual change.
+- The union of all commit_plan paths must exactly cover the patch paths you approve.
+
 Reject rather than guessing when the patch cannot be semantically reviewed. Do not reject merely because risky words appear;
 reject only with evidence from the patch and artifacts. If there is no patch because Stage06 status is no_fix/blocked,
-use status `not_required`, approved false, and the exact patch_hash.
+use status `not_required`, approved false, the exact patch_hash, and an empty commit_plan.
 
 ## Exact merged patch identity
 - patch_hash_sha256: `{patch_hash}`
@@ -113,6 +120,7 @@ def validate_semantic_patch_safety_result(raw: dict[str, Any], merged_fix: dict[
     out.setdefault("blocking_reason", None)
     out.setdefault("reviewed_criteria", [])
     out.setdefault("semantic_findings", [])
+    out.setdefault("commit_plan", [])
 
     if not patch or status in {"no_fix", "blocked"}:
         out["status"] = "not_required"
@@ -134,6 +142,8 @@ def validate_semantic_patch_safety_result(raw: dict[str, Any], merged_fix: dict[
         raise ValidationError("semantic safety approved=true requires status=approved")
     if decision != "approved" and not str(out.get("blocking_reason") or out.get("summary") or "").strip():
         raise ValidationError("semantic safety rejection requires blocking_reason or summary")
+    if decision == "approved":
+        out["commit_plan"] = normalize_commit_plan(out.get("commit_plan"), patch)
     return out
 
 

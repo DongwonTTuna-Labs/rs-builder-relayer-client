@@ -14,5 +14,12 @@ def test_ready_to_push_requires_patch():
 
 
 def test_commit_message_contains_autofix_marker():
-    msg=build_commit_message({}, "plan", "old")
+    msg=build_commit_message({"commit_plan":[{"subject":"docs(openspec): add lgtm loop guide","body":"Add the OpenSpec smoke guide.","paths":["docs/CODEX_REVIEW_LGTM_LOOP.md"]}]}, "plan", "old")
     assert "codex-review:autofix" in msg
+    assert msg.startswith("docs(openspec): add lgtm loop guide\n\n")
+    assert "Codex Review Autofix" not in msg
+
+
+def test_commit_message_rejects_generic_autofix_subject():
+    with pytest.raises(Exception):
+        build_commit_message({"commit_plan":[{"subject":"Codex Review Autofix","paths":["docs/a.md"]}]}, "plan", "old")
