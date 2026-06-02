@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from codex_review.artifacts import write_json
 from codex_review.errors import ValidationError
+from codex_review.inspection import validate_inspection_evidence
 
 
 def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, Any], analyses: list[dict[str, Any]]) -> str:
@@ -19,6 +20,8 @@ def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, 
         )
     instructions = (
         "Coordinate a candidate design plan. Return stage03-design-plan.v1 JSON with edit_sequence and tests.\n"
+        "First inspect relevant files in pr-head. Include top-level inspection_evidence as a non-empty "
+        "array of objects with path, purpose, and observation for the repo files that informed the plan.\n"
         "Do not include human-routing fields in this artifact. stage04 design chief decides whether the "
         "candidate is approved_for_fix, needs_human, rejected_plan, or no_fix_needed. For OpenSpec-backed "
         "work, needs_human must be reserved for explicit non-executable blockers; otherwise close the plan "
@@ -27,10 +30,17 @@ def build_coordinate_prompt(design_context: dict[str, Any], clusters: dict[str, 
     return instructions + openspec_line + str({"context":design_context,"clusters":clusters,"analyses":analyses})
 
 
-def validate_design_plan(plan: dict[str, Any], design_context: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def validate_design_plan(
+    plan: dict[str, Any],
+    design_context: dict[str, Any],
+    config: dict[str, Any],
+    repo_path: str | Path | None = None,
+) -> dict[str, Any]:
     if "open_questions" in plan:
         raise ValidationError("stage03 design plan does not accept open_questions; use stage04 needs_human routing")
+    evidence = validate_inspection_evidence(plan, repo_path, "stage03 design plan")
     out=dict(plan); out["schema_version"]="stage03-design-plan.v1"
+    out["inspection_evidence"] = evidence
     out.setdefault("edit_sequence", out.get("tasks") or [])
     out.setdefault("tests", [])
     out.setdefault("acceptance_criteria", [])

@@ -92,3 +92,21 @@ def test_openai_strict_schema_keeps_fix_policy_payload_shape():
     policy = schema["properties"]["fix_policy"]
     assert "null" in policy["type"]
     assert {"allowed_files", "allowed_prefixes", "max_tasks", "max_patch_bytes"}.issubset(policy["properties"])
+
+
+def test_stage01_to_stage04_schemas_require_inspection_evidence():
+    for name in [
+        "stage01-axis-findings.v1",
+        "stage02-techlead-decision.v1",
+        "stage03-design-plan.v1",
+        "stage04-design-chief-decision.v1",
+    ]:
+        schema = make_openai_structured_output_schema(load_schema_json(name))
+        assert "inspection_evidence" in schema["properties"], name
+        assert "inspection_evidence" in schema["required"], name
+        evidence = schema["properties"]["inspection_evidence"]
+        assert evidence["type"] == "array", name
+        item = evidence["items"]
+        assert set(item["properties"]) == {"path", "purpose", "observation"}, name
+        assert set(item["required"]) == {"path", "purpose", "observation"}, name
+        assert item["additionalProperties"] is False, name

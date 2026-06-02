@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from codex_review.artifacts import write_json
 from codex_review.errors import ValidationError
+from codex_review.inspection import validate_inspection_evidence
 
 VALID_STATUSES={"approved_for_fix","needs_human","rejected_plan","no_fix_needed"}
 NON_EXECUTABLE_BLOCKERS={
@@ -83,9 +84,16 @@ def promote_openspec_backed_plan(decision: dict[str, Any], design_plan: dict[str
     return out
 
 
-def validate_chief_decision(decision: dict[str, Any], design_plan: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def validate_chief_decision(
+    decision: dict[str, Any],
+    design_plan: dict[str, Any],
+    config: dict[str, Any],
+    repo_path: str | Path | None = None,
+) -> dict[str, Any]:
+    evidence = validate_inspection_evidence(decision, repo_path, "stage04 design chief decision")
     out=promote_openspec_backed_plan(dict(decision), design_plan)
     out["schema_version"]="stage04-design-chief-decision.v1"
+    out["inspection_evidence"] = evidence
     status=out.get("status")
     if status not in VALID_STATUSES: raise ValidationError(f"invalid chief status: {status}")
     block_approval_when_human_review_required(out, design_plan)

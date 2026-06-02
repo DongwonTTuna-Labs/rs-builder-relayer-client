@@ -9,8 +9,11 @@ def include_axis_specific_focus(axis: str) -> str:
     focuses={"correctness":"bugs, edge cases, state transitions","security":"secrets, auth, injection, unsafe trust boundaries","performance":"unbounded work, memory, network, algorithms","test-coverage":"missing tests and regression coverage","domain":"project-specific correctness and product requirements"}
     return focuses.get(axis, "general review")
 
+def include_inspection_evidence_contract(prompt: str) -> str:
+    return prompt + "\n\nBefore deciding findings, inspect relevant repo files under pr-head: changed files, nearby implementation, tests, docs, AGENTS.md, and OpenSpec artifacts when present. Return top-level inspection_evidence as a non-empty array. Each inspection_evidence item must include path, purpose, and observation. Stage01 needs inspection_evidence even when findings is empty."
+
 def include_changed_line_contract(prompt: str, changed_line_map: dict[str, Any]) -> str:
-    return prompt + "\n\nOnly emit findings with file/line on changed RIGHT-side lines. Changed line map:\n" + str(changed_line_map)
+    return prompt + "\n\nOnly emit inline findings with file/line on changed RIGHT-side lines. If repo inspection finds PR-scope risk outside changed RIGHT-side lines, summarize it in finding context/evidence only when it can be anchored to a changed line; otherwise leave it for Stage02 defer_to_issue routing through the finding summary and inspection_evidence. Changed line map:\n" + str(changed_line_map)
 
 def build_axis_prompt(axis: str, pr_context: dict[str, Any], review_context: str, docs_context: str, config: dict[str, Any]) -> str:
     prompt=f"""You are the {axis} reviewer. Focus on {include_axis_specific_focus(axis)}.
@@ -25,7 +28,7 @@ Review the PR against its title/body and any OpenSpec context in the repository 
 ## PR context
 {pr_context}
 """
-    return include_changed_line_contract(prompt, pr_context.get("changed_line_map", {}))
+    return include_changed_line_contract(include_inspection_evidence_contract(prompt), pr_context.get("changed_line_map", {}))
 
 def write_axis_prompt(axis: str, prompt: str, out_path: str | Path) -> Path:
     return write_text(out_path, prompt)

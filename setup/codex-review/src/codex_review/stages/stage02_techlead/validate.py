@@ -11,6 +11,7 @@ from typing import Any
 from codex_review.artifacts import write_json
 from codex_review.constants import TECHLEAD_ACTIONS, SEVERITIES
 from codex_review.errors import ValidationError
+from codex_review.inspection import validate_inspection_evidence
 from codex_review.schema import validate_enum
 
 NON_EXECUTABLE_BLOCKERS = {
@@ -82,7 +83,13 @@ def annotate_semantic_risk(item: dict[str, Any], config: dict[str, Any]) -> dict
     return out
 
 
-def validate_techlead_decision(decision: dict[str, Any], combined_findings: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def validate_techlead_decision(
+    decision: dict[str, Any],
+    combined_findings: dict[str, Any],
+    config: dict[str, Any],
+    repo_path: str | Path | None = None,
+) -> dict[str, Any]:
+    evidence = validate_inspection_evidence(decision, repo_path, "stage02 techlead decision")
     raw_items=decision.get("decisions") or decision.get("items") or []
     if not isinstance(raw_items, list): raise ValidationError("techlead decisions must be a list")
     expected={f.get("finding_id") or f.get("id") for f in combined_findings.get("findings", [])}
@@ -95,7 +102,7 @@ def validate_techlead_decision(decision: dict[str, Any], combined_findings: dict
         item = annotate_semantic_risk(normalize_generic_needs_human(dict(raw)), config)
         validate_decision_action(item); validate_scope_and_severity(item)
         items.append(item)
-    out=dict(decision); out["schema_version"]="stage02-techlead-decision.v1"; out["decisions"]=items
+    out=dict(decision); out["schema_version"]="stage02-techlead-decision.v1"; out["decisions"]=items; out["inspection_evidence"]=evidence
     out["needs_design"] = bool(any(i.get("action") in {"needs_design","publish_and_fix_now","summary_only_fix_now"} for i in items))
     if any(i.get("action") == "needs_human" for i in items):
         out["status"] = "needs_human"

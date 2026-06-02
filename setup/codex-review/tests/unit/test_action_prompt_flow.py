@@ -1,10 +1,21 @@
 import json
 
 from codex_review.cli import main
+from codex_review.stages.stage01_review.prompt import build_axis_prompt
+from codex_review.stages.stage02_techlead.prompt import build_techlead_prompt
+from codex_review.stages.stage04_design_chief.prompt import build_design_chief_prompt
 
 
 def write_json(path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def assert_inspection_contract(prompt: str):
+    assert "pr-head" in prompt
+    assert "inspection_evidence" in prompt
+    assert "path" in prompt
+    assert "purpose" in prompt
+    assert "observation" in prompt
 
 
 def test_stage03_prompt_only_commands_write_model_prompts(tmp_path):
@@ -62,6 +73,7 @@ def test_stage03_plan_prompt_keeps_human_routing_in_stage04(tmp_path):
     assert "candidate design plan" in prompt
     assert "stage04" in prompt
     assert "open_questions" not in prompt
+    assert_inspection_contract(prompt)
 
 
 def test_openspec_backed_prompts_drive_closed_implementation_plan(tmp_path):
@@ -97,7 +109,23 @@ def test_openspec_backed_prompts_drive_closed_implementation_plan(tmp_path):
     prompt = out.read_text(encoding="utf-8")
     assert "OpenSpec-backed implementation" in prompt
     assert "acceptance_criteria" in prompt
+    assert_inspection_contract(prompt)
     assert "questions" not in prompt.lower()
+
+
+def test_stage01_stage02_stage04_prompts_require_repo_inspection_evidence():
+    pr_context = {"changed_line_map": {"src/lib.rs": [1]}, "title": "demo"}
+    combined = {"findings": [{"finding_id": "f1", "file": "src/lib.rs", "line": 1}]}
+    stage01 = build_axis_prompt("correctness", pr_context, "", "docs", {"review": {"axes": ["correctness"]}})
+    stage02 = build_techlead_prompt(combined, pr_context, "", "docs", {})
+    stage04 = build_design_chief_prompt(
+        {"schema_version": "stage03-design-plan.v1", "edit_sequence": [{"task_id": "t1"}], "tests": ["cargo test"]},
+        {"schema_version": "stage02-techlead-decision.v1", "decisions": [{"finding_id": "f1", "action": "needs_design"}]},
+        pr_context,
+        {"autofix": {"allowed_prefixes": ["src/"], "max_tasks": 1}},
+    )
+    for prompt in [stage01, stage02, stage04]:
+        assert_inspection_contract(prompt)
 
 
 def test_stage05_prepare_agents_writes_prompts_matrix_and_github_outputs(tmp_path, monkeypatch):
