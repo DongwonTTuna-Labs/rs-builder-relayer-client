@@ -56,6 +56,28 @@ fix SHALL be limited to `docs/CODEX_REVIEW_LGTM_LOOP.md`.
 - **AND** it does not require a push enable variable
 - **AND** it does not rely on `GITHUB_TOKEN` write permissions
 
+### Requirement: Semantic patch safety approves exact patch hashes
+
+Codex Review SHALL run an AI semantic safety review over the exact merged patch text
+and SHA-256 patch hash before a ready autofix patch can be validated or pushed.
+
+#### Scenario: Stage06 reviews the generated docs patch
+
+- **GIVEN** stage06 has merged a patch for `docs/CODEX_REVIEW_LGTM_LOOP.md`
+- **WHEN** semantic patch safety runs
+- **THEN** the model receives the exact patch text and expected patch hash
+- **AND** the validated semantic safety artifact has `status: approved`
+- **AND** the validated semantic safety artifact has `approved: true`
+- **AND** the validated semantic safety artifact has `patch_hash` equal to the merged patch hash
+
+#### Scenario: Stage07 refuses unapproved or mismatched semantic safety
+
+- **GIVEN** a ready autofix patch exists
+- **WHEN** the semantic safety artifact is missing, rejected, or has a different patch hash
+- **THEN** stage07 does not mark the patch as validated
+- **AND** the trusted push job does not push the patch
+- **AND** the workflow routes to issue fallback with a semantic safety reason
+
 #### Scenario: Issue fallback writes without an enable variable
 
 - **GIVEN** stage09 is reached for missing OpenSpec, fork mutation, no-diff repeat, or another terminal fallback reason

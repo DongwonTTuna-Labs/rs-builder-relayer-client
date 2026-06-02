@@ -34,8 +34,10 @@ fallback are default actual write paths rather than repo-variable-gated dry-runs
 6. Stage04 must approve an executable OpenSpec-backed plan for fix unless a real
    non-executable blocker exists.
 7. Stage05 prepares agent tasks and prompts.
-8. Stage06 merges model patch output.
-9. Stage07 validates the patch without any write token, then the trusted push job
+8. Stage06 merges model patch output, then runs semantic patch safety review against
+   the exact merged patch text and SHA-256 hash.
+9. Stage07 validates the patch without any write token only if semantic safety
+   approved that exact hash, then the trusted push job
    always mints a GitHub App token and attempts the same-repository PR push.
 10. Stage08 records reentry after a successful push.
 11. Stage09 creates or updates an idempotent issue fallback, without a separate
@@ -54,6 +56,8 @@ file must explain the intended OpenSpec-backed loop in repository documentation 
 - Actual branch mutation is limited to same-repository PRs and GitHub App token writes.
 - Push and issue fallback are default write paths once the trusted stage is reached; no separate enable variable is required.
 - Rootless Codex action execution must avoid proxy sudo paths.
+- Semantic patch safety must review the exact generated diff and approve the matching
+  patch hash before validation or push can proceed.
 - Issue fallback is the terminal path for non-executable work.
 
 ## Safety Boundaries
@@ -74,6 +78,8 @@ file must explain the intended OpenSpec-backed loop in repository documentation 
 - `openspec-context.json` has `present: true` and includes this change directory.
 - Stage04 produces or validates `approved_for_fix` for the docs-only plan.
 - Stage05 prepare is not skipped for a same-repository PR.
+- Stage06 semantic patch safety produces `status: approved`, `approved: true`, and a
+  `patch_hash` equal to the merged docs patch hash.
 - Stage07 validation confirms the patch touches only `docs/CODEX_REVIEW_LGTM_LOOP.md`.
 - After validation, the bot commits the missing docs file through the GitHub App
   token path and the follow-up run terminates as LGTM, noop, or no-fix rather than
