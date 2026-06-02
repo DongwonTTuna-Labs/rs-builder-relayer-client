@@ -8,6 +8,7 @@ from _pipeline import codex_action_steps as pipeline_codex_action_steps
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
 REVIEW = ROOT / ".github" / "workflows" / "codex-review.yml"
+DESIGN = ROOT / ".github" / "workflows" / "codex-design.yml"
 CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
 
 
@@ -17,6 +18,10 @@ def load_workflow():
 
 def load_review():
     return yaml.safe_load(REVIEW.read_text(encoding="utf-8"))
+
+
+def load_design():
+    return yaml.safe_load(DESIGN.read_text(encoding="utf-8"))
 
 
 def iter_job_steps():
@@ -63,14 +68,19 @@ def test_workflow_declares_expected_stage_order():
         "review_publish_trusted",
         "finalize_labels",
     ]
-    orchestrator_jobs = list(load_workflow()["jobs"].keys())
-    assert orchestrator_jobs == [
+    design_jobs = list(load_design()["jobs"].keys())
+    assert design_jobs == [
+        "guard_and_inputs",
         "design_context",
         "design_prepare",
         "design_analysis_model",
         "design_plan_model",
         "design_chief_model",
         "design_publish_trusted",
+        "finalize_labels",
+    ]
+    orchestrator_jobs = list(load_workflow()["jobs"].keys())
+    assert orchestrator_jobs == [
         "fix_prepare",
         "fix_agent_model",
         "fix_collect_and_merge",
@@ -112,10 +122,12 @@ def test_no_placeholder_echo_json_or_error_suppression():
 
 
 def test_workflow_routes_design_and_fix_stages():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "needs.resolve_apply_trusted.outputs.route == 'run_design_from_existing_threads'" in text
-    assert "needs.review_publish_trusted.outputs.route == 'run_design'" in text
-    assert "needs.design_publish_trusted.outputs.route == 'run_stage05'" in text
+    # Review decides whether to design via its finalize label transition;
+    # the orchestrator still gates the fix loop on the design chief's route.
+    review_text = REVIEW.read_text(encoding="utf-8")
+    assert "run_design" in review_text
+    assert "리뷰완료" in review_text
+    assert "needs.design_publish_trusted.outputs.route == 'run_stage05'" in WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_actions_are_pinned_and_checkout_credentials_not_persisted():
@@ -127,7 +139,7 @@ def test_actions_are_pinned_and_checkout_credentials_not_persisted():
 
 
 def test_stage03_plan_is_validated_in_workflow():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = DESIGN.read_text(encoding="utf-8")
     assert "stage03 build-plan-prompt" in text
     assert "stage03 validate-plan" in text
     assert "design-plan.raw.json" in text
@@ -192,14 +204,14 @@ def _assert_pr_head_worktree(job, job_name, head_job):
 
 
 def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
-    # Review-stage model jobs moved to codex-review.yml and source the PR head
-    # from guard_and_event; design-stage jobs remain in the orchestrator.
+    # Review-stage model jobs source the PR head from guard_and_event;
+    # design-stage jobs source it from guard_and_inputs. Both split workflows.
     review_jobs = load_review()["jobs"]
     for job_name in ["review_axes_model", "techlead_model"]:
         _assert_pr_head_worktree(review_jobs[job_name], job_name, "guard_and_event")
-    orchestrator_jobs = load_workflow()["jobs"]
+    design_jobs = load_design()["jobs"]
     for job_name in ["design_context", "design_prepare", "design_analysis_model", "design_plan_model", "design_chief_model"]:
-        _assert_pr_head_worktree(orchestrator_jobs[job_name], job_name, "bootstrap_event")
+        _assert_pr_head_worktree(design_jobs[job_name], job_name, "guard_and_inputs")
 
 
 def test_stage01_to_stage04_validators_receive_pr_head_repo_path():

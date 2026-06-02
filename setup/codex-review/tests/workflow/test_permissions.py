@@ -1,4 +1,4 @@
-from _pipeline import CODEX_ACTION, all_jobs, all_text
+from _pipeline import CODEX_ACTION, all_jobs, all_text, iter_all_steps
 
 
 def jobs():
@@ -56,14 +56,16 @@ def test_app_token_permission_metadata_is_threaded_to_write_commands():
 
 
 def test_app_token_steps_include_current_codex_app_secret_fallbacks():
-    app_token_steps = []
-    for job in jobs().values():
-        for step in job.get("steps", []):
-            if "codex-review auth app-token" in str(step.get("run", "")):
-                app_token_steps.append(step)
+    # iter_all_steps walks each file's jobs directly (job names like finalize_labels
+    # collide across files, so a merged-by-name view would undercount).
+    app_token_steps = [
+        step
+        for _, step in iter_all_steps()
+        if "codex-review auth app-token" in str(step.get("run", ""))
+    ]
 
-    # review file: stage00, stage02, label-ops; orchestrator: stage04, push, loop-state, stage09.
-    assert len(app_token_steps) == 7
+    # review: stage00, stage02, label-ops; design: stage04, label-ops; orchestrator: push, loop-state, stage09.
+    assert len(app_token_steps) == 8
     for step in app_token_steps:
         env = step.get("env", {})
         assert env.get("CODEX_APP_ID") == "${{ secrets.CODEX_APP_ID }}"
