@@ -364,6 +364,7 @@ jobs:
       semantic_safety_status: ${{ steps.semantic_safety_outputs.outputs.semantic_safety_status }}
       semantic_safety_approved: ${{ steps.semantic_safety_outputs.outputs.semantic_safety_approved }}
       semantic_safety_patch_hash: ${{ steps.semantic_safety_outputs.outputs.semantic_safety_patch_hash }}
+      semantic_safety: ${{ steps.export.outputs.semantic_safety }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -421,10 +422,9 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review stage06 validate-semantic-safety --in trusted/codex-review-artifacts/stage06/semantic-safety.raw.json --inventory trusted/codex-review-artifacts/stage06/merged-fix.json --out trusted/codex-review-artifacts/stage06/semantic-safety.json
       - id: semantic_safety_outputs
         run: workflow-helper/setup/codex-review/bin/codex-review stage06 write-semantic-safety-outputs --in trusted/codex-review-artifacts/stage06/semantic-safety.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-review-stage06-semantic-safety
-          path: trusted/codex-review-artifacts/stage06
+      - name: Export semantic safety to job output
+        id: export
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name semantic_safety --in trusted/codex-review-artifacts/stage06/semantic-safety.json
 
   validate_patch:
     name: Validate patch & loop budget
@@ -472,11 +472,14 @@ jobs:
         with:
           name: codex-review-stage05-06
           path: trusted/codex-review-artifacts
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        continue-on-error: true
-        with:
-          name: codex-review-stage06-semantic-safety
-          path: trusted/codex-review-artifacts/stage06
+      - name: Materialize semantic safety (if present)
+        env:
+          SEMANTIC_SAFETY: ${{ needs.patch_safety.outputs.semantic_safety }}
+        run: |
+          mkdir -p trusted/codex-review-artifacts/stage06
+          if [ -n "$SEMANTIC_SAFETY" ]; then
+            printf '%s' "$SEMANTIC_SAFETY" > trusted/codex-review-artifacts/stage06/semantic-safety.json
+          fi
       - env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
         run: workflow-helper/setup/codex-review/bin/codex-review stage07 validate-fix --in trusted/codex-review-artifacts/stage06/merged-fix.json --semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json

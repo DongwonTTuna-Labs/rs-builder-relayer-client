@@ -136,6 +136,9 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+    outputs:
+      thread_inventory: ${{ steps.export.outputs.thread_inventory }}
+      resolved_memory: ${{ steps.export.outputs.resolved_memory }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -164,10 +167,11 @@ jobs:
         run: |
           workflow-helper/setup/codex-review/bin/codex-review stage00 collect --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/thread-inventory.json
           workflow-helper/setup/codex-review/bin/codex-review stage00 collect-resolved --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/resolved-memory.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-review-stage00-collect
-          path: codex-review-artifacts/stage00
+      - name: Export thread inventory + resolved memory to job outputs
+        id: export
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review io to-output --name thread_inventory --in codex-review-artifacts/stage00/thread-inventory.json
+          workflow-helper/setup/codex-review/bin/codex-review io to-output --name resolved_memory --in codex-review-artifacts/stage00/resolved-memory.json
 
   triage_threads:
     name: Triage resolved threads
@@ -179,6 +183,8 @@ jobs:
       contents: read
       pull-requests: read
       id-token: write
+    outputs:
+      lifecycle_result: ${{ steps.export.outputs.lifecycle_result }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -202,10 +208,12 @@ jobs:
         with:
           name: codex-review-event
           path: codex-review-artifacts/event
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-stage00-collect
-          path: codex-review-artifacts/stage00
+      - name: Materialize thread inventory
+        env:
+          THREAD_INVENTORY: ${{ needs.collect_threads.outputs.thread_inventory }}
+        run: |
+          mkdir -p codex-review-artifacts/stage00
+          printf '%s' "$THREAD_INVENTORY" > codex-review-artifacts/stage00/thread-inventory.json
       - name: Mint Codex relay token
         id: codex_oidc
         run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
@@ -229,17 +237,16 @@ jobs:
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-review-stage00-model
-          path: codex-review-artifacts/stage00
+      - name: Export lifecycle result to job output
+        id: export
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name lifecycle_result --in codex-review-artifacts/stage00/lifecycle-result.json
 
   apply_threads:
     name: Apply thread lifecycle & route
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [triage_threads]
+    needs: [collect_threads, triage_threads]
     permissions:
       contents: read
       pull-requests: read
@@ -269,10 +276,14 @@ jobs:
         with:
           name: codex-review-event
           path: codex-review-artifacts/event
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-stage00-model
-          path: codex-review-artifacts/stage00
+      - name: Materialize stage00 inputs
+        env:
+          THREAD_INVENTORY: ${{ needs.collect_threads.outputs.thread_inventory }}
+          LIFECYCLE_RESULT: ${{ needs.triage_threads.outputs.lifecycle_result }}
+        run: |
+          mkdir -p codex-review-artifacts/stage00
+          printf '%s' "$THREAD_INVENTORY" > codex-review-artifacts/stage00/thread-inventory.json
+          printf '%s' "$LIFECYCLE_RESULT" > codex-review-artifacts/stage00/lifecycle-result.json
       - id: app_token
         if: vars.CODEX_REVIEW_ENABLE_STAGE00_APPLY == 'true'
         env:
@@ -421,7 +432,7 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard, combine_findings]
+    needs: [guard, combine_findings, collect_threads]
     permissions:
       contents: read
       pull-requests: read
@@ -460,10 +471,12 @@ jobs:
         with:
           name: codex-review-stage01-combined
           path: codex-review-artifacts/stage01
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-stage00-collect
-          path: codex-review-artifacts/stage00
+      - name: Materialize resolved memory
+        env:
+          RESOLVED_MEMORY: ${{ needs.collect_threads.outputs.resolved_memory }}
+        run: |
+          mkdir -p codex-review-artifacts/stage00
+          printf '%s' "$RESOLVED_MEMORY" > codex-review-artifacts/stage00/resolved-memory.json
       - name: Mint Codex relay token
         id: codex_oidc
         run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token

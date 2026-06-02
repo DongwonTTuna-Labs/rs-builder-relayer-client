@@ -39,6 +39,8 @@ jobs:
       actions: read
     outputs:
       proceed: ${{ steps.guard.outputs.proceed }}
+      issue_plan: ${{ steps.export.outputs.issue_plan }}
+      pr_context: ${{ steps.export.outputs.pr_context }}
     steps:
       - name: Guard actor permission and locate prior runs
         id: guard
@@ -156,11 +158,12 @@ jobs:
       - name: Compose Korean issue content (codex-polished, marker-safe fallback)
         if: steps.guard.outputs.proceed == 'true'
         run: workflow-helper/setup/codex-review/bin/codex-review stage09 compose --in codex-review-artifacts/stage09/issue-plan.json --result codex-review-artifacts/stage09/issue-content.raw.json --out codex-review-artifacts/stage09/issue-final-plan.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Export issue plan + PR context to job outputs
+        id: export
         if: steps.guard.outputs.proceed == 'true'
-        with:
-          name: codex-issue-plan
-          path: codex-review-artifacts
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review io to-output --name issue_plan --in codex-review-artifacts/stage09/issue-final-plan.json
+          workflow-helper/setup/codex-review/bin/codex-review io to-output --name pr_context --in codex-review-artifacts/event/pr-context.json
 
   publish_issue:
     name: Create or update fallback issue
@@ -188,10 +191,14 @@ jobs:
           cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
         run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-issue-plan
-          path: codex-review-artifacts
+      - name: Materialize issue plan + PR context
+        env:
+          ISSUE_PLAN: ${{ needs.compose_content.outputs.issue_plan }}
+          PR_CONTEXT: ${{ needs.compose_content.outputs.pr_context }}
+        run: |
+          mkdir -p codex-review-artifacts/stage09 codex-review-artifacts/event
+          printf '%s' "$ISSUE_PLAN" > codex-review-artifacts/stage09/issue-final-plan.json
+          printf '%s' "$PR_CONTEXT" > codex-review-artifacts/event/pr-context.json
       - id: app_token
         env:
           CODEX_REVIEW_GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_GITHUB_APP_ID }}
