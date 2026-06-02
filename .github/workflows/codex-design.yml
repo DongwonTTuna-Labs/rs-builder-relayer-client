@@ -148,6 +148,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    outputs:
+      design_context: ${{ steps.export.outputs.design_context }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -185,10 +187,9 @@ jobs:
             DESIGN_INPUT=codex-review-artifacts/stage00/lifecycle-result.validated.json
           fi
           workflow-helper/setup/codex-review/bin/codex-review stage03 context --in "$DESIGN_INPUT" --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage03/design-context.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-review-stage03-context
-          path: codex-review-artifacts/stage03
+      - name: Export design context to job output
+        id: export
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name design_context --in codex-review-artifacts/stage03/design-context.json
 
   prepare_clusters:
     name: Inventory & cluster design
@@ -229,10 +230,12 @@ jobs:
           cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
       - name: Install codex-review helper
         run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-stage03-context
-          path: codex-review-artifacts/stage03
+      - name: Materialize design context
+        env:
+          DESIGN_CONTEXT: ${{ needs.design_context.outputs.design_context }}
+        run: |
+          mkdir -p codex-review-artifacts/stage03
+          printf '%s' "$DESIGN_CONTEXT" > codex-review-artifacts/stage03/design-context.json
       - name: Mint Codex relay token
         id: codex_oidc
         run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
@@ -448,6 +451,8 @@ jobs:
       contents: read
       pull-requests: read
       id-token: write
+    outputs:
+      chief_decision: ${{ steps.export.outputs.chief_decision }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -503,10 +508,9 @@ jobs:
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate design chief decision
         run: workflow-helper/setup/codex-review/bin/codex-review stage04 validate --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.json --repo-path pr-head --out codex-review-artifacts/stage04/chief-decision.validated.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-review-stage04-model
-          path: codex-review-artifacts/stage04
+      - name: Export chief decision to job output
+        id: export
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name chief_decision --in codex-review-artifacts/stage04/chief-decision.validated.json
 
   publish_design:
     name: Publish design & route
@@ -547,10 +551,12 @@ jobs:
         with:
           name: codex-review-stage03
           path: codex-review-artifacts/stage03
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-stage04-model
-          path: codex-review-artifacts/stage04
+      - name: Materialize chief decision
+        env:
+          CHIEF_DECISION: ${{ needs.chief_decision.outputs.chief_decision }}
+        run: |
+          mkdir -p codex-review-artifacts/stage04
+          printf '%s' "$CHIEF_DECISION" > codex-review-artifacts/stage04/chief-decision.validated.json
       - id: app_token
         if: vars.CODEX_REVIEW_ENABLE_DESIGN_POSTING == 'true'
         env:

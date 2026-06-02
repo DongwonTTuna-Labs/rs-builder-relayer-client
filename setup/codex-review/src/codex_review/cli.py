@@ -137,6 +137,7 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--semantic-safety", default=None)
     p.add_argument("--audience", default=None)
     p.add_argument("--broker-url", default=None)
+    p.add_argument("--name", default=None)
 
 
 def _model_or_fallback(args: argparse.Namespace, *, stage: str, expected_schema: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -1109,6 +1110,18 @@ def _handle_oidc(args: argparse.Namespace) -> tuple[Any, str | None]:
     }, None
 
 
+def _handle_io(args: argparse.Namespace) -> tuple[Any, str | None]:
+    if args.command != "to-output":
+        raise ValueError(f"unknown io command: {args.command}")
+    if not args.name:
+        raise ValidationError("io to-output requires --name")
+    if not args.in_path:
+        raise ValidationError("io to-output requires --in")
+    content = read_text(args.in_path)
+    write_output(args.name, content)
+    return {"schema_version": "io-to-output.v1", "name": args.name, "bytes": len(content)}, None
+
+
 def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
     if args.command not in {"openai-strict", "openai-structured-output"}:
         raise ValueError(f"unknown schema command: {args.command}")
@@ -1120,13 +1133,14 @@ def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review")
-    parser.add_argument("area", choices=["auth", "oidc", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
+    parser.add_argument("area", choices=["auth", "oidc", "io", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
     _add_common(parser)
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config) if args.area.startswith("stage") or args.area == "context" else {}
         if args.area == "auth": payload, schema = _handle_auth(args)
         elif args.area == "oidc": payload, schema = _handle_oidc(args)
+        elif args.area == "io": payload, schema = _handle_io(args)
         elif args.area == "event": payload, schema = _handle_event(args)
         elif args.area == "context": payload, schema = _handle_context(args, config)
         elif args.area == "loop": payload, schema = _handle_loop(args)

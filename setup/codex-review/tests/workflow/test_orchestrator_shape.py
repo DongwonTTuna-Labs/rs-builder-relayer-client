@@ -427,3 +427,28 @@ def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
     assert "working-directory: ${{ github.workspace }}/pr-head" in section
     assert "CODEX_REVIEW_MODEL_CWD" not in section
     assert "CODEX_REVIEW_TARGET_REPO_PATH" not in section
+
+
+def test_small_intra_workflow_handoffs_use_job_outputs_not_artifacts():
+    # Hybrid data flow: small intra-workflow handoffs move to job outputs via
+    # `io to-output`; the corresponding intra artifacts are removed. Cross-workflow,
+    # matrix fan-in, and large payload artifacts intentionally remain.
+    text = pipeline_text()
+    for removed in [
+        "codex-review-stage00-collect",
+        "codex-review-stage00-model",
+        "codex-review-stage03-context",
+        "codex-review-stage04-model",
+        "codex-review-stage06-semantic-safety",
+        "codex-issue-plan",
+    ]:
+        assert removed not in text, removed
+    # One export per converted handoff (8 output keys across the 4 workflows).
+    assert text.count("io to-output --name ") == 8
+    # Large / matrix / cross-workflow artifacts are still passed as artifacts.
+    for kept in [
+        "codex-review-stage01-combined",  # large combined findings
+        "codex-review-stage05-06",        # multi-MB merged patch
+        "codex-review-event",             # cross-workflow boundary
+    ]:
+        assert kept in text, kept
