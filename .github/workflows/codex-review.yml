@@ -1,8 +1,8 @@
-name: Codex Review (review + techlead)
+name: Codex Review
 
 # Label-driven stage of the split Codex pipeline.
 # Trigger: a maintainer attaches the `리뷰중` label to a PR.
-# On completion finalize_labels transitions the PR to the next state:
+# On completion finalize transitions the PR to the next state:
 #   - findings to fix         -> remove 리뷰중, add 리뷰완료  (triggers codex-design)
 #   - clean / no findings     -> remove 리뷰중, add codex:lgtm
 #   - blocker / deferred      -> remove 리뷰중, add codex:needs-issue (triggers codex-issue)
@@ -26,8 +26,8 @@ env:
   CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
 
 jobs:
-  guard_and_event:
-    name: 00 guard + event
+  guard:
+    name: Guard & collect PR context
     if: github.event.label.name == '리뷰중'
     runs-on:
       group: "Home Server Runners"
@@ -123,13 +123,13 @@ jobs:
           name: codex-review-event
           path: codex-review-artifacts/event
 
-  resolve_collect:
-    name: 00 resolve collect
+  collect_threads:
+    name: Collect review threads
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_event]
-    if: needs.guard_and_event.outputs.proceed == 'true'
+    needs: [guard]
+    if: needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -167,12 +167,12 @@ jobs:
           name: codex-review-stage00-collect
           path: codex-review-artifacts/stage00
 
-  resolve_triage_model:
-    name: 00 resolve triage model
+  triage_threads:
+    name: Triage resolved threads
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [resolve_collect]
+    needs: [collect_threads]
     permissions:
       contents: read
       pull-requests: read
@@ -237,12 +237,12 @@ jobs:
           name: codex-review-stage00-model
           path: codex-review-artifacts/stage00
 
-  resolve_apply_trusted:
-    name: 00 resolve apply trusted
+  apply_threads:
+    name: Apply thread lifecycle & route
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [resolve_triage_model]
+    needs: [triage_threads]
     permissions:
       contents: read
       pull-requests: read
@@ -303,13 +303,13 @@ jobs:
           name: codex-review-stage00
           path: codex-review-artifacts/stage00
 
-  review_axes_model:
-    name: 01 review axes model
+  review_axes:
+    name: Review findings by axis
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_event, resolve_apply_trusted]
-    if: needs.resolve_apply_trusted.outputs.route == 'run_review'
+    needs: [guard, apply_threads]
+    if: needs.apply_threads.outputs.route == 'run_review'
     permissions:
       contents: read
       pull-requests: read
@@ -333,8 +333,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_event.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_event.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -385,12 +385,12 @@ jobs:
           name: codex-review-stage01-${{ matrix.axis }}
           path: codex-review-artifacts/stage01/${{ matrix.axis }}
 
-  review_combine:
-    name: 01 review combine
+  combine_findings:
+    name: Combine axis findings
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [review_axes_model]
+    needs: [review_axes]
     permissions:
       contents: read
       pull-requests: read
@@ -424,12 +424,12 @@ jobs:
           name: codex-review-stage01-combined
           path: codex-review-artifacts/stage01
 
-  techlead_model:
-    name: 02 techlead model
+  techlead:
+    name: Tech lead decision
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_event, review_combine]
+    needs: [guard, combine_findings]
     permissions:
       contents: read
       pull-requests: read
@@ -449,8 +449,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_event.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_event.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -510,12 +510,12 @@ jobs:
           name: codex-review-stage02-model
           path: codex-review-artifacts/stage02
 
-  review_publish_trusted:
-    name: 02 review publish trusted
+  publish_review:
+    name: Publish review & route
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [techlead_model]
+    needs: [techlead]
     permissions:
       contents: read
       pull-requests: read
@@ -584,13 +584,13 @@ jobs:
           name: codex-review-stage02
           path: codex-review-artifacts/stage02
 
-  finalize_labels:
-    name: 02 finalize labels
+  finalize:
+    name: Finalize labels
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_event, resolve_apply_trusted, review_publish_trusted]
-    if: always() && needs.guard_and_event.outputs.proceed == 'true'
+    needs: [guard, apply_threads, publish_review]
+    if: always() && needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: write
@@ -630,11 +630,11 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          RESOLVE_RESULT: ${{ needs.resolve_apply_trusted.result }}
-          REVIEW_RESULT: ${{ needs.review_publish_trusted.result }}
-          RESOLVE_ROUTE: ${{ needs.resolve_apply_trusted.outputs.route }}
-          REVIEW_ROUTE: ${{ needs.review_publish_trusted.outputs.route }}
-          HAS_DEFERRED: ${{ needs.review_publish_trusted.outputs.has_deferred_issue_items }}
+          RESOLVE_RESULT: ${{ needs.apply_threads.result }}
+          REVIEW_RESULT: ${{ needs.publish_review.result }}
+          RESOLVE_ROUTE: ${{ needs.apply_threads.outputs.route }}
+          REVIEW_ROUTE: ${{ needs.publish_review.outputs.route }}
+          HAS_DEFERRED: ${{ needs.publish_review.outputs.has_deferred_issue_items }}
         run: |
           set -euo pipefail
           add=""

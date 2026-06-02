@@ -1,9 +1,9 @@
-name: Codex Fix (fix + merge + push)
+name: Codex Fix
 
 # Label-driven stage of the split Codex pipeline.
 # Trigger: codex-design attaches `설계완료` (or a maintainer does).
-# guard_and_inputs blocks fork PRs, pulls the design run's artifacts, then
-# stage 05-07 run. finalize_labels closes the loop:
+# guard blocks fork PRs, pulls the design run's artifacts, then
+# stage 05-07 run. finalize closes the loop:
 #   - pushed a fix      -> remove 수정중, add 수정완료 + 리뷰중 (re-review)
 #   - oscillation/cap   -> remove 수정중, add codex:needs-issue
 #   - nothing to push   -> remove 수정중, add codex:needs-issue
@@ -27,8 +27,8 @@ env:
   CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
 
 jobs:
-  guard_and_inputs:
-    name: 05 guard + inputs
+  guard:
+    name: Guard, block forks & fetch design inputs
     if: github.event.label.name == '설계완료'
     runs-on:
       group: "Home Server Runners"
@@ -140,13 +140,13 @@ jobs:
           name: codex-fix-inputs
           path: fix-inputs
 
-  fix_prepare:
-    name: 05 fix prepare
+  plan_tasks:
+    name: Plan fix tasks
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs]
-    if: needs.guard_and_inputs.outputs.proceed == 'true'
+    needs: [guard]
+    if: needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -189,25 +189,25 @@ jobs:
           name: codex-review-stage05-prepare
           path: trusted/codex-review-artifacts/stage05
 
-  fix_agent_model:
-    name: 05 fix agent model
+  run_agents:
+    name: Run fix agents
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, fix_prepare]
-    if: needs.fix_prepare.outputs.has_agent_tasks == 'true'
+    needs: [guard, plan_tasks]
+    if: needs.plan_tasks.outputs.has_agent_tasks == 'true'
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.fix_prepare.outputs.agent_matrix) }}
+      matrix: ${{ fromJson(needs.plan_tasks.outputs.agent_matrix) }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - name: Checkout workflow helper
@@ -261,13 +261,13 @@ jobs:
           name: codex-review-stage05-agent-${{ matrix.task_path }}
           path: ${{ github.workspace }}/trusted/codex-review-artifacts/stage05/agents/${{ matrix.task_path }}
 
-  fix_collect_and_merge:
-    name: 05-06 fix collect and merge
+  merge_fixes:
+    name: Collect & merge fixes
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, fix_prepare, fix_agent_model]
-    if: always() && needs.fix_prepare.result == 'success' && (needs.fix_agent_model.result == 'success' || needs.fix_agent_model.result == 'skipped')
+    needs: [guard, plan_tasks, run_agents]
+    if: always() && needs.plan_tasks.result == 'success' && (needs.run_agents.result == 'success' || needs.run_agents.result == 'skipped')
     permissions:
       contents: read
       pull-requests: read
@@ -280,8 +280,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - name: Checkout workflow helper
@@ -307,7 +307,7 @@ jobs:
           name: codex-review-stage05-prepare
           path: trusted/codex-review-artifacts/stage05
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: needs.fix_prepare.outputs.has_agent_tasks == 'true'
+        if: needs.plan_tasks.outputs.has_agent_tasks == 'true'
         with:
           pattern: codex-review-stage05-agent-*
           path: trusted/codex-review-artifacts/stage05-agent-downloads
@@ -357,13 +357,13 @@ jobs:
           name: codex-review-stage05-06
           path: trusted/codex-review-artifacts
 
-  semantic_patch_safety_model:
-    name: 06 semantic patch safety model
+  patch_safety:
+    name: Semantic patch safety
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, fix_collect_and_merge]
-    if: always() && needs.fix_collect_and_merge.result == 'success'
+    needs: [guard, merge_fixes]
+    if: always() && needs.merge_fixes.result == 'success'
     permissions:
       contents: read
       pull-requests: read
@@ -380,8 +380,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - name: Checkout workflow helper
@@ -439,13 +439,13 @@ jobs:
           name: codex-review-stage06-semantic-safety
           path: trusted/codex-review-artifacts/stage06
 
-  push_validate_no_token:
-    name: 07 validate patch without token
+  validate_patch:
+    name: Validate patch & loop budget
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, fix_collect_and_merge, semantic_patch_safety_model]
-    if: always() && needs.fix_collect_and_merge.result == 'success'
+    needs: [guard, merge_fixes, patch_safety]
+    if: always() && needs.merge_fixes.result == 'success'
     permissions:
       contents: read
       pull-requests: read
@@ -463,8 +463,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - name: Checkout workflow helper
@@ -502,13 +502,13 @@ jobs:
           name: codex-review-stage07-validation
           path: trusted/codex-review-artifacts/stage07
 
-  push_trusted:
-    name: 07 commit and push trusted
+  commit_push:
+    name: Commit & push fix
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, push_validate_no_token]
-    if: always() && needs.push_validate_no_token.outputs.requires_push_token == 'true'
+    needs: [guard, validate_patch]
+    if: always() && needs.validate_patch.outputs.requires_push_token == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -523,8 +523,8 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - name: Checkout workflow helper
@@ -586,13 +586,13 @@ jobs:
           name: codex-review-stage07
           path: trusted/codex-review-artifacts/stage07
 
-  finalize_labels:
-    name: 07 finalize labels
+  finalize:
+    name: Finalize labels (loop or issue)
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, push_validate_no_token, push_trusted]
-    if: always() && needs.guard_and_inputs.outputs.proceed == 'true'
+    needs: [guard, validate_patch, commit_push]
+    if: always() && needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: write
@@ -632,9 +632,9 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PUSH_STATUS: ${{ needs.push_trusted.outputs.push_status }}
-          SHOULD_CONTINUE: ${{ needs.push_validate_no_token.outputs.should_continue }}
-          LOOP_TERMINAL: ${{ needs.push_validate_no_token.outputs.loop_terminal_reason }}
+          PUSH_STATUS: ${{ needs.commit_push.outputs.push_status }}
+          SHOULD_CONTINUE: ${{ needs.validate_patch.outputs.should_continue }}
+          LOOP_TERMINAL: ${{ needs.validate_patch.outputs.loop_terminal_reason }}
         run: |
           set -euo pipefail
           if [ -n "$LOOP_TERMINAL" ]; then

@@ -1,9 +1,9 @@
-name: Codex Issue (fallback issue)
+name: Codex Issue
 
 # Label-driven stage of the split Codex pipeline.
 # Trigger: any stage attaches `codex:needs-issue` (blocker / deferred / failure).
-# issue_model (read-only) infers the reason and has codex compose a Korean
-# title + body; issue_publish opens/updates the issue with an app token and
+# compose_content (read-only) infers the reason and has codex compose a Korean
+# title + body; publish_issue opens/updates the issue with an app token and
 # swaps the label to codex:issue-created so it does not re-fire.
 on:
   pull_request_target:
@@ -25,8 +25,8 @@ env:
   CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
 
 jobs:
-  issue_model:
-    name: 09 issue content model
+  compose_content:
+    name: Compose issue content
     if: github.event.label.name == 'codex:needs-issue'
     runs-on:
       group: "Home Server Runners"
@@ -167,13 +167,13 @@ jobs:
           name: codex-issue-plan
           path: codex-review-artifacts
 
-  issue_publish:
-    name: 09 issue publish trusted
+  publish_issue:
+    name: Create or update fallback issue
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [issue_model]
-    if: needs.issue_model.outputs.proceed == 'true'
+    needs: [compose_content]
+    if: needs.compose_content.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: write

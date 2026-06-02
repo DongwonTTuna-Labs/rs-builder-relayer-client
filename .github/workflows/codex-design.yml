@@ -1,9 +1,9 @@
-name: Codex Design (design + chief)
+name: Codex Design
 
 # Label-driven stage of the split Codex pipeline.
 # Trigger: codex-review attaches `리뷰완료` (or a maintainer does, to re-run design).
-# guard_and_inputs pulls the prior codex-review run's artifacts, then stage 03-04
-# run. finalize_labels transitions the PR:
+# guard pulls the prior codex-review run's artifacts, then stage 03-04
+# run. finalize transitions the PR:
 #   - approved for fix -> remove 설계중, add 설계완료 (triggers codex-fix)
 #   - blocker          -> remove 설계중, add codex:needs-issue (triggers codex-issue)
 on:
@@ -26,8 +26,8 @@ env:
   CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
 
 jobs:
-  guard_and_inputs:
-    name: 03 guard + inputs
+  guard:
+    name: Guard & fetch review inputs
     if: github.event.label.name == '리뷰완료'
     runs-on:
       group: "Home Server Runners"
@@ -137,12 +137,12 @@ jobs:
           path: design-inputs
 
   design_context:
-    name: 03 design context
+    name: Build design context
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs]
-    if: needs.guard_and_inputs.outputs.proceed == 'true'
+    needs: [guard]
+    if: needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -161,8 +161,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -188,12 +188,12 @@ jobs:
           name: codex-review-stage03-context
           path: codex-review-artifacts/stage03
 
-  design_prepare:
-    name: 03 design prepare
+  prepare_clusters:
+    name: Inventory & cluster design
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, design_context]
+    needs: [guard, design_context]
     permissions:
       contents: read
       pull-requests: read
@@ -216,8 +216,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -291,20 +291,20 @@ jobs:
           name: codex-review-stage03-prepare
           path: codex-review-artifacts/stage03
 
-  design_analysis_model:
-    name: 03 design analysis model
+  analyze_clusters:
+    name: Analyze design clusters
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, design_prepare]
-    if: needs.design_prepare.outputs.has_analysis_batches == 'true'
+    needs: [guard, prepare_clusters]
+    if: needs.prepare_clusters.outputs.has_analysis_batches == 'true'
     permissions:
       contents: read
       pull-requests: read
       id-token: write
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.design_prepare.outputs.analysis_matrix) }}
+      matrix: ${{ fromJson(needs.prepare_clusters.outputs.analysis_matrix) }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -320,8 +320,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -368,13 +368,13 @@ jobs:
           name: codex-review-stage03-analysis-${{ matrix.batch_path }}
           path: ${{ github.workspace }}/codex-review-artifacts/stage03/batches/${{ matrix.batch_path }}
 
-  design_plan_model:
-    name: 03 design plan model
+  draft_plan:
+    name: Draft design plan
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, design_prepare, design_analysis_model]
-    if: always() && needs.design_prepare.result == 'success' && (needs.design_analysis_model.result == 'success' || needs.design_analysis_model.result == 'skipped')
+    needs: [guard, prepare_clusters, analyze_clusters]
+    if: always() && needs.prepare_clusters.result == 'success' && (needs.analyze_clusters.result == 'success' || needs.analyze_clusters.result == 'skipped')
     permissions:
       contents: read
       pull-requests: read
@@ -394,8 +394,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -410,7 +410,7 @@ jobs:
           name: codex-review-stage03-prepare
           path: codex-review-artifacts/stage03
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        if: needs.design_prepare.outputs.has_analysis_batches == 'true'
+        if: needs.prepare_clusters.outputs.has_analysis_batches == 'true'
         with:
           pattern: codex-review-stage03-analysis-*
           path: codex-review-artifacts/stage03-analysis-downloads
@@ -453,12 +453,12 @@ jobs:
           name: codex-review-stage03
           path: codex-review-artifacts/stage03
 
-  design_chief_model:
-    name: 04 design chief model
+  chief_decision:
+    name: Design chief decision
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, design_plan_model]
+    needs: [guard, draft_plan]
     permissions:
       contents: read
       pull-requests: read
@@ -478,8 +478,8 @@ jobs:
       - name: Checkout PR head for model inspection
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: ${{ needs.guard_and_inputs.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard_and_inputs.outputs.head_sha || github.sha }}
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
           path: pr-head
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -528,12 +528,12 @@ jobs:
           name: codex-review-stage04-model
           path: codex-review-artifacts/stage04
 
-  design_publish_trusted:
-    name: 04 design publish trusted
+  publish_design:
+    name: Publish design & route
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [design_chief_model]
+    needs: [chief_decision]
     permissions:
       contents: read
       pull-requests: read
@@ -597,13 +597,13 @@ jobs:
           name: codex-review-stage04
           path: codex-review-artifacts/stage04
 
-  finalize_labels:
-    name: 04 finalize labels
+  finalize:
+    name: Finalize labels
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard_and_inputs, design_publish_trusted]
-    if: always() && needs.guard_and_inputs.outputs.proceed == 'true'
+    needs: [guard, publish_design]
+    if: always() && needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
       pull-requests: write
@@ -642,8 +642,8 @@ jobs:
           GH_TOKEN: ${{ steps.app_token.outputs.token || github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          DESIGN_RESULT: ${{ needs.design_publish_trusted.result }}
-          DESIGN_ROUTE: ${{ needs.design_publish_trusted.outputs.route }}
+          DESIGN_RESULT: ${{ needs.publish_design.result }}
+          DESIGN_ROUTE: ${{ needs.publish_design.outputs.route }}
         run: |
           set -euo pipefail
           if [ "$DESIGN_RESULT" = "success" ] && [ "$DESIGN_ROUTE" = "run_stage05" ]; then
