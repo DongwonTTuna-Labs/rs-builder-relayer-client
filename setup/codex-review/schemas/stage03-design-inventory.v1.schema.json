@@ -9,13 +9,37 @@
     "items": {
       "type": "array"
     },
+    "inspection_evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "purpose",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "schema_version": {
       "type": "string"
     }
   },
   "required": [
     "schema_version",
-    "items"
+    "items",
+    "inspection_evidence"
   ],
   "title": "stage03-design-inventory.v1",
   "type": "object"

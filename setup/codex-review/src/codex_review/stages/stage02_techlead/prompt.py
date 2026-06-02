@@ -11,6 +11,9 @@ def include_decision_action_contract(prompt: str) -> str:
 def include_design_required_contract(prompt: str) -> str:
     return prompt + "\nSet needs_design=true for findings that require coordinated edits or autofix."
 
+def include_inspection_evidence_contract(prompt: str) -> str:
+    return prompt + "\nBefore routing, inspect relevant repo files under pr-head instead of relying only on the Stage01 summaries. Return top-level inspection_evidence as a non-empty array. Each item must include path, purpose, and observation."
+
 def build_techlead_prompt(combined_findings: dict[str, Any], pr_context: dict[str, Any], review_context: str, docs_context: str, config: dict[str, Any]) -> str:
     prompt=f"""You are the Codex Review tech lead. Reduce axis findings to actionable decisions.
 Return JSON schema_version stage02-techlead-decision.v1.
@@ -25,7 +28,7 @@ Combined findings:
 PR context:
 {pr_context}
 """
-    return include_design_required_contract(include_decision_action_contract(prompt))
+    return include_inspection_evidence_contract(include_design_required_contract(include_decision_action_contract(prompt)))
 
 def write_techlead_prompt(prompt: str, out_path: str | Path) -> Path:
     return write_text(out_path, prompt)

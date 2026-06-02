@@ -97,6 +97,10 @@ def _repo_parts_from_context(ctx: dict[str, Any]) -> tuple[str | None, str | Non
     return owner, repo
 
 
+def _default_inspection_evidence(purpose: str, observation: str) -> list[dict[str, str]]:
+    return [{"path": "AGENTS.md", "purpose": purpose, "observation": observation}]
+
+
 def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("command", nargs="?")
     p.add_argument("--config", default=None)
@@ -353,7 +357,13 @@ def _handle_stage01(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return {"axes": review_axes(config)}, None
     if cmd in {"default-result", "noop-result", "model-result"}:
         axis = args.axis or "correctness"
-        fallback = {"schema_version": "stage01-axis-findings.v1", "axis": axis, "findings": [], "defaulted": True}
+        fallback = {
+            "schema_version": "stage01-axis-findings.v1",
+            "axis": axis,
+            "findings": [],
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No model result was available for this axis."),
+            "defaulted": True,
+        }
         if cmd == "model-result":
             return _model_or_fallback(args, stage=f"stage01_{axis}", expected_schema="stage01-axis-findings.v1", fallback=fallback), "stage01-axis-findings.v1"
         return fallback, "stage01-axis-findings.v1"
@@ -365,7 +375,7 @@ def _handle_stage01(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         payload = _maybe_json(args.in_path, {})
         changed_payload = _json_or_default(args.changed_lines, {})
         changed = changed_payload.get("changed_line_map", changed_payload) if isinstance(changed_payload, dict) else {}
-        return validate_axis_findings(args.axis or payload.get("axis"), payload, _maybe_json(args.pr_context, {}), changed, config), "stage01-axis-findings.v1"
+        return validate_axis_findings(args.axis or payload.get("axis"), payload, _maybe_json(args.pr_context, {}), changed, config, args.repo_path), "stage01-axis-findings.v1"
     if cmd == "combine":
         from .stages.stage01_review.combine import combine_axis_findings
         paths = _preferred_artifact_paths(args.artifacts, primary="findings.validated.json", fallback="findings.json")
@@ -381,7 +391,14 @@ def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"default-result", "noop-result", "model-result"}:
         combined = _maybe_json(args.inventory or args.in_path, {"findings": []})
         decisions = [{"finding_id": f.get("finding_id") or f.get("id"), "action": "publish_only", "reason": "safe deterministic default"} for f in combined.get("findings", [])]
-        fallback = {"schema_version": "stage02-techlead-decision.v1", "decisions": decisions, "needs_design": False, "status": "ready" if decisions else "lgtm", "defaulted": True}
+        fallback = {
+            "schema_version": "stage02-techlead-decision.v1",
+            "decisions": decisions,
+            "needs_design": False,
+            "status": "ready" if decisions else "lgtm",
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No techlead model result was available."),
+            "defaulted": True,
+        }
         if cmd == "model-result":
             return _model_or_fallback(args, stage="stage02", expected_schema="stage02-techlead-decision.v1", fallback=fallback), "stage02-techlead-decision.v1"
         return fallback, "stage02-techlead-decision.v1"
@@ -391,7 +408,7 @@ def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "validate":
         from .stages.stage02_techlead.validate import validate_techlead_decision
         combined = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
-        return validate_techlead_decision(_maybe_json(args.in_path, {}), combined, config), "stage02-techlead-decision.v1"
+        return validate_techlead_decision(_maybe_json(args.in_path, {}), combined, config, args.repo_path), "stage02-techlead-decision.v1"
     if cmd == "classify":
         from .stages.stage02_techlead.classify import build_review_publication
         combined = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
@@ -427,7 +444,13 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         items = []
         for finding in ctx.get("findings", []):
             items.append({"finding_id": finding.get("finding_id"), "invariant": finding.get("root_cause_key") or finding.get("title") or finding.get("finding_id"), "summary": finding.get("summary", "")})
-        fallback = {"schema_version": "stage03-design-inventory.v1", "items": items, "item_count": len(items), "defaulted": True}
+        fallback = {
+            "schema_version": "stage03-design-inventory.v1",
+            "items": items,
+            "item_count": len(items),
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design inventory model result was available."),
+            "defaulted": True,
+        }
         if cmd == "model-inventory":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
@@ -439,7 +462,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         from .stages.stage03_design.normalize import validate_design_inventory
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         tech = ctx.get("techlead_decision", ctx)
-        return validate_design_inventory(_maybe_json(args.in_path, {}), tech), "stage03-design-inventory.v1"
+        return validate_design_inventory(_maybe_json(args.in_path, {}), tech, args.repo_path), "stage03-design-inventory.v1"
     if cmd in {"build-clusters-prompt", "clusters-prompt"}:
         from .stages.stage03_design.cluster import build_cluster_prompt
         return build_cluster_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
@@ -448,7 +471,13 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         clusters = []
         for idx, item in enumerate(inv.get("items", []), 1):
             clusters.append({"cluster_id": f"cluster-{idx}", "finding_ids": [item.get("finding_id")], "summary": item.get("summary", "")})
-        fallback = {"schema_version": "stage03-design-clusters.v1", "clusters": clusters, "cluster_count": len(clusters), "defaulted": True}
+        fallback = {
+            "schema_version": "stage03-design-clusters.v1",
+            "clusters": clusters,
+            "cluster_count": len(clusters),
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design cluster model result was available."),
+            "defaulted": True,
+        }
         if cmd == "model-clusters":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
@@ -458,7 +487,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return fallback, "stage03-design-clusters.v1"
     if cmd == "cluster":
         from .stages.stage03_design.cluster import validate_design_clusters
-        return validate_design_clusters(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {})), "stage03-design-clusters.v1"
+        return validate_design_clusters(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), args.repo_path), "stage03-design-clusters.v1"
     if cmd == "batch":
         from .stages.stage03_design.batch import make_cluster_batches
         return {"batches": make_cluster_batches(_maybe_json(args.in_path, {}), config)}, None
@@ -468,7 +497,12 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"default-analysis", "model-analysis"}:
         clusters = _maybe_json(args.inventory or args.in_path, {})
         analyses = [{"cluster_id": c.get("cluster_id"), "status": "needs_human", "recommendation": "model analysis not provided"} for c in clusters.get("clusters", [])]
-        fallback = {"schema_version": "stage03-cluster-analysis.v1", "analyses": analyses, "defaulted": True}
+        fallback = {
+            "schema_version": "stage03-cluster-analysis.v1",
+            "analyses": analyses,
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No cluster analysis model result was available."),
+            "defaulted": True,
+        }
         if cmd == "model-analysis":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
@@ -479,12 +513,18 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd == "analyze":
         from .stages.stage03_design.analyze import validate_cluster_analysis
         batch = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
-        return validate_cluster_analysis(_maybe_json(args.in_path, {}), batch), "stage03-cluster-analysis.v1"
+        return validate_cluster_analysis(_maybe_json(args.in_path, {}), batch, args.repo_path), "stage03-cluster-analysis.v1"
     if cmd in {"default-plan", "model-plan"}:
         from .stages.stage03_design.coordinate import validate_design_plan
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         findings = ctx.get("findings", [])
-        plan = {"schema_version": "stage03-design-plan.v1", "edit_sequence": [], "tests": [], "defaulted": True}
+        plan = {
+            "schema_version": "stage03-design-plan.v1",
+            "edit_sequence": [],
+            "tests": [],
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design plan model result was available."),
+            "defaulted": True,
+        }
         if findings:
             plan["openspec_backed"] = bool(ctx.get("openspec_backed"))
             plan["edit_sequence"] = [
@@ -517,7 +557,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return build_coordinate_prompt(_maybe_json(args.pr_context, {}), _maybe_json(args.inventory, {}), analyses), None
     if cmd in {"coordinate", "validate-plan"}:
         from .stages.stage03_design.coordinate import validate_design_plan
-        return validate_design_plan(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config), "stage03-design-plan.v1"
+        return validate_design_plan(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path), "stage03-design-plan.v1"
     if cmd == "render":
         from .stages.stage03_design.render import render_design_plan_markdown
         return render_design_plan_markdown(_maybe_json(args.in_path, {})), None
@@ -529,7 +569,13 @@ def _handle_stage04(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"default-result", "noop-result", "model-result"}:
         plan = _maybe_json(args.design_plan or args.in_path, {})
         status = "needs_human" if plan.get("requires_human_review") else ("no_fix_needed" if not plan.get("edit_sequence") else "needs_human")
-        fallback = {"schema_version": "stage04-design-chief-decision.v1", "status": status, "reason": "safe deterministic default", "defaulted": True}
+        fallback = {
+            "schema_version": "stage04-design-chief-decision.v1",
+            "status": status,
+            "reason": "safe deterministic default",
+            "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design chief model result was available."),
+            "defaulted": True,
+        }
         if cmd == "model-result":
             return _model_or_fallback(args, stage="stage04", expected_schema="stage04-design-chief-decision.v1", fallback=fallback), "stage04-design-chief-decision.v1"
         return fallback, "stage04-design-chief-decision.v1"
@@ -538,7 +584,7 @@ def _handle_stage04(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return build_design_chief_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), _maybe_json(args.pr_context, {}), config), None
     if cmd == "validate":
         from .stages.stage04_design_chief.validate import validate_chief_decision
-        return validate_chief_decision(_maybe_json(args.in_path, {}), _maybe_json(args.inventory or args.design_plan, {}), config), "stage04-design-chief-decision.v1"
+        return validate_chief_decision(_maybe_json(args.in_path, {}), _maybe_json(args.inventory or args.design_plan, {}), config, args.repo_path), "stage04-design-chief-decision.v1"
     if cmd == "route":
         from .stages.stage04_design_chief.route import route_after_design_chief, write_chief_route_outputs
         route = route_after_design_chief(_maybe_json(args.in_path, {}))

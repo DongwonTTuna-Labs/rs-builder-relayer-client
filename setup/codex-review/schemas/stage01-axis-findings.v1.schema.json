@@ -12,6 +12,29 @@
     "findings": {
       "type": "array"
     },
+    "inspection_evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "purpose",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "schema_version": {
       "type": "string"
     }
@@ -19,7 +42,8 @@
   "required": [
     "schema_version",
     "axis",
-    "findings"
+    "findings",
+    "inspection_evidence"
   ],
   "title": "stage01-axis-findings.v1",
   "type": "object"

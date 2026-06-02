@@ -10,9 +10,12 @@ def include_approval_contract(prompt: str) -> str:
 def include_fix_policy_requirements(prompt: str) -> str:
     return prompt + "\nIf approved_for_fix, include fix_policy with allowed_files/allowed_prefixes, forbidden_files, max_tasks, max_patch_bytes."
 
+def include_inspection_evidence_contract(prompt: str) -> str:
+    return prompt + "\nBefore deciding status, inspect relevant repo files under pr-head and compare the design plan against OpenSpec/task context when present. Return top-level inspection_evidence as a non-empty array of objects with path, purpose, and observation."
+
 def build_design_chief_prompt(design_plan: dict[str, Any], techlead_decision: dict[str, Any], pr_context: dict[str, Any], config: dict[str, Any]) -> str:
     prompt=f"Review the design plan for safe autofix.\nPlan: {design_plan}\nTechlead: {techlead_decision}\nPR: {pr_context}\nPolicy: {config.get('autofix', {})}\n"
-    return include_fix_policy_requirements(include_approval_contract(prompt))
+    return include_inspection_evidence_contract(include_fix_policy_requirements(include_approval_contract(prompt)))
 
 def write_design_chief_prompt(prompt: str, out_path: str | Path) -> Path:
     return write_text(out_path, prompt)

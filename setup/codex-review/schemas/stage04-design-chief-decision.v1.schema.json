@@ -6,6 +6,29 @@
     "fix_policy": {
       "type": "object"
     },
+    "inspection_evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "purpose",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "schema_version": {
       "type": "string"
     },
@@ -23,7 +46,8 @@
   },
   "required": [
     "schema_version",
-    "status"
+    "status",
+    "inspection_evidence"
   ],
   "title": "stage04-design-chief-decision.v1",
   "type": "object"

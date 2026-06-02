@@ -7,6 +7,7 @@ from codex_review.artifacts import write_json
 from codex_review.constants import SEVERITIES
 from codex_review.context.changed_lines import is_changed_right_line
 from codex_review.errors import ValidationError
+from codex_review.inspection import validate_inspection_evidence
 from codex_review.schema import validate_enum
 from codex_review.security.redaction import assert_no_secret_patterns
 from .axes import validate_axis
@@ -38,9 +39,17 @@ def redact_and_validate_finding_text(finding: dict[str, Any]) -> dict[str, Any]:
     return finding
 
 
-def validate_axis_findings(axis: str, findings: dict[str, Any] | list[dict[str, Any]], pr_context: dict[str, Any] | None, changed_line_map: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+def validate_axis_findings(
+    axis: str,
+    findings: dict[str, Any] | list[dict[str, Any]],
+    pr_context: dict[str, Any] | None,
+    changed_line_map: dict[str, Any],
+    config: dict[str, Any],
+    repo_path: str | Path | None = None,
+) -> dict[str, Any]:
     validate_axis(axis, config)
     payload = {"findings": findings} if isinstance(findings, list) else dict(findings)
+    evidence = validate_inspection_evidence(payload, repo_path, f"stage01 {axis}")
     if payload.get("axis") and payload["axis"] != axis:
         raise ValidationError(f"axis mismatch: {payload.get('axis')} != {axis}")
     items=payload.get("findings") or []
@@ -58,7 +67,13 @@ def validate_axis_findings(axis: str, findings: dict[str, Any] | list[dict[str, 
         if require_changed: validate_finding_location(f, changed_line_map)
         validate_root_cause_key(f)
         redact_and_validate_finding_text(f)
-    return {"schema_version": "stage01-axis-findings.v1", "axis": axis, "findings": items, "finding_count": len(items)}
+    return {
+        "schema_version": "stage01-axis-findings.v1",
+        "axis": axis,
+        "findings": items,
+        "finding_count": len(items),
+        "inspection_evidence": evidence,
+    }
 
 
 def write_validated_axis_findings(axis: str, findings: dict[str, Any], out_path: str | Path) -> Path:

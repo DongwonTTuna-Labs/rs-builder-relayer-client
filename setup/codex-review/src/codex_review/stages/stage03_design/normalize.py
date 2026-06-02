@@ -4,19 +4,30 @@ from pathlib import Path
 from typing import Any
 from codex_review.artifacts import write_json
 from codex_review.errors import ValidationError
+from codex_review.inspection import validate_inspection_evidence
 
 
 def build_normalize_prompt(design_context: dict[str, Any]) -> str:
-    return "Normalize the following design-relevant findings into invariant-oriented items. Return stage03-design-inventory.v1 JSON.\n" + str(design_context)
+    return (
+        "Normalize the following design-relevant findings into invariant-oriented items. "
+        "First inspect relevant files in pr-head and include top-level inspection_evidence "
+        "items with path, purpose, and observation. Return stage03-design-inventory.v1 JSON.\n"
+        + str(design_context)
+    )
 
 
-def validate_design_inventory(inventory: dict[str, Any], techlead_decision: dict[str, Any]) -> dict[str, Any]:
+def validate_design_inventory(
+    inventory: dict[str, Any],
+    techlead_decision: dict[str, Any],
+    repo_path: str | Path | None = None,
+) -> dict[str, Any]:
+    evidence = validate_inspection_evidence(inventory, repo_path, "stage03 design inventory")
     items=inventory.get("items") or inventory.get("findings") or []
     expected={i.get("finding_id") for i in techlead_decision.get("decisions", []) if i.get("action") in {"needs_design","publish_and_fix_now","summary_only_fix_now"}}
     got={i.get("finding_id") for i in items}
     if expected and got != expected:
         raise ValidationError(f"design inventory coverage mismatch missing={sorted(expected-got)} unknown={sorted(got-expected)}")
-    out=dict(inventory); out["schema_version"]="stage03-design-inventory.v1"; out["items"]=items; out["item_count"]=len(items)
+    out=dict(inventory); out["schema_version"]="stage03-design-inventory.v1"; out["items"]=items; out["item_count"]=len(items); out["inspection_evidence"]=evidence
     return out
 
 

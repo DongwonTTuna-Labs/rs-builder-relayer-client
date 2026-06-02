@@ -9,14 +9,42 @@ def finding(fid="f1", line=10):
     return {"finding_id":fid,"severity":"medium","file":"src/a.py","line":line,"root_cause_key":"rc1","title":"Bug","summary":"Bug","recommendation":"Fix"}
 
 
-def test_axis_findings_validate_location_and_shape():
-    out=validate_axis_findings("correctness", {"axis":"correctness","findings":[finding()]}, {}, {"src/a.py":[10]}, CFG)
+def payload_with_evidence(findings):
+    return {
+        "axis": "correctness",
+        "findings": findings,
+        "inspection_evidence": [
+            {
+                "path": "src/a.py",
+                "purpose": "Inspect implementation touched by the finding",
+                "observation": "The changed line is relevant to the reported bug.",
+            }
+        ],
+    }
+
+
+def test_axis_findings_validate_location_shape_and_inspection_evidence(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("print('ok')\n", encoding="utf-8")
+    out=validate_axis_findings("correctness", payload_with_evidence([finding()]), {}, {"src/a.py":[10]}, CFG, repo_path=tmp_path)
     assert out["finding_count"] == 1
+    assert out["inspection_evidence"][0]["path"] == "src/a.py"
 
 
 def test_axis_findings_reject_unchanged_line():
     with pytest.raises(Exception):
-        validate_axis_findings("correctness", {"axis":"correctness","findings":[finding(line=11)]}, {}, {"src/a.py":[10]}, CFG)
+        validate_axis_findings("correctness", payload_with_evidence([finding(line=11)]), {}, {"src/a.py":[10]}, CFG)
+
+
+def test_axis_findings_require_inspection_evidence_even_when_no_findings(tmp_path):
+    with pytest.raises(Exception, match="inspection_evidence"):
+        validate_axis_findings("correctness", {"axis":"correctness","findings":[]}, {}, {}, CFG, repo_path=tmp_path)
+
+
+def test_axis_findings_reject_missing_inspection_path(tmp_path):
+    with pytest.raises(Exception, match="inspection_evidence path does not exist"):
+        validate_axis_findings("correctness", payload_with_evidence([]), {}, {}, CFG, repo_path=tmp_path)
 
 
 def test_combine_rejects_duplicate_ids():

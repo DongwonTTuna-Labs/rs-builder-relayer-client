@@ -126,6 +126,19 @@ def _task_item_schema() -> dict[str, Any]:
     }
 
 
+def _inspection_evidence_item_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "purpose": {"type": "string"},
+            "observation": {"type": "string"},
+        },
+        "required": ["path", "purpose", "observation"],
+        "additionalProperties": False,
+    }
+
+
 def _fix_policy_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -164,6 +177,8 @@ def _default_array_item_schema(path: tuple[str, ...]) -> dict[str, Any]:
         return _cluster_analysis_item_schema()
     if name in {"edit_sequence", "task_hints", "tasks"}:
         return _task_item_schema()
+    if name == "inspection_evidence":
+        return _inspection_evidence_item_schema()
     if name in {
         "tests",
         "risk_flags",

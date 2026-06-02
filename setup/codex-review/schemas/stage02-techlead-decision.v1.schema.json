@@ -30,6 +30,29 @@
       },
       "type": "array"
     },
+    "inspection_evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "purpose",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "needs_design": {
       "type": "boolean"
     },
@@ -42,7 +65,8 @@
   },
   "required": [
     "schema_version",
-    "decisions"
+    "decisions",
+    "inspection_evidence"
   ],
   "title": "stage02-techlead-decision.v1",
   "type": "object"

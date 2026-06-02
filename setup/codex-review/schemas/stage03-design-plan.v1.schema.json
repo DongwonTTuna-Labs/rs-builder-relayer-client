@@ -12,6 +12,29 @@
     "execution_blockers": {
       "type": "array"
     },
+    "inspection_evidence": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "purpose",
+          "observation"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "openspec_backed": {
       "type": "boolean"
     },
@@ -31,7 +54,8 @@
   "required": [
     "schema_version",
     "edit_sequence",
-    "tests"
+    "tests",
+    "inspection_evidence"
   ],
   "title": "stage03-design-plan.v1",
   "type": "object"

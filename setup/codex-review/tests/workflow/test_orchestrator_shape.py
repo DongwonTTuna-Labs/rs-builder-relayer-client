@@ -56,6 +56,12 @@ def test_workflow_declares_expected_stage_order():
     assert jobs == expected
 
 
+def test_workflow_cancels_stale_runs_for_same_pr():
+    workflow = load_workflow()
+    assert workflow["concurrency"]["group"] == "codex-review-v3-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.run_id }}"
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+
+
 def test_no_inline_python_or_schema_bloat():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "python - <<" not in text
@@ -137,6 +143,57 @@ def test_workflow_uses_codex_action_for_model_execution():
         assert with_inputs["output-schema-file"].endswith(".openai.schema.json"), job_name
         assert "codex-review-artifacts/schemas/" in with_inputs["output-schema-file"], job_name
         assert with_inputs["working-directory"], job_name
+
+
+def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
+    jobs = load_workflow()["jobs"]
+    stage_jobs = [
+        "review_axes_model",
+        "techlead_model",
+        "design_context",
+        "design_model_chain",
+        "design_chief_model",
+    ]
+    for job_name in stage_jobs:
+        job = jobs[job_name]
+        checkout_steps = [
+            step
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("actions/checkout@")
+            and (step.get("with") or {}).get("path") == "pr-head"
+        ]
+        assert checkout_steps, job_name
+        head_checkout = checkout_steps[0]["with"]
+        assert head_checkout["repository"] == "${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}"
+        assert head_checkout["ref"] == "${{ needs.bootstrap_event.outputs.head_sha || github.sha }}"
+        assert head_checkout["persist-credentials"] is False
+        for step in job.get("steps", []):
+            if step.get("uses") == CODEX_ACTION:
+                with_inputs = step["with"]
+                assert with_inputs["working-directory"] == "${{ github.workspace }}/pr-head", job_name
+                assert with_inputs["prompt-file"].startswith("${{ github.workspace }}/"), job_name
+                assert with_inputs["output-file"].startswith("${{ github.workspace }}/"), job_name
+                assert with_inputs["output-schema-file"].startswith("${{ github.workspace }}/"), job_name
+
+
+def test_stage01_to_stage04_validators_receive_pr_head_repo_path():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    for command in [
+        "stage01 validate",
+        "stage02 validate",
+        "stage03 validate-plan",
+        "stage04 validate",
+    ]:
+        assert command in text
+    for snippet in [
+        "stage01 validate --axis ${{ matrix.axis }}",
+        "stage02 validate --inventory",
+        "stage03 validate-plan --in",
+        "stage04 validate --in",
+    ]:
+        start = text.index(snippet)
+        line = text[start:text.index("\n", start)]
+        assert "--repo-path pr-head" in line, snippet
 
 
 def test_codex_action_reuses_relay_home_for_rootless_server_info_placeholder():
