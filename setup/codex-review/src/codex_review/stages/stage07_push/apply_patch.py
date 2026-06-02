@@ -10,18 +10,18 @@ from .safe_subprocess import sanitized_env
 
 def apply_merged_patch(patch_path: str | Path, repo_path: str | Path) -> dict[str, Any]:
     patch=Path(patch_path).read_text(encoding="utf-8")
-    proc=subprocess.run(["git","apply","-"], input=patch, text=True, cwd=Path(repo_path), capture_output=True, env=sanitized_env())
+    proc=subprocess.run(["git","apply","--index","-"], input=patch, text=True, cwd=Path(repo_path), capture_output=True, env=sanitized_env())
     if proc.returncode!=0: raise ValidationError(f"git apply failed: {proc.stderr.strip()}")
     return {"applied": True, "patch_bytes": len(patch.encode())}
 
 
 def run_diff_check(repo_path: str | Path) -> None:
-    proc=subprocess.run(["git","diff","--quiet"], cwd=Path(repo_path), env=sanitized_env())
+    proc=subprocess.run(["git","diff","--quiet","HEAD","--"], cwd=Path(repo_path), env=sanitized_env())
     if proc.returncode==0: raise ValidationError("patch produced no diff")
 
 
 def collect_applied_diff(repo_path: str | Path) -> str:
-    proc=subprocess.run(["git","diff","--binary"], cwd=Path(repo_path), capture_output=True, text=True, env=sanitized_env())
+    proc=subprocess.run(["git","diff","--binary","HEAD","--"], cwd=Path(repo_path), capture_output=True, text=True, env=sanitized_env())
     return proc.stdout
 
 

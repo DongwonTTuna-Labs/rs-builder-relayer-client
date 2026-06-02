@@ -226,6 +226,43 @@ def test_validate_and_test_allows_exact_semantic_patch_safety_approval(tmp_path)
     assert result["semantic_safety_approved"] is True
 
 
+def test_validate_and_test_accepts_new_file_patch(tmp_path):
+    import subprocess
+    from codex_review.stages.stage07_push.orchestrate import validate_and_test_fix
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    patch = """diff --git a/docs/CODEX_REVIEW_LGTM_LOOP.md b/docs/CODEX_REVIEW_LGTM_LOOP.md
+new file mode 100644
+index 0000000..04331b2
+--- /dev/null
++++ b/docs/CODEX_REVIEW_LGTM_LOOP.md
+@@ -0,0 +1 @@
++LGTM loop smoke
+"""
+
+    result = validate_and_test_fix(
+        {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
+        {"head_sha":head},
+        {"autofix":{"allowed_prefixes":["docs/"], "max_patch_bytes":10000}},
+        repo,
+        dry_run=False,
+        semantic_safety=_semantic_approval_for_patch(patch),
+    )
+
+    assert result["status"] == "validated"
+    assert result["validated"] is True
+    assert result["semantic_safety_approved"] is True
+    assert result["applied_diff_hash"]
+
+
 def test_commit_push_defensively_refuses_validated_artifact_without_semantic_approval(tmp_path):
     result = commit_and_push_validated_fix(
         {"schema_version":"stage06-merged-fix.v1", "status":"ready_to_push", "patch":"diff --git a/src/a.py b/src/a.py\n"},
