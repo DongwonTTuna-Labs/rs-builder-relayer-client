@@ -1,11 +1,9 @@
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[4]
-WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
+from _pipeline import all_text
 
 
 def test_no_inline_python_or_schema_bloat():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    # Invariant holds across every pipeline workflow file.
+    text = all_text()
     assert "python - <<" not in text
     assert "python3 - <<" not in text
     assert "json-schema.org" not in text

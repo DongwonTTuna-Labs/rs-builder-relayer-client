@@ -10,7 +10,9 @@ def test_no_separate_resolve_checker_workflow():
 
 
 def test_resolve_logic_is_stage00_integrated():
-    workflow = (ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml").read_text(encoding="utf-8")
+    # Resolve/stage00 now lives in the split review workflow rather than a
+    # separate resolve-checker; assert it is integrated wherever review runs.
+    workflow = (ROOT / ".github" / "workflows" / "codex-review.yml").read_text(encoding="utf-8")
     assert "stage00 collect" in workflow
     assert "stage00 apply" in workflow
     assert "stage00 route" in workflow

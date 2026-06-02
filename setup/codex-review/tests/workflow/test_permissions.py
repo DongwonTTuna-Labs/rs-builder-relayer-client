@@ -1,13 +1,8 @@
-from pathlib import Path
-import yaml
-
-ROOT = Path(__file__).resolve().parents[4]
-WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
-CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
+from _pipeline import CODEX_ACTION, all_jobs, all_text, iter_all_steps
 
 
 def jobs():
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    return all_jobs()
 
 
 def test_model_jobs_have_no_repo_write_permissions():
@@ -23,7 +18,7 @@ def test_model_jobs_have_no_repo_write_permissions():
 
 
 def test_trusted_write_jobs_keep_github_token_read_only():
-    write_jobs = ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "issue_fallback_trusted", "push_trusted"]
+    write_jobs = ["apply_threads", "publish_review", "publish_design", "commit_push"]
     for name in write_jobs:
         perms = jobs()[name].get("permissions", {})
         assert perms.get("contents") == "read"
@@ -33,7 +28,7 @@ def test_trusted_write_jobs_keep_github_token_read_only():
 
 
 def test_no_token_validation_job_is_read_only():
-    perms = jobs()["push_validate_no_token"].get("permissions", {})
+    perms = jobs()["validate_patch"].get("permissions", {})
     assert perms.get("contents") == "read"
     assert perms.get("pull-requests") == "read"
     assert perms.get("issues") == "read"
@@ -41,33 +36,39 @@ def test_no_token_validation_job_is_read_only():
 
 
 def test_write_jobs_use_app_token_not_github_token_write_permissions():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = all_text()
     assert "auth app-token --mode stage00" in text
     assert "auth app-token --mode stage02" in text
     assert "auth app-token --mode stage04" in text
     assert "auth app-token --mode push" in text
     assert "auth app-token --mode stage08" not in text
     assert "auth app-token --mode stage09" in text
-    assert "GITHUB_TOKEN: ${{ github.token }}" not in text.split("resolve_apply_trusted:", 1)[1]
-    for name in ["resolve_apply_trusted", "review_publish_trusted", "design_publish_trusted", "issue_fallback_trusted", "push_trusted"]:
-        section = text.split(f"  {name}:", 1)[1].split("\n  ", 1)[0]
-        assert "write" not in section
+    # Trusted write/publish jobs must drive writes with the app token, never GITHUB_TOKEN.
+    all_jobs_map = jobs()
+    for name in ["apply_threads", "publish_review", "publish_design", "commit_push"]:
+        for step in all_jobs_map[name].get("steps", []):
+            env = step.get("env") or {}
+            assert env.get("GITHUB_TOKEN") != "${{ github.token }}", name
 
 
 def test_app_token_permission_metadata_is_threaded_to_write_commands():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = all_text()
     assert "write_output(\"permissions_json\"" not in text  # helper code stays outside workflow
     assert text.count("CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}") >= 4
 
 
 def test_app_token_steps_include_current_codex_app_secret_fallbacks():
-    app_token_steps = []
-    for job in jobs().values():
-        for step in job.get("steps", []):
-            if "codex-review auth app-token" in str(step.get("run", "")):
-                app_token_steps.append(step)
+    # iter_all_steps walks each file's jobs directly (job names like finalize_labels
+    # collide across files, so a merged-by-name view would undercount).
+    app_token_steps = [
+        step
+        for _, step in iter_all_steps()
+        if "codex-review auth app-token" in str(step.get("run", ""))
+    ]
 
-    assert len(app_token_steps) == 6
+    # review: stage00, stage02, label-ops; design: stage04, label-ops;
+    # fix: push, loop-state, label-ops; orchestrator: stage09.
+    assert len(app_token_steps) == 9
     for step in app_token_steps:
         env = step.get("env", {})
         assert env.get("CODEX_APP_ID") == "${{ secrets.CODEX_APP_ID }}"
@@ -76,15 +77,15 @@ def test_app_token_steps_include_current_codex_app_secret_fallbacks():
 
 def test_model_jobs_use_oidc_relay_without_write_permissions():
     model_jobs = [
-        "resolve_triage_model",
-        "review_axes_model",
-        "techlead_model",
-        "design_prepare",
-        "design_analysis_model",
-        "design_plan_model",
-        "design_chief_model",
-        "fix_agent_model",
-        "fix_collect_and_merge",
+        "triage_threads",
+        "review_axes",
+        "techlead",
+        "prepare_clusters",
+        "analyze_clusters",
+        "draft_plan",
+        "chief_decision",
+        "run_agents",
+        "merge_fixes",
     ]
     for name in model_jobs:
         job = jobs()[name]
