@@ -172,10 +172,13 @@ def test_workflow_uses_codex_action_for_model_execution():
     assert len(steps) >= 10
     for job_name, step in steps:
         with_inputs = step["with"]
-        assert "openai-api-key" not in with_inputs, job_name
-        assert "responses-api-endpoint" not in with_inputs, job_name
-        assert with_inputs["codex-args"] == "${{ steps.relay-token.outputs.codex_args }}", job_name
-        assert step["env"]["AI_RELAY_API_KEY"] == "${{ steps.relay-token.outputs.relay_token }}", job_name
+        # Native codex-action relay wiring: the OIDC-minted key drives the
+        # built-in Responses proxy, replacing the hand-built codex-args provider.
+        assert with_inputs["openai-api-key"] == "${{ steps.codex_oidc.outputs.relay_token }}", job_name
+        assert with_inputs["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses", job_name
+        assert "codex-args" not in with_inputs, job_name
+        assert "codex-home" not in with_inputs, job_name
+        assert "env" not in step or "AI_RELAY_API_KEY" not in (step.get("env") or {}), job_name
         assert with_inputs["sandbox"] == "read-only", job_name
         assert with_inputs["safety-strategy"] == "read-only", job_name
         assert with_inputs["allow-users"] == "DongwonTTuna", job_name
@@ -240,21 +243,23 @@ def test_stage01_to_stage04_validators_receive_pr_head_repo_path():
         assert "--repo-path pr-head" in line, snippet
 
 
-def test_codex_action_reuses_relay_home_for_rootless_server_info_placeholder():
+def test_model_jobs_mint_relay_token_locally_via_oidc():
+    # Each job that runs codex-action mints its relay key once with the local
+    # OIDC helper (no external setup-codex-relay action remains).
+    text = pipeline_text()
+    assert "setup-codex-relay" not in text
     jobs = pipeline_jobs()
     for job_name, job in jobs.items():
-        relay_steps = [
-            step
-            for step in job.get("steps", [])
-            if step.get("uses") == "DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main"
-        ]
         action_steps = [step for step in job.get("steps", []) if step.get("uses") == CODEX_ACTION]
         if not action_steps:
             continue
-        assert len(relay_steps) == 1, job_name
-        relay_home = relay_steps[0]["with"]["codex-home"]
-        for step in action_steps:
-            assert step["with"]["codex-home"] == relay_home, job_name
+        mint_steps = [
+            step
+            for step in job.get("steps", [])
+            if step.get("id") == "codex_oidc"
+            and "oidc relay-token" in str(step.get("run", ""))
+        ]
+        assert len(mint_steps) == 1, job_name
 
 
 def test_workflow_generates_openai_strict_schemas_for_codex_action():
@@ -304,7 +309,7 @@ def test_semantic_patch_safety_model_gates_stage07_push_validation():
     assert "schema openai-strict --schema stage06-semantic-patch-safety.v1" in semantic_text
     assert "stage06 validate-semantic-safety" in semantic_text
     assert "stage06 write-semantic-safety-outputs" in semantic_text
-    assert "AI_RELAY_API_KEY" in semantic_text
+    assert "oidc relay-token" in semantic_text
     validate_job = jobs["validate_patch"]
     assert validate_job["needs"] == ["guard", "merge_fixes", "patch_safety"]
 

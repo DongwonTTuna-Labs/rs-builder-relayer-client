@@ -75,7 +75,7 @@ def test_app_token_steps_include_current_codex_app_secret_fallbacks():
         assert env.get("CODEX_APP_PRIVATE_KEY") == "${{ secrets.CODEX_APP_PRIVATE_KEY }}"
 
 
-def test_model_jobs_use_oidc_relay_without_write_permissions():
+def test_model_jobs_use_native_codex_action_relay_without_write_permissions():
     model_jobs = [
         "triage_threads",
         "review_axes",
@@ -90,21 +90,23 @@ def test_model_jobs_use_oidc_relay_without_write_permissions():
     for name in model_jobs:
         job = jobs()[name]
         steps = job.get("steps", [])
-        relay_steps = [
+        mint_steps = [
             step for step in steps
-            if step.get("uses") == "DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main"
+            if step.get("id") == "codex_oidc" and "oidc relay-token" in str(step.get("run", ""))
         ]
-        assert len(relay_steps) == 1
-        assert relay_steps[0]["with"]["trusted-actors"] == "DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]"
-        relay_home = relay_steps[0]["with"]["codex-home"]
-        assert "codex-relay-home-" in relay_home
+        assert len(mint_steps) == 1
+        # No external relay action remains; the read-only model job mints the key itself.
+        assert all(
+            step.get("uses") != "DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main"
+            for step in steps
+        )
 
         action_steps = [step for step in steps if step.get("uses") == CODEX_ACTION]
         assert action_steps
         for step in action_steps:
-            assert "openai-api-key" not in step["with"]
-            assert "responses-api-endpoint" not in step["with"]
-            assert step["with"]["codex-args"] == "${{ steps.relay-token.outputs.codex_args }}"
-            assert step["env"]["AI_RELAY_API_KEY"] == "${{ steps.relay-token.outputs.relay_token }}"
+            assert step["with"]["openai-api-key"] == "${{ steps.codex_oidc.outputs.relay_token }}"
+            assert step["with"]["responses-api-endpoint"] == "https://relay-ai.dongwontuna.net/v1/responses"
+            assert "codex-args" not in step["with"]
+            assert "codex-home" not in step["with"]
+            assert "AI_RELAY_API_KEY" not in (step.get("env") or {})
             assert step["with"]["output-schema-file"]
-            assert step["with"]["codex-home"] == relay_home

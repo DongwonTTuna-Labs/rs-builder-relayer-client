@@ -72,8 +72,10 @@ jobs:
               *) proceed=false; reason="라벨 부착자($ACTOR)의 권한이 부족합니다 (write 이상 필요)." ;;
             esac
           fi
+          label_add() { gh api --silent -X POST "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=$1"; }
+          label_del() { gh api --silent -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$1")" >/dev/null 2>&1 || true; }
           if [ "$proceed" = "false" ]; then
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label '리뷰중' --add-label 'codex:label-misuse' || true
+            label_del '리뷰중'; label_add 'codex:label-misuse' || true
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Codex 리뷰를 시작할 수 없습니다: $reason" || true
           fi
           echo "proceed=$proceed" >> "$GITHUB_OUTPUT"
@@ -204,12 +206,9 @@ jobs:
         with:
           name: codex-review-stage00-collect
           path: codex-review-artifacts/stage00
-      - name: Setup Codex relay
-        id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
-        with:
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
-          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Mint Codex relay token
+        id: codex_oidc
+        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
       - name: Build lifecycle prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage00 build-prompt --inventory codex-review-artifacts/stage00/thread-inventory.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage00/lifecycle-prompt.md
       - name: Prepare lifecycle schema
@@ -218,17 +217,15 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage00-lifecycle-result.v1 --out codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
       - name: Run Codex lifecycle model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
-        env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
+          openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
+          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           prompt-file: codex-review-artifacts/stage00/lifecycle-prompt.md
           output-file: codex-review-artifacts/stage00/lifecycle-result.json
           output-schema-file: codex-review-artifacts/schemas/stage00-lifecycle-result.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: read-only
           safety-strategy: read-only
-          codex-args: ${{ steps.relay-token.outputs.codex_args }}
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -348,12 +345,9 @@ jobs:
         with:
           name: codex-review-event
           path: codex-review-artifacts/event
-      - name: Setup Codex relay
-        id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
-        with:
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
-          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Mint Codex relay token
+        id: codex_oidc
+        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
       - name: Build axis prompt
         run: |
           mkdir -p codex-review-artifacts/stage01/${{ matrix.axis }}
@@ -364,17 +358,15 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage01-axis-findings.v1 --out codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
       - name: Run Codex axis model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
-        env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
+          openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
+          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage01/${{ matrix.axis }}/prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage01/${{ matrix.axis }}/findings.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage01-axis-findings.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only
-          codex-args: ${{ steps.relay-token.outputs.codex_args }}
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -472,12 +464,9 @@ jobs:
         with:
           name: codex-review-stage00-collect
           path: codex-review-artifacts/stage00
-      - name: Setup Codex relay
-        id: relay-token
-        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
-        with:
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
-          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Mint Codex relay token
+        id: codex_oidc
+        run: workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
       - name: Filter resolved findings and build techlead prompt
         run: |
           mkdir -p codex-review-artifacts/stage02
@@ -489,17 +478,15 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage02-techlead-decision.v1 --out codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
       - name: Run Codex techlead model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
-        env:
-          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
+          openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
+          responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage02/prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage02/techlead-decision.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage02-techlead-decision.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only
-          codex-args: ${{ steps.relay-token.outputs.codex_args }}
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -661,8 +648,10 @@ jobs:
             # Resolve decided there is nothing to review (stop_noop) -> done.
             add='codex:lgtm'
           fi
-          gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label '리뷰중' --add-label "$add"
+          label_add() { gh api --silent -X POST "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=$1"; }
+          label_del() { gh api --silent -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$1")" >/dev/null 2>&1 || true; }
+          label_del '리뷰중'; label_add "$add"
           if [ -n "$extra" ]; then
-            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$extra"
+            label_add "$extra"
           fi
           echo "Transitioned PR #$PR_NUMBER: 리뷰중 -> $add ${extra:+(+$extra)}"
