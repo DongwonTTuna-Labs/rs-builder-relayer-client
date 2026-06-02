@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 from codex_review.cli import main
 from codex_review.stages.stage01_review.prompt import build_axis_prompt
@@ -205,6 +206,73 @@ def test_stage06_prepare_merge_model_routes_without_invoking_model_when_clean(tm
 
     assert json.loads(route.read_text(encoding="utf-8"))["needs_model"] is False
     assert json.loads(raw_out.read_text(encoding="utf-8"))["status"] == "no_fix"
+    assert "needs_model=false" in gh_output.read_text(encoding="utf-8")
+
+
+def test_stage06_prepare_merge_model_preserves_clean_new_file_patch(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "codex-review@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Codex Review"], cwd=repo, check=True)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+    patch = (
+        "diff --git a/docs/CODEX_REVIEW_LGTM_LOOP.md b/docs/CODEX_REVIEW_LGTM_LOOP.md\n"
+        "new file mode 100644\n"
+        "index 0000000..7898192\n"
+        "--- /dev/null\n"
+        "+++ b/docs/CODEX_REVIEW_LGTM_LOOP.md\n"
+        "@@ -0,0 +1 @@\n"
+        "+LGTM loop\n"
+    )
+    collection = tmp_path / "collection.json"
+    premerge = tmp_path / "premerge.json"
+    pr_context = tmp_path / "pr-context.json"
+    raw_out = tmp_path / "merged-fix.raw.json"
+    route = tmp_path / "merge-route.json"
+    write_json(
+        collection,
+        {
+            "schema_version": "stage05-fix-collection-result.v1",
+            "results": [
+                {
+                    "schema_version": "stage05-fix-agent-result.v1",
+                    "task_id": "correctness-001",
+                    "status": "patched",
+                    "patch": patch,
+                }
+            ],
+        },
+    )
+    write_json(pr_context, {"head_sha": "abc123"})
+
+    assert main(["stage06", "premerge", "--in", str(collection), "--repo-path", str(repo), "--out", str(premerge)]) == 0
+    assert json.loads(premerge.read_text(encoding="utf-8"))["clean"] is True
+
+    gh_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(gh_output))
+    assert main([
+        "stage06",
+        "prepare-merge-model",
+        "--inventory",
+        str(premerge),
+        "--in",
+        str(collection),
+        "--pr-context",
+        str(pr_context),
+        "--raw-out",
+        str(raw_out),
+        "--out",
+        str(route),
+    ]) == 0
+
+    merged = json.loads(raw_out.read_text(encoding="utf-8"))
+    assert merged["patch"] == patch
+    assert "docs/CODEX_REVIEW_LGTM_LOOP.md" in merged["patch"]
+    assert json.loads(route.read_text(encoding="utf-8"))["needs_model"] is False
     assert "needs_model=false" in gh_output.read_text(encoding="utf-8")
 
 
