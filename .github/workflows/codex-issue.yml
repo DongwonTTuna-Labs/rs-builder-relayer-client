@@ -1,0 +1,225 @@
+name: Codex Issue (fallback issue)
+
+# Label-driven stage of the split Codex pipeline.
+# Trigger: any stage attaches `codex:needs-issue` (blocker / deferred / failure).
+# issue_model (read-only) infers the reason and has codex compose a Korean
+# title + body; issue_publish opens/updates the issue with an app token and
+# swaps the label to codex:issue-created so it does not re-fire.
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  id-token: write
+
+concurrency:
+  group: codex-issue-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/codex-review-artifacts
+  CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}
+  CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+
+jobs:
+  issue_model:
+    name: 09 issue content model
+    if: github.event.label.name == 'codex:needs-issue'
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read
+    outputs:
+      proceed: ${{ steps.guard.outputs.proceed }}
+    steps:
+      - name: Guard actor permission and locate prior runs
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          ACTOR: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          PERM=$(gh api "/repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+          case "$PERM" in
+            admin|maintain|write) ;;
+            *) echo "proceed=false" >> "$GITHUB_OUTPUT"; echo "라벨 부착자($ACTOR) 권한 부족으로 이슈 생성을 건너뜁니다."; exit 0 ;;
+          esac
+          find_run() {
+            gh run list --repo "$REPO" --workflow="$1" --limit 50 \
+              --json databaseId,headSha,conclusion \
+              -q "[.[] | select(.headSha==\"$HEAD_SHA\" and .conclusion==\"success\")][0].databaseId" 2>/dev/null || echo ""
+          }
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+          echo "review_run_id=$(find_run codex-review.yml)" >> "$GITHUB_OUTPUT"
+          echo "design_run_id=$(find_run codex-design.yml)" >> "$GITHUB_OUTPUT"
+          echo "fix_run_id=$(find_run codex-fix.yml)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout workflow helper
+        if: steps.guard.outputs.proceed == 'true'
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install codex-review helper
+        if: steps.guard.outputs.proceed == 'true'
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - name: Build PR + OpenSpec context from the event
+        if: steps.guard.outputs.proceed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p codex-review-artifacts/event codex-review-artifacts/stage09
+          workflow-helper/setup/codex-review/bin/codex-review event resolve-current --out codex-review-artifacts/event/event-context.json
+          workflow-helper/setup/codex-review/bin/codex-review context pr --event "$GITHUB_EVENT_PATH" --pr-context codex-review-artifacts/event/event-context.json --out codex-review-artifacts/event/pr-context.json
+          workflow-helper/setup/codex-review/bin/codex-review context openspec --pr-context codex-review-artifacts/event/pr-context.json --repo-path . --out codex-review-artifacts/event/openspec-context.json
+      # Best-effort reason inputs from prior stage runs (any may be absent).
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.review_run_id != ''
+        continue-on-error: true
+        with:
+          name: codex-review-stage02
+          path: codex-review-artifacts/stage02
+          run-id: ${{ steps.guard.outputs.review_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.design_run_id != ''
+        continue-on-error: true
+        with:
+          name: codex-review-stage04
+          path: codex-review-artifacts/stage04
+          run-id: ${{ steps.guard.outputs.design_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.fix_run_id != ''
+        continue-on-error: true
+        with:
+          name: codex-review-stage07-validation
+          path: codex-review-artifacts/stage07
+          run-id: ${{ steps.guard.outputs.fix_run_id }}
+          github-token: ${{ github.token }}
+      - name: Infer reason and build deterministic plan
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review stage09 infer-reason \
+            --review-context codex-review-artifacts/stage02/review-publication.json \
+            --chief-decision codex-review-artifacts/stage04/route.json \
+            --validation codex-review-artifacts/stage07/validated-fix.json \
+            --out codex-review-artifacts/stage09/reason.json
+          workflow-helper/setup/codex-review/bin/codex-review stage09 plan --in codex-review-artifacts/stage09/reason.json --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --out codex-review-artifacts/stage09/issue-plan.json
+          workflow-helper/setup/codex-review/bin/codex-review stage09 build-prompt --in codex-review-artifacts/stage09/issue-plan.json --out codex-review-artifacts/stage09/issue-content.prompt.md
+      - name: Setup Codex relay
+        id: relay-token
+        if: steps.guard.outputs.proceed == 'true'
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Prepare issue content schema
+        if: steps.guard.outputs.proceed == 'true'
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage09-issue-content.v1 --out codex-review-artifacts/schemas/stage09-issue-content.v1.openai.schema.json
+      - name: Run Codex issue content model
+        if: steps.guard.outputs.proceed == 'true'
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
+        with:
+          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage09/issue-content.prompt.md
+          output-file: ${{ github.workspace }}/codex-review-artifacts/stage09/issue-content.raw.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage09-issue-content.v1.openai.schema.json
+          working-directory: ${{ github.workspace }}
+          sandbox: read-only
+          safety-strategy: read-only
+          codex-args: ${{ steps.relay-token.outputs.codex_args }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          allow-users: DongwonTTuna
+          allow-bots: true
+          allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
+      - name: Compose Korean issue content (codex-polished, marker-safe fallback)
+        if: steps.guard.outputs.proceed == 'true'
+        run: workflow-helper/setup/codex-review/bin/codex-review stage09 compose --in codex-review-artifacts/stage09/issue-plan.json --result codex-review-artifacts/stage09/issue-content.raw.json --out codex-review-artifacts/stage09/issue-final-plan.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.guard.outputs.proceed == 'true'
+        with:
+          name: codex-issue-plan
+          path: codex-review-artifacts
+
+  issue_publish:
+    name: 09 issue publish trusted
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    needs: [issue_model]
+    if: needs.issue_model.outputs.proceed == 'true'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+    steps:
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install codex-review helper
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-issue-plan
+          path: codex-review-artifacts
+      - id: app_token
+        env:
+          CODEX_REVIEW_GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_GITHUB_APP_ID }}
+          CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
+          GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage09 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/app-token.json
+      - name: Create or update fallback issue
+        env:
+          GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
+          CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
+        run: workflow-helper/setup/codex-review/bin/codex-review stage09 apply --in codex-review-artifacts/stage09/issue-final-plan.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/issue-result.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-issue-stage09
+          path: codex-review-artifacts/stage09
+      - name: Swap needs-issue label for issue-created
+        if: always()
+        env:
+          # issue-created triggers no workflow, so GITHUB_TOKEN is sufficient here.
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label 'codex:needs-issue' --add-label 'codex:issue-created'

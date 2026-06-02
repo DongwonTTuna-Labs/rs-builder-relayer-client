@@ -4,17 +4,14 @@ import yaml
 from _pipeline import all_jobs as pipeline_jobs
 from _pipeline import all_text as pipeline_text
 from _pipeline import codex_action_steps as pipeline_codex_action_steps
+from _pipeline import iter_all_steps
 
 ROOT = Path(__file__).resolve().parents[4]
-WORKFLOW = ROOT / ".github" / "workflows" / "codex-review-orchestrator.yml"
 REVIEW = ROOT / ".github" / "workflows" / "codex-review.yml"
 DESIGN = ROOT / ".github" / "workflows" / "codex-design.yml"
 FIX = ROOT / ".github" / "workflows" / "codex-fix.yml"
+ISSUE = ROOT / ".github" / "workflows" / "codex-issue.yml"
 CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
-
-
-def load_workflow():
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 
 
 def load_review():
@@ -29,35 +26,20 @@ def load_fix():
     return yaml.safe_load(FIX.read_text(encoding="utf-8"))
 
 
-def iter_job_steps():
-    for job_name, job in load_workflow()["jobs"].items():
-        for step in job.get("steps", []):
-            yield job_name, step
-
-
-def codex_action_steps():
-    return [
-        (job_name, step)
-        for job_name, step in iter_job_steps()
-        if step.get("uses") == CODEX_ACTION
-    ]
+def load_issue():
+    return yaml.safe_load(ISSUE.read_text(encoding="utf-8"))
 
 
 def test_codex_pipeline_workflow_files_present():
     workflows = list((ROOT / ".github" / "workflows").glob("*.yml")) + list((ROOT / ".github" / "workflows").glob("*.yaml"))
     names = {p.name for p in workflows}
-    # Review is split into its own label-driven workflow; the orchestrator still
-    # hosts design/fix/issue during the migration.
-    assert "codex-review.yml" in names
-    assert "codex-review-orchestrator.yml" in names
-    known = {
+    # The monolithic orchestrator has been fully replaced by four label-driven workflows.
+    assert names == {
         "codex-review.yml",
         "codex-design.yml",
         "codex-fix.yml",
         "codex-issue.yml",
-        "codex-review-orchestrator.yml",
     }
-    assert names <= known
 
 
 def test_workflow_declares_expected_stage_order():
@@ -95,15 +77,22 @@ def test_workflow_declares_expected_stage_order():
         "push_trusted",
         "finalize_labels",
     ]
-    # Orchestrator now hosts only the issue fallback until PR 5 retires it.
-    orchestrator_jobs = list(load_workflow()["jobs"].keys())
-    assert orchestrator_jobs == ["issue_fallback_trusted"]
+    issue_jobs = list(load_issue()["jobs"].keys())
+    assert issue_jobs == ["issue_model", "issue_publish"]
 
 
-def test_workflow_cancels_human_stale_runs_but_not_bot_autofix_push_runs():
-    workflow = load_workflow()
-    assert workflow["concurrency"]["group"] == "codex-review-v3-${{ github.event.pull_request.number || github.event.inputs.pr_number || github.run_id }}"
-    assert workflow["concurrency"]["cancel-in-progress"] == "${{ github.actor != 'codex-reviewer-for-dongwonttuna[bot]' }}"
+def test_each_stage_workflow_serializes_per_pr_without_cancelling():
+    # Each split workflow runs at most one instance per PR and never cancels an
+    # in-flight run (the loop relies on label transitions completing).
+    for loader, group_prefix in [
+        (load_review, "codex-review-"),
+        (load_design, "codex-design-"),
+        (load_fix, "codex-fix-"),
+        (load_issue, "codex-issue-"),
+    ]:
+        workflow = loader()
+        assert workflow["concurrency"]["group"] == group_prefix + "${{ github.event.pull_request.number }}"
+        assert workflow["concurrency"]["cancel-in-progress"] is False
 
 
 def test_no_inline_python_or_schema_bloat():
@@ -135,15 +124,17 @@ def test_no_placeholder_echo_json_or_error_suppression():
 
 def test_workflow_routes_design_and_fix_stages():
     # Review decides whether to design via its finalize label transition;
-    # the orchestrator still gates the fix loop on the design chief's route.
-    review_text = REVIEW.read_text(encoding="utf-8")
-    assert "run_design" in review_text
-    assert "리뷰완료" in review_text
-    assert "needs.design_publish_trusted.outputs.route == 'run_stage05'" in WORKFLOW.read_text(encoding="utf-8")
+    # design gates the fix loop on the chief's route; fix loops back to review.
+    assert "run_design" in REVIEW.read_text(encoding="utf-8")
+    assert "리뷰완료" in REVIEW.read_text(encoding="utf-8")
+    design_text = DESIGN.read_text(encoding="utf-8")
+    assert 'DESIGN_ROUTE" = "run_stage05"' in design_text
+    assert "설계완료" in design_text
+    assert "리뷰중" in FIX.read_text(encoding="utf-8")
 
 
 def test_actions_are_pinned_and_checkout_credentials_not_persisted():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     assert "actions/checkout@v4" not in text
     assert "actions/upload-artifact@v4" not in text
     assert "actions/download-artifact@v4" not in text
@@ -157,10 +148,13 @@ def test_stage03_plan_is_validated_in_workflow():
     assert "design-plan.raw.json" in text
 
 
-def test_workflow_dispatch_pr_number_is_threaded_into_context():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "github.event.inputs.pr_number" in text
-    assert "CODEX_REVIEW_PR_NUMBER" in text
+def test_label_triggered_workflows_thread_pr_number_into_context():
+    # Split workflows are label-driven (no workflow_dispatch); each threads the
+    # PR number from the labeled event into the helper env.
+    for path in (REVIEW, DESIGN, FIX, ISSUE):
+        text = path.read_text(encoding="utf-8")
+        assert "types: [labeled]" in text
+        assert "CODEX_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}" in text
 
 
 def test_bootstrap_collects_openspec_context_artifacts():
@@ -247,7 +241,7 @@ def test_stage01_to_stage04_validators_receive_pr_head_repo_path():
 
 
 def test_codex_action_reuses_relay_home_for_rootless_server_info_placeholder():
-    jobs = load_workflow()["jobs"]
+    jobs = pipeline_jobs()
     for job_name, job in jobs.items():
         relay_steps = [
             step
@@ -264,16 +258,17 @@ def test_codex_action_reuses_relay_home_for_rootless_server_info_placeholder():
 
 
 def test_workflow_generates_openai_strict_schemas_for_codex_action():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert text.count("schema openai-strict --schema") >= len(codex_action_steps())
-    for _, step in codex_action_steps():
+    text = pipeline_text()
+    steps = pipeline_codex_action_steps()
+    assert text.count("schema openai-strict --schema") >= len(steps)
+    for _, step in steps:
         schema_file = step["with"]["output-schema-file"]
         schema_name = Path(schema_file).name.removesuffix(".openai.schema.json")
         assert f"schema openai-strict --schema {schema_name}" in text
 
 
 def test_workflow_has_no_model_runner_default_or_codex_cli_env_contract():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     assert "CODEX_REVIEW_MODEL_COMMAND" not in text
     assert "CODEX_REVIEW_CODEX_ARGS_JSON" not in text
     assert "codex-review-model-runner" not in text
@@ -338,15 +333,15 @@ def test_push_and_issue_fallback_are_default_actual_write_paths():
     assert "stage07 push --dry-run" not in push_section
     assert "record_reentry:" not in fix_text
 
-    # Issue fallback (default actual write) still lives in the orchestrator until PR 5.
-    issue_section = WORKFLOW.read_text(encoding="utf-8").split("issue_fallback_trusted:", 1)[1]
+    # Issue fallback (default actual write) now lives in the dedicated issue workflow.
+    issue_section = ISSUE.read_text(encoding="utf-8").split("issue_publish:", 1)[1]
     assert "auth app-token --mode stage09" in issue_section
     assert "stage09 apply --in" in issue_section
     assert "stage09 apply --dry-run" not in issue_section
 
 
 def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     assert "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405" in text
     assert "python-version: '3.11'" in text
     assert "pip install --disable-pip-version-check -e workflow-helper/setup/codex-review" in text
@@ -354,13 +349,13 @@ def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
 
 
 def test_workflow_helper_checkout_uses_workflow_sha_without_changing_base_ref():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     assert "ref: ${{ github.event.pull_request.base.sha || github.sha }}" in text
     assert "repository: ${{ github.repository }}" in text
     assert "ref: ${{ github.workflow_sha }}" in text
     assert "path: workflow-helper" in text
 
-    jobs = load_workflow()["jobs"]
+    jobs = pipeline_jobs()
     for job_name, job in jobs.items():
         helper_steps = [
             step
@@ -379,7 +374,7 @@ def test_workflow_helper_checkout_uses_workflow_sha_without_changing_base_ref():
 def test_setup_python_pip_cache_uses_workflow_helper_dependency_file():
     setup_steps = [
         (job_name, step)
-        for job_name, step in iter_job_steps()
+        for job_name, step in iter_all_steps()
         if step.get("uses") == "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405"
     ]
     assert setup_steps
@@ -390,7 +385,7 @@ def test_setup_python_pip_cache_uses_workflow_helper_dependency_file():
 
 
 def test_workflow_never_executes_helper_from_pr_head_or_stale_trusted_tree():
-    text = WORKFLOW.read_text(encoding="utf-8")
+    text = pipeline_text()
     assert "pr-head/setup/codex-review" not in text
     assert "trusted/setup/codex-review" not in text
 
@@ -406,21 +401,19 @@ def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
 
 
 def test_stage09_issue_fallback_uses_app_token_and_never_github_token_write():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert "issue_fallback_trusted:" in text
-    section = text.split("issue_fallback_trusted:", 1)[1].split("push_trusted:", 1)[0]
-    assert "auth app-token --mode stage09" in section
+    text = ISSUE.read_text(encoding="utf-8")
+    # Reason inference + plan + codex content live in the read-only model job;
+    # the actual issue write happens in issue_publish via the app token.
+    assert "stage09 infer-reason" in text
+    assert "stage09 plan" in text
+    assert "stage09 compose" in text
+    assert "stage09 apply --in" in text
+    assert "auth app-token --mode stage09" in text
     issue_flag = "CODEX_REVIEW" + "_ENABLE" + "_ISSUE_FALLBACK"
-    assert issue_flag not in section
-    assert "--dry-run" not in section
-    assert "stage09 plan" in section
-    assert "stage09 apply" in section
-    assert "has_deferred_issue_items" in section
-    assert "stage02_defer_to_issue" in section
-    assert "codex-review-stage02" in section
-    for status in ["no_diff_repeat", "empty_patch", "tests_failed", "validation_failed", "semantic_safety_rejected"]:
-        assert f"validation_status == '{status}'" in section
-    assert "issues: write" not in section
+    assert issue_flag not in text
+    assert "stage09 apply --dry-run" not in text
+    # GITHUB_TOKEN job permission is never issues:write; the app token does the write.
+    assert "issues: write" not in text
 
 
 def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
