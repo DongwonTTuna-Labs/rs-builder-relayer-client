@@ -9,6 +9,30 @@ from codex_review.github.issues import create_or_update_deferred_issue
 from codex_review.github.markers import render_marker
 
 SCHEMA_VERSION = "stage09-issue-fallback.v1"
+CONTENT_SCHEMA_VERSION = "stage09-issue-content.v1"
+
+# Machine reason keys stay English/snake_case; user-facing labels are Korean.
+_REASON_LABELS_KO: dict[str, str] = {
+    "missing_openspec_spec": "OpenSpec 변경 명세 누락",
+    "unresolved_openspec_source": "OpenSpec 소스 미해결",
+    "fork_pr_push_blocked": "포크 PR 푸시 차단",
+    "out_of_scope": "PR 범위 밖 작업",
+    "stage02_defer_to_issue": "리뷰 지적사항 이슈 이관",
+    "no_diff_repeat": "빈 패치 반복",
+    "no-diff-repeat": "빈 패치 반복",
+    "empty_patch": "빈 패치",
+    "oscillation_detected": "자동 수정 진동 감지",
+    "max_rounds_reached": "최대 반복 횟수 초과",
+    "review_needs_human": "리뷰 단계 사람 개입 필요",
+    "design_needs_human": "설계 단계 사람 개입 필요",
+    "stop_needs_human": "사람 개입 필요",
+    "artifacts_missing": "이전 단계 산출물 누락",
+    "manual_fallback": "수동 후속조치 필요",
+}
+
+
+def reason_label_ko(reason: str) -> str:
+    return _REASON_LABELS_KO.get(reason, "후속조치 필요")
 
 
 def _repository(pr_context: dict[str, Any]) -> str:
@@ -50,12 +74,12 @@ def render_issue_fallback_body(
 ) -> str:
     lines = [
         render_marker("codex-review:issue-fallback", {"key": idempotency_key, "reason": reason}),
-        "# Codex review fallback",
+        "# Codex 리뷰 후속조치",
         "",
-        f"Reason: `{reason}`",
-        f"Source PR: {_pr_reference(pr_context)}",
+        f"사유: `{reason}` ({reason_label_ko(reason)})",
+        f"원본 PR: {_pr_reference(pr_context)}",
         "",
-        "## OpenSpec source",
+        "## OpenSpec 소스",
     ]
     sources = openspec_context.get("source_summary") or []
     if sources:
@@ -64,20 +88,20 @@ def render_issue_fallback_body(
         lines.append(f"- `{openspec_context.get('decision') or 'missing_openspec_spec'}`")
     deferred = deferred_items or []
     if deferred:
-        lines.extend(["", "## Deferred items"])
+        lines.extend(["", "## 이관된 지적사항"])
         for item in deferred:
             finding = item.get("finding_id") or item.get("id") or "unknown"
-            title = item.get("title") or item.get("summary") or "Deferred review item"
+            title = item.get("title") or item.get("summary") or "이관된 리뷰 항목"
             location = item.get("file") or item.get("path") or ""
             line = item.get("line")
             where = f" ({location}:{line})" if location and line else (f" ({location})" if location else "")
             root = item.get("root_cause_key") or item.get("root_cause") or ""
-            root_text = f"; root cause `{root}`" if root else ""
-            recommendation = item.get("recommendation") or item.get("reason") or item.get("summary") or "Handle this outside the current PR mutation loop."
-            lines.append(f"- `{finding}`{where}: {title}{root_text}. Follow-up: {recommendation}")
-    lines.extend(["", "## Attempted stages"])
+            root_text = f"; 근본 원인 `{root}`" if root else ""
+            recommendation = item.get("recommendation") or item.get("reason") or item.get("summary") or "현재 PR 수정 루프 밖에서 처리하세요."
+            lines.append(f"- `{finding}`{where}: {title}{root_text}. 후속: {recommendation}")
+    lines.extend(["", "## 시도한 단계"])
     lines.extend(f"- {stage}" for stage in attempted_stages or ["unknown"])
-    lines.extend(["", "## Required follow-up", required_follow_up])
+    lines.extend(["", "## 필요한 후속조치", required_follow_up])
     return "\n".join(lines)
 
 
@@ -106,7 +130,8 @@ def build_issue_fallback_plan(
         "status": "planned",
         "reason": reason,
         "idempotency_key": key,
-        "title": f"Codex review fallback: {reason}",
+        # Korean, human-facing title; reason key kept for traceability/search.
+        "title": f"[Codex 리뷰 후속조치] {reason_label_ko(reason)} ({reason})",
         "body": body,
         "required_follow_up": follow_up,
         "attempted_stages": attempted_stages or [],
@@ -118,16 +143,121 @@ def build_issue_fallback_plan(
 
 def _default_follow_up(reason: str, openspec_context: dict[str, Any]) -> str:
     if reason in {"missing_openspec_spec", "unresolved_openspec_source"} or not openspec_context.get("present"):
-        return "Add or link the OpenSpec change artifacts in the PR title/body, then rerun Codex Review."
+        return "PR 제목/본문에 OpenSpec 변경 산출물을 추가하거나 링크한 뒤 Codex 리뷰를 다시 실행하세요."
     if reason in {"fork_pr_push_blocked", "out_of_scope"}:
-        return "Move the implementation into a same-repository branch or handle the out-of-scope work in a separate PR."
+        return "구현을 동일 저장소 브랜치로 옮기거나, 범위 밖 작업은 별도 PR에서 처리하세요."
     if reason == "stage02_defer_to_issue":
-        return "Create or update a follow-up issue for work that is valid but outside the current PR mutation scope, while continuing the PR fix loop for implementable items."
+        return "현재 PR 수정 범위 밖이지만 유효한 작업에 대해 후속 이슈를 생성/갱신하고, 구현 가능한 항목은 PR 수정 루프를 계속 진행하세요."
     if reason in {"no-diff-repeat", "no_diff_repeat", "empty_patch"}:
-        return "Inspect the generated fix artifacts and adjust the OpenSpec tasks or implementation plan so the next run can produce a non-empty patch."
+        return "생성된 수정 산출물을 점검하고, 다음 실행에서 비어있지 않은 패치가 나오도록 OpenSpec 작업 또는 구현 계획을 조정하세요."
     if reason in {"oscillation_detected", "max_rounds_reached"}:
-        return "The autofix loop stopped because it kept re-fixing the same issue (or hit the round cap) without converging. A human should reconcile the conflicting review feedback and apply the fix directly, then rerun Codex Review."
-    return "Resolve the blocking condition, then rerun Codex Review."
+        return "자동 수정 루프가 같은 문제를 반복 수정(또는 반복 횟수 상한 도달)하며 수렴하지 못해 중단되었습니다. 사람이 상충하는 리뷰 피드백을 조율해 직접 수정한 뒤 Codex 리뷰를 다시 실행하세요."
+    if reason in {"design_needs_human", "review_needs_human", "stop_needs_human"}:
+        return "자동화가 안전하게 진행할 수 없는 비실행 블로커가 있습니다. 사람이 판단해 처리한 뒤 Codex 리뷰를 다시 실행하세요."
+    if reason == "artifacts_missing":
+        return "이전 단계 산출물(artifact)이 만료/누락되었습니다. 처음부터 다시 `리뷰중` 라벨을 부착해 파이프라인을 재시작하세요."
+    return "차단 조건을 해소한 뒤 Codex 리뷰를 다시 실행하세요."
+
+
+def infer_issue_reason(
+    *,
+    review_publication: dict[str, Any] | None = None,
+    design_route: dict[str, Any] | None = None,
+    fix_validation: dict[str, Any] | None = None,
+    fallback_reason: str | None = None,
+) -> dict[str, Any]:
+    """Derive an issue reason key from the artifacts of prior workflow stages.
+
+    Priority: terminal fix-loop conditions first, then design/review needs-human,
+    then deferred review items, finally an explicit/manual fallback.
+    """
+    attempted: list[str] = []
+    deferred_items: list[dict[str, Any]] = []
+
+    fix = fix_validation or {}
+    if fix:
+        attempted.append("stage07")
+    terminal = str(fix.get("loop_terminal_reason") or "").strip()
+    status = str(fix.get("status") or "").strip()
+    for candidate in (terminal, status):
+        if candidate in {"oscillation_detected", "max_rounds_reached", "no_diff_repeat", "no-diff-repeat", "empty_patch"}:
+            return {"reason": candidate, "attempted_stages": attempted, "deferred_items": deferred_items}
+
+    design = design_route or {}
+    if design:
+        attempted.append("stage04")
+        route = str(design.get("route") or design.get("status") or "").strip()
+        if route in {"stop_needs_human", "needs_human", "design_needs_human"}:
+            return {"reason": "design_needs_human", "attempted_stages": attempted, "deferred_items": deferred_items}
+
+    review = review_publication or {}
+    if review:
+        attempted.append("stage02")
+        items = review.get("deferred_items")
+        if isinstance(items, list) and items:
+            deferred_items = items
+            return {"reason": "stage02_defer_to_issue", "attempted_stages": ["stage02_defer_to_issue"], "deferred_items": deferred_items}
+        status02 = str(review.get("status") or "").strip()
+        if status02 in {"needs_human", "review_needs_human"}:
+            return {"reason": "review_needs_human", "attempted_stages": attempted, "deferred_items": deferred_items}
+
+    reason = (fallback_reason or "").strip() or ("artifacts_missing" if not (fix or design or review) else "manual_fallback")
+    return {"reason": reason, "attempted_stages": attempted, "deferred_items": deferred_items}
+
+
+def build_issue_content_prompt(plan: dict[str, Any]) -> str:
+    """Prompt asking the model to compose a concise Korean title and a polished Korean body.
+
+    The deterministic plan body is the source of truth for facts; the model only
+    rewrites it into clearer Korean prose. Machine fields (reason, marker) must be preserved.
+    """
+    return "\n".join(
+        [
+            "역할: 너는 Codex 리뷰 파이프라인의 후속조치 이슈를 작성하는 보조자다.",
+            "아래 결정적으로 생성된 이슈 초안을 바탕으로, 사람이 읽기 좋은 한국어 이슈를 정리하라.",
+            "",
+            "규칙:",
+            "- 제목(title)은 한국어 한 줄로 핵심을 요약한다. 50자 이내 권장.",
+            "- 본문(body)은 한국어로 작성한다. 초안의 사실(사유 키, PR 참조, OpenSpec 소스, 이관 항목, 후속조치)을 빠짐없이 포함한다.",
+            "- 본문 첫 줄의 HTML 주석 마커(<!-- ... -->)는 그대로 유지한다. 멱등성 키이므로 절대 수정/삭제하지 않는다.",
+            f"- 기계용 사유 키 `{plan.get('reason')}` 는 본문 어딘가에 그대로 남긴다.",
+            "- 추측하지 말고 초안에 있는 정보만 사용한다.",
+            "",
+            f'출력은 JSON 한 개: {{"schema_version": "{CONTENT_SCHEMA_VERSION}", "title": "...", "body": "..."}}',
+            "",
+            "## 이슈 초안 (제목)",
+            str(plan.get("title") or ""),
+            "",
+            "## 이슈 초안 (본문)",
+            str(plan.get("body") or ""),
+        ]
+    )
+
+
+def compose_issue_content(plan: dict[str, Any], model_content: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge model-polished title/body over the deterministic plan, with safe fallback.
+
+    The model output is only trusted when it is non-empty and preserves the
+    idempotency marker; otherwise the deterministic Korean plan is kept.
+    """
+    plan = dict(plan)
+    content = model_content or {}
+    title = str(content.get("title") or "").strip()
+    body = str(content.get("body") or "").strip()
+    marker = render_marker("codex-review:issue-fallback", {"key": plan.get("idempotency_key"), "reason": plan.get("reason")})
+    marker_token = marker.split(" ", 2)[1] if " " in marker else "codex-review:issue-fallback"
+    if title:
+        plan["title"] = title
+    if body and (marker_token in body or "codex-review:issue-fallback" in body):
+        plan["body"] = body
+    else:
+        # Model dropped the marker (or returned nothing): keep the deterministic body so
+        # idempotency is never broken.
+        if not body:
+            plan["body_polish_skipped"] = "empty_model_body"
+        else:
+            plan["body_polish_skipped"] = "missing_marker"
+    return plan
 
 
 def apply_issue_fallback(plan: dict[str, Any], pr_context: dict[str, Any], token: str | None, *, dry_run: bool) -> dict[str, Any]:

@@ -960,10 +960,23 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"write-validation-outputs", "validation-outputs"}:
         payload = _maybe_json(args.in_path, {})
         status = str(payload.get("status") or "unknown")
-        requires_push_token = bool(payload.get("validated"))
+        validated = bool(payload.get("validated"))
+        requires_push_token = validated
+        # A validated patch will push, so the loop should re-review afterwards.
+        # Terminal loop reasons (oscillation / round cap) stop the loop and route to the issue workflow.
+        terminal_reasons = {"oscillation_detected", "max_rounds_reached", "no_diff_repeat", "no-diff-repeat"}
+        loop_terminal_reason = status if (not validated and status in terminal_reasons) else ""
+        should_continue = validated
         write_output("validation_status", status)
         write_output("requires_push_token", str(requires_push_token).lower())
-        return {"validation_status": status, "requires_push_token": requires_push_token}, None
+        write_output("loop_terminal_reason", loop_terminal_reason)
+        write_output("should_continue", str(should_continue).lower())
+        return {
+            "validation_status": status,
+            "requires_push_token": requires_push_token,
+            "loop_terminal_reason": loop_terminal_reason,
+            "should_continue": should_continue,
+        }, None
     if cmd in {"write-outputs", "github-outputs"}:
         payload = _maybe_json(args.in_path, {})
         status = str(payload.get("status") or "unknown")
@@ -1014,6 +1027,35 @@ def _handle_stage09(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             attempted_stages=attempted,
             deferred_items=deferred_items,
         ), "stage09-issue-fallback.v1"
+    if cmd in {"infer-reason", "reason"}:
+        from .stages.stage09_issue_fallback.issue import infer_issue_reason
+        return infer_issue_reason(
+            review_publication=_json_or_default(args.review_context, {}),
+            design_route=_json_or_default(args.chief_decision, {}),
+            fix_validation=_json_or_default(args.validation, {}),
+            fallback_reason=args.mode,
+        ), None
+    if cmd in {"build-prompt", "content-prompt"}:
+        from .stages.stage09_issue_fallback.issue import build_issue_content_prompt
+        return build_issue_content_prompt(_maybe_json(args.in_path, {})), None
+    if cmd in {"compose", "compose-content"}:
+        from .stages.stage09_issue_fallback.issue import build_issue_content_prompt, compose_issue_content
+        plan = _maybe_json(args.in_path, {})
+        if args.result:
+            content = _json_or_default(args.result, {})
+        else:
+            from .stages.stage09_issue_fallback.issue import CONTENT_SCHEMA_VERSION
+            prompt_path = args.prompt
+            if not prompt_path and args.prompt_out:
+                from .model_adapter import write_prompt_if_needed
+                prompt_path = str(write_prompt_if_needed(build_issue_content_prompt(plan), args.prompt_out))
+            content = _model_or_fallback(
+                argparse.Namespace(**{**vars(args), "prompt": prompt_path}),
+                stage="stage09",
+                expected_schema=CONTENT_SCHEMA_VERSION,
+                fallback={"title": plan.get("title"), "body": plan.get("body")},
+            )
+        return compose_issue_content(plan, content), "stage09-issue-fallback.v1"
     if cmd in {"apply", "publish"}:
         from .stages.stage09_issue_fallback.issue import apply_issue_fallback
         return apply_issue_fallback(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.token, dry_run=args.dry_run), "stage09-issue-fallback.v1"
