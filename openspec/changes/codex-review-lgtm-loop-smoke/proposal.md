@@ -29,3 +29,5 @@ The only expected human-authored files in this PR are OpenSpec artifacts under `
 ## Smoke Signal
 
 Codex Review should compare this OpenSpec change to the PR tree and identify that `tasks.md` requires `docs/CODEX_REVIEW_LGTM_LOOP.md`, but the file is absent.
+
+This PR may receive a small OpenSpec-only follow-up commit while the first workflow run is still active so the stale-run cancellation behavior can be observed.
