@@ -86,6 +86,16 @@ def summarize_diff(diff: list[dict[str, Any]] | str, max_chars: int = 12000) -> 
     return text
 
 
+def hunk_headers(patch_text: str) -> str:
+    """Return only the ``@@ ... @@`` hunk headers from a unified-diff patch.
+
+    Used when a per-file patch exceeds its token budget: the headers preserve which
+    line ranges changed (so a reviewer still knows where to look) while dropping the
+    body that would blow the context window.
+    """
+    return "\n".join(line for line in (patch_text or "").splitlines() if line.startswith("@@"))
+
+
 def find_context_window(file_path: str | Path, line: int, radius: int = 8) -> dict[str, Any]:
     p = Path(file_path)
     if not p.exists():

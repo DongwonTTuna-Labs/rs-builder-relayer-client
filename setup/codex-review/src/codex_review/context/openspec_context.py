@@ -352,7 +352,47 @@ def collect_openspec_context(
     }
 
 
-def render_openspec_context_markdown(context: dict[str, Any]) -> str:
+_SECTION_BY_BASENAME = {
+    "tasks.md": "tasks",
+    "proposal.md": "proposal",
+    "design.md": "design",
+    "config.yaml": "config",
+    "config.yml": "config",
+}
+
+
+def _doc_section(path: str) -> str:
+    name = Path(str(path or "")).name
+    if name in _SECTION_BY_BASENAME:
+        return _SECTION_BY_BASENAME[name]
+    if "/specs/" in str(path or "") or name == "spec.md":
+        return "spec"
+    return "other"
+
+
+def sections_for_stage(stage: str | None) -> set[str] | None:
+    """Which OpenSpec doc sections a stage needs (None => all).
+
+    Review/techlead reason about intent (proposal + spec); design/fix stages need the
+    full implementation contract (tasks + spec + design). Scoping avoids inlining the
+    entire OpenSpec change (which can be 100k+ tokens) into every stage's prompt.
+    """
+    if not stage:
+        return None
+    s = str(stage)
+    if s.startswith(("stage01", "stage02")) or s in {"review", "techlead"}:
+        return {"proposal", "spec", "other"}
+    if s.startswith(("stage03", "stage04", "stage05", "stage06")) or s in {"design", "fix"}:
+        return {"tasks", "spec", "design", "proposal", "config", "other"}
+    return None
+
+
+def render_openspec_context_markdown(
+    context: dict[str, Any],
+    *,
+    sections: set[str] | list[str] | None = None,
+    budget_tokens: int | None = None,
+) -> str:
     lines = ["## OpenSpec context", ""]
     if not context.get("present"):
         lines.extend(
@@ -370,9 +410,22 @@ def render_openspec_context_markdown(context: dict[str, Any]) -> str:
     lines.append("Sources:")
     for source in context.get("source_summary", []):
         lines.append(f"- {source}")
-    for doc in context.get("documents", []):
+
+    documents = context.get("documents", []) or []
+    if sections is not None:
+        wanted = set(sections)
+        selected = [doc for doc in documents if _doc_section(doc.get("path")) in wanted]
+        documents = selected or documents  # never render an empty context when docs exist
+    for doc in documents:
         path = doc.get("path") or "OpenSpec document"
         lines.extend(["", f"### {path}", "", str(doc.get("content") or "").rstrip()])
         if doc.get("truncated"):
             lines.append("\n[truncated]")
-    return "\n".join(lines).rstrip() + "\n"
+    rendered = "\n".join(lines).rstrip() + "\n"
+    if budget_tokens:
+        from codex_review.context.token_budget import fit_to_budget
+
+        fitted, truncated = fit_to_budget(rendered, int(budget_tokens))
+        if truncated:
+            rendered = fitted.rstrip() + "\n\n[openspec context truncated to fit token budget]\n"
+    return rendered

@@ -596,8 +596,8 @@ jobs:
           name: codex-review-stage03-context
           path: codex-review-artifacts/stage03
 
-  design_model_chain:
-    name: 03 design model chain
+  design_prepare:
+    name: 03 design prepare
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -606,6 +606,9 @@ jobs:
       contents: read
       pull-requests: read
       id-token: write
+    outputs:
+      analysis_matrix: ${{ steps.prepare.outputs.analysis_matrix }}
+      has_analysis_batches: ${{ steps.prepare.outputs.has_analysis_batches }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -689,28 +692,152 @@ jobs:
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate design clusters
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 cluster --in codex-review-artifacts/stage03/design-clusters.raw.json --inventory codex-review-artifacts/stage03/design-inventory.json --repo-path pr-head --out codex-review-artifacts/stage03/design-clusters.json
-      - name: Build analysis prompt
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-analysis-prompt --inventory codex-review-artifacts/stage03/design-clusters.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/cluster-analysis.prompt.md
+      - id: prepare
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 prepare-analysis-matrix --in codex-review-artifacts/stage03/design-clusters.json --pr-context codex-review-artifacts/stage03/design-context.json --repo-path pr-head --work-dir codex-review-artifacts/stage03/batches --out codex-review-artifacts/stage03/analysis-matrix.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-review-stage03-prepare
+          path: codex-review-artifacts/stage03
+
+  design_analysis_model:
+    name: 03 design analysis model
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    needs: [bootstrap_event, design_prepare]
+    if: needs.design_prepare.outputs.has_analysis_batches == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.design_prepare.outputs.analysis_matrix) }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install codex-review helper
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-stage03-prepare
+          path: codex-review-artifacts/stage03
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.batch_path }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Prepare cluster analysis schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-cluster-analysis.v1 --out codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
       - name: Run Codex analysis model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
           AI_RELAY_API_KEY: ${{ steps.relay-token.outputs.relay_token }}
         with:
-          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/cluster-analysis.prompt.md
-          output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/cluster-analysis.raw.json
+          prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
+          output-file: ${{ github.workspace }}/${{ matrix.output_file }}
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: read-only
           safety-strategy: read-only
           codex-args: ${{ steps.relay-token.outputs.codex_args }}
-          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}-${{ matrix.batch_path }}
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate cluster analysis
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 analyze --in codex-review-artifacts/stage03/cluster-analysis.raw.json --inventory codex-review-artifacts/stage03/design-clusters.json --repo-path pr-head --out codex-review-artifacts/stage03/cluster-analysis.json
-      - name: Build design plan prompt
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-plan-prompt --pr-context codex-review-artifacts/stage03/design-context.json --inventory codex-review-artifacts/stage03/design-clusters.json --result codex-review-artifacts/stage03/cluster-analysis.json --out codex-review-artifacts/stage03/design-plan.prompt.md
+        run: workflow-helper/setup/codex-review/bin/codex-review stage03 analyze --in "${{ github.workspace }}/${{ matrix.output_file }}" --inventory "${{ github.workspace }}/${{ matrix.batch_file }}" --repo-path pr-head --out "${{ github.workspace }}/${{ matrix.validated_file }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-review-stage03-analysis-${{ matrix.batch_path }}
+          path: ${{ github.workspace }}/codex-review-artifacts/stage03/batches/${{ matrix.batch_path }}
+
+  design_plan_model:
+    name: 03 design plan model
+    runs-on:
+      group: "Home Server Runners"
+      labels: dongwontuna-labs-runner
+    needs: [bootstrap_event, design_prepare, design_analysis_model]
+    if: always() && needs.design_prepare.result == 'success' && (needs.design_analysis_model.result == 'success' || needs.design_analysis_model.result == 'skipped')
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - name: Checkout workflow helper
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          path: workflow-helper
+          persist-credentials: false
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.bootstrap_event.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.bootstrap_event.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: workflow-helper/setup/codex-review/pyproject.toml
+      - name: Install codex-review helper
+        run: python3 -m pip install --disable-pip-version-check -e workflow-helper/setup/codex-review
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: codex-review-stage03-prepare
+          path: codex-review-artifacts/stage03
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.design_prepare.outputs.has_analysis_batches == 'true'
+        with:
+          pattern: codex-review-stage03-analysis-*
+          path: codex-review-artifacts/stage03-analysis-downloads
+          merge-multiple: false
+      - name: Setup Codex relay
+        id: relay-token
+        uses: DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main
+        with:
+          codex-home: ${{ runner.temp }}/codex-relay-home-${{ github.job }}
+          trusted-actors: DongwonTTuna,codex-reviewer-for-dongwonttuna[bot]
+      - name: Prepare design plan schema
+        run: |
+          mkdir -p codex-review-artifacts/schemas
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-plan.v1 --out codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
+      - name: Collect cluster analyses and build design plan prompt
+        run: |
+          mkdir -p codex-review-artifacts/stage03-analysis-downloads
+          workflow-helper/setup/codex-review/bin/codex-review stage03 collect-analyses --artifacts codex-review-artifacts/stage03-analysis-downloads --out codex-review-artifacts/stage03/cluster-analysis.json
+          workflow-helper/setup/codex-review/bin/codex-review stage03 build-plan-prompt --pr-context codex-review-artifacts/stage03/design-context.json --inventory codex-review-artifacts/stage03/design-clusters.json --result codex-review-artifacts/stage03/cluster-analysis.json --out codex-review-artifacts/stage03/design-plan.prompt.md
       - name: Run Codex design plan model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         env:
@@ -739,7 +866,7 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [bootstrap_event, design_model_chain]
+    needs: [bootstrap_event, design_plan_model]
     permissions:
       contents: read
       pull-requests: read
