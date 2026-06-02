@@ -78,6 +78,27 @@ def test_axis_findings_accept_domain_display_axis_alias(tmp_path):
     assert out["axis"] == "domain"
 
 
+def test_axis_findings_accept_project_specific_correctness_axis_alias(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("print('ok')\n", encoding="utf-8")
+
+    out = validate_axis_findings(
+        "domain",
+        payload_with_custom_evidence(
+            [],
+            "src/a.py",
+            axis="project-specific-correctness",
+        ),
+        {},
+        {},
+        {"review":{"axes":["domain"],"max_findings_per_axis":3,"require_changed_right_line":True}},
+        repo_path=tmp_path,
+    )
+
+    assert out["axis"] == "domain"
+
+
 def test_axis_findings_reject_unchanged_line():
     with pytest.raises(Exception):
         validate_axis_findings("correctness", payload_with_evidence([finding(line=11)]), {}, {"src/a.py":[10]}, CFG)

@@ -13,6 +13,7 @@ from codex_review.security.redaction import assert_no_secret_patterns
 from .axes import validate_axis
 
 AXIS_ALIASES = {
+    "project-specific-correctness": "domain",
     "project-specific correctness and product requirements": "domain",
 }
 
