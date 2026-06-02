@@ -125,6 +125,8 @@ def _default_follow_up(reason: str, openspec_context: dict[str, Any]) -> str:
         return "Create or update a follow-up issue for work that is valid but outside the current PR mutation scope, while continuing the PR fix loop for implementable items."
     if reason in {"no-diff-repeat", "no_diff_repeat", "empty_patch"}:
         return "Inspect the generated fix artifacts and adjust the OpenSpec tasks or implementation plan so the next run can produce a non-empty patch."
+    if reason in {"oscillation_detected", "max_rounds_reached"}:
+        return "The autofix loop stopped because it kept re-fixing the same issue (or hit the round cap) without converging. A human should reconcile the conflicting review feedback and apply the fix directly, then rerun Codex Review."
     return "Resolve the blocking condition, then rerun Codex Review."
 
 

@@ -332,6 +332,22 @@ def _handle_loop(args: argparse.Namespace) -> tuple[Any, str | None]:
     if cmd == "summary":
         from .loop.events import render_event_summary
         return render_event_summary(payload if isinstance(payload, list) else payload.get("events", [])), None
+    if cmd in {"read-state", "read-loop-state"}:
+        from .loop.state import read_loop_state_from_comments
+        empty = {"schema_version": "loop-state.v1", "recent_pushes": [], "round_count": 0}
+        pr = _json_or_default(args.pr_context, {})
+        owner, repo = _repo_parts_from_context(pr)
+        pr_number = pr.get("pr_number")
+        if not (owner and repo and pr_number and args.token):
+            return empty, None
+        # Tolerant: a comment-read hiccup must not break bootstrap; degrade to no history.
+        try:
+            from .github.comments import list_issue_comments
+            comments = list_issue_comments(owner, repo, int(pr_number), args.token)
+            state = read_loop_state_from_comments(comments)
+        except Exception:
+            state = None
+        return ({**empty, **state} if state else empty), None
     raise ValueError(f"unknown loop command: {cmd}")
 
 
@@ -892,6 +908,55 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
     if cmd in {"push", "run"}:
         from .stages.stage07_push.orchestrate import run_push_flow
         return run_push_flow(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "stage07-push-result.v1"
+    if cmd in {"check-loop-budget", "loop-budget"}:
+        from .loop.state import build_push_entry, detect_oscillation
+        validated = _maybe_json(args.in_path, {})
+        # Only a patch that WOULD push can continue an oscillation; otherwise pass through.
+        if not validated.get("validated"):
+            return {**validated, "loop_budget_ok": True}, "stage07-validated-fix.v1"
+        merged = _json_or_default(args.result, {})
+        patch = merged.get("patch") or merged.get("patch_text") or ""
+        if not patch and merged.get("patch_path"):
+            patch = _maybe_text(str(merged["patch_path"]))
+        design_plan = _json_or_default(args.design_plan, {})
+        prior = _json_or_default(args.loop_state, {})
+        candidate = build_push_entry(int(prior.get("round_count", 0)) + 1, validated, patch, design_plan)
+        verdict = detect_oscillation(prior, candidate, config)
+        if verdict["ok"]:
+            return {**validated, "loop_budget_ok": True}, "stage07-validated-fix.v1"
+        return {
+            **validated,
+            "status": verdict["status"],
+            "validated": False,
+            "pushed": False,
+            "loop_budget_ok": False,
+            "loop_budget_status": verdict["status"],
+            "loop_budget_reason": verdict["reason"],
+        }, "stage07-validated-fix.v1"
+    if cmd in {"record-push", "record-loop-state"}:
+        from .loop.state import append_push_to_loop_state, build_push_entry, write_loop_state_comment
+        push_result = _maybe_json(args.in_path, {})
+        # Only successful pushes extend the history; anything else is a no-op pass-through.
+        if not push_result.get("pushed"):
+            return {"recorded": False, "reason": "no_push"}, None
+        merged = _json_or_default(args.result, {})
+        patch = merged.get("patch") or merged.get("patch_text") or ""
+        if not patch and merged.get("patch_path"):
+            patch = _maybe_text(str(merged["patch_path"]))
+        design_plan = _json_or_default(args.design_plan, {})
+        prior = _json_or_default(args.loop_state, {})
+        window = int(config.get("autofix", {}).get("oscillation_window", 10))
+        entry = build_push_entry(int(prior.get("round_count", 0)) + 1, push_result, patch, design_plan)
+        next_state = append_push_to_loop_state(prior, entry, window)
+        persisted = False
+        if args.token and args.pr_context:
+            pr = _maybe_json(args.pr_context, {})
+            owner, repo = _repo_parts_from_context(pr)
+            pr_number = pr.get("pr_number")
+            if owner and repo and pr_number:
+                write_loop_state_comment(owner, repo, int(pr_number), next_state, args.token)
+                persisted = True
+        return {"recorded": True, "persisted": persisted, "loop_state": next_state}, None
     if cmd in {"write-validation-outputs", "validation-outputs"}:
         payload = _maybe_json(args.in_path, {})
         status = str(payload.get("status") or "unknown")
