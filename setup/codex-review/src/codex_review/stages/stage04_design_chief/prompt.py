@@ -11,7 +11,7 @@ def include_fix_policy_requirements(prompt: str) -> str:
     return prompt + "\nIf approved_for_fix, include fix_policy with allowed_files/allowed_prefixes, forbidden_files, max_tasks, max_patch_bytes."
 
 def include_inspection_evidence_contract(prompt: str) -> str:
-    return prompt + "\nBefore deciding status, inspect relevant repo files under pr-head and compare the design plan against OpenSpec/task context when present. Return top-level inspection_evidence as a non-empty array of objects with path, purpose, and observation."
+    return prompt + "\nBefore deciding status, inspect relevant repo files under pr-head and compare the design plan against OpenSpec/task context when present. Return top-level inspection_evidence as a non-empty array of objects with path, purpose, and observation. Each inspection_evidence.path must be an existing file in pr-head, not a directory and not a missing target path. If the issue is a missing file, cite the existing task/spec/design/proposal file that proves it is required and put the missing file path in observation or decision reason."
 
 def build_design_chief_prompt(design_plan: dict[str, Any], techlead_decision: dict[str, Any], pr_context: dict[str, Any], config: dict[str, Any]) -> str:
     prompt=f"Review the design plan for safe autofix.\nPlan: {design_plan}\nTechlead: {techlead_decision}\nPR: {pr_context}\nPolicy: {config.get('autofix', {})}\n"

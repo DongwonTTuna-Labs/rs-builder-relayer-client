@@ -12,7 +12,7 @@ def include_design_required_contract(prompt: str) -> str:
     return prompt + "\nSet needs_design=true for findings that require coordinated edits or autofix."
 
 def include_inspection_evidence_contract(prompt: str) -> str:
-    return prompt + "\nBefore routing, inspect relevant repo files under pr-head instead of relying only on the Stage01 summaries. Return top-level inspection_evidence as a non-empty array. Each item must include path, purpose, and observation."
+    return prompt + "\nBefore routing, inspect relevant repo files under pr-head instead of relying only on the Stage01 summaries. Return top-level inspection_evidence as a non-empty array. Each item must include path, purpose, and observation. Each inspection_evidence.path must be an existing file in pr-head, not a directory and not a missing target path. If the issue is a missing file, cite the existing task, spec, proposal, design, or source file that proves the file is required, and put the missing file path in observation or routing reason."
 
 def build_techlead_prompt(combined_findings: dict[str, Any], pr_context: dict[str, Any], review_context: str, docs_context: str, config: dict[str, Any]) -> str:
     prompt=f"""You are the Codex Review tech lead. Reduce axis findings to actionable decisions.

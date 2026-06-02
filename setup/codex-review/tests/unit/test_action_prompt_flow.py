@@ -16,6 +16,8 @@ def assert_inspection_contract(prompt: str):
     assert "path" in prompt
     assert "purpose" in prompt
     assert "observation" in prompt
+    assert "existing file" in prompt
+    assert "missing file" in prompt
 
 
 def test_stage03_prompt_only_commands_write_model_prompts(tmp_path):

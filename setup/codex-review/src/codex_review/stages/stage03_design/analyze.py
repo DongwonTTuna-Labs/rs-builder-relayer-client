@@ -11,6 +11,9 @@ def build_cluster_analysis_prompt(batch: dict[str, Any], design_context: dict[st
     return (
         "Analyze design cluster batch. First inspect relevant files in pr-head and include "
         "top-level inspection_evidence items with path, purpose, and observation. "
+        "Each inspection_evidence.path must be an existing file in pr-head, not a directory and "
+        "not a missing target path. If the issue is a missing file, cite the existing task/spec/design/proposal "
+        "file that proves it is required and put the missing file path in observation. "
         "Return stage03-cluster-analysis.v1 JSON.\n"
         + str({"batch": batch, "context": design_context})
     )
