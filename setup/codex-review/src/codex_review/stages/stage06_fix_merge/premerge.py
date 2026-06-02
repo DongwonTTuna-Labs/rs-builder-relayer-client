@@ -52,7 +52,13 @@ def create_merged_fix_from_premerge(premerge_report: dict[str, Any], collection:
     If no patches were available, returns a no_fix artifact. If premerge was not clean,
     returns a blocked artifact so the caller can route to a merge model or human review.
     """
-    patches = [r.get("patch") or r.get("patch_text") or "" for r in collection.get("results", []) if r.get("status", "patched") == "patched"]
+    patches = [
+        patch
+        for r in collection.get("results", [])
+        if r.get("status", "patched") == "patched"
+        for patch in [r.get("patch") or r.get("patch_text") or ""]
+        if patch
+    ]
     if not patches:
         return {"schema_version": "stage06-merged-fix.v1", "status": "no_fix", "patch": "", "expected_head_sha": (pr_context or {}).get("head_sha"), "premerge_clean": bool(premerge_report.get("clean"))}
     if not premerge_report.get("clean"):
@@ -62,8 +68,16 @@ def create_merged_fix_from_premerge(premerge_report: dict[str, Any], collection:
         proc = subprocess.run(["git", "diff", "--binary"], cwd=Path(temp), capture_output=True, text=True, env=sanitized_env())
         patch = proc.stdout
     else:
-        patch = "\n".join(patches)
+        patch = _join_source_patches(patches)
+    if not patch:
+        patch = _join_source_patches(patches)
     merged = {"schema_version": "stage06-merged-fix.v1", "status": "ready", "patch": patch, "patch_text": patch, "expected_head_sha": (pr_context or {}).get("head_sha"), "premerge_clean": True, "source_patch_count": len(patches)}
     if out_path:
         write_json(out_path, merged, "stage06-merged-fix.v1")
     return merged
+
+
+def _join_source_patches(patches: list[str]) -> str:
+    if len(patches) == 1:
+        return patches[0]
+    return "\n".join(p.rstrip("\n") for p in patches if p).rstrip("\n") + "\n"
