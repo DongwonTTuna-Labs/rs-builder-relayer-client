@@ -36,3 +36,23 @@ def test_contents_write_can_be_proved_by_repo_push_permission(monkeypatch):
     monkeypatch.setattr(app_token, "rest_request", _fake_rest_factory(repo_permissions={"pull": True, "push": True}))
     result = app_token.assert_installation_token_for_repo("tok", "owner", "repo", {"contents": "write"})
     assert result["permission_preflight"]["contents"].startswith("permission_map")
+
+
+def test_app_credentials_accept_current_codex_app_secret_names(monkeypatch):
+    for name in (
+        "CODEX_REVIEW_GITHUB_APP_ID",
+        "CODEX_REVIEW_APP_ID",
+        "GITHUB_APP_ID",
+        "APP_ID",
+        "CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY",
+        "CODEX_REVIEW_APP_PRIVATE_KEY",
+        "GITHUB_APP_PRIVATE_KEY",
+        "APP_PRIVATE_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CODEX_APP_ID", "12345")
+    monkeypatch.setenv("CODEX_APP_PRIVATE_KEY", "line1\\nline2")
+
+    creds = app_token.load_app_credentials_from_env()
+
+    assert creds == {"app_id": "12345", "private_key": "line1\nline2"}

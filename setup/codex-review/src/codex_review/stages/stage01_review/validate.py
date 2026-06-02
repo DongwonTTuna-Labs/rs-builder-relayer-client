@@ -12,6 +12,10 @@ from codex_review.schema import validate_enum
 from codex_review.security.redaction import assert_no_secret_patterns
 from .axes import validate_axis
 
+AXIS_ALIASES = {
+    "project-specific correctness and product requirements": "domain",
+}
+
 
 def validate_finding_id(axis: str, finding_id: str) -> None:
     if not finding_id or not str(finding_id).strip():
@@ -50,7 +54,8 @@ def validate_axis_findings(
     validate_axis(axis, config)
     payload = {"findings": findings} if isinstance(findings, list) else dict(findings)
     evidence = validate_inspection_evidence(payload, repo_path, f"stage01 {axis}")
-    if payload.get("axis") and payload["axis"] != axis:
+    payload_axis = AXIS_ALIASES.get(str(payload.get("axis") or ""), payload.get("axis"))
+    if payload_axis and payload_axis != axis:
         raise ValidationError(f"axis mismatch: {payload.get('axis')} != {axis}")
     items=payload.get("findings") or []
     max_count=int(config.get("review", {}).get("max_findings_per_axis", 13))

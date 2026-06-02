@@ -23,6 +23,13 @@ def payload_with_evidence(findings):
     }
 
 
+def payload_with_custom_evidence(findings, path, axis="correctness"):
+    payload = payload_with_evidence(findings)
+    payload["axis"] = axis
+    payload["inspection_evidence"][0]["path"] = str(path)
+    return payload
+
+
 def test_axis_findings_validate_location_shape_and_inspection_evidence(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
@@ -30,6 +37,45 @@ def test_axis_findings_validate_location_shape_and_inspection_evidence(tmp_path)
     out=validate_axis_findings("correctness", payload_with_evidence([finding()]), {}, {"src/a.py":[10]}, CFG, repo_path=tmp_path)
     assert out["finding_count"] == 1
     assert out["inspection_evidence"][0]["path"] == "src/a.py"
+
+
+def test_axis_findings_normalize_absolute_inspection_path_inside_repo(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    evidence_file = src / "a.py"
+    evidence_file.write_text("print('ok')\n", encoding="utf-8")
+
+    out = validate_axis_findings(
+        "correctness",
+        payload_with_custom_evidence([], evidence_file),
+        {},
+        {},
+        CFG,
+        repo_path=tmp_path,
+    )
+
+    assert out["inspection_evidence"][0]["path"] == "src/a.py"
+
+
+def test_axis_findings_accept_domain_display_axis_alias(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("print('ok')\n", encoding="utf-8")
+
+    out = validate_axis_findings(
+        "domain",
+        payload_with_custom_evidence(
+            [],
+            "src/a.py",
+            axis="project-specific correctness and product requirements",
+        ),
+        {},
+        {},
+        {"review":{"axes":["domain"],"max_findings_per_axis":3,"require_changed_right_line":True}},
+        repo_path=tmp_path,
+    )
+
+    assert out["axis"] == "domain"
 
 
 def test_axis_findings_reject_unchanged_line():

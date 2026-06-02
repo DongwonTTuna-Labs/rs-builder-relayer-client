@@ -60,6 +60,20 @@ def test_app_token_permission_metadata_is_threaded_to_write_commands():
     assert text.count("CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}") >= 5
 
 
+def test_app_token_steps_include_current_codex_app_secret_fallbacks():
+    app_token_steps = []
+    for job in jobs().values():
+        for step in job.get("steps", []):
+            if "codex-review auth app-token" in str(step.get("run", "")):
+                app_token_steps.append(step)
+
+    assert len(app_token_steps) == 6
+    for step in app_token_steps:
+        env = step.get("env", {})
+        assert env.get("CODEX_APP_ID") == "${{ secrets.CODEX_APP_ID }}"
+        assert env.get("CODEX_APP_PRIVATE_KEY") == "${{ secrets.CODEX_APP_PRIVATE_KEY }}"
+
+
 def test_model_jobs_use_oidc_relay_without_write_permissions():
     model_jobs = [
         "resolve_triage_model",

@@ -238,6 +238,8 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
         run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage00 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage00/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -510,6 +512,8 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
         run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage02 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage02/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -855,6 +859,8 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
         run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage04 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -1307,6 +1313,8 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
         run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode push --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -1365,6 +1373,8 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
         run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage08 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage08/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -1467,6 +1477,8 @@ jobs:
           CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_GITHUB_APP_PRIVATE_KEY }}
           GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_APP_ID }}
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
+          CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
+          CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
         run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage09 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
