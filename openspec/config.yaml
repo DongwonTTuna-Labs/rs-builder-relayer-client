@@ -1,0 +1,7 @@
+project:
+  name: rs-builder-relayer-client
+  description: Rust relayer client with Codex Review v3 automation smoke coverage.
+openspec:
+  changes_dir: openspec/changes
+  specs_dir: openspec/specs
+  default_change_type: proposal
