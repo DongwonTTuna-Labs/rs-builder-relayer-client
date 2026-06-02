@@ -12,7 +12,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 CODEX_ACTION = "openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1"
-RELAY_ACTION = "DongwonTTuna-Labs/home-server-infra/.github/actions/setup-codex-relay@main"
+RESPONSES_ENDPOINT = "https://relay-ai.dongwontuna.net/v1/responses"
+OIDC_MINT_COMMAND = "codex-review oidc relay-token"
 
 # Files that together implement the Codex review pipeline. Listed in pipeline
 # order; not all exist at every step of the split migration.

@@ -135,6 +135,8 @@ def _add_common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--validation", default=None)
     p.add_argument("--schema", default=None)
     p.add_argument("--semantic-safety", default=None)
+    p.add_argument("--audience", default=None)
+    p.add_argument("--broker-url", default=None)
 
 
 def _model_or_fallback(args: argparse.Namespace, *, stage: str, expected_schema: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -1082,6 +1084,31 @@ def _handle_auth(args: argparse.Namespace) -> tuple[Any, str | None]:
     return {"schema_version":"github-app-token.v1", "token_created": True, "owner": owner, "repo": repo, "permissions": permissions, "permissions_json": permissions_json, "repository_scoped": True}, None
 
 
+def _handle_oidc(args: argparse.Namespace) -> tuple[Any, str | None]:
+    from .github.oidc_token import (
+        DEFAULT_AUDIENCE,
+        DEFAULT_BROKER_URL,
+        DEFAULT_RESPONSES_ENDPOINT,
+        mint_relay_token,
+    )
+    if args.command not in {"relay-token", "mint"}:
+        raise ValueError(f"unknown oidc command: {args.command}")
+    audience = args.audience or DEFAULT_AUDIENCE
+    broker_url = args.broker_url or DEFAULT_BROKER_URL
+    credential = mint_relay_token(audience, broker_url)
+    mask_secret(credential["relay_token"])
+    if os.environ.get("GITHUB_OUTPUT"):
+        write_output("relay_token", credential["relay_token"])
+        write_output("expires_at", credential["expires_at"])
+        write_output("endpoint", DEFAULT_RESPONSES_ENDPOINT)
+    return {
+        "schema_version": "codex-oidc-relay.v1",
+        "relay_token_minted": True,
+        "expires_at": credential["expires_at"],
+        "endpoint": DEFAULT_RESPONSES_ENDPOINT,
+    }, None
+
+
 def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
     if args.command not in {"openai-strict", "openai-structured-output"}:
         raise ValueError(f"unknown schema command: {args.command}")
@@ -1093,12 +1120,13 @@ def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review")
-    parser.add_argument("area", choices=["auth", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
+    parser.add_argument("area", choices=["auth", "oidc", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
     _add_common(parser)
     args = parser.parse_args(argv)
     try:
         config = load_config(args.config) if args.area.startswith("stage") or args.area == "context" else {}
         if args.area == "auth": payload, schema = _handle_auth(args)
+        elif args.area == "oidc": payload, schema = _handle_oidc(args)
         elif args.area == "event": payload, schema = _handle_event(args)
         elif args.area == "context": payload, schema = _handle_context(args, config)
         elif args.area == "loop": payload, schema = _handle_loop(args)
