@@ -155,7 +155,7 @@ jobs:
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage09/issue-content.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage09-issue-content.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true

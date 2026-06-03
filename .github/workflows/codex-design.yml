@@ -264,7 +264,7 @@ jobs:
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
@@ -283,7 +283,7 @@ jobs:
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
@@ -360,7 +360,7 @@ jobs:
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
@@ -443,7 +443,7 @@ jobs:
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-plan.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
@@ -518,7 +518,7 @@ jobs:
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage04/chief-decision.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
