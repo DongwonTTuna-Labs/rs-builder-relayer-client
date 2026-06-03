@@ -1,6 +1,6 @@
 import pytest
-from codex_review.stages.stage04_design_chief.validate import validate_chief_decision
-from codex_review.stages.stage04_design_chief.route import route_after_design_chief
+from codex_review.stages.design_chief.validate import validate_chief_decision
+from codex_review.stages.design_chief.route import route_after_design_chief
 
 CFG={"autofix":{"allowed_prefixes":["src/"],"max_tasks":3}}
 PLAN={"edit_sequence":[{"task_id":"t1","files":["src/a.py"]}],"tests":["pytest"]}
@@ -31,7 +31,7 @@ def test_approval_requires_fix_policy_and_inspection_evidence(tmp_path):
     out=validate_chief_decision(decision_with_evidence(status="approved_for_fix",fix_policy={"allowed_files":["src/a.py"],"max_tasks":1}), PLAN, CFG, repo_path=tmp_path)
     assert out["status"] == "approved_for_fix"
     assert out["inspection_evidence"][0]["path"] == "src/a.py"
-    assert route_after_design_chief(out)["route"] == "run_stage05"
+    assert route_after_design_chief(out)["route"] == "run_fix_dispatch"
 
 
 def test_chief_decision_requires_inspection_evidence(tmp_path):
@@ -53,7 +53,7 @@ def test_openspec_backed_executable_plan_is_promoted_to_fix_route(tmp_path):
     assert out["status"] == "approved_for_fix"
     assert out["normalized_from"] == "needs_human"
     assert out["fix_policy"]["allowed_prefixes"] == ["src/"]
-    assert route_after_design_chief(out)["route"] == "run_stage05"
+    assert route_after_design_chief(out)["route"] == "run_fix_dispatch"
 
 
 

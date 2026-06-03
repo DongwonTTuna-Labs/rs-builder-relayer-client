@@ -9,10 +9,10 @@ def test_no_separate_resolve_checker_workflow():
     assert "resolve-checker.yaml" not in names
 
 
-def test_resolve_logic_is_stage00_integrated():
-    # Resolve/stage00 now lives in the split review workflow rather than a
+def test_resolve_logic_is_resolve_gate_integrated():
+    # Resolve/resolve_gate now lives in the split review workflow rather than a
     # separate resolve-checker; assert it is integrated wherever review runs.
     workflow = (ROOT / ".github" / "workflows" / "codex-review.yml").read_text(encoding="utf-8")
-    assert "stage00 collect" in workflow
-    assert "stage00 apply" in workflow
-    assert "stage00 route" in workflow
+    assert "resolve_gate collect" in workflow
+    assert "resolve_gate apply" in workflow
+    assert "resolve_gate route" in workflow

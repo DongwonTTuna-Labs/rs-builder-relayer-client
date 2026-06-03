@@ -20,23 +20,23 @@ from codex_review.cli._helpers import (
 
 
 def handle_loop(args: argparse.Namespace) -> tuple[Any, str | None]:
-    from codex_review.loop.router import route_after_stage00, route_after_stage02, route_after_stage04, route_after_stage07, write_route_outputs
+    from codex_review.loop.router import route_after_resolve_gate, route_after_techlead, route_after_design_chief, route_after_push, write_route_outputs
     cmd = args.command
     payload = _maybe_json(args.in_path, {})
-    if cmd == "route-after-stage00":
-        route = route_after_stage00(payload)
+    if cmd == "route-after-resolve_gate":
+        route = route_after_resolve_gate(payload)
         write_route_outputs(route)
         return route, None
-    if cmd == "route-after-stage02":
-        route = route_after_stage02(payload)
+    if cmd == "route-after-techlead":
+        route = route_after_techlead(payload)
         write_route_outputs(route)
         return route, None
-    if cmd == "route-after-stage04":
-        route = route_after_stage04(payload)
+    if cmd == "route-after-design_chief":
+        route = route_after_design_chief(payload)
         write_route_outputs(route)
         return route, None
-    if cmd == "route-after-stage07":
-        route = route_after_stage07(payload)
+    if cmd == "route-after-push":
+        route = route_after_push(payload)
         write_route_outputs(route)
         return route, None
     if cmd == "summary":

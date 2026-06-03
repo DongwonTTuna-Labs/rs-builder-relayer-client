@@ -1,5 +1,5 @@
 import pytest
-from codex_review.stages.stage00_resolve_gate.collect import collect_thread_inventory
+from codex_review.stages.resolve_gate.collect import collect_thread_inventory
 
 
 def cfg():

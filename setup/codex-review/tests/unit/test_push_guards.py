@@ -1,6 +1,6 @@
 import pytest
-from codex_review.stages.stage07_push.validate import validate_current_head, validate_ready_to_push
-from codex_review.stages.stage07_push.commit import build_commit_message
+from codex_review.stages.push.validate import validate_current_head, validate_ready_to_push
+from codex_review.stages.push.commit import build_commit_message
 
 
 def test_head_sha_drift_blocks_push():

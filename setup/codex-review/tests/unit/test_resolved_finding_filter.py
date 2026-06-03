@@ -6,10 +6,10 @@ from pathlib import Path
 
 from codex_review.cli import main
 from codex_review.github.markers import parse_marker, render_inline_review_marker
-from codex_review.stages.stage00_resolve_gate.collect import collect_resolved_memory
-from codex_review.stages.stage00_resolve_gate.render import render_resolve_reply
-from codex_review.stages.stage02_techlead.filter_resolved import filter_findings_against_resolved
-from codex_review.stages.stage02_techlead.validate import validate_techlead_decision
+from codex_review.stages.resolve_gate.collect import collect_resolved_memory
+from codex_review.stages.resolve_gate.render import render_resolve_reply
+from codex_review.stages.techlead.filter_resolved import filter_findings_against_resolved
+from codex_review.stages.techlead.validate import validate_techlead_decision
 
 CONFIG = str(Path(__file__).resolve().parents[2] / "config.yml")
 
@@ -105,10 +105,10 @@ def test_filter_no_match_keeps_everything():
 def test_filtered_output_satisfies_techlead_coverage_contract():
     # The filtered findings must be a valid contract for the techlead: decisions
     # covering the kept set validate, while a suppressed finding has no decision.
-    combined = {"schema_version": "stage01-combined-findings.v1", "findings": [_finding("F1", "K_nonce"), _finding("F2", "K_other", file="src/b.rs", line=20)]}
+    combined = {"schema_version": "review-combined-findings.v1", "findings": [_finding("F1", "K_nonce"), _finding("F2", "K_other", file="src/b.rs", line=20)]}
     filtered, _ = filter_findings_against_resolved(combined, _mem("K_nonce", "false_positive"), {}, {})
     decision = {
-        "schema_version": "stage02-techlead-decision.v1",
+        "schema_version": "techlead-decision.v1",
         "decisions": [{"finding_id": "F2", "action": "publish_only"}],
         "inspection_evidence": [{"path": "AGENTS.md", "purpose": "p", "observation": "o"}],
     }
@@ -124,15 +124,15 @@ def test_cli_collect_resolved_and_filter_roundtrip(tmp_path):
     pr_file = tmp_path / "pr.json"
     pr_file.write_text(json.dumps({"head_sha": "s9", "pr_number": 1, "changed_line_map": {}}), encoding="utf-8")
     mem_out = tmp_path / "resolved-memory.json"
-    rc = main(["stage00", "collect-resolved", "--config", CONFIG, "--in", str(threads_file), "--pr-context", str(pr_file), "--out", str(mem_out)])
+    rc = main(["resolve_gate", "collect-resolved", "--config", CONFIG, "--in", str(threads_file), "--pr-context", str(pr_file), "--out", str(mem_out)])
     assert rc == 0
     mem = json.loads(mem_out.read_text(encoding="utf-8"))
     assert mem["count"] == 1 and mem["items"][0]["root_cause_key"] == "K_nonce"
 
     combined_file = tmp_path / "combined.json"
-    combined_file.write_text(json.dumps({"schema_version": "stage01-combined-findings.v1", "findings": [_finding("F1", "K_nonce")]}), encoding="utf-8")
+    combined_file.write_text(json.dumps({"schema_version": "review-combined-findings.v1", "findings": [_finding("F1", "K_nonce")]}), encoding="utf-8")
     filtered_out = tmp_path / "filtered.json"
-    rc = main(["stage02", "filter-resolved", "--config", CONFIG, "--in", str(combined_file), "--inventory", str(mem_out), "--pr-context", str(pr_file), "--out", str(filtered_out)])
+    rc = main(["techlead", "filter-resolved", "--config", CONFIG, "--in", str(combined_file), "--inventory", str(mem_out), "--pr-context", str(pr_file), "--out", str(filtered_out)])
     assert rc == 0
     filtered = json.loads(filtered_out.read_text(encoding="utf-8"))
     assert filtered["findings"] == [] and filtered["suppressed_resolved_count"] == 1

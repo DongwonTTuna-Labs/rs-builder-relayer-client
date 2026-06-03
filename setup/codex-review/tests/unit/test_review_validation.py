@@ -1,6 +1,6 @@
 import pytest
-from codex_review.stages.stage01_review.validate import validate_axis_findings
-from codex_review.stages.stage01_review.combine import combine_axis_findings
+from codex_review.stages.review.validate import validate_axis_findings
+from codex_review.stages.review.combine import combine_axis_findings
 
 CFG={"review":{"axes":["correctness"],"max_findings_per_axis":3,"require_changed_right_line":True}}
 

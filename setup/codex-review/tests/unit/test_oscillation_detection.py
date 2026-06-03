@@ -85,12 +85,12 @@ def test_detect_revert_ignored_when_different_paths():
 # ---- CLI wiring ----
 
 def test_cli_check_loop_budget_downgrades_on_pingpong(tmp_path):
-    (tmp_path / "validated.json").write_text(json.dumps({"schema_version": "stage07-validated-fix.v1", "status": "validated", "validated": True, "head_sha": "s2"}), encoding="utf-8")
-    (tmp_path / "merged.json").write_text(json.dumps({"schema_version": "stage06-merged-fix.v1", "status": "ready", "patch": "diff --git a/x b/x\n@@ -1 +1 @@\n+changed"}), encoding="utf-8")
-    (tmp_path / "plan.json").write_text(json.dumps({"schema_version": "stage03-design-plan.v1", "edit_sequence": [{"task_id": "t1", "finding_ids": ["F_nonce"]}]}), encoding="utf-8")
+    (tmp_path / "validated.json").write_text(json.dumps({"schema_version": "push-validated-fix.v1", "status": "validated", "validated": True, "head_sha": "s2"}), encoding="utf-8")
+    (tmp_path / "merged.json").write_text(json.dumps({"schema_version": "fix-merge-merged-fix.v1", "status": "ready", "patch": "diff --git a/x b/x\n@@ -1 +1 @@\n+changed"}), encoding="utf-8")
+    (tmp_path / "plan.json").write_text(json.dumps({"schema_version": "design-plan.v1", "edit_sequence": [{"task_id": "t1", "finding_ids": ["F_nonce"]}]}), encoding="utf-8")
     (tmp_path / "prior.json").write_text(json.dumps({"schema_version": "loop-state.v1", "round_count": 2, "recent_pushes": [{"normalized_finding_keys": ["f_nonce"]}, {"normalized_finding_keys": ["f_nonce"]}]}), encoding="utf-8")
     out = tmp_path / "out.json"
-    rc = main(["stage07", "check-loop-budget", "--config", CONFIG, "--in", str(tmp_path / "validated.json"), "--result", str(tmp_path / "merged.json"), "--design-plan", str(tmp_path / "plan.json"), "--loop-state", str(tmp_path / "prior.json"), "--out", str(out)])
+    rc = main(["push", "check-loop-budget", "--config", CONFIG, "--in", str(tmp_path / "validated.json"), "--result", str(tmp_path / "merged.json"), "--design-plan", str(tmp_path / "plan.json"), "--loop-state", str(tmp_path / "prior.json"), "--out", str(out)])
     assert rc == 0
     result = json.loads(out.read_text(encoding="utf-8"))
     assert result["loop_budget_ok"] is False
@@ -99,9 +99,9 @@ def test_cli_check_loop_budget_downgrades_on_pingpong(tmp_path):
 
 
 def test_cli_check_loop_budget_passthrough_when_not_validated(tmp_path):
-    (tmp_path / "validated.json").write_text(json.dumps({"schema_version": "stage07-validated-fix.v1", "status": "tests_failed", "validated": False}), encoding="utf-8")
+    (tmp_path / "validated.json").write_text(json.dumps({"schema_version": "push-validated-fix.v1", "status": "tests_failed", "validated": False}), encoding="utf-8")
     out = tmp_path / "out.json"
-    rc = main(["stage07", "check-loop-budget", "--config", CONFIG, "--in", str(tmp_path / "validated.json"), "--out", str(out)])
+    rc = main(["push", "check-loop-budget", "--config", CONFIG, "--in", str(tmp_path / "validated.json"), "--out", str(out)])
     assert rc == 0
     result = json.loads(out.read_text(encoding="utf-8"))
     assert result["loop_budget_ok"] is True and result["status"] == "tests_failed"

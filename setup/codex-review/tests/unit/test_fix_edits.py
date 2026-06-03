@@ -63,20 +63,20 @@ def test_old_str_not_unique_raises(tmp_path):
 
 def test_ensure_patch_from_edits_injects_patch(tmp_path):
     _init_repo(tmp_path, {"a.py": "one\n"})
-    obj = {"schema_version": "stage06-merged-fix.v1", "edits": [{"path": "a.py", "old_str": "one", "new_str": "ONE"}]}
+    obj = {"schema_version": "fix-merge-merged-fix.v1", "edits": [{"path": "a.py", "old_str": "one", "new_str": "ONE"}]}
     out = ensure_patch_from_edits(obj, tmp_path)
     assert out["patch"] and out["patch"] == out["patch_text"]
     assert _applies(out["patch"], tmp_path)
 
 
 def test_ensure_patch_noop_without_edits(tmp_path):
-    obj = {"schema_version": "stage06-merged-fix.v1", "patch": "EXISTING"}
+    obj = {"schema_version": "fix-merge-merged-fix.v1", "patch": "EXISTING"}
     out = ensure_patch_from_edits(obj, tmp_path)
     assert out["patch"] == "EXISTING"
 
 
 def test_validate_agent_result_materializes_patch_from_edits(tmp_path):
-    from codex_review.stages.stage05_fix_dispatch.validate_agent_result import validate_fix_agent_result
+    from codex_review.stages.fix_dispatch.validate_agent_result import validate_fix_agent_result
 
     _init_repo(tmp_path, {"a.py": "value = 1\n"})
     result = {"task_id": "fix-1", "status": "patched",
@@ -113,15 +113,15 @@ def test_deletion_of_absent_path_is_noop(tmp_path):
 
 def test_ensure_patch_from_deletions_only(tmp_path):
     _init_repo(tmp_path, {"doc.md": "content\n"})
-    obj = {"schema_version": "stage05-fix-agent-result.v1", "status": "patched", "deletions": ["doc.md"]}
+    obj = {"schema_version": "fix-dispatch-agent-result.v1", "status": "patched", "deletions": ["doc.md"]}
     out = ensure_patch_from_edits(obj, tmp_path)
     assert "deleted file mode" in out["patch"]
     assert _applies(out["patch"], tmp_path)
 
 
 def test_fix_prompt_contracts_describe_edits_not_diff():
-    from codex_review.stages.stage05_fix_dispatch.prompt import include_patch_output_contract
-    from codex_review.stages.stage06_fix_merge.prompt import include_final_patch_contract
+    from codex_review.stages.fix_dispatch.prompt import include_patch_output_contract
+    from codex_review.stages.fix_merge.prompt import include_final_patch_contract
 
     for contract in (include_patch_output_contract(""), include_final_patch_contract("")):
         assert "edits" in contract

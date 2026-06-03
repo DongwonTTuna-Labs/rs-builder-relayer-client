@@ -184,15 +184,15 @@ def create_installation_token_for_repo(owner: str, repo: str, permissions: dict[
 def permissions_for_write_mode(mode: str | None) -> dict[str, str]:
     if mode in {"label-ops", "labels", "finalize"}:
         return {"contents": "read", "pull_requests": "write", "issues": "read"}
-    if mode in {"push", "stage07", "stage07_push"}:
+    if mode in {"push", "push", "push"}:
         return {"contents": "write", "pull_requests": "read", "issues": "read"}
-    if mode in {"stage08", "stage09", "issue-fallback", "reentry", "loop-state"}:
+    if mode in {"reentry", "issue_fallback", "issue-fallback", "reentry", "loop-state"}:
         return {"contents": "read", "pull_requests": "read", "issues": "write"}
-    if mode in {"stage04", "design"}:
+    if mode in {"design_chief", "design"}:
         return {"contents": "read", "pull_requests": "read", "issues": "write"}
-    if mode in {"stage00", "resolve"}:
+    if mode in {"resolve_gate", "resolve"}:
         return {"contents": "read", "pull_requests": "write", "issues": "write"}
-    if mode in {"review", "stage02", "comments", "write"}:
+    if mode in {"review", "techlead", "comments", "write"}:
         return {"contents": "read", "pull_requests": "write", "issues": "write"}
     return {"contents": "read", "pull_requests": "write", "issues": "write"}
 

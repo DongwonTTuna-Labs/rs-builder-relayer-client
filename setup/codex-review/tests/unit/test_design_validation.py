@@ -1,6 +1,6 @@
 import pytest
-from codex_review.stages.stage03_design.coordinate import validate_design_plan
-from codex_review.stages.stage03_design.cluster import validate_design_clusters
+from codex_review.stages.design.coordinate import validate_design_plan
+from codex_review.stages.design.cluster import validate_design_clusters
 
 CFG={"design":{},"autofix":{"dangerous_keywords":[]}}
 CTX={"findings":[{"finding_id":"f1"}]}

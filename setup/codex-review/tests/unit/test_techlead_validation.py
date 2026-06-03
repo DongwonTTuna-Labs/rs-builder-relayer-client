@@ -1,6 +1,6 @@
 import pytest
-from codex_review.stages.stage02_techlead.validate import validate_techlead_decision
-from codex_review.stages.stage02_techlead.classify import build_review_publication
+from codex_review.stages.techlead.validate import validate_techlead_decision
+from codex_review.stages.techlead.classify import build_review_publication
 
 COMBINED={"findings":[{"finding_id":"f1","file":"src/a.py","line":1,"root_cause_key":"r","title":"T","summary":"S"}]}
 CFG={"autofix":{"dangerous_keywords":["secret","auth","nonce"]}}
