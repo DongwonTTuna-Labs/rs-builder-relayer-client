@@ -40,3 +40,19 @@ def test_semantic_keywords_are_advisory_not_hard_blockers():
 
 def test_parse_patch_touched_files_normalizes_paths():
     assert parse_patch_touched_files(PATCH) == ["src/a.py"]
+
+
+def test_patch_policy_allows_large_multi_file_patch():
+    # max_files / max_patch_bytes caps were removed: a big, many-file patch
+    # must pass policy (scope/secret/forbidden checks still apply).
+    chunks = []
+    for i in range(20):
+        chunks.append(
+            f"diff --git a/src/f{i}.py b/src/f{i}.py\n"
+            f"--- a/src/f{i}.py\n+++ b/src/f{i}.py\n@@ -1 +1 @@\n-old{i}\n+new{i}\n"
+        )
+    big = "".join(chunks) + "+padding " * 5000
+    policy = {"allowed_prefixes": ["src/"], "max_patch_bytes": 10, "max_files": 1}
+    report = validate_patch_policy(big, policy, {})
+    assert report["ok"] is True
+    assert len(report["touched_files"]) == 20

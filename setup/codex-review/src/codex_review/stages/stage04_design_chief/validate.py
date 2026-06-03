@@ -29,8 +29,6 @@ def validate_fix_policy(policy: dict[str, Any], design_plan: dict[str, Any], con
     if not isinstance(policy, dict): raise ValidationError("fix_policy must be an object")
     allowed=policy.get("allowed_files") or policy.get("allowed_prefixes") or config.get("autofix", {}).get("allowed_prefixes")
     if not allowed: raise ValidationError("fix_policy requires allowed_files or allowed_prefixes")
-    max_tasks=int(policy.get("max_tasks", config.get("autofix", {}).get("max_tasks", 0)) or 0)
-    if max_tasks <= 0: raise ValidationError("fix_policy.max_tasks must be positive")
 
 
 def validate_task_hints(task_hints: list[dict[str, Any]], design_plan: dict[str, Any]) -> None:

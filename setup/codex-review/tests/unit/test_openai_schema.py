@@ -91,7 +91,7 @@ def test_openai_strict_schema_keeps_fix_policy_payload_shape():
     schema = make_openai_structured_output_schema(load_schema_json("stage04-design-chief-decision.v1"))
     policy = schema["properties"]["fix_policy"]
     assert "null" in policy["type"]
-    assert {"allowed_files", "allowed_prefixes", "max_tasks", "max_patch_bytes"}.issubset(policy["properties"])
+    assert {"allowed_files", "allowed_prefixes", "forbidden_files", "forbidden_prefixes"}.issubset(policy["properties"])
 
 
 def test_stage01_to_stage04_schemas_require_inspection_evidence():

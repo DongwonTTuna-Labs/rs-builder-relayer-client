@@ -315,7 +315,6 @@ diff --git a/docs/b.md b/docs/b.md
 
     monkeypatch.setattr(orchestrate, "assert_installation_token_for_repo", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrate, "validate_current_head", lambda *args, **kwargs: None)
-    monkeypatch.setattr(orchestrate, "validate_autofix_commit_cap", lambda *args, **kwargs: {"ok": True})
     monkeypatch.setattr(orchestrate, "push_commit", lambda *args, **kwargs: {"pushed": True, "returncode": 0, "verified": True})
     monkeypatch.setattr(orchestrate, "verify_pushed_head", lambda *args, **kwargs: True)
 
@@ -368,7 +367,6 @@ def test_commit_push_treats_successful_push_with_delayed_verification_as_pushed_
 
     monkeypatch.setattr(orchestrate, "assert_installation_token_for_repo", lambda *args, **kwargs: None)
     monkeypatch.setattr(orchestrate, "validate_current_head", lambda *args, **kwargs: None)
-    monkeypatch.setattr(orchestrate, "validate_autofix_commit_cap", lambda *args, **kwargs: {"ok": True})
     monkeypatch.setattr(orchestrate, "push_commit", lambda *args, **kwargs: {"pushed": True, "returncode": 0, "verified": False})
     monkeypatch.setattr(orchestrate, "verify_pushed_head", lambda *args, **kwargs: False)
 

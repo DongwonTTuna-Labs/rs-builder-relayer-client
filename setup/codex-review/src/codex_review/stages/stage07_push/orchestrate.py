@@ -23,7 +23,7 @@ from .apply_patch import apply_merged_patch, collect_applied_diff, run_diff_chec
 from .commit import build_commit_message, commit_plan_from_artifacts, create_commit, create_commits_from_plan, validate_commit_diff
 from .push import push_commit, verify_pushed_head
 from .run_tests import run_required_tests, select_test_commands
-from .validate import validate_autofix_commit_cap, validate_current_head, validate_push_target, validate_ready_to_push, validate_worktree_clean
+from .validate import validate_current_head, validate_push_target, validate_ready_to_push, validate_worktree_clean
 from .safe_subprocess import sanitized_env
 
 
@@ -340,7 +340,6 @@ def commit_and_push_validated_fix(
     _validate_local_expected_head(repo_path, pr_context, merged_fix)
 
     policy = _policy(config, merged_fix)
-    cap_report = validate_autofix_commit_cap(owner, repo, pr_number, token, policy)
     validate_worktree_clean(repo_path)
     validate_patch_policy(patch, policy, {})
 
@@ -351,7 +350,6 @@ def commit_and_push_validated_fix(
             "pushed": False,
             "commit_sha": None,
             "patch_hash": _sha256_text(patch),
-            "commit_cap": cap_report,
         }
 
     patch_path = _write_temp_patch(patch)
@@ -400,7 +398,6 @@ def commit_and_push_validated_fix(
             "policy_report": commit_policy_report,
             "applied_policy_report": applied_policy_report,
             "push_report": push_report,
-            "commit_cap": cap_report,
             "validation_result": {"status": validation_result.get("status"), "applied_diff_hash": validation_result.get("applied_diff_hash")},
         }
     finally:

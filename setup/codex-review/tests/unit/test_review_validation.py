@@ -119,3 +119,15 @@ def test_combine_rejects_duplicate_ids():
     b={"axis":"correctness","findings":[finding("f1")]}
     with pytest.raises(Exception):
         combine_axis_findings([a,b])
+
+
+def test_axis_findings_allow_more_than_old_cap(tmp_path):
+    # The per-axis findings cap (was 3 in CFG) was removed: many findings on one
+    # axis must all validate instead of failing the review.
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("\n".join(f"line{i}" for i in range(60)), encoding="utf-8")
+    findings = [finding(fid=f"f{i}", line=i) for i in range(1, 31)]
+    changed = {"src/a.py": list(range(1, 31))}
+    out = validate_axis_findings("correctness", payload_with_evidence(findings), {}, changed, CFG, repo_path=tmp_path)
+    assert out["finding_count"] == 30

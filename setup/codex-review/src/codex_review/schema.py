@@ -147,8 +147,6 @@ def _fix_policy_schema() -> dict[str, Any]:
             "allowed_prefixes": _string_array_schema(),
             "forbidden_files": _string_array_schema(),
             "forbidden_prefixes": _string_array_schema(),
-            "max_tasks": {"type": "integer"},
-            "max_patch_bytes": {"type": "integer"},
         },
     }
 
