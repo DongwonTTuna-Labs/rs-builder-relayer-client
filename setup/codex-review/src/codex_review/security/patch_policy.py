@@ -6,6 +6,12 @@ Semantic risk words are emitted as advisory metadata for the AI review/fix loop;
 they are deliberately not hard blockers here. OpenSpec-backed automation must be
 able to implement spec-described work without substring or keyword vetoes in
 trusted helper code.
+
+Note: blast-radius caps (max_files / max_patch_bytes / max_commits / max_tasks)
+were intentionally removed. They forced the self-healing autofix loop to escalate
+to a human issue for work it could legitimately complete on large PRs. Runaway
+loops are bounded instead by the convergence guards in ``loop.state`` (max_rounds,
+oscillation/pingpong/revert detection) and by the semantic-safety model gate.
 """
 from __future__ import annotations
 
