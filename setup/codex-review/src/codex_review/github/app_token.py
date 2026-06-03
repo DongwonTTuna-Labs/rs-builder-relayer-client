@@ -184,12 +184,19 @@ def create_installation_token_for_repo(owner: str, repo: str, permissions: dict[
 def permissions_for_write_mode(mode: str | None) -> dict[str, str]:
     if mode in {"label-ops", "labels", "finalize"}:
         return {"contents": "read", "pull_requests": "write", "issues": "read"}
-    if mode in {"push", "push", "push"}:
+    if mode == "push":
         return {"contents": "write", "pull_requests": "read", "issues": "read"}
-    if mode in {"reentry", "issue_fallback", "issue-fallback", "reentry", "loop-state"}:
+    if mode in {"issue_fallback", "issue-fallback"}:
+        # Creates a standalone GitHub issue.
         return {"contents": "read", "pull_requests": "read", "issues": "write"}
+    if mode in {"reentry", "loop-state"}:
+        # Upserts the sticky loop-state comment on the PR. Commenting on a PR via the
+        # issue-comments endpoint requires the Pull requests permission (not Issues),
+        # so this needs pull_requests:write or GitHub returns 403 "not accessible".
+        return {"contents": "read", "pull_requests": "write", "issues": "read"}
     if mode in {"design_chief", "design"}:
-        return {"contents": "read", "pull_requests": "read", "issues": "write"}
+        # Upserts the design-summary sticky comment on the PR (same PR-comment rule).
+        return {"contents": "read", "pull_requests": "write", "issues": "read"}
     if mode in {"resolve_gate", "resolve"}:
         return {"contents": "read", "pull_requests": "write", "issues": "write"}
     if mode in {"review", "techlead", "comments", "write"}:
