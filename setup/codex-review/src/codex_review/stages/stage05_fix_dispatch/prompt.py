@@ -6,7 +6,13 @@ from codex_review.artifacts import write_text
 
 
 def include_patch_output_contract(prompt: str) -> str:
-    return prompt + "\nReturn JSON schema_version stage05-fix-agent-result.v1. Produce a unified diff patch only; do not commit, push, comment, or call GitHub APIs."
+    return prompt + (
+        "\nReturn JSON schema_version stage05-fix-agent-result.v1 with an `edits` array of "
+        "{path, old_str, new_str} search/replace objects — NOT a unified diff. Rules: old_str "
+        "must appear EXACTLY ONCE in the target file, so include enough surrounding context to be "
+        "unique; to create a new file use an empty old_str and put the full file content in new_str; "
+        "only touch allowed files. Do not commit, push, comment, or call GitHub APIs."
+    )
 
 
 def include_no_safe_fix_contract(prompt: str) -> str:

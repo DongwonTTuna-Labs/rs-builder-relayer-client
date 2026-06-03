@@ -3,13 +3,30 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": true,
   "properties": {
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "old_str": {
+            "type": "string"
+          },
+          "new_str": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "old_str",
+          "new_str"
+        ]
+      }
+    },
     "expected_head_sha": {
-      "type": "string"
-    },
-    "patch": {
-      "type": "string"
-    },
-    "patch_text": {
       "type": "string"
     },
     "policy_report": {

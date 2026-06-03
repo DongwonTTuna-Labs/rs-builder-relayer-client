@@ -12,8 +12,10 @@ def validate_agent_patch(patch_text: str, task: dict[str, Any], policy: dict[str
     return validate_patch_policy(patch_text, merged, {})
 
 
-def validate_fix_agent_result(result: dict[str, Any], task: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+def validate_fix_agent_result(result: dict[str, Any], task: dict[str, Any], policy: dict[str, Any], repo_path: str | Path | None = None) -> dict[str, Any]:
     out=dict(result); out["schema_version"]="stage05-fix-agent-result.v1"; out.setdefault("task_id", task.get("task_id"))
+    from codex_review.fix_edits import ensure_patch_from_edits
+    ensure_patch_from_edits(out, repo_path)
     status=out.get("status", "patched")
     if status == "patched":
         patch=out.get("patch") or out.get("patch_text") or ""

@@ -3,8 +3,28 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": true,
   "properties": {
-    "patch": {
-      "type": "string"
+    "edits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "old_str": {
+            "type": "string"
+          },
+          "new_str": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "old_str",
+          "new_str"
+        ]
+      }
     },
     "policy_report": {
       "type": "object"
