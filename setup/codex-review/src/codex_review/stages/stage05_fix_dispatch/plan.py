@@ -41,6 +41,23 @@ def merge_tasks_touching_same_files(tasks: list[dict[str, Any]]) -> list[dict[st
     return groups
 
 
+def _ensure_unique_task_ids(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Make task_ids unique deterministically.
+
+    The design model supplies task_id/id values that can collide; rather than
+    hard-failing the whole fix stage, disambiguate collisions by suffixing the
+    second and later occurrences (fix-1, fix-1-2, fix-1-3, ...).
+    """
+    seen: dict[str, int] = {}
+    for task in tasks:
+        base = task.get("task_id") or "fix"
+        count = seen.get(base, 0) + 1
+        seen[base] = count
+        if count > 1:
+            task["task_id"] = f"{base}-{count}"
+    return tasks
+
+
 def plan_fix_tasks(design_plan: dict[str, Any], chief_decision: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     tasks=[]
     plan_tests = design_plan.get("tests", [])
@@ -66,7 +83,7 @@ def plan_fix_tasks(design_plan: dict[str, Any], chief_decision: dict[str, Any], 
         raise ValidationError("approved design has no fix tasks")
     manifest={
         "schema_version":"stage05-fix-task-manifest.v1",
-        "tasks":merge_tasks_touching_same_files(tasks),
+        "tasks":_ensure_unique_task_ids(merge_tasks_touching_same_files(tasks)),
         "plan_hash":design_plan.get("plan_hash"),
         "fix_policy":chief_decision.get("fix_policy", config.get("autofix", {})),
         "openspec_backed": bool(design_plan.get("openspec_backed")),
