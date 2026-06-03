@@ -5,6 +5,7 @@ from _pipeline import all_jobs as pipeline_jobs
 from _pipeline import all_text as pipeline_text
 from _pipeline import codex_action_steps as pipeline_codex_action_steps
 from _pipeline import iter_all_steps
+from _pipeline import setup_action_steps, setup_action_text, SETUP_ACTION_USES
 
 ROOT = Path(__file__).resolve().parents[4]
 REVIEW = ROOT / ".github" / "workflows" / "codex-review.yml"
@@ -354,47 +355,42 @@ def test_push_and_issue_fallback_are_default_actual_write_paths():
 
 
 def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
-    text = pipeline_text()
+    # Setup boilerplate lives in the shared composite action.
+    text = setup_action_text()
     assert "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405" in text
     assert "python-version: '3.11'" in text
     assert "pip install --disable-pip-version-check -e workflow-helper/setup/codex-review" in text
-    assert "pip install --disable-pip-version-check -e trusted/setup/codex-review" not in text
+    assert "pip install --disable-pip-version-check -e trusted/setup/codex-review" not in pipeline_text()
 
 
 def test_workflow_helper_checkout_uses_workflow_sha_without_changing_base_ref():
-    text = pipeline_text()
-    assert "ref: ${{ github.event.pull_request.base.sha || github.sha }}" in text
-    assert "repository: ${{ github.repository }}" in text
-    assert "ref: ${{ github.workflow_sha }}" in text
-    assert "path: workflow-helper" in text
+    # Trusted base checkouts still live in the workflows...
+    assert "ref: ${{ github.event.pull_request.base.sha || github.sha }}" in pipeline_text()
+    # ...while the workflow-helper checkout is centralized in the composite action.
+    helper_steps = [s for s in setup_action_steps() if s.get("name") == "Checkout workflow helper"]
+    assert len(helper_steps) == 1
+    helper = helper_steps[0]
+    assert helper["uses"] == "actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955"
+    assert helper["with"]["repository"] == "${{ github.repository }}"
+    assert helper["with"]["ref"] == "${{ github.workflow_sha }}"
+    assert helper["with"]["path"] == "workflow-helper"
+    assert helper["with"]["persist-credentials"] is False
 
-    jobs = pipeline_jobs()
-    for job_name, job in jobs.items():
-        helper_steps = [
-            step
-            for step in job.get("steps", [])
-            if step.get("name") == "Checkout workflow helper"
-        ]
-        assert len(helper_steps) == 1, job_name
-        helper = helper_steps[0]
-        assert helper["uses"] == "actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955"
-        assert helper["with"]["repository"] == "${{ github.repository }}"
-        assert helper["with"]["ref"] == "${{ github.workflow_sha }}"
-        assert helper["with"]["path"] == "workflow-helper"
-        assert helper["with"]["persist-credentials"] is False
+    # No job inlines the helper checkout anymore; they all use the composite action.
+    assert all(step.get("name") != "Checkout workflow helper" for _, step in iter_all_steps())
+    assert SETUP_ACTION_USES in pipeline_text()
 
 
 def test_setup_python_pip_cache_uses_workflow_helper_dependency_file():
     setup_steps = [
-        (job_name, step)
-        for job_name, step in iter_all_steps()
-        if step.get("uses") == "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405"
+        s for s in setup_action_steps()
+        if str(s.get("uses", "")).startswith("actions/setup-python@")
     ]
-    assert setup_steps
-    for job_name, step in setup_steps:
-        assert step["with"]["python-version"] == "3.11", job_name
-        assert step["with"]["cache"] == "pip", job_name
-        assert step["with"]["cache-dependency-path"] == "workflow-helper/setup/codex-review/pyproject.toml", job_name
+    assert len(setup_steps) == 1
+    step = setup_steps[0]
+    assert step["with"]["python-version"] == "3.11"
+    assert step["with"]["cache"] == "pip"
+    assert step["with"]["cache-dependency-path"] == "workflow-helper/setup/codex-review/pyproject.toml"
 
 
 def test_workflow_never_executes_helper_from_pr_head_or_stale_trusted_tree():

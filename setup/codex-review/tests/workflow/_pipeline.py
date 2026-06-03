@@ -26,6 +26,18 @@ PIPELINE_FILENAMES = [
 ]
 
 
+SETUP_ACTION_PATH = ROOT / ".github" / "actions" / "setup-codex-review" / "action.yml"
+SETUP_ACTION_USES = "DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main"
+
+
+def setup_action_text() -> str:
+    return SETUP_ACTION_PATH.read_text(encoding="utf-8")
+
+
+def setup_action_steps() -> list[dict]:
+    return (yaml.safe_load(setup_action_text()).get("runs") or {}).get("steps") or []
+
+
 def workflow_path(name: str) -> Path:
     return WORKFLOWS_DIR / name
 
