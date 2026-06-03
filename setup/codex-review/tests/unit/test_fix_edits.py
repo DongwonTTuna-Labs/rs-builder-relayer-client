@@ -87,6 +87,38 @@ def test_validate_agent_result_materializes_patch_from_edits(tmp_path):
     assert out["policy_report"]
 
 
+def test_deletion_generates_applicable_patch(tmp_path):
+    _init_repo(tmp_path, {"keep.py": "stay\n", "gone.md": "delete me\n"})
+    patch = apply_edits_and_generate_patch([], tmp_path, deletions=["gone.md"])
+    assert "deleted file mode" in patch and "gone.md" in patch
+    assert _applies(patch, tmp_path)
+
+
+def test_edits_and_deletions_combined(tmp_path):
+    _init_repo(tmp_path, {"a.py": "x = 1\n", "old.md": "bye\n"})
+    patch = apply_edits_and_generate_patch(
+        [{"path": "a.py", "old_str": "x = 1", "new_str": "x = 2"}],
+        tmp_path,
+        deletions=["old.md"],
+    )
+    assert "deleted file mode" in patch and "+x = 2" in patch
+    assert _applies(patch, tmp_path)
+
+
+def test_deletion_of_absent_path_is_noop(tmp_path):
+    _init_repo(tmp_path, {"a.py": "x\n"})
+    patch = apply_edits_and_generate_patch([], tmp_path, deletions=["nope.md"])
+    assert patch == ""
+
+
+def test_ensure_patch_from_deletions_only(tmp_path):
+    _init_repo(tmp_path, {"doc.md": "content\n"})
+    obj = {"schema_version": "stage05-fix-agent-result.v1", "status": "patched", "deletions": ["doc.md"]}
+    out = ensure_patch_from_edits(obj, tmp_path)
+    assert "deleted file mode" in out["patch"]
+    assert _applies(out["patch"], tmp_path)
+
+
 def test_fix_prompt_contracts_describe_edits_not_diff():
     from codex_review.stages.stage05_fix_dispatch.prompt import include_patch_output_contract
     from codex_review.stages.stage06_fix_merge.prompt import include_final_patch_contract
@@ -94,4 +126,5 @@ def test_fix_prompt_contracts_describe_edits_not_diff():
     for contract in (include_patch_output_contract(""), include_final_patch_contract("")):
         assert "edits" in contract
         assert "old_str" in contract and "new_str" in contract
+        assert "deletions" in contract
         assert "unified diff" not in contract.lower().replace("not a unified diff", "")

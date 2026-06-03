@@ -10,6 +10,7 @@ def include_final_patch_contract(prompt: str) -> str:
         "\nReturn stage06-merged-fix.v1 JSON with a single consolidated `edits` array of "
         "{path, old_str, new_str} search/replace objects (NOT a unified diff). old_str must match "
         "exactly once per file (include surrounding context); an empty old_str creates a new file. "
+        "To delete a file, list its path in a top-level `deletions` array (use [] when none). "
         "No commits, pushes, or comments."
     )
 

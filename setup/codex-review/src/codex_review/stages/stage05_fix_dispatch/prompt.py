@@ -10,8 +10,9 @@ def include_patch_output_contract(prompt: str) -> str:
         "\nReturn JSON schema_version stage05-fix-agent-result.v1 with an `edits` array of "
         "{path, old_str, new_str} search/replace objects — NOT a unified diff. Rules: old_str "
         "must appear EXACTLY ONCE in the target file, so include enough surrounding context to be "
-        "unique; to create a new file use an empty old_str and put the full file content in new_str; "
-        "only touch allowed files. Do not commit, push, comment, or call GitHub APIs."
+        "unique; to create a new file use an empty old_str and put the full file content in new_str. "
+        "To DELETE a file, list its path in a top-level `deletions` array (use [] when none). "
+        "Only touch allowed files. Do not commit, push, comment, or call GitHub APIs."
     )
 
 
