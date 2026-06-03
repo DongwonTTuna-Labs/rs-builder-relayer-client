@@ -45,9 +45,21 @@ def _apply_one_edit(root: Path, edit: dict[str, Any]) -> None:
     target.write_text(content.replace(old, new, 1), encoding="utf-8")
 
 
-def apply_edits_and_generate_patch(edits: list[dict[str, Any]], repo_path: str | Path) -> str:
-    """Apply search/replace edits in a temp clone and return a `git diff` patch."""
-    if not edits:
+def _delete_one(root: Path, path: str) -> None:
+    if not path or not isinstance(path, str):
+        raise ValidationError("deletion path must be a string")
+    target = root / path
+    if not str(target.resolve()).startswith(str(root.resolve())):
+        raise ValidationError(f"deletion path escapes repository: {path}")
+    if target.exists():
+        target.unlink()  # absent target is a no-op (already in desired state)
+
+
+def apply_edits_and_generate_patch(edits: list[dict[str, Any]], repo_path: str | Path, deletions: list[str] | None = None) -> str:
+    """Apply search/replace edits and file deletions in a temp clone; return a `git diff` patch."""
+    edits = edits or []
+    deletions = deletions or []
+    if not edits and not deletions:
         return ""
     repo = Path(repo_path)
     tmp = Path(tempfile.mkdtemp(prefix="codex-edits-"))
@@ -60,7 +72,9 @@ def apply_edits_and_generate_patch(edits: list[dict[str, Any]], repo_path: str |
             if not isinstance(edit, dict):
                 raise ValidationError("edit must be an object with path/old_str/new_str")
             _apply_one_edit(tmp, edit)
-        # Stage everything so new files appear in the diff, then diff HEAD..index.
+        for path in deletions:
+            _delete_one(tmp, path)
+        # Stage everything so new + deleted files appear in the diff, then diff HEAD..index.
         subprocess.run(["git", "add", "-A"], cwd=tmp, check=True, env=sanitized_env())
         proc = subprocess.run(["git", "diff", "--binary", "--staged"], cwd=tmp, capture_output=True, text=True, env=sanitized_env())
         if proc.returncode != 0:
@@ -79,8 +93,9 @@ def ensure_patch_from_edits(obj: dict[str, Any], repo_path: str | Path | None) -
     if not isinstance(obj, dict):
         return obj
     edits = obj.get("edits")
-    if edits and repo_path is not None:
-        patch = apply_edits_and_generate_patch(edits, repo_path)
+    deletions = obj.get("deletions")
+    if (edits or deletions) and repo_path is not None:
+        patch = apply_edits_and_generate_patch(edits, repo_path, deletions)
         obj["patch"] = patch
         obj["patch_text"] = patch
     return obj
