@@ -142,6 +142,12 @@ def detect_oscillation(prior: dict[str, Any] | None, candidate: dict[str, Any], 
 
     Returns {"ok": bool, "status": str, "reason": str}. ok=False blocks the push so the
     loop escalates to an issue + human instead of ping-ponging forever.
+
+    These convergence guards (round cap + oscillation/pingpong/revert detection) are
+    the *only* bound on the autofix loop. Blast-radius caps (max_files/patch_bytes/
+    commits/tasks) were intentionally removed because they escalated legitimate large
+    fixes to a human; a fix that genuinely converges should be allowed to land however
+    big it is, and one that does not is caught here.
     """
     auto = (config or {}).get("autofix", {}) or {}
     max_rounds = int(auto.get("max_rounds", 5))

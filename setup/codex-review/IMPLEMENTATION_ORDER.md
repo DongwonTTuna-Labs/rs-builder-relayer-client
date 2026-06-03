@@ -2,12 +2,12 @@
 
 ## Phase 1: Foundation
 
-- `config.py`
-- `env.py`
-- `paths.py`
-- `artifacts.py`
-- `schema.py`
-- `github_output.py`
+- `core/config.py`
+- `core/env.py`
+- `core/paths.py`
+- `core/artifacts.py`
+- `core/schema.py`
+- `core/output.py`
 - `security/redaction.py`
 
 ## Phase 2: GitHub trusted boundary
@@ -48,6 +48,6 @@
 
 ## Phase 7: Workflow and tests
 
-- `.github/workflows/codex-review-orchestrator.yml`
+- `.github/workflows/codex-review.yml`, `codex-design.yml`, `codex-fix.yml`, `codex-issue.yml`
 - `tests/workflow/*`
 - `tests/unit/*`
