@@ -179,7 +179,7 @@ def test_workflow_uses_codex_action_for_model_execution():
         assert "codex-args" not in with_inputs, job_name
         # Writable Codex home so the responses-api proxy can write its server-info
         # on the rootless self-hosted runner (default ~/.codex is not writable).
-        assert with_inputs["codex-home"] == "${{ runner.temp }}/codex-home", job_name
+        assert with_inputs["codex-home"].startswith("${{ runner.temp }}/codex-home"), job_name
         assert "env" not in step or "AI_RELAY_API_KEY" not in (step.get("env") or {}), job_name
         assert with_inputs["sandbox"] == "read-only", job_name
         assert with_inputs["safety-strategy"] == "read-only", job_name
@@ -429,6 +429,21 @@ def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
     assert "working-directory: ${{ github.workspace }}/pr-head" in section
     assert "CODEX_REVIEW_MODEL_CWD" not in section
     assert "CODEX_REVIEW_TARGET_REPO_PATH" not in section
+
+
+def test_multi_model_job_uses_distinct_codex_home_per_step():
+    # codex-action appends its provider block to config.toml in CODEX_HOME on
+    # every invocation, so two model steps sharing one home produce a duplicate
+    # model_provider key and codex fails. prepare_clusters runs two models and
+    # must give each its own codex-home.
+    job = load_design()["jobs"]["prepare_clusters"]
+    homes = [
+        step["with"]["codex-home"]
+        for step in job["steps"]
+        if step.get("uses") == CODEX_ACTION
+    ]
+    assert len(homes) == 2
+    assert len(set(homes)) == 2, homes
 
 
 def test_guards_allow_trusted_pipeline_bot_through_permission_check():

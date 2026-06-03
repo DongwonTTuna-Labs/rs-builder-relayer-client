@@ -244,7 +244,7 @@ jobs:
         id: codex_oidc
         run: |
           workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
-          mkdir -p "${{ runner.temp }}/codex-home"
+          mkdir -p "${{ runner.temp }}/codex-home-inventory" "${{ runner.temp }}/codex-home-cluster"
       - name: Build inventory prompt
         run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-inventory-prompt --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.prompt.md
       - name: Prepare design schemas
@@ -259,7 +259,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home
+          codex-home: ${{ runner.temp }}/codex-home-inventory
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
@@ -278,7 +278,7 @@ jobs:
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
-          codex-home: ${{ runner.temp }}/codex-home
+          codex-home: ${{ runner.temp }}/codex-home-cluster
           prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.prompt.md
           output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.raw.json
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
