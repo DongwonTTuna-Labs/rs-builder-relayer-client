@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_json
-from codex_review.errors import ValidationError
+from codex_review.core.artifacts import write_json
+from codex_review.core.errors import ValidationError
 
 
 VALID_NEXT_ENTRIES = {"stage00_on_synchronize", "none", "stage00"}

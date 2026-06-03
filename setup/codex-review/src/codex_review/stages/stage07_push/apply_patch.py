@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import Any
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from codex_review.security.patch_policy import validate_patch_policy
 from .safe_subprocess import sanitized_env
 

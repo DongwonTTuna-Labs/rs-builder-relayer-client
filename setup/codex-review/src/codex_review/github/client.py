@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from codex_review.errors import GitHubError
+from codex_review.core.errors import GitHubError
 
 API_ROOT = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 

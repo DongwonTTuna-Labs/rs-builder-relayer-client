@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from codex_review.errors import PolicyViolation
+from codex_review.core.errors import PolicyViolation
 
 
 def is_trusted_codex_review_author(author: str | dict[str, Any] | None, policy: dict[str, Any]) -> bool:

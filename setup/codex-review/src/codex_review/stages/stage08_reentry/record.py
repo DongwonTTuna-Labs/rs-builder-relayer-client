@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_json
-from codex_review.errors import ValidationError
+from codex_review.core.artifacts import write_json
+from codex_review.core.errors import ValidationError
 from codex_review.github.app_token import assert_installation_token_for_repo, permissions_for_write_mode
 from codex_review.loop.state import build_loop_state, write_loop_state_comment
 

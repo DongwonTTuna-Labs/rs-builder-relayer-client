@@ -8,7 +8,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from codex_review.errors import GitHubError
+from codex_review.core.errors import GitHubError
 from codex_review.github.client import github_api_url, rest_request
 from codex_review.github.pull_requests import get_pull_request, list_pull_request_files
 
@@ -423,7 +423,7 @@ def render_openspec_context_markdown(
             lines.append("\n[truncated]")
     rendered = "\n".join(lines).rstrip() + "\n"
     if budget_tokens:
-        from codex_review.context.token_budget import fit_to_budget
+        from codex_review.context.budget import fit_to_budget
 
         fitted, truncated = fit_to_budget(rendered, int(budget_tokens))
         if truncated:

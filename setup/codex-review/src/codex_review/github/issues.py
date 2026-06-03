@@ -6,7 +6,7 @@ import re
 import urllib.parse
 from typing import Any
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from .client import api_root, github_api_url, rest_request
 from .comments import list_issue_comments
 from .markers import render_marker

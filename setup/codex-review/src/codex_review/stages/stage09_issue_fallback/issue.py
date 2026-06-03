@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from codex_review.github.issues import create_or_update_deferred_issue
 from codex_review.github.markers import render_marker
 

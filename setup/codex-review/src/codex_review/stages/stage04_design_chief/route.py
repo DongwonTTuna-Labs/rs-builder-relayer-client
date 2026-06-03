@@ -2,8 +2,8 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
-from codex_review.github_output import write_output
+from codex_review.core.artifacts import write_json
+from codex_review.core.output import write_output
 
 def route_after_design_chief(chief_decision: dict[str, Any]) -> dict[str, Any]:
     status=chief_decision.get("status")

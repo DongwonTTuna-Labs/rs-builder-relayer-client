@@ -6,8 +6,8 @@ import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
-from codex_review.errors import ValidationError
+from codex_review.core.artifacts import write_json
+from codex_review.core.errors import ValidationError
 from codex_review.github.pull_requests import get_current_head_sha
 from .safe_subprocess import sanitized_env
 

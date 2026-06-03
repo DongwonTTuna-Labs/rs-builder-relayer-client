@@ -8,11 +8,11 @@ with an explicit blocker or deferred to issue fallback.
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
-from codex_review.constants import TECHLEAD_ACTIONS, SEVERITIES
-from codex_review.errors import ValidationError
-from codex_review.inspection import validate_inspection_evidence
-from codex_review.schema import validate_enum
+from codex_review.core.artifacts import write_json
+from codex_review.core.constants import TECHLEAD_ACTIONS, SEVERITIES
+from codex_review.core.errors import ValidationError
+from codex_review.model.inspection import validate_inspection_evidence
+from codex_review.core.schema import validate_enum
 
 NON_EXECUTABLE_BLOCKERS = {
     "missing_openspec_spec",

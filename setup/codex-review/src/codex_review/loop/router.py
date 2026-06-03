@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from codex_review.github_output import set_route_outputs, write_json_output, write_output
+from codex_review.core.output import set_route_outputs, write_json_output, write_output
 
 
 def route_after_stage00(gate_result: dict[str, Any], loop_state: dict[str, Any] | None = None, pr_context: dict[str, Any] | None = None) -> dict[str, Any]:

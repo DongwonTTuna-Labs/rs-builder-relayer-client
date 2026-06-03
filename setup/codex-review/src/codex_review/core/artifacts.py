@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from .errors import ValidationError
-from .schema import require_schema_version
+from codex_review.core.errors import ValidationError
+from codex_review.core.schema import require_schema_version
 
 MAX_TEXT_ARTIFACT_BYTES = 5_000_000
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from codex_review.errors import PolicyViolation
+from codex_review.core.errors import PolicyViolation
 
 SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),

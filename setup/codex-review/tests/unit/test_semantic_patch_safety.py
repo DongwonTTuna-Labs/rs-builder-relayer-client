@@ -2,7 +2,7 @@ import hashlib
 
 import pytest
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from codex_review.stages.stage06_fix_merge.semantic_safety import (
     build_semantic_patch_safety_prompt,
     validate_semantic_patch_safety_result,

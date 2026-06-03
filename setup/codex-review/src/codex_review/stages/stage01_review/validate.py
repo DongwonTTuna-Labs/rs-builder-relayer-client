@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_json
-from codex_review.constants import SEVERITIES
-from codex_review.context.changed_lines import is_changed_right_line
-from codex_review.errors import ValidationError
-from codex_review.inspection import validate_inspection_evidence
-from codex_review.schema import validate_enum
+from codex_review.core.artifacts import write_json
+from codex_review.core.constants import SEVERITIES
+from codex_review.context.diff import is_changed_right_line
+from codex_review.core.errors import ValidationError
+from codex_review.model.inspection import validate_inspection_evidence
+from codex_review.core.schema import validate_enum
 from codex_review.security.redaction import assert_no_secret_patterns
 from .axes import validate_axis
 

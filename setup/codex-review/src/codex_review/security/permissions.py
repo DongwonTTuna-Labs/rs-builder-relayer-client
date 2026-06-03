@@ -6,7 +6,7 @@ GitHub App installation tokens minted inside those jobs.
 """
 from __future__ import annotations
 
-from codex_review.errors import PolicyViolation
+from codex_review.core.errors import PolicyViolation
 
 WRITE_STAGES = {"stage00_apply", "stage02_publish", "stage04_publish", "stage07_push", "stage08_record"}
 

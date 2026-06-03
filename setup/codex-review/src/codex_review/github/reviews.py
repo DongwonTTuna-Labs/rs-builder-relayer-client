@@ -4,8 +4,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from codex_review.context.changed_lines import is_changed_right_line
-from codex_review.errors import ValidationError
+from codex_review.context.diff import is_changed_right_line
+from codex_review.core.errors import ValidationError
 from .client import github_api_url, rest_request
 
 

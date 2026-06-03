@@ -1,7 +1,7 @@
 """Validate complete stage03 artifact chain."""
 from __future__ import annotations
 from typing import Any
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 
 
 def validate_plan_scope(plan: dict[str, Any], techlead_decision: dict[str, Any]) -> None:

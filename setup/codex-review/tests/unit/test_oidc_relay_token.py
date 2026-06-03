@@ -3,7 +3,7 @@ import json
 import pytest
 
 from codex_review.cli import main
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from codex_review.github import oidc_token
 
 

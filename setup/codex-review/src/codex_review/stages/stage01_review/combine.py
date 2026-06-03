@@ -2,8 +2,8 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import read_json, write_json
-from codex_review.errors import ValidationError
+from codex_review.core.artifacts import read_json, write_json
+from codex_review.core.errors import ValidationError
 
 _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

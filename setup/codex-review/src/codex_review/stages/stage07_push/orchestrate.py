@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from codex_review.errors import CodexReviewError, ValidationError
+from codex_review.core.errors import CodexReviewError, ValidationError
 from codex_review.github.app_token import assert_installation_token_for_repo, permissions_for_write_mode
 from codex_review.security.patch_policy import validate_patch_policy
 from .apply_patch import apply_merged_patch, collect_applied_diff, run_diff_check

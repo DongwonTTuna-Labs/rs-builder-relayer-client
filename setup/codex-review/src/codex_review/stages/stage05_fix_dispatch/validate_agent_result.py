@@ -2,8 +2,8 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
-from codex_review.errors import ValidationError
+from codex_review.core.artifacts import write_json
+from codex_review.core.errors import ValidationError
 from codex_review.security.patch_policy import validate_patch_policy, parse_patch_touched_files
 
 
@@ -14,7 +14,7 @@ def validate_agent_patch(patch_text: str, task: dict[str, Any], policy: dict[str
 
 def validate_fix_agent_result(result: dict[str, Any], task: dict[str, Any], policy: dict[str, Any], repo_path: str | Path | None = None) -> dict[str, Any]:
     out=dict(result); out["schema_version"]="stage05-fix-agent-result.v1"; out.setdefault("task_id", task.get("task_id"))
-    from codex_review.fix_edits import ensure_patch_from_edits
+    from codex_review.patches.fix_edits import ensure_patch_from_edits
     ensure_patch_from_edits(out, repo_path)
     status=out.get("status", "patched")
     if status == "patched":

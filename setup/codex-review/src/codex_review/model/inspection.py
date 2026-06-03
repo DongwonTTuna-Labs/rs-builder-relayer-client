@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .errors import ValidationError
-from .security.redaction import assert_no_secret_patterns
+from codex_review.core.errors import ValidationError
+from codex_review.security.redaction import assert_no_secret_patterns
 
 EVIDENCE_KEYS = ("path", "purpose", "observation")
 

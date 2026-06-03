@@ -6,8 +6,8 @@ from typing import Any
 
 import yaml
 
-from .errors import ValidationError
-from .paths import setup_root
+from codex_review.core.errors import ValidationError
+from codex_review.core.paths import setup_root
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "base_branch": "main",

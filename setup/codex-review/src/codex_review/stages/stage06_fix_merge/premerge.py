@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess, tempfile, shutil
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json, write_text
+from codex_review.core.artifacts import write_json, write_text
 from codex_review.security.subprocess_env import sanitized_env
 
 

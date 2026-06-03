@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from codex_review.schema import load_schema_json, make_openai_structured_output_schema
+from codex_review.core.schema import load_schema_json, make_openai_structured_output_schema
 
 
 ACTION_SCHEMA_NAMES = [

@@ -1,6 +1,6 @@
 """Review axis helpers."""
 from __future__ import annotations
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 
 DEFAULT_AXES=["correctness","security","performance","test-coverage","domain"]
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_text
+from codex_review.core.artifacts import write_text
 from codex_review.context.budget import compact_json
 
 def include_approval_contract(prompt: str) -> str:

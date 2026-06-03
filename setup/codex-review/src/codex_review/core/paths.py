@@ -4,10 +4,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .errors import ValidationError
+from codex_review.core.errors import ValidationError
 
-PACKAGE_DIR = Path(__file__).resolve().parent
-SETUP_ROOT = PACKAGE_DIR.parents[1]  # setup/codex-review
+def _find_setup_root() -> Path:
+    # The package layout can move modules between subpackages, so locate the
+    # setup root (the dir holding schemas/ and prompts/) by walking ancestors
+    # instead of hard-coding a parent depth.
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "schemas").is_dir() and (candidate / "prompts").is_dir():
+            return candidate
+    raise RuntimeError("could not locate codex-review setup root (schemas/ + prompts/)")
+
+
+SETUP_ROOT = _find_setup_root()  # setup/codex-review
 
 
 def repo_root() -> Path:
