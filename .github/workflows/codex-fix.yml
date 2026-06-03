@@ -253,7 +253,7 @@ jobs:
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
           output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
@@ -347,7 +347,7 @@ jobs:
           output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merged-fix.raw.json
           output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true
@@ -426,7 +426,7 @@ jobs:
           output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/semantic-safety.raw.json
           output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-semantic-patch-safety.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
-          sandbox: read-only
+          sandbox: danger-full-access
           safety-strategy: read-only
           allow-users: DongwonTTuna
           allow-bots: true

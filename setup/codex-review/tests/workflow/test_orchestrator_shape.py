@@ -181,7 +181,10 @@ def test_workflow_uses_codex_action_for_model_execution():
         # on the rootless self-hosted runner (default ~/.codex is not writable).
         assert with_inputs["codex-home"].startswith("${{ runner.temp }}/codex-home"), job_name
         assert "env" not in step or "AI_RELAY_API_KEY" not in (step.get("env") or {}), job_name
-        assert with_inputs["sandbox"] == "read-only", job_name
+        # Model tool-call sandbox is disabled: codex's read-only sandbox uses
+        # bubblewrap, which needs unprivileged user namespaces the rootless runner
+        # forbids. safety-strategy still restricts the codex process privileges.
+        assert with_inputs["sandbox"] == "danger-full-access", job_name
         assert with_inputs["safety-strategy"] == "read-only", job_name
         assert with_inputs["allow-users"] == "DongwonTTuna", job_name
         assert with_inputs["allow-bots"] is True, job_name
