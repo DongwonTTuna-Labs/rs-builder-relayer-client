@@ -113,6 +113,7 @@ jobs:
         with:
           name: codex-review-event
           path: codex-review-artifacts/event
+          retention-days: 7
 
   collect_threads:
     name: Collect review threads
@@ -263,6 +264,7 @@ jobs:
         with:
           name: codex-review-stage00
           path: codex-review-artifacts/stage00
+          retention-days: 7
 
   review_axes:
     name: Review findings by axis
@@ -330,6 +332,7 @@ jobs:
         with:
           name: codex-review-stage01-${{ matrix.axis }}
           path: codex-review-artifacts/stage01/${{ matrix.axis }}
+          retention-days: 7
 
   combine_findings:
     name: Combine axis findings
@@ -356,6 +359,7 @@ jobs:
         with:
           name: codex-review-stage01-combined
           path: codex-review-artifacts/stage01
+          retention-days: 7
 
   techlead:
     name: Tech lead decision
@@ -429,6 +433,7 @@ jobs:
         with:
           name: codex-review-stage02-model
           path: codex-review-artifacts/stage02
+          retention-days: 7
 
   publish_review:
     name: Publish review & route
@@ -490,6 +495,7 @@ jobs:
         with:
           name: codex-review-stage02
           path: codex-review-artifacts/stage02
+          retention-days: 7
 
   finalize:
     name: Finalize labels

@@ -126,6 +126,7 @@ jobs:
         with:
           name: codex-design-inputs
           path: design-inputs
+          retention-days: 7
 
   design_context:
     name: Build design context
@@ -255,6 +256,7 @@ jobs:
         with:
           name: codex-review-stage03-prepare
           path: codex-review-artifacts/stage03
+          retention-days: 7
 
   analyze_clusters:
     name: Analyze design clusters
@@ -317,6 +319,7 @@ jobs:
         with:
           name: codex-review-stage03-analysis-${{ matrix.batch_path }}
           path: ${{ github.workspace }}/codex-review-artifacts/stage03/batches/${{ matrix.batch_path }}
+          retention-days: 7
 
   draft_plan:
     name: Draft design plan
@@ -387,6 +390,7 @@ jobs:
         with:
           name: codex-review-stage03
           path: codex-review-artifacts/stage03
+          retention-days: 7
 
   chief_decision:
     name: Design chief decision
@@ -506,6 +510,7 @@ jobs:
         with:
           name: codex-review-stage04
           path: codex-review-artifacts/stage04
+          retention-days: 7
 
   finalize:
     name: Finalize labels

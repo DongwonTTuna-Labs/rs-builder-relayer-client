@@ -194,6 +194,7 @@ jobs:
         with:
           name: codex-issue-stage09
           path: codex-review-artifacts/stage09
+          retention-days: 7
       - name: Swap needs-issue label for issue-created
         if: always()
         env:
