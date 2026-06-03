@@ -6,7 +6,12 @@ from codex_review.artifacts import write_text
 from codex_review.context.budget import compact_json
 
 def include_final_patch_contract(prompt: str) -> str:
-    return prompt + "\nReturn stage06-merged-fix.v1 JSON with one final unified diff patch. No commits, pushes, or comments."
+    return prompt + (
+        "\nReturn stage06-merged-fix.v1 JSON with a single consolidated `edits` array of "
+        "{path, old_str, new_str} search/replace objects (NOT a unified diff). old_str must match "
+        "exactly once per file (include surrounding context); an empty old_str creates a new file. "
+        "No commits, pushes, or comments."
+    )
 
 def _section(value: dict[str, Any] | str) -> str:
     return value if isinstance(value, str) else compact_json(value)

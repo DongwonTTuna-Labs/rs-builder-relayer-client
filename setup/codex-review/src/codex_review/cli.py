@@ -785,14 +785,14 @@ def _handle_stage05(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             out_path = task_dir / "result.json"
             fallback = {"schema_version":"stage05-fix-agent-result.v1", "task_id": task_id, "status":"no_safe_fix", "reason":"model fix result was not provided", "defaulted": True}
             raw = run_model_or_fallback(stage=f"stage05_{task_id}", prompt_path=prompt_path, output_path=out_path, expected_schema="stage05-fix-agent-result.v1", fallback=fallback, model_command=args.model_command, cwd=args.model_cwd, target_repo_path=args.repo_path)
-            validated = validate_fix_agent_result(raw, task, config.get("autofix", {}))
+            validated = validate_fix_agent_result(raw, task, config.get("autofix", {}), args.repo_path)
             write_json(task_dir / "result.validated.json", validated, "stage05-fix-agent-result.v1")
             results.append(validated)
         return build_fix_collection_result(manifest, results), "stage05-fix-collection-result.v1"
     if cmd in {"validate-agent-result", "validate"}:
         from .stages.stage05_fix_dispatch.validate_agent_result import validate_fix_agent_result
         task = _maybe_json(args.inventory, {})
-        return validate_fix_agent_result(_maybe_json(args.in_path, {}), task, config.get("autofix", {})), "stage05-fix-agent-result.v1"
+        return validate_fix_agent_result(_maybe_json(args.in_path, {}), task, config.get("autofix", {}), args.repo_path), "stage05-fix-agent-result.v1"
     if cmd == "collect":
         from .stages.stage05_fix_dispatch.collect import collect_agent_results
         paths = _artifact_paths(args.artifacts, names=("*.validated.json", "*.json"))
@@ -855,9 +855,11 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return {"schema_version": "stage06-merged-fix.v1", "status": "no_fix", "patch": "", "premerge_clean": pre.get("clean", False), "defaulted": True}, "stage06-merged-fix.v1"
     if cmd == "validate":
         from .stages.stage06_fix_merge.validate import validate_merged_fix
+        from .fix_edits import ensure_patch_from_edits
         pre = _maybe_json(args.inventory, {})
         chief = _maybe_json(args.result or args.chief_decision, {})
-        return validate_merged_fix(_maybe_json(args.in_path, {}), pre, chief, config.get("autofix", {}), args.repo_path), "stage06-merged-fix.v1"
+        merged = ensure_patch_from_edits(_maybe_json(args.in_path, {}), args.repo_path)
+        return validate_merged_fix(merged, pre, chief, config.get("autofix", {}), args.repo_path), "stage06-merged-fix.v1"
     if cmd in {"build-semantic-safety-prompt", "semantic-safety-prompt"}:
         from .stages.stage06_fix_merge.semantic_safety import build_semantic_patch_safety_prompt
         prompt = build_semantic_patch_safety_prompt(

@@ -259,7 +259,7 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate fix agent result
-        run: workflow-helper/setup/codex-review/bin/codex-review stage05 validate-agent-result --inventory "${{ github.workspace }}/${{ matrix.task_file }}" --in "${{ github.workspace }}/${{ matrix.output_file }}" --out "${{ github.workspace }}/${{ matrix.validated_file }}"
+        run: workflow-helper/setup/codex-review/bin/codex-review stage05 validate-agent-result --inventory "${{ github.workspace }}/${{ matrix.task_file }}" --in "${{ github.workspace }}/${{ matrix.output_file }}" --out "${{ github.workspace }}/${{ matrix.validated_file }}" --repo-path "${{ github.workspace }}/pr-head"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-stage05-agent-${{ matrix.task_path }}
