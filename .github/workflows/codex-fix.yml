@@ -210,6 +210,7 @@ jobs:
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
+          effort: xhigh
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
@@ -295,6 +296,7 @@ jobs:
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
+          effort: xhigh
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_merge/merge-prompt.md
@@ -316,6 +318,7 @@ jobs:
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
+          effort: xhigh
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_merge/semantic-safety-prompt.md

@@ -188,6 +188,8 @@ def test_workflow_uses_codex_action_for_model_execution():
         # sudo to drop, which the runner's command-scoped NOPASSWD does not grant.
         assert with_inputs["sandbox"] == "danger-full-access", job_name
         assert with_inputs["safety-strategy"] == "unsafe", job_name
+        # Every model step runs at maximum reasoning effort.
+        assert with_inputs["effort"] == "xhigh", job_name
         assert with_inputs["allow-users"] == "DongwonTTuna", job_name
         assert with_inputs["allow-bots"] is True, job_name
         assert with_inputs["allow-bot-users"] == "codex-reviewer-for-dongwonttuna[bot]", job_name
