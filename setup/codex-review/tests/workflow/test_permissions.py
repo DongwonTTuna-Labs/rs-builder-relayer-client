@@ -28,11 +28,15 @@ def test_trusted_write_jobs_keep_github_token_read_only():
 
 
 def test_no_token_validation_job_is_read_only():
-    perms = jobs()["validate_patch"].get("permissions", {})
+    # Merge/safety/validation share one job that runs models (needs id-token: write
+    # for the OIDC relay token) but must never hold repo-write permissions.
+    perms = jobs()["merge_validate"].get("permissions", {})
     assert perms.get("contents") == "read"
     assert perms.get("pull-requests") == "read"
     assert perms.get("issues") == "read"
-    assert "write" not in set(perms.values())
+    assert perms.get("id-token") == "write"
+    repo_write_scopes = {k: v for k, v in perms.items() if k != "id-token"}
+    assert "write" not in set(repo_write_scopes.values())
 
 
 def test_write_jobs_use_app_token_not_github_token_write_permissions():
@@ -85,7 +89,7 @@ def test_model_jobs_use_native_codex_action_relay_without_write_permissions():
         "draft_plan",
         "chief_decision",
         "run_agents",
-        "merge_fixes",
+        "merge_validate",
     ]
     for name in model_jobs:
         job = jobs()[name]
