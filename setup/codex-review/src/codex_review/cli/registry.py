@@ -9,22 +9,22 @@ from codex_review.cli.handlers import (
     loop,
     oidc,
     schema,
-    stage00,
-    stage01,
-    stage02,
-    stage03,
-    stage04,
-    stage05,
-    stage06,
-    stage07,
-    stage08,
-    stage09,
+    resolve_gate,
+    review,
+    techlead,
+    design,
+    design_chief,
+    fix_dispatch,
+    fix_merge,
+    push,
+    reentry,
+    issue_fallback,
 )
 
 AREAS = [
     "auth", "oidc", "io", "event", "context", "loop", "schema",
-    "stage00", "stage01", "stage02", "stage03", "stage04",
-    "stage05", "stage06", "stage07", "stage08", "stage09",
+    "resolve_gate", "review", "techlead", "design", "design_chief",
+    "fix_dispatch", "fix_merge", "push", "reentry", "issue_fallback",
 ]
 
 HANDLERS = {
@@ -35,20 +35,20 @@ HANDLERS = {
     "context": context.handle_context,
     "loop": loop.handle_loop,
     "schema": schema.handle_schema,
-    "stage00": stage00.handle_stage00,
-    "stage01": stage01.handle_stage01,
-    "stage02": stage02.handle_stage02,
-    "stage03": stage03.handle_stage03,
-    "stage04": stage04.handle_stage04,
-    "stage05": stage05.handle_stage05,
-    "stage06": stage06.handle_stage06,
-    "stage07": stage07.handle_stage07,
-    "stage08": stage08.handle_stage08,
-    "stage09": stage09.handle_stage09,
+    "resolve_gate": resolve_gate.handle_resolve_gate,
+    "review": review.handle_review,
+    "techlead": techlead.handle_techlead,
+    "design": design.handle_design,
+    "design_chief": design_chief.handle_design_chief,
+    "fix_dispatch": fix_dispatch.handle_fix_dispatch,
+    "fix_merge": fix_merge.handle_fix_merge,
+    "push": push.handle_push,
+    "reentry": reentry.handle_reentry,
+    "issue_fallback": issue_fallback.handle_issue_fallback,
 }
 
 # Areas whose handler also receives the loaded config.yml.
 NEEDS_CONFIG = {
-    "context", "stage00", "stage01", "stage02", "stage03", "stage04",
-    "stage05", "stage06", "stage07", "stage08", "stage09",
+    "context", "resolve_gate", "review", "techlead", "design", "design_chief",
+    "fix_dispatch", "fix_merge", "push", "reentry", "issue_fallback",
 }

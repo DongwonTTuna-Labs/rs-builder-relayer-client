@@ -41,12 +41,12 @@ def test_no_token_validation_job_is_read_only():
 
 def test_write_jobs_use_app_token_not_github_token_write_permissions():
     text = all_text()
-    assert "auth app-token --mode stage00" in text
-    assert "auth app-token --mode stage02" in text
-    assert "auth app-token --mode stage04" in text
+    assert "auth app-token --mode resolve_gate" in text
+    assert "auth app-token --mode techlead" in text
+    assert "auth app-token --mode design_chief" in text
     assert "auth app-token --mode push" in text
-    assert "auth app-token --mode stage08" not in text
-    assert "auth app-token --mode stage09" in text
+    assert "auth app-token --mode reentry" not in text
+    assert "auth app-token --mode issue_fallback" in text
     # Trusted write/publish jobs must drive writes with the app token, never GITHUB_TOKEN.
     all_jobs_map = jobs()
     for name in ["apply_threads", "publish_review", "publish_design", "commit_push"]:
@@ -70,8 +70,8 @@ def test_app_token_steps_include_current_codex_app_secret_fallbacks():
         if "codex-review auth app-token" in str(step.get("run", ""))
     ]
 
-    # review: stage00, stage02, label-ops; design: stage04, label-ops;
-    # fix: push, loop-state, label-ops; orchestrator: stage09.
+    # review: resolve_gate, techlead, label-ops; design: design_chief, label-ops;
+    # fix: push, loop-state, label-ops; orchestrator: issue_fallback.
     assert len(app_token_steps) == 9
     for step in app_token_steps:
         env = step.get("env", {})

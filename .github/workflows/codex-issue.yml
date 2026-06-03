@@ -79,7 +79,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p codex-review-artifacts/event codex-review-artifacts/stage09
+          mkdir -p codex-review-artifacts/event codex-review-artifacts/issue_fallback
           workflow-helper/setup/codex-review/bin/codex-review event resolve-current --out codex-review-artifacts/event/event-context.json
           workflow-helper/setup/codex-review/bin/codex-review context pr --event "$GITHUB_EVENT_PATH" --pr-context codex-review-artifacts/event/event-context.json --out codex-review-artifacts/event/pr-context.json
           workflow-helper/setup/codex-review/bin/codex-review context openspec --pr-context codex-review-artifacts/event/pr-context.json --repo-path . --out codex-review-artifacts/event/openspec-context.json
@@ -88,36 +88,36 @@ jobs:
         if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.review_run_id != ''
         continue-on-error: true
         with:
-          name: codex-review-stage02
-          path: codex-review-artifacts/stage02
+          name: codex-review-techlead
+          path: codex-review-artifacts/techlead
           run-id: ${{ steps.guard.outputs.review_run_id }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.design_run_id != ''
         continue-on-error: true
         with:
-          name: codex-review-stage04
-          path: codex-review-artifacts/stage04
+          name: codex-review-design_chief
+          path: codex-review-artifacts/design_chief
           run-id: ${{ steps.guard.outputs.design_run_id }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.guard.outputs.proceed == 'true' && steps.guard.outputs.fix_run_id != ''
         continue-on-error: true
         with:
-          name: codex-review-stage07-validation
-          path: codex-review-artifacts/stage07
+          name: codex-review-push-validation
+          path: codex-review-artifacts/push
           run-id: ${{ steps.guard.outputs.fix_run_id }}
           github-token: ${{ github.token }}
       - name: Infer reason and build deterministic plan
         if: steps.guard.outputs.proceed == 'true'
         run: |
-          workflow-helper/setup/codex-review/bin/codex-review stage09 infer-reason \
-            --review-context codex-review-artifacts/stage02/review-publication.json \
-            --chief-decision codex-review-artifacts/stage04/route.json \
-            --validation codex-review-artifacts/stage07/validated-fix.json \
-            --out codex-review-artifacts/stage09/reason.json
-          workflow-helper/setup/codex-review/bin/codex-review stage09 plan --in codex-review-artifacts/stage09/reason.json --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --out codex-review-artifacts/stage09/issue-plan.json
-          workflow-helper/setup/codex-review/bin/codex-review stage09 build-prompt --in codex-review-artifacts/stage09/issue-plan.json --out codex-review-artifacts/stage09/issue-content.prompt.md
+          workflow-helper/setup/codex-review/bin/codex-review issue_fallback infer-reason \
+            --review-context codex-review-artifacts/techlead/review-publication.json \
+            --chief-decision codex-review-artifacts/design_chief/route.json \
+            --validation codex-review-artifacts/push/validated-fix.json \
+            --out codex-review-artifacts/issue_fallback/reason.json
+          workflow-helper/setup/codex-review/bin/codex-review issue_fallback plan --in codex-review-artifacts/issue_fallback/reason.json --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --out codex-review-artifacts/issue_fallback/issue-plan.json
+          workflow-helper/setup/codex-review/bin/codex-review issue_fallback build-prompt --in codex-review-artifacts/issue_fallback/issue-plan.json --out codex-review-artifacts/issue_fallback/issue-content.prompt.md
       - name: Mint Codex relay token
         id: codex_oidc
         if: steps.guard.outputs.proceed == 'true'
@@ -128,7 +128,7 @@ jobs:
         if: steps.guard.outputs.proceed == 'true'
         run: |
           mkdir -p codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage09-issue-content.v1 --out codex-review-artifacts/schemas/stage09-issue-content.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema issue-fallback-content.v1 --out codex-review-artifacts/schemas/issue-fallback-content.v1.openai.schema.json
       - name: Run Codex issue content model
         if: steps.guard.outputs.proceed == 'true'
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
@@ -136,9 +136,9 @@ jobs:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage09/issue-content.prompt.md
-          output-file: ${{ github.workspace }}/codex-review-artifacts/stage09/issue-content.raw.json
-          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage09-issue-content.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/codex-review-artifacts/issue_fallback/issue-content.prompt.md
+          output-file: ${{ github.workspace }}/codex-review-artifacts/issue_fallback/issue-content.raw.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/issue-fallback-content.v1.openai.schema.json
           working-directory: ${{ github.workspace }}
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -147,12 +147,12 @@ jobs:
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Compose Korean issue content (codex-polished, marker-safe fallback)
         if: steps.guard.outputs.proceed == 'true'
-        run: workflow-helper/setup/codex-review/bin/codex-review stage09 compose --in codex-review-artifacts/stage09/issue-plan.json --result codex-review-artifacts/stage09/issue-content.raw.json --out codex-review-artifacts/stage09/issue-final-plan.json
+        run: workflow-helper/setup/codex-review/bin/codex-review issue_fallback compose --in codex-review-artifacts/issue_fallback/issue-plan.json --result codex-review-artifacts/issue_fallback/issue-content.raw.json --out codex-review-artifacts/issue_fallback/issue-final-plan.json
       - name: Export issue plan + PR context to job outputs
         id: export
         if: steps.guard.outputs.proceed == 'true'
         run: |
-          workflow-helper/setup/codex-review/bin/codex-review io to-output --name issue_plan --in codex-review-artifacts/stage09/issue-final-plan.json
+          workflow-helper/setup/codex-review/bin/codex-review io to-output --name issue_plan --in codex-review-artifacts/issue_fallback/issue-final-plan.json
           workflow-helper/setup/codex-review/bin/codex-review io to-output --name pr_context --in codex-review-artifacts/event/pr-context.json
 
   publish_issue:
@@ -173,8 +173,8 @@ jobs:
           ISSUE_PLAN: ${{ needs.compose_content.outputs.issue_plan }}
           PR_CONTEXT: ${{ needs.compose_content.outputs.pr_context }}
         run: |
-          mkdir -p codex-review-artifacts/stage09 codex-review-artifacts/event
-          printf '%s' "$ISSUE_PLAN" > codex-review-artifacts/stage09/issue-final-plan.json
+          mkdir -p codex-review-artifacts/issue_fallback codex-review-artifacts/event
+          printf '%s' "$ISSUE_PLAN" > codex-review-artifacts/issue_fallback/issue-final-plan.json
           printf '%s' "$PR_CONTEXT" > codex-review-artifacts/event/pr-context.json
       - id: app_token
         env:
@@ -184,16 +184,16 @@ jobs:
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
           CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
           CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage09 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode issue_fallback --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/issue_fallback/app-token.json
       - name: Create or update fallback issue
         env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
-        run: workflow-helper/setup/codex-review/bin/codex-review stage09 apply --in codex-review-artifacts/stage09/issue-final-plan.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage09/issue-result.json
+        run: workflow-helper/setup/codex-review/bin/codex-review issue_fallback apply --in codex-review-artifacts/issue_fallback/issue-final-plan.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/issue_fallback/issue-result.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-issue-stage09
-          path: codex-review-artifacts/stage09
+          name: codex-issue-issue_fallback
+          path: codex-review-artifacts/issue_fallback
           retention-days: 7
       - name: Swap needs-issue label for issue-created
         if: always()

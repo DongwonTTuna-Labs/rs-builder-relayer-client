@@ -1,4 +1,4 @@
-from codex_review.stages.stage05_fix_dispatch.plan import plan_fix_tasks
+from codex_review.stages.fix_dispatch.plan import plan_fix_tasks
 
 
 def test_plan_dedupes_duplicate_model_task_ids():

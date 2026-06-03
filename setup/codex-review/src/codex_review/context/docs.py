@@ -32,7 +32,7 @@ def classify_doc_relevance(path: str | Path, stage: str) -> str:
         return "tests"
     if "agent" in name or "review" in name:
         return "workflow-rules"
-    if stage.startswith("stage05") or stage.startswith("stage07"):
+    if stage.startswith("fix_dispatch") or stage.startswith("push"):
         return "autofix"
     return "general"
 

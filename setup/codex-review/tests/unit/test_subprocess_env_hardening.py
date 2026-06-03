@@ -1,8 +1,8 @@
 import subprocess
 
 from codex_review.security import patch_policy
-from codex_review.stages.stage06_fix_merge import premerge, validate as merge_validate
-from codex_review.stages.stage07_push import validate as push_validate
+from codex_review.stages.fix_merge import premerge, validate as merge_validate
+from codex_review.stages.push import validate as push_validate
 
 
 class FakeProc:
@@ -23,7 +23,7 @@ def test_patch_policy_git_apply_check_strips_tokens(tmp_path, monkeypatch):
     assert "GITHUB_TOKEN" not in seen
 
 
-def test_stage06_premerge_git_commands_strip_tokens(tmp_path, monkeypatch):
+def test_fix_merge_premerge_git_commands_strip_tokens(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     envs = []
@@ -36,7 +36,7 @@ def test_stage06_premerge_git_commands_strip_tokens(tmp_path, monkeypatch):
     assert all("GITHUB_TOKEN" not in env for env in envs)
 
 
-def test_stage06_validate_git_apply_check_strips_tokens(tmp_path, monkeypatch):
+def test_fix_merge_validate_git_apply_check_strips_tokens(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     seen = {}
@@ -48,7 +48,7 @@ def test_stage06_validate_git_apply_check_strips_tokens(tmp_path, monkeypatch):
     assert "GITHUB_TOKEN" not in seen
 
 
-def test_stage07_worktree_clean_strips_tokens(tmp_path, monkeypatch):
+def test_push_worktree_clean_strips_tokens(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "secret")
     seen = {}
     def fake_run(*args, **kwargs):

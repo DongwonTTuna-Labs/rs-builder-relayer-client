@@ -1,10 +1,10 @@
 import pytest
-from codex_review.stages.stage00_resolve_gate.validate import validate_lifecycle_result
-from codex_review.stages.stage00_resolve_gate.apply import apply_lifecycle_result
+from codex_review.stages.resolve_gate.validate import validate_lifecycle_result
+from codex_review.stages.resolve_gate.apply import apply_lifecycle_result
 
 
 def inventory():
-    return {"schema_version":"stage00-thread-inventory.v1","items":[{"thread_id":"T1","forced_needs_human":False,"is_current_head":False,"root_cause_key":"rc1"}]}
+    return {"schema_version":"resolve-gate-thread-inventory.v1","items":[{"thread_id":"T1","forced_needs_human":False,"is_current_head":False,"root_cause_key":"rc1"}]}
 
 
 def test_lifecycle_validation_requires_exact_thread_coverage():

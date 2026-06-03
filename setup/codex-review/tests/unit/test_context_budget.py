@@ -9,8 +9,8 @@ from codex_review.context.openspec import render_openspec_context_markdown, sect
 from codex_review.context.pr import build_pr_context, context_truncation_evidence
 from codex_review.context.budget import estimate_tokens, fit_to_budget, within_budget
 from codex_review.core.errors import ValidationError
-from codex_review.stages.stage01_review.combine import cap_combined_findings, combine_axis_findings
-from codex_review.stages.stage06_fix_merge.semantic_safety import build_semantic_patch_safety_prompt
+from codex_review.stages.review.combine import cap_combined_findings, combine_axis_findings
+from codex_review.stages.fix_merge.semantic_safety import build_semantic_patch_safety_prompt
 
 
 def test_estimate_and_fit_to_budget():
@@ -98,8 +98,8 @@ def test_combine_axis_findings_no_cap_when_unset():
 
 
 def test_sections_for_stage_routing():
-    assert sections_for_stage("stage01_security") == {"proposal", "spec", "other"}
-    assert "tasks" in sections_for_stage("stage03_plan")
+    assert sections_for_stage("review_security") == {"proposal", "spec", "other"}
+    assert "tasks" in sections_for_stage("design_plan")
     assert sections_for_stage(None) is None
 
 
@@ -128,12 +128,12 @@ def test_render_openspec_budget_truncates():
 
 
 def test_semantic_safety_prompt_fails_closed_when_over_budget():
-    merged_fix = {"schema_version": "stage06-merged-fix.v1", "status": "ready", "patch": "diff --git a/x b/x\n" + ("+l\n" * 4000), "expected_head_sha": "abc"}
+    merged_fix = {"schema_version": "fix-merge-merged-fix.v1", "status": "ready", "patch": "diff --git a/x b/x\n" + ("+l\n" * 4000), "expected_head_sha": "abc"}
     with pytest.raises(ValidationError, match="too large for single-pass"):
         build_semantic_patch_safety_prompt(merged_fix, {"title": "t", "head_sha": "abc"}, "", token_budget=100)
 
 
 def test_semantic_safety_prompt_ok_within_budget():
-    merged_fix = {"schema_version": "stage06-merged-fix.v1", "status": "ready", "patch": "diff --git a/x b/x\n@@ -1 +1 @@\n+ok", "expected_head_sha": "abc"}
+    merged_fix = {"schema_version": "fix-merge-merged-fix.v1", "status": "ready", "patch": "diff --git a/x b/x\n@@ -1 +1 @@\n+ok", "expected_head_sha": "abc"}
     prompt = build_semantic_patch_safety_prompt(merged_fix, {"title": "t", "head_sha": "abc"}, "", token_budget=100000)
     assert "Semantic Patch Safety Review" in prompt

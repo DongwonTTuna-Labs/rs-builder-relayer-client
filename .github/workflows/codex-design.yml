@@ -105,8 +105,8 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.guard.outputs.proceed == 'true'
         with:
-          name: codex-review-stage00
-          path: design-inputs/stage00
+          name: codex-review-resolve_gate
+          path: design-inputs/resolve_gate
           run-id: ${{ steps.guard.outputs.review_run_id }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -114,8 +114,8 @@ jobs:
         continue-on-error: true
         with:
           # Absent when review routed design from existing threads (no techlead run).
-          name: codex-review-stage02-model
-          path: design-inputs/stage02
+          name: codex-review-techlead-model
+          path: design-inputs/techlead
           run-id: ${{ steps.guard.outputs.review_run_id }}
           github-token: ${{ github.token }}
       - id: paths
@@ -158,15 +158,15 @@ jobs:
           name: codex-design-inputs
           path: codex-review-artifacts
       - run: |
-          if [ -f codex-review-artifacts/stage02/techlead-decision.validated.json ]; then
-            DESIGN_INPUT=codex-review-artifacts/stage02/techlead-decision.validated.json
+          if [ -f codex-review-artifacts/techlead/techlead-decision.validated.json ]; then
+            DESIGN_INPUT=codex-review-artifacts/techlead/techlead-decision.validated.json
           else
-            DESIGN_INPUT=codex-review-artifacts/stage00/lifecycle-result.validated.json
+            DESIGN_INPUT=codex-review-artifacts/resolve_gate/lifecycle-result.validated.json
           fi
-          workflow-helper/setup/codex-review/bin/codex-review stage03 context --in "$DESIGN_INPUT" --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/stage03/design-context.json
+          workflow-helper/setup/codex-review/bin/codex-review design context --in "$DESIGN_INPUT" --pr-context codex-review-artifacts/event/pr-context.json --openspec-context codex-review-artifacts/event/openspec-context.json --docs-context codex-review-artifacts/event/docs-context.md --out codex-review-artifacts/design/design-context.json
       - name: Export design context to job output
         id: export
-        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name design_context --in codex-review-artifacts/stage03/design-context.json
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name design_context --in codex-review-artifacts/design/design-context.json
 
   prepare_clusters:
     name: Inventory & cluster design
@@ -198,31 +198,31 @@ jobs:
         env:
           DESIGN_CONTEXT: ${{ needs.design_context.outputs.design_context }}
         run: |
-          mkdir -p codex-review-artifacts/stage03
-          printf '%s' "$DESIGN_CONTEXT" > codex-review-artifacts/stage03/design-context.json
+          mkdir -p codex-review-artifacts/design
+          printf '%s' "$DESIGN_CONTEXT" > codex-review-artifacts/design/design-context.json
       - name: Mint Codex relay token
         id: codex_oidc
         run: |
           workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
           mkdir -p "${{ runner.temp }}/codex-home-inventory" "${{ runner.temp }}/codex-home-cluster"
       - name: Build inventory prompt
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-inventory-prompt --in codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-inventory.prompt.md
+        run: workflow-helper/setup/codex-review/bin/codex-review design build-inventory-prompt --in codex-review-artifacts/design/design-context.json --out codex-review-artifacts/design/design-inventory.prompt.md
       - name: Prepare design schemas
         run: |
           mkdir -p codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-inventory.v1 --out codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-clusters.v1 --out codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-cluster-analysis.v1 --out codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-plan.v1 --out codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-inventory.v1 --out codex-review-artifacts/schemas/design-inventory.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-clusters.v1 --out codex-review-artifacts/schemas/design-clusters.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-cluster-analysis.v1 --out codex-review-artifacts/schemas/design-cluster-analysis.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-plan.v1 --out codex-review-artifacts/schemas/design-plan.v1.openai.schema.json
       - name: Run Codex inventory model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home-inventory
-          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.prompt.md
-          output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-inventory.raw.json
-          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/codex-review-artifacts/design/design-inventory.prompt.md
+          output-file: ${{ github.workspace }}/codex-review-artifacts/design/design-inventory.raw.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/design-inventory.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -230,18 +230,18 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate design inventory
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 normalize --in codex-review-artifacts/stage03/design-inventory.raw.json --pr-context codex-review-artifacts/stage03/design-context.json --repo-path pr-head --out codex-review-artifacts/stage03/design-inventory.json
+        run: workflow-helper/setup/codex-review/bin/codex-review design normalize --in codex-review-artifacts/design/design-inventory.raw.json --pr-context codex-review-artifacts/design/design-context.json --repo-path pr-head --out codex-review-artifacts/design/design-inventory.json
       - name: Build cluster prompt
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 build-clusters-prompt --inventory codex-review-artifacts/stage03/design-inventory.json --pr-context codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage03/design-clusters.prompt.md
+        run: workflow-helper/setup/codex-review/bin/codex-review design build-clusters-prompt --inventory codex-review-artifacts/design/design-inventory.json --pr-context codex-review-artifacts/design/design-context.json --out codex-review-artifacts/design/design-clusters.prompt.md
       - name: Run Codex cluster model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home-cluster
-          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.prompt.md
-          output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-clusters.raw.json
-          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/codex-review-artifacts/design/design-clusters.prompt.md
+          output-file: ${{ github.workspace }}/codex-review-artifacts/design/design-clusters.raw.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/design-clusters.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -249,13 +249,13 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate design clusters
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 cluster --in codex-review-artifacts/stage03/design-clusters.raw.json --inventory codex-review-artifacts/stage03/design-inventory.json --repo-path pr-head --out codex-review-artifacts/stage03/design-clusters.json
+        run: workflow-helper/setup/codex-review/bin/codex-review design cluster --in codex-review-artifacts/design/design-clusters.raw.json --inventory codex-review-artifacts/design/design-inventory.json --repo-path pr-head --out codex-review-artifacts/design/design-clusters.json
       - id: prepare
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 prepare-analysis-matrix --in codex-review-artifacts/stage03/design-clusters.json --pr-context codex-review-artifacts/stage03/design-context.json --repo-path pr-head --work-dir codex-review-artifacts/stage03/batches --out codex-review-artifacts/stage03/analysis-matrix.json
+        run: workflow-helper/setup/codex-review/bin/codex-review design prepare-analysis-matrix --in codex-review-artifacts/design/design-clusters.json --pr-context codex-review-artifacts/design/design-context.json --repo-path pr-head --work-dir codex-review-artifacts/design/batches --out codex-review-artifacts/design/analysis-matrix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage03-prepare
-          path: codex-review-artifacts/stage03
+          name: codex-review-design-prepare
+          path: codex-review-artifacts/design
           retention-days: 7
 
   analyze_clusters:
@@ -287,8 +287,8 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage03-prepare
-          path: codex-review-artifacts/stage03
+          name: codex-review-design-prepare
+          path: codex-review-artifacts/design
       - name: Mint Codex relay token
         id: codex_oidc
         run: |
@@ -297,7 +297,7 @@ jobs:
       - name: Prepare cluster analysis schema
         run: |
           mkdir -p codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-cluster-analysis.v1 --out codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-cluster-analysis.v1 --out codex-review-artifacts/schemas/design-cluster-analysis.v1.openai.schema.json
       - name: Run Codex analysis model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
@@ -306,7 +306,7 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
-          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/design-cluster-analysis.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -314,11 +314,11 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate cluster analysis
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 analyze --in "${{ github.workspace }}/${{ matrix.output_file }}" --inventory "${{ github.workspace }}/${{ matrix.batch_file }}" --repo-path pr-head --out "${{ github.workspace }}/${{ matrix.validated_file }}"
+        run: workflow-helper/setup/codex-review/bin/codex-review design analyze --in "${{ github.workspace }}/${{ matrix.output_file }}" --inventory "${{ github.workspace }}/${{ matrix.batch_file }}" --repo-path pr-head --out "${{ github.workspace }}/${{ matrix.validated_file }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage03-analysis-${{ matrix.batch_path }}
-          path: ${{ github.workspace }}/codex-review-artifacts/stage03/batches/${{ matrix.batch_path }}
+          name: codex-review-design-analysis-${{ matrix.batch_path }}
+          path: ${{ github.workspace }}/codex-review-artifacts/design/batches/${{ matrix.batch_path }}
           retention-days: 7
 
   draft_plan:
@@ -347,13 +347,13 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage03-prepare
-          path: codex-review-artifacts/stage03
+          name: codex-review-design-prepare
+          path: codex-review-artifacts/design
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.prepare_clusters.outputs.has_analysis_batches == 'true'
         with:
-          pattern: codex-review-stage03-analysis-*
-          path: codex-review-artifacts/stage03-analysis-downloads
+          pattern: codex-review-design-analysis-*
+          path: codex-review-artifacts/design-analysis-downloads
           merge-multiple: false
       - name: Mint Codex relay token
         id: codex_oidc
@@ -363,21 +363,21 @@ jobs:
       - name: Prepare design plan schema
         run: |
           mkdir -p codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage03-design-plan.v1 --out codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-plan.v1 --out codex-review-artifacts/schemas/design-plan.v1.openai.schema.json
       - name: Collect cluster analyses and build design plan prompt
         run: |
-          mkdir -p codex-review-artifacts/stage03-analysis-downloads
-          workflow-helper/setup/codex-review/bin/codex-review stage03 collect-analyses --artifacts codex-review-artifacts/stage03-analysis-downloads --out codex-review-artifacts/stage03/cluster-analysis.json
-          workflow-helper/setup/codex-review/bin/codex-review stage03 build-plan-prompt --pr-context codex-review-artifacts/stage03/design-context.json --inventory codex-review-artifacts/stage03/design-clusters.json --result codex-review-artifacts/stage03/cluster-analysis.json --out codex-review-artifacts/stage03/design-plan.prompt.md
+          mkdir -p codex-review-artifacts/design-analysis-downloads
+          workflow-helper/setup/codex-review/bin/codex-review design collect-analyses --artifacts codex-review-artifacts/design-analysis-downloads --out codex-review-artifacts/design/cluster-analysis.json
+          workflow-helper/setup/codex-review/bin/codex-review design build-plan-prompt --pr-context codex-review-artifacts/design/design-context.json --inventory codex-review-artifacts/design/design-clusters.json --result codex-review-artifacts/design/cluster-analysis.json --out codex-review-artifacts/design/design-plan.prompt.md
       - name: Run Codex design plan model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-plan.prompt.md
-          output-file: ${{ github.workspace }}/codex-review-artifacts/stage03/design-plan.raw.json
-          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/codex-review-artifacts/design/design-plan.prompt.md
+          output-file: ${{ github.workspace }}/codex-review-artifacts/design/design-plan.raw.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/design-plan.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -385,11 +385,11 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate design plan
-        run: workflow-helper/setup/codex-review/bin/codex-review stage03 validate-plan --in codex-review-artifacts/stage03/design-plan.raw.json --pr-context codex-review-artifacts/stage03/design-context.json --repo-path pr-head --out codex-review-artifacts/stage03/design-plan.json
+        run: workflow-helper/setup/codex-review/bin/codex-review design validate-plan --in codex-review-artifacts/design/design-plan.raw.json --pr-context codex-review-artifacts/design/design-context.json --repo-path pr-head --out codex-review-artifacts/design/design-plan.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage03
-          path: codex-review-artifacts/stage03
+          name: codex-review-design
+          path: codex-review-artifacts/design
           retention-days: 7
 
   chief_decision:
@@ -419,28 +419,28 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage03
-          path: codex-review-artifacts/stage03
+          name: codex-review-design
+          path: codex-review-artifacts/design
       - name: Mint Codex relay token
         id: codex_oidc
         run: |
           workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
           mkdir -p "${{ runner.temp }}/codex-home"
       - name: Build design chief prompt
-        run: workflow-helper/setup/codex-review/bin/codex-review stage04 build-chief-prompt --in codex-review-artifacts/stage03/design-plan.json --inventory codex-review-artifacts/stage03/design-context.json --out codex-review-artifacts/stage04/prompt.md
+        run: workflow-helper/setup/codex-review/bin/codex-review design_chief build-chief-prompt --in codex-review-artifacts/design/design-plan.json --inventory codex-review-artifacts/design/design-context.json --out codex-review-artifacts/design_chief/prompt.md
       - name: Prepare design chief schema
         run: |
           mkdir -p codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage04-design-chief-decision.v1 --out codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema design-chief-decision.v1 --out codex-review-artifacts/schemas/design-chief-decision.v1.openai.schema.json
       - name: Run Codex design chief model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ github.workspace }}/codex-review-artifacts/stage04/prompt.md
-          output-file: ${{ github.workspace }}/codex-review-artifacts/stage04/chief-decision.json
-          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/codex-review-artifacts/design_chief/prompt.md
+          output-file: ${{ github.workspace }}/codex-review-artifacts/design_chief/chief-decision.json
+          output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/design-chief-decision.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -448,10 +448,10 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate design chief decision
-        run: workflow-helper/setup/codex-review/bin/codex-review stage04 validate --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.json --repo-path pr-head --out codex-review-artifacts/stage04/chief-decision.validated.json
+        run: workflow-helper/setup/codex-review/bin/codex-review design_chief validate --inventory codex-review-artifacts/design/design-plan.json --in codex-review-artifacts/design_chief/chief-decision.json --repo-path pr-head --out codex-review-artifacts/design_chief/chief-decision.validated.json
       - name: Export chief decision to job output
         id: export
-        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name chief_decision --in codex-review-artifacts/stage04/chief-decision.validated.json
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name chief_decision --in codex-review-artifacts/design_chief/chief-decision.validated.json
 
   publish_design:
     name: Publish design & route
@@ -477,14 +477,14 @@ jobs:
           path: codex-review-artifacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage03
-          path: codex-review-artifacts/stage03
+          name: codex-review-design
+          path: codex-review-artifacts/design
       - name: Materialize chief decision
         env:
           CHIEF_DECISION: ${{ needs.chief_decision.outputs.chief_decision }}
         run: |
-          mkdir -p codex-review-artifacts/stage04
-          printf '%s' "$CHIEF_DECISION" > codex-review-artifacts/stage04/chief-decision.validated.json
+          mkdir -p codex-review-artifacts/design_chief
+          printf '%s' "$CHIEF_DECISION" > codex-review-artifacts/design_chief/chief-decision.validated.json
       - id: app_token
         if: vars.CODEX_REVIEW_ENABLE_DESIGN_POSTING == 'true'
         env:
@@ -494,22 +494,22 @@ jobs:
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
           CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
           CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode stage04 --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode design_chief --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/design_chief/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
         run: |
           if [ "${{ vars.CODEX_REVIEW_ENABLE_DESIGN_POSTING }}" = "true" ]; then
-            workflow-helper/setup/codex-review/bin/codex-review stage04 publish --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/publish-report.json
+            workflow-helper/setup/codex-review/bin/codex-review design_chief publish --inventory codex-review-artifacts/design/design-plan.json --in codex-review-artifacts/design_chief/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/design_chief/publish-report.json
           else
-            workflow-helper/setup/codex-review/bin/codex-review stage04 publish --dry-run --inventory codex-review-artifacts/stage03/design-plan.json --in codex-review-artifacts/stage04/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/stage04/publish-report.json
+            workflow-helper/setup/codex-review/bin/codex-review design_chief publish --dry-run --inventory codex-review-artifacts/design/design-plan.json --in codex-review-artifacts/design_chief/chief-decision.validated.json --pr-context codex-review-artifacts/event/pr-context.json --out codex-review-artifacts/design_chief/publish-report.json
           fi
       - id: route
-        run: workflow-helper/setup/codex-review/bin/codex-review stage04 route --in codex-review-artifacts/stage04/chief-decision.validated.json --out codex-review-artifacts/stage04/route.json
+        run: workflow-helper/setup/codex-review/bin/codex-review design_chief route --in codex-review-artifacts/design_chief/chief-decision.validated.json --out codex-review-artifacts/design_chief/route.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage04
-          path: codex-review-artifacts/stage04
+          name: codex-review-design_chief
+          path: codex-review-artifacts/design_chief
           retention-days: 7
 
   finalize:
@@ -548,7 +548,7 @@ jobs:
           DESIGN_ROUTE: ${{ needs.publish_design.outputs.route }}
         run: |
           set -euo pipefail
-          if [ "$DESIGN_RESULT" = "success" ] && [ "$DESIGN_ROUTE" = "run_stage05" ]; then
+          if [ "$DESIGN_RESULT" = "success" ] && [ "$DESIGN_ROUTE" = "run_fix_dispatch" ]; then
             add='설계완료'
           else
             # stop_needs_human, stop_noop, or any failure -> hand to a human via issue.
