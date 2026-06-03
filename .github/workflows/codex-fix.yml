@@ -130,6 +130,7 @@ jobs:
         with:
           name: codex-fix-inputs
           path: fix-inputs
+          retention-days: 7
 
   plan_tasks:
     name: Plan fix tasks
@@ -168,6 +169,7 @@ jobs:
         with:
           name: codex-review-stage05-prepare
           path: trusted/codex-review-artifacts/stage05
+          retention-days: 7
 
   run_agents:
     name: Run fix agents
@@ -225,6 +227,7 @@ jobs:
         with:
           name: codex-review-stage05-agent-${{ matrix.task_path }}
           path: ${{ github.workspace }}/trusted/codex-review-artifacts/stage05/agents/${{ matrix.task_path }}
+          retention-days: 7
 
   merge_fixes:
     name: Collect & merge fixes
@@ -306,6 +309,7 @@ jobs:
         with:
           name: codex-review-stage05-06
           path: trusted/codex-review-artifacts
+          retention-days: 7
 
   patch_safety:
     name: Semantic patch safety
@@ -426,6 +430,7 @@ jobs:
         with:
           name: codex-review-stage07-validation
           path: trusted/codex-review-artifacts/stage07
+          retention-days: 7
 
   commit_push:
     name: Commit & push fix
@@ -497,6 +502,7 @@ jobs:
         with:
           name: codex-review-stage07
           path: trusted/codex-review-artifacts/stage07
+          retention-days: 7
 
   finalize:
     name: Finalize labels (loop or issue)
