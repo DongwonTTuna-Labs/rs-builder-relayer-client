@@ -23,28 +23,28 @@
 
 ## Phase 3: Stage00 resolve gate
 
-- `stage00_resolve_gate/collect.py`
-- `stage00_resolve_gate/prompt.py`
-- `stage00_resolve_gate/validate.py`
-- `stage00_resolve_gate/apply.py`
-- `stage00_resolve_gate/route.py`
+- `resolve_gate/collect.py`
+- `resolve_gate/prompt.py`
+- `resolve_gate/validate.py`
+- `resolve_gate/apply.py`
+- `resolve_gate/route.py`
 
 ## Phase 4: Review + Techlead
 
-- `stage01_review/*`
-- `stage02_techlead/*`
+- `review/*`
+- `techlead/*`
 
 ## Phase 5: Design + Design Chief
 
-- `stage03_design/*`
-- `stage04_design_chief/*`
+- `design/*`
+- `design_chief/*`
 
 ## Phase 6: Fix + Merge + Push
 
-- `stage05_fix_dispatch/*`
-- `stage06_fix_merge/*`
-- `stage07_push/*`
-- `stage08_reentry/*`
+- `fix_dispatch/*`
+- `fix_merge/*`
+- `push/*`
+- `reentry/*`
 
 ## Phase 7: Workflow and tests
 

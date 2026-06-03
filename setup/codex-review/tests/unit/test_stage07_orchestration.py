@@ -1,16 +1,16 @@
-from codex_review.stages.stage07_push.orchestrate import commit_and_push_validated_fix, run_push_flow
+from codex_review.stages.push.orchestrate import commit_and_push_validated_fix, run_push_flow
 
 
 def test_push_flow_no_fix_returns_safe_result(tmp_path):
-    result = run_push_flow({"schema_version":"stage06-merged-fix.v1", "status":"no_fix", "patch":""}, {"head_sha":"abc"}, {}, tmp_path, None, dry_run=True)
+    result = run_push_flow({"schema_version":"fix-merge-merged-fix.v1", "status":"no_fix", "patch":""}, {"head_sha":"abc"}, {}, tmp_path, None, dry_run=True)
     assert result["pushed"] is False
     assert result["status"] == "no_fix"
 
 
 def test_commit_push_preserves_nonvalidated_status_for_issue_fallback(tmp_path):
     result = commit_and_push_validated_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready_to_push", "patch":"diff --git a/src/a.py b/src/a.py\n"},
-        {"schema_version":"stage07-validated-fix.v1", "status":"no_diff_repeat", "validated":False},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready_to_push", "patch":"diff --git a/src/a.py b/src/a.py\n"},
+        {"schema_version":"push-validated-fix.v1", "status":"no_diff_repeat", "validated":False},
         {"owner":"o", "repo":"r", "pr_number":1, "head_sha":"abc"},
         {},
         tmp_path,
@@ -23,7 +23,7 @@ def test_commit_push_preserves_nonvalidated_status_for_issue_fallback(tmp_path):
 
 def test_validate_and_test_reports_already_applied_patch_as_no_diff_repeat(tmp_path):
     import subprocess
-    from codex_review.stages.stage07_push.orchestrate import validate_and_test_fix
+    from codex_review.stages.push.orchestrate import validate_and_test_fix
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -47,7 +47,7 @@ def test_validate_and_test_reports_already_applied_patch_as_no_diff_repeat(tmp_p
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
     result = validate_and_test_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
         {"head_sha":head},
         {"autofix":{"allowed_prefixes":["src/"], "max_patch_bytes":10000}},
         repo,
@@ -58,31 +58,31 @@ def test_validate_and_test_reports_already_applied_patch_as_no_diff_repeat(tmp_p
     assert result["validated"] is False
 
 
-def test_stage07_write_validation_outputs_declares_push_token_requirement(tmp_path, monkeypatch):
+def test_push_write_validation_outputs_declares_push_token_requirement(tmp_path, monkeypatch):
     import json
     from codex_review.cli import main
 
     artifact = tmp_path / "validated-fix.json"
-    artifact.write_text(json.dumps({"schema_version":"stage07-validated-fix.v1", "status":"validated", "validated":True}), encoding="utf-8")
+    artifact.write_text(json.dumps({"schema_version":"push-validated-fix.v1", "status":"validated", "validated":True}), encoding="utf-8")
     github_output = tmp_path / "github-output.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
 
-    assert main(["stage07", "write-validation-outputs", "--in", str(artifact)]) == 0
+    assert main(["push", "write-validation-outputs", "--in", str(artifact)]) == 0
     text = github_output.read_text(encoding="utf-8")
     assert "validation_status=validated" in text
     assert "requires_push_token=true" in text
 
 
-def test_stage02_write_deferred_outputs_counts_items(tmp_path, monkeypatch):
+def test_techlead_write_deferred_outputs_counts_items(tmp_path, monkeypatch):
     import json
     from codex_review.cli import main
 
     artifact = tmp_path / "review-publication.json"
-    artifact.write_text(json.dumps({"schema_version":"stage02-review-publication.v1", "deferred_items":[{"id":"a"}, {"id":"b"}]}), encoding="utf-8")
-    github_output = tmp_path / "github-output-stage02.txt"
+    artifact.write_text(json.dumps({"schema_version":"techlead-review-publication.v1", "deferred_items":[{"id":"a"}, {"id":"b"}]}), encoding="utf-8")
+    github_output = tmp_path / "github-output-techlead.txt"
     monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
 
-    assert main(["stage02", "write-deferred-outputs", "--in", str(artifact)]) == 0
+    assert main(["techlead", "write-deferred-outputs", "--in", str(artifact)]) == 0
     text = github_output.read_text(encoding="utf-8")
     assert "has_deferred_issue_items=true" in text
     assert "deferred_issue_count=2" in text
@@ -90,7 +90,7 @@ def test_stage02_write_deferred_outputs_counts_items(tmp_path, monkeypatch):
 
 def test_validate_and_test_returns_validation_failed_artifact_instead_of_raising(tmp_path):
     import subprocess
-    from codex_review.stages.stage07_push.orchestrate import validate_and_test_fix
+    from codex_review.stages.push.orchestrate import validate_and_test_fix
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -110,7 +110,7 @@ def test_validate_and_test_returns_validation_failed_artifact_instead_of_raising
 +new
 """
     result = validate_and_test_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":"not-the-current-head"},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":"not-the-current-head"},
         {"head_sha":"not-the-current-head"},
         {"autofix":{"allowed_prefixes":["src/"], "max_patch_bytes":10000}},
         repo,
@@ -124,10 +124,10 @@ def test_validate_and_test_returns_validation_failed_artifact_instead_of_raising
 
 
 def test_ready_status_with_empty_patch_routes_to_empty_patch():
-    from codex_review.stages.stage07_push.orchestrate import run_push_flow
+    from codex_review.stages.push.orchestrate import run_push_flow
 
     result = run_push_flow(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready_to_push", "patch":""},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready_to_push", "patch":""},
         {"head_sha":"abc"},
         {},
         ".",
@@ -146,7 +146,7 @@ def _semantic_approval_for_patch(patch: str) -> dict:
     paths = extract_patch_paths(patch) or ["src/a.txt"]
 
     return {
-        "schema_version": "stage06-semantic-patch-safety.v1",
+        "schema_version": "fix-merge-semantic-patch-safety.v1",
         "status": "approved",
         "approved": True,
         "patch_hash": hashlib.sha256(patch.encode("utf-8")).hexdigest(),
@@ -160,7 +160,7 @@ def _semantic_approval_for_patch(patch: str) -> dict:
 
 def test_validate_and_test_requires_exact_semantic_patch_safety_approval(tmp_path):
     import subprocess
-    from codex_review.stages.stage07_push.orchestrate import validate_and_test_fix
+    from codex_review.stages.push.orchestrate import validate_and_test_fix
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -181,7 +181,7 @@ def test_validate_and_test_requires_exact_semantic_patch_safety_approval(tmp_pat
 """
 
     result = validate_and_test_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
         {"head_sha":head},
         {"autofix":{"allowed_prefixes":["src/"], "max_patch_bytes":10000}},
         repo,
@@ -196,7 +196,7 @@ def test_validate_and_test_requires_exact_semantic_patch_safety_approval(tmp_pat
 
 def test_validate_and_test_allows_exact_semantic_patch_safety_approval(tmp_path):
     import subprocess
-    from codex_review.stages.stage07_push.orchestrate import validate_and_test_fix
+    from codex_review.stages.push.orchestrate import validate_and_test_fix
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -217,7 +217,7 @@ def test_validate_and_test_allows_exact_semantic_patch_safety_approval(tmp_path)
 """
 
     result = validate_and_test_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
         {"head_sha":head},
         {"autofix":{"allowed_prefixes":["src/"], "max_patch_bytes":10000}},
         repo,
@@ -232,7 +232,7 @@ def test_validate_and_test_allows_exact_semantic_patch_safety_approval(tmp_path)
 
 def test_validate_and_test_accepts_new_file_patch(tmp_path):
     import subprocess
-    from codex_review.stages.stage07_push.orchestrate import validate_and_test_fix
+    from codex_review.stages.push.orchestrate import validate_and_test_fix
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -253,7 +253,7 @@ index 0000000..04331b2
 """
 
     result = validate_and_test_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready", "patch":patch, "expected_head_sha":head},
         {"head_sha":head},
         {"autofix":{"allowed_prefixes":["docs/"], "max_patch_bytes":10000}},
         repo,
@@ -269,8 +269,8 @@ index 0000000..04331b2
 
 def test_commit_push_defensively_refuses_validated_artifact_without_semantic_approval(tmp_path):
     result = commit_and_push_validated_fix(
-        {"schema_version":"stage06-merged-fix.v1", "status":"ready_to_push", "patch":"diff --git a/src/a.py b/src/a.py\n"},
-        {"schema_version":"stage07-validated-fix.v1", "status":"validated", "validated":True, "semantic_safety_approved":False},
+        {"schema_version":"fix-merge-merged-fix.v1", "status":"ready_to_push", "patch":"diff --git a/src/a.py b/src/a.py\n"},
+        {"schema_version":"push-validated-fix.v1", "status":"validated", "validated":True, "semantic_safety_approved":False},
         {"owner":"o", "repo":"r", "pr_number":1, "head_sha":"abc"},
         {},
         tmp_path,
@@ -282,7 +282,7 @@ def test_commit_push_defensively_refuses_validated_artifact_without_semantic_app
 
 def test_commit_push_uses_semantic_commit_plan_and_splits_logical_commits(tmp_path, monkeypatch):
     import subprocess
-    from codex_review.stages.stage07_push import orchestrate
+    from codex_review.stages.push import orchestrate
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -319,9 +319,9 @@ diff --git a/docs/b.md b/docs/b.md
     monkeypatch.setattr(orchestrate, "verify_pushed_head", lambda *args, **kwargs: True)
 
     result = commit_and_push_validated_fix(
-        {"schema_version": "stage06-merged-fix.v1", "status": "ready_to_push", "patch": patch, "expected_head_sha": head},
+        {"schema_version": "fix-merge-merged-fix.v1", "status": "ready_to_push", "patch": patch, "expected_head_sha": head},
         {
-            "schema_version": "stage07-validated-fix.v1",
+            "schema_version": "push-validated-fix.v1",
             "status": "validated",
             "validated": True,
             "semantic_safety_approved": True,
@@ -345,7 +345,7 @@ diff --git a/docs/b.md b/docs/b.md
 def test_commit_push_treats_successful_push_with_delayed_verification_as_pushed_unverified(tmp_path, monkeypatch):
     import hashlib
     import subprocess
-    from codex_review.stages.stage07_push import orchestrate
+    from codex_review.stages.push import orchestrate
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -371,9 +371,9 @@ def test_commit_push_treats_successful_push_with_delayed_verification_as_pushed_
     monkeypatch.setattr(orchestrate, "verify_pushed_head", lambda *args, **kwargs: False)
 
     result = commit_and_push_validated_fix(
-        {"schema_version": "stage06-merged-fix.v1", "status": "ready_to_push", "patch": patch, "expected_head_sha": head},
+        {"schema_version": "fix-merge-merged-fix.v1", "status": "ready_to_push", "patch": patch, "expected_head_sha": head},
         {
-            "schema_version": "stage07-validated-fix.v1",
+            "schema_version": "push-validated-fix.v1",
             "status": "validated",
             "validated": True,
             "semantic_safety_approved": True,

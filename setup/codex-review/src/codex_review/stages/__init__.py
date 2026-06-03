@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 STAGE_ORDER = [
-    "stage00_resolve_gate",
-    "stage01_review",
-    "stage02_techlead",
-    "stage03_design",
-    "stage04_design_chief",
-    "stage05_fix_dispatch",
-    "stage06_fix_merge",
-    "stage07_push",
-    "stage08_reentry",
+    "resolve_gate",
+    "review",
+    "techlead",
+    "design",
+    "design_chief",
+    "fix_dispatch",
+    "fix_merge",
+    "push",
+    "reentry",
 ]
 
 

@@ -158,16 +158,16 @@ def _model_or_fallback(args: argparse.Namespace, *, stage: str, expected_schema:
 def register_event_commands(parser: argparse.ArgumentParser) -> None: return None
 def register_context_commands(parser: argparse.ArgumentParser) -> None: return None
 def register_loop_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage00_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage01_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage02_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage03_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage04_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage05_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage06_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage07_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage08_commands(parser: argparse.ArgumentParser) -> None: return None
-def register_stage09_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_resolve_gate_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_review_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_techlead_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_design_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_design_chief_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_fix_dispatch_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_fix_merge_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_push_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_reentry_commands(parser: argparse.ArgumentParser) -> None: return None
+def register_issue_fallback_commands(parser: argparse.ArgumentParser) -> None: return None
 
 
 def _handle_event(args: argparse.Namespace) -> tuple[Any, str | None]:
@@ -313,23 +313,23 @@ def _handle_context(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
 
 
 def _handle_loop(args: argparse.Namespace) -> tuple[Any, str | None]:
-    from .loop.router import route_after_stage00, route_after_stage02, route_after_stage04, route_after_stage07, write_route_outputs
+    from .loop.router import route_after_resolve_gate, route_after_techlead, route_after_design_chief, route_after_push, write_route_outputs
     cmd = args.command
     payload = _maybe_json(args.in_path, {})
-    if cmd in {"route-after-stage00", "route"}:
-        route = route_after_stage00(payload)
+    if cmd in {"route-after-resolve_gate", "route"}:
+        route = route_after_resolve_gate(payload)
         write_route_outputs(route)
         return route, None
-    if cmd == "route-after-stage02":
-        route = route_after_stage02(payload)
+    if cmd == "route-after-techlead":
+        route = route_after_techlead(payload)
         write_route_outputs(route)
         return route, None
-    if cmd == "route-after-stage04":
-        route = route_after_stage04(payload)
+    if cmd == "route-after-design_chief":
+        route = route_after_design_chief(payload)
         write_route_outputs(route)
         return route, None
-    if cmd == "route-after-stage07":
-        route = route_after_stage07(payload)
+    if cmd == "route-after-push":
+        route = route_after_push(payload)
         write_route_outputs(route)
         return route, None
     if cmd == "summary":
@@ -354,11 +354,11 @@ def _handle_loop(args: argparse.Namespace) -> tuple[Any, str | None]:
     raise ValueError(f"unknown loop command: {cmd}")
 
 
-def _handle_stage00(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_resolve_gate(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd == "collect":
         from .github.review_threads import collect_review_threads
-        from .stages.stage00_resolve_gate.collect import collect_thread_inventory
+        from .stages.resolve_gate.collect import collect_thread_inventory
         pr = _maybe_json(args.pr_context, {})
         raw = _json_or_default(args.in_path, None)
         if raw is None:
@@ -368,10 +368,10 @@ def _handle_stage00(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         else:
             threads = raw.get("threads") or raw.get("review_threads") if isinstance(raw, dict) else raw
         inv = collect_thread_inventory(pr, threads or [], [], config)
-        return inv, "stage00-thread-inventory.v1"
+        return inv, "resolve-gate-thread-inventory.v1"
     if cmd in {"collect-resolved", "resolved-memory"}:
         from .github.review_threads import collect_review_threads
-        from .stages.stage00_resolve_gate.collect import build_resolved_memory
+        from .stages.resolve_gate.collect import build_resolved_memory
         pr = _maybe_json(args.pr_context, {})
         raw = _json_or_default(args.in_path, None)
         if raw is None:
@@ -380,83 +380,83 @@ def _handle_stage00(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             threads = collect_review_threads(owner, repo, int(pr_number), args.token) if owner and repo and pr_number and args.token else []
         else:
             threads = raw.get("threads") or raw.get("review_threads") if isinstance(raw, dict) else raw
-        return build_resolved_memory(pr, threads or [], config), "stage00-resolved-memory.v1"
+        return build_resolved_memory(pr, threads or [], config), "resolve-gate-resolved-memory.v1"
     if cmd in {"default-result", "noop-result", "model-result"}:
         inv = _maybe_json(args.inventory or args.in_path, {})
         decisions = []
         for item in inv.get("items", []):
             state = "needs_human" if item.get("forced_needs_human") else "current_head_keep_open"
             decisions.append({"thread_id": item.get("thread_id"), "state": state, "reason": item.get("forced_reason") or "safe default keeps existing thread open"})
-        fallback = {"schema_version": "stage00-lifecycle-result.v1", "decisions": decisions, "defaulted": True}
+        fallback = {"schema_version": "resolve-gate-lifecycle-result.v1", "decisions": decisions, "defaulted": True}
         if cmd == "model-result":
-            return _model_or_fallback(args, stage="stage00", expected_schema="stage00-lifecycle-result.v1", fallback=fallback), "stage00-lifecycle-result.v1"
-        return fallback, "stage00-lifecycle-result.v1"
+            return _model_or_fallback(args, stage="resolve_gate", expected_schema="resolve-gate-lifecycle-result.v1", fallback=fallback), "resolve-gate-lifecycle-result.v1"
+        return fallback, "resolve-gate-lifecycle-result.v1"
     if cmd in {"build-prompt", "prompt"}:
-        from .stages.stage00_resolve_gate.prompt import build_lifecycle_prompt
+        from .stages.resolve_gate.prompt import build_lifecycle_prompt
         inv = _maybe_json(args.inventory or args.in_path, {})
         prompt = build_lifecycle_prompt(inv, _maybe_text(args.review_context), _maybe_text(args.docs_context), config)
         return prompt, None
     if cmd in {"validate", "validate-result"}:
-        from .stages.stage00_resolve_gate.validate import validate_lifecycle_result
-        return validate_lifecycle_result(_maybe_json(args.result or args.in_path, {}), _maybe_json(args.inventory, {})), "stage00-lifecycle-result.v1"
+        from .stages.resolve_gate.validate import validate_lifecycle_result
+        return validate_lifecycle_result(_maybe_json(args.result or args.in_path, {}), _maybe_json(args.inventory, {})), "resolve-gate-lifecycle-result.v1"
     if cmd == "apply":
-        from .stages.stage00_resolve_gate.apply import apply_lifecycle_result
+        from .stages.resolve_gate.apply import apply_lifecycle_result
         return apply_lifecycle_result(_maybe_json(args.result or args.in_path, {}), _maybe_json(args.pr_context, {}), args.token, config, dry_run=args.dry_run), None
     if cmd == "route":
-        from .stages.stage00_resolve_gate.route import build_gate_result, emit_gate_outputs
+        from .stages.resolve_gate.route import build_gate_result, emit_gate_outputs
         apply_report = _maybe_json(args.artifacts[0], {}) if args.artifacts else {}
         gate = build_gate_result(_maybe_json(args.inventory, {}), _maybe_json(args.result or args.in_path, {}), apply_report)
         emit_gate_outputs(gate)
-        return gate, "stage00-gate-result.v1"
+        return gate, "resolve-gate-result.v1"
     if cmd == "render":
-        from .stages.stage00_resolve_gate.render import render_stage00_step_summary
-        return render_stage00_step_summary(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage00 command: {cmd}")
+        from .stages.resolve_gate.render import render_resolve_gate_step_summary
+        return render_resolve_gate_step_summary(_maybe_json(args.in_path, {})), None
+    raise ValueError(f"unknown resolve_gate command: {cmd}")
 
 
-def _handle_stage01(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_review(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd == "axes":
-        from .stages.stage01_review.axes import review_axes
+        from .stages.review.axes import review_axes
         return {"axes": review_axes(config)}, None
     if cmd in {"default-result", "noop-result", "model-result"}:
         axis = args.axis or "correctness"
         fallback = {
-            "schema_version": "stage01-axis-findings.v1",
+            "schema_version": "review-axis-findings.v1",
             "axis": axis,
             "findings": [],
             "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No model result was available for this axis."),
             "defaulted": True,
         }
         if cmd == "model-result":
-            return _model_or_fallback(args, stage=f"stage01_{axis}", expected_schema="stage01-axis-findings.v1", fallback=fallback), "stage01-axis-findings.v1"
-        return fallback, "stage01-axis-findings.v1"
+            return _model_or_fallback(args, stage=f"review_{axis}", expected_schema="review-axis-findings.v1", fallback=fallback), "review-axis-findings.v1"
+        return fallback, "review-axis-findings.v1"
     if cmd in {"build-review-prompt", "prompt"}:
-        from .stages.stage01_review.prompt import build_axis_prompt
+        from .stages.review.prompt import build_axis_prompt
         return build_axis_prompt(args.axis or "correctness", _maybe_json(args.pr_context, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), config), None
     if cmd in {"validate-axis", "validate"}:
-        from .stages.stage01_review.validate import validate_axis_findings
+        from .stages.review.validate import validate_axis_findings
         payload = _maybe_json(args.in_path, {})
         changed_payload = _json_or_default(args.changed_lines, {})
         changed = changed_payload.get("changed_line_map", changed_payload) if isinstance(changed_payload, dict) else {}
-        return validate_axis_findings(args.axis or payload.get("axis"), payload, _maybe_json(args.pr_context, {}), changed, config, args.repo_path), "stage01-axis-findings.v1"
+        return validate_axis_findings(args.axis or payload.get("axis"), payload, _maybe_json(args.pr_context, {}), changed, config, args.repo_path), "review-axis-findings.v1"
     if cmd == "combine":
-        from .stages.stage01_review.combine import combine_axis_findings
+        from .stages.review.combine import combine_axis_findings
         paths = _preferred_artifact_paths(args.artifacts, primary="findings.validated.json", fallback="findings.json")
-        return combine_axis_findings(paths, config), "stage01-combined-findings.v1"
+        return combine_axis_findings(paths, config), "review-combined-findings.v1"
     if cmd == "render":
-        from .stages.stage01_review.render import render_combined_summary
+        from .stages.review.render import render_combined_summary
         return render_combined_summary(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage01 command: {cmd}")
+    raise ValueError(f"unknown review command: {cmd}")
 
 
-def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_techlead(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd in {"default-result", "noop-result", "model-result"}:
         combined = _maybe_json(args.inventory or args.in_path, {"findings": []})
         decisions = [{"finding_id": f.get("finding_id") or f.get("id"), "action": "publish_only", "reason": "safe deterministic default"} for f in combined.get("findings", [])]
         fallback = {
-            "schema_version": "stage02-techlead-decision.v1",
+            "schema_version": "techlead-decision.v1",
             "decisions": decisions,
             "needs_design": False,
             "status": "ready" if decisions else "lgtm",
@@ -464,27 +464,27 @@ def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             "defaulted": True,
         }
         if cmd == "model-result":
-            return _model_or_fallback(args, stage="stage02", expected_schema="stage02-techlead-decision.v1", fallback=fallback), "stage02-techlead-decision.v1"
-        return fallback, "stage02-techlead-decision.v1"
+            return _model_or_fallback(args, stage="techlead", expected_schema="techlead-decision.v1", fallback=fallback), "techlead-decision.v1"
+        return fallback, "techlead-decision.v1"
     if cmd in {"filter-resolved", "filter-against-resolved"}:
-        from .stages.stage02_techlead.filter_resolved import filter_findings_against_resolved
+        from .stages.techlead.filter_resolved import filter_findings_against_resolved
         combined = _maybe_json(args.in_path, {"findings": []})
         resolved_memory = _json_or_default(args.inventory, {})
         pr = _json_or_default(args.pr_context, {})
         changed_line_map = pr.get("changed_line_map") or {}
         filtered, _ = filter_findings_against_resolved(combined, resolved_memory, changed_line_map, config)
-        return filtered, "stage01-combined-findings.v1"
+        return filtered, "review-combined-findings.v1"
     if cmd in {"build-techlead-prompt", "prompt"}:
-        from .stages.stage02_techlead.prompt import build_techlead_prompt
+        from .stages.techlead.prompt import build_techlead_prompt
         return build_techlead_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), config), None
     if cmd == "validate":
-        from .stages.stage02_techlead.validate import validate_techlead_decision
+        from .stages.techlead.validate import validate_techlead_decision
         combined = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
-        return validate_techlead_decision(_maybe_json(args.in_path, {}), combined, config, args.repo_path), "stage02-techlead-decision.v1"
+        return validate_techlead_decision(_maybe_json(args.in_path, {}), combined, config, args.repo_path), "techlead-decision.v1"
     if cmd == "classify":
-        from .stages.stage02_techlead.classify import build_review_publication
+        from .stages.techlead.classify import build_review_publication
         combined = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
-        return build_review_publication(_maybe_json(args.in_path, {}), combined, config), "stage02-review-publication.v1"
+        return build_review_publication(_maybe_json(args.in_path, {}), combined, config), "techlead-review-publication.v1"
     if cmd in {"write-deferred-outputs", "deferred-outputs"}:
         payload = _maybe_json(args.in_path, {})
         count = len(payload.get("deferred_items") or [])
@@ -492,24 +492,24 @@ def _handle_stage02(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         write_output("deferred_issue_count", str(count))
         return {"has_deferred_issue_items": bool(count), "deferred_issue_count": count}, None
     if cmd == "publish":
-        from .stages.stage02_techlead.publish import publish_review
+        from .stages.techlead.publish import publish_review
         changed_payload = _json_or_default(args.changed_lines, {})
         changed = changed_payload.get("changed_line_map", changed_payload) if isinstance(changed_payload, dict) else {}
         token = None if args.dry_run else args.token
         return publish_review(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), changed, token, config, dry_run=args.dry_run), None
     if cmd == "render":
-        from .stages.stage02_techlead.render import render_review_body
+        from .stages.techlead.render import render_review_body
         return render_review_body(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage02 command: {cmd}")
+    raise ValueError(f"unknown techlead command: {cmd}")
 
 
-def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_design(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd == "context":
-        from .stages.stage03_design.context import build_design_context
-        return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None, _json_or_default(args.openspec_context, {})), "stage03-design-context.v1"
+        from .stages.design.context import build_design_context
+        return build_design_context(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), _maybe_text(args.review_context), _maybe_text(args.docs_context), None, _json_or_default(args.openspec_context, {})), "design-context.v1"
     if cmd in {"build-inventory-prompt", "inventory-prompt"}:
-        from .stages.stage03_design.normalize import build_normalize_prompt
+        from .stages.design.normalize import build_normalize_prompt
         return build_normalize_prompt(_maybe_json(args.in_path or args.inventory, {})), None
     if cmd in {"default-inventory", "default-result", "model-inventory"}:
         ctx = _maybe_json(args.in_path, {})
@@ -517,7 +517,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         for finding in ctx.get("findings", []):
             items.append({"finding_id": finding.get("finding_id"), "invariant": finding.get("root_cause_key") or finding.get("title") or finding.get("finding_id"), "summary": finding.get("summary", "")})
         fallback = {
-            "schema_version": "stage03-design-inventory.v1",
+            "schema_version": "design-inventory.v1",
             "items": items,
             "item_count": len(items),
             "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design inventory model result was available."),
@@ -526,17 +526,17 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if cmd == "model-inventory":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
-                from .stages.stage03_design.normalize import build_normalize_prompt
+                from .stages.design.normalize import build_normalize_prompt
                 args.prompt = str(write_prompt_if_needed(build_normalize_prompt(ctx), args.out))
-            return _model_or_fallback(args, stage="stage03_inventory", expected_schema="stage03-design-inventory.v1", fallback=fallback), "stage03-design-inventory.v1"
-        return fallback, "stage03-design-inventory.v1"
+            return _model_or_fallback(args, stage="design_inventory", expected_schema="design-inventory.v1", fallback=fallback), "design-inventory.v1"
+        return fallback, "design-inventory.v1"
     if cmd == "normalize":
-        from .stages.stage03_design.normalize import validate_design_inventory
+        from .stages.design.normalize import validate_design_inventory
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         tech = ctx.get("techlead_decision", ctx)
-        return validate_design_inventory(_maybe_json(args.in_path, {}), tech, args.repo_path), "stage03-design-inventory.v1"
+        return validate_design_inventory(_maybe_json(args.in_path, {}), tech, args.repo_path), "design-inventory.v1"
     if cmd in {"build-clusters-prompt", "clusters-prompt"}:
-        from .stages.stage03_design.cluster import build_cluster_prompt
+        from .stages.design.cluster import build_cluster_prompt
         return build_cluster_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
     if cmd in {"default-clusters", "model-clusters"}:
         inv = _maybe_json(args.inventory or args.in_path, {})
@@ -544,7 +544,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         for idx, item in enumerate(inv.get("items", []), 1):
             clusters.append({"cluster_id": f"cluster-{idx}", "finding_ids": [item.get("finding_id")], "summary": item.get("summary", "")})
         fallback = {
-            "schema_version": "stage03-design-clusters.v1",
+            "schema_version": "design-clusters.v1",
             "clusters": clusters,
             "cluster_count": len(clusters),
             "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design cluster model result was available."),
@@ -553,23 +553,23 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if cmd == "model-clusters":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
-                from .stages.stage03_design.cluster import build_cluster_prompt
+                from .stages.design.cluster import build_cluster_prompt
                 args.prompt = str(write_prompt_if_needed(build_cluster_prompt(inv, _maybe_json(args.pr_context, {})), args.out))
-            return _model_or_fallback(args, stage="stage03_clusters", expected_schema="stage03-design-clusters.v1", fallback=fallback), "stage03-design-clusters.v1"
-        return fallback, "stage03-design-clusters.v1"
+            return _model_or_fallback(args, stage="design_clusters", expected_schema="design-clusters.v1", fallback=fallback), "design-clusters.v1"
+        return fallback, "design-clusters.v1"
     if cmd == "cluster":
-        from .stages.stage03_design.cluster import validate_design_clusters
-        return validate_design_clusters(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), args.repo_path), "stage03-design-clusters.v1"
+        from .stages.design.cluster import validate_design_clusters
+        return validate_design_clusters(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), args.repo_path), "design-clusters.v1"
     if cmd == "batch":
-        from .stages.stage03_design.batch import make_cluster_batches
+        from .stages.design.batch import make_cluster_batches
         return {"batches": make_cluster_batches(_maybe_json(args.in_path, {}), config)}, None
     if cmd in {"prepare-analysis-matrix", "prepare-analysis"}:
-        from .stages.stage03_design.analyze import build_cluster_analysis_prompt
-        from .stages.stage03_design.batch import make_cluster_batches
+        from .stages.design.analyze import build_cluster_analysis_prompt
+        from .stages.design.batch import make_cluster_batches
         clusters = _maybe_json(args.in_path or args.inventory, {})
         design_context = _maybe_json(args.pr_context, {})
         batches = make_cluster_batches(clusters, config)
-        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/stage03/batches")
+        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/design/batches")
         base_dir.mkdir(parents=True, exist_ok=True)
         include = []
         for batch in batches:
@@ -583,7 +583,7 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             prompt_file = batch_dir / "analysis.prompt.md"
             output_file = batch_dir / "analysis.raw.json"
             validated_file = batch_dir / "analysis.validated.json"
-            write_json(batch_file, batch, "stage03-cluster-batch.v1")
+            write_json(batch_file, batch, "design-cluster-batch.v1")
             write_text(prompt_file, build_cluster_analysis_prompt(batch, design_context))
             include.append(
                 {
@@ -602,18 +602,18 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             write_output("analysis_matrix", json.dumps(matrix, sort_keys=True, separators=(",", ":")))
         return matrix, None
     if cmd in {"collect-analyses", "collect-analysis"}:
-        from .stages.stage03_design.analyze import combine_cluster_analyses
+        from .stages.design.analyze import combine_cluster_analyses
         paths = _preferred_artifact_paths(args.artifacts, primary="analysis.validated.json", fallback="*.json")
         analyses = combine_cluster_analyses(paths)
-        return {"schema_version": "stage03-cluster-analysis.v1", "analyses": analyses, "analysis_count": len(analyses)}, "stage03-cluster-analysis.v1"
+        return {"schema_version": "design-cluster-analysis.v1", "analyses": analyses, "analysis_count": len(analyses)}, "design-cluster-analysis.v1"
     if cmd in {"build-analysis-prompt", "analysis-prompt"}:
-        from .stages.stage03_design.analyze import build_cluster_analysis_prompt
+        from .stages.design.analyze import build_cluster_analysis_prompt
         return build_cluster_analysis_prompt(_maybe_json(args.inventory or args.in_path, {}), _maybe_json(args.pr_context, {})), None
     if cmd in {"default-analysis", "model-analysis"}:
         clusters = _maybe_json(args.inventory or args.in_path, {})
         analyses = [{"cluster_id": c.get("cluster_id"), "status": "needs_human", "recommendation": "model analysis not provided"} for c in clusters.get("clusters", [])]
         fallback = {
-            "schema_version": "stage03-cluster-analysis.v1",
+            "schema_version": "design-cluster-analysis.v1",
             "analyses": analyses,
             "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No cluster analysis model result was available."),
             "defaulted": True,
@@ -621,20 +621,20 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if cmd == "model-analysis":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
-                from .stages.stage03_design.analyze import build_cluster_analysis_prompt
+                from .stages.design.analyze import build_cluster_analysis_prompt
                 args.prompt = str(write_prompt_if_needed(build_cluster_analysis_prompt(clusters, _maybe_json(args.pr_context, {})), args.out))
-            return _model_or_fallback(args, stage="stage03_analysis", expected_schema="stage03-cluster-analysis.v1", fallback=fallback), "stage03-cluster-analysis.v1"
-        return fallback, "stage03-cluster-analysis.v1"
+            return _model_or_fallback(args, stage="design_analysis", expected_schema="design-cluster-analysis.v1", fallback=fallback), "design-cluster-analysis.v1"
+        return fallback, "design-cluster-analysis.v1"
     if cmd == "analyze":
-        from .stages.stage03_design.analyze import validate_cluster_analysis
+        from .stages.design.analyze import validate_cluster_analysis
         batch = _maybe_json(args.artifacts[0], {}) if args.artifacts else _maybe_json(args.inventory, {})
-        return validate_cluster_analysis(_maybe_json(args.in_path, {}), batch, args.repo_path), "stage03-cluster-analysis.v1"
+        return validate_cluster_analysis(_maybe_json(args.in_path, {}), batch, args.repo_path), "design-cluster-analysis.v1"
     if cmd in {"default-plan", "model-plan"}:
-        from .stages.stage03_design.coordinate import validate_design_plan
+        from .stages.design.coordinate import validate_design_plan
         ctx = _maybe_json(args.pr_context or args.inventory, {})
         findings = ctx.get("findings", [])
         plan = {
-            "schema_version": "stage03-design-plan.v1",
+            "schema_version": "design-plan.v1",
             "edit_sequence": [],
             "tests": [],
             "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design plan model result was available."),
@@ -661,76 +661,76 @@ def _handle_stage03(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if cmd == "model-plan":
             if not args.prompt:
                 from .model_adapter import write_prompt_if_needed
-                from .stages.stage03_design.coordinate import build_coordinate_prompt
+                from .stages.design.coordinate import build_coordinate_prompt
                 args.prompt = str(write_prompt_if_needed(build_coordinate_prompt(ctx, _maybe_json(args.inventory, {}), []), args.out))
-            return _model_or_fallback(args, stage="stage03_plan", expected_schema="stage03-design-plan.v1", fallback=fallback), "stage03-design-plan.v1"
-        return fallback, "stage03-design-plan.v1"
+            return _model_or_fallback(args, stage="design_plan", expected_schema="design-plan.v1", fallback=fallback), "design-plan.v1"
+        return fallback, "design-plan.v1"
     if cmd in {"build-plan-prompt", "plan-prompt"}:
-        from .stages.stage03_design.coordinate import build_coordinate_prompt
+        from .stages.design.coordinate import build_coordinate_prompt
         analyses_payload = _json_or_default(args.result, {})
         analyses = analyses_payload.get("analyses", analyses_payload if isinstance(analyses_payload, list) else [])
         return build_coordinate_prompt(_maybe_json(args.pr_context, {}), _maybe_json(args.inventory, {}), analyses), None
     if cmd in {"coordinate", "validate-plan"}:
-        from .stages.stage03_design.coordinate import validate_design_plan
-        return validate_design_plan(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path), "stage03-design-plan.v1"
+        from .stages.design.coordinate import validate_design_plan
+        return validate_design_plan(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path), "design-plan.v1"
     if cmd == "render":
-        from .stages.stage03_design.render import render_design_plan_markdown
+        from .stages.design.render import render_design_plan_markdown
         return render_design_plan_markdown(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage03 command: {cmd}")
+    raise ValueError(f"unknown design command: {cmd}")
 
 
-def _handle_stage04(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_design_chief(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd in {"default-result", "noop-result", "model-result"}:
         plan = _maybe_json(args.design_plan or args.in_path, {})
         status = "needs_human" if plan.get("requires_human_review") else ("no_fix_needed" if not plan.get("edit_sequence") else "needs_human")
         fallback = {
-            "schema_version": "stage04-design-chief-decision.v1",
+            "schema_version": "design-chief-decision.v1",
             "status": status,
             "reason": "safe deterministic default",
             "inspection_evidence": _default_inspection_evidence("deterministic fallback", "No design chief model result was available."),
             "defaulted": True,
         }
         if cmd == "model-result":
-            return _model_or_fallback(args, stage="stage04", expected_schema="stage04-design-chief-decision.v1", fallback=fallback), "stage04-design-chief-decision.v1"
-        return fallback, "stage04-design-chief-decision.v1"
+            return _model_or_fallback(args, stage="design_chief", expected_schema="design-chief-decision.v1", fallback=fallback), "design-chief-decision.v1"
+        return fallback, "design-chief-decision.v1"
     if cmd in {"build-chief-prompt", "prompt"}:
-        from .stages.stage04_design_chief.prompt import build_design_chief_prompt
+        from .stages.design_chief.prompt import build_design_chief_prompt
         return build_design_chief_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), _maybe_json(args.pr_context, {}), config), None
     if cmd == "validate":
-        from .stages.stage04_design_chief.validate import validate_chief_decision
-        return validate_chief_decision(_maybe_json(args.in_path, {}), _maybe_json(args.inventory or args.design_plan, {}), config, args.repo_path), "stage04-design-chief-decision.v1"
+        from .stages.design_chief.validate import validate_chief_decision
+        return validate_chief_decision(_maybe_json(args.in_path, {}), _maybe_json(args.inventory or args.design_plan, {}), config, args.repo_path), "design-chief-decision.v1"
     if cmd == "route":
-        from .stages.stage04_design_chief.route import route_after_design_chief, write_chief_route_outputs
+        from .stages.design_chief.route import route_after_design_chief, write_chief_route_outputs
         route = route_after_design_chief(_maybe_json(args.in_path, {}))
         write_chief_route_outputs(route)
         return route, None
     if cmd == "publish":
-        from .stages.stage04_design_chief.publish import publish_design_summary
+        from .stages.design_chief.publish import publish_design_summary
         token = None if args.dry_run else args.token
         return publish_design_summary(_maybe_json(args.inventory or args.design_plan, {}), _maybe_json(args.in_path, {}), token, _maybe_json(args.pr_context, {}), dry_run=args.dry_run), None
     if cmd == "render":
-        from .stages.stage04_design_chief.render import render_chief_decision_markdown
+        from .stages.design_chief.render import render_chief_decision_markdown
         return render_chief_decision_markdown(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage04 command: {cmd}")
+    raise ValueError(f"unknown design_chief command: {cmd}")
 
 
-def _handle_stage05(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_fix_dispatch(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd in {"plan-tasks", "plan"}:
-        from .stages.stage05_fix_dispatch.plan import plan_fix_tasks
-        return plan_fix_tasks(_maybe_json(args.in_path, {}), _maybe_json(args.inventory or args.chief_decision, {}), config), "stage05-fix-task-manifest.v1"
+        from .stages.fix_dispatch.plan import plan_fix_tasks
+        return plan_fix_tasks(_maybe_json(args.in_path, {}), _maybe_json(args.inventory or args.chief_decision, {}), config), "fix-dispatch-task-manifest.v1"
     if cmd in {"build-agent-prompt", "prompt"}:
-        from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
+        from .stages.fix_dispatch.prompt import build_fix_agent_prompt
         task = _maybe_json(args.in_path, {})
         return build_fix_agent_prompt(task, _maybe_json(args.inventory, {}), _maybe_json(args.result, {}), _maybe_text(args.docs_context), config), None
     if cmd in {"prepare-agents", "prepare-agent-matrix"}:
-        from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
+        from .stages.fix_dispatch.prompt import build_fix_agent_prompt
         manifest = _maybe_json(args.inventory or args.in_path, {})
         design_plan = _maybe_json(args.design_plan, {})
         chief = _maybe_json(args.chief_decision or args.result, {})
         docs = _maybe_text(args.docs_context)
-        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/stage05/agents")
+        base_dir = Path(args.work_dir) if args.work_dir else Path("codex-review-artifacts/fix_dispatch/agents")
         base_dir.mkdir(parents=True, exist_ok=True)
         include = []
         for task in manifest.get("tasks", []):
@@ -762,17 +762,17 @@ def _handle_stage05(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return matrix, None
     if cmd in {"default-agent-result", "noop-result"}:
         task = _maybe_json(args.inventory or args.in_path, {})
-        return {"schema_version": "stage05-fix-agent-result.v1", "task_id": task.get("task_id"), "status": "no_safe_fix", "reason": "model fix result was not provided", "defaulted": True}, "stage05-fix-agent-result.v1"
+        return {"schema_version": "fix-dispatch-agent-result.v1", "task_id": task.get("task_id"), "status": "no_safe_fix", "reason": "model fix result was not provided", "defaulted": True}, "fix-dispatch-agent-result.v1"
     if cmd in {"run-agents", "model-agents"}:
         from .model_adapter import run_model_or_fallback
-        from .stages.stage05_fix_dispatch.collect import build_fix_collection_result
-        from .stages.stage05_fix_dispatch.prompt import build_fix_agent_prompt
-        from .stages.stage05_fix_dispatch.validate_agent_result import validate_fix_agent_result
+        from .stages.fix_dispatch.collect import build_fix_collection_result
+        from .stages.fix_dispatch.prompt import build_fix_agent_prompt
+        from .stages.fix_dispatch.validate_agent_result import validate_fix_agent_result
         manifest = _maybe_json(args.inventory or args.in_path, {})
         design_plan = _maybe_json(args.design_plan, {})
         chief = _maybe_json(args.chief_decision or args.result, {})
         docs = _maybe_text(args.docs_context)
-        base_dir = Path(args.work_dir) if args.work_dir else (Path(args.out).parent / "agents" if args.out else Path("codex-review-artifacts/stage05/agents"))
+        base_dir = Path(args.work_dir) if args.work_dir else (Path(args.out).parent / "agents" if args.out else Path("codex-review-artifacts/fix_dispatch/agents"))
         base_dir.mkdir(parents=True, exist_ok=True)
         results=[]
         for task in manifest.get("tasks", []):
@@ -783,53 +783,53 @@ def _handle_stage05(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             prompt_path = task_dir / "prompt.md"
             write_text(prompt_path, prompt)
             out_path = task_dir / "result.json"
-            fallback = {"schema_version":"stage05-fix-agent-result.v1", "task_id": task_id, "status":"no_safe_fix", "reason":"model fix result was not provided", "defaulted": True}
-            raw = run_model_or_fallback(stage=f"stage05_{task_id}", prompt_path=prompt_path, output_path=out_path, expected_schema="stage05-fix-agent-result.v1", fallback=fallback, model_command=args.model_command, cwd=args.model_cwd, target_repo_path=args.repo_path)
+            fallback = {"schema_version":"fix-dispatch-agent-result.v1", "task_id": task_id, "status":"no_safe_fix", "reason":"model fix result was not provided", "defaulted": True}
+            raw = run_model_or_fallback(stage=f"fix_dispatch_{task_id}", prompt_path=prompt_path, output_path=out_path, expected_schema="fix-dispatch-agent-result.v1", fallback=fallback, model_command=args.model_command, cwd=args.model_cwd, target_repo_path=args.repo_path)
             validated = validate_fix_agent_result(raw, task, config.get("autofix", {}), args.repo_path)
-            write_json(task_dir / "result.validated.json", validated, "stage05-fix-agent-result.v1")
+            write_json(task_dir / "result.validated.json", validated, "fix-dispatch-agent-result.v1")
             results.append(validated)
-        return build_fix_collection_result(manifest, results), "stage05-fix-collection-result.v1"
+        return build_fix_collection_result(manifest, results), "fix-dispatch-collection-result.v1"
     if cmd in {"validate-agent-result", "validate"}:
-        from .stages.stage05_fix_dispatch.validate_agent_result import validate_fix_agent_result
+        from .stages.fix_dispatch.validate_agent_result import validate_fix_agent_result
         task = _maybe_json(args.inventory, {})
-        return validate_fix_agent_result(_maybe_json(args.in_path, {}), task, config.get("autofix", {}), args.repo_path), "stage05-fix-agent-result.v1"
+        return validate_fix_agent_result(_maybe_json(args.in_path, {}), task, config.get("autofix", {}), args.repo_path), "fix-dispatch-agent-result.v1"
     if cmd == "collect":
-        from .stages.stage05_fix_dispatch.collect import collect_agent_results
+        from .stages.fix_dispatch.collect import collect_agent_results
         paths = _artifact_paths(args.artifacts, names=("*.validated.json", "*.json"))
-        return collect_agent_results(_maybe_json(args.inventory, {}), paths), "stage05-fix-collection-result.v1"
+        return collect_agent_results(_maybe_json(args.inventory, {}), paths), "fix-dispatch-collection-result.v1"
     if cmd == "render":
-        from .stages.stage05_fix_dispatch.render import render_agent_result_summary
+        from .stages.fix_dispatch.render import render_agent_result_summary
         return render_agent_result_summary(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage05 command: {cmd}")
+    raise ValueError(f"unknown fix_dispatch command: {cmd}")
 
 
-def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_fix_merge(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd == "premerge":
-        from .stages.stage06_fix_merge.premerge import run_premerge_check
-        return run_premerge_check(_maybe_json(args.in_path, {}), args.repo_path), "stage06-premerge-report.v1"
+        from .stages.fix_merge.premerge import run_premerge_check
+        return run_premerge_check(_maybe_json(args.in_path, {}), args.repo_path), "fix-merge-premerge-report.v1"
     if cmd == "merge":
-        from .stages.stage06_fix_merge.premerge import create_merged_fix_from_premerge
-        return create_merged_fix_from_premerge(_maybe_json(args.inventory, {}), _maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.out), "stage06-merged-fix.v1"
+        from .stages.fix_merge.premerge import create_merged_fix_from_premerge
+        return create_merged_fix_from_premerge(_maybe_json(args.inventory, {}), _maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.out), "fix-merge-merged-fix.v1"
     if cmd in {"model-merged-fix", "model-merge"}:
         from .model_adapter import run_model_or_fallback, write_prompt_if_needed
-        from .stages.stage06_fix_merge.premerge import create_merged_fix_from_premerge
-        from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
+        from .stages.fix_merge.premerge import create_merged_fix_from_premerge
+        from .stages.fix_merge.prompt import build_fix_merge_prompt
         pre = _maybe_json(args.inventory, {})
         collection = _maybe_json(args.in_path, {})
         pr = _maybe_json(args.pr_context, {})
         if pre.get("clean") or not collection.get("results"):
-            return create_merged_fix_from_premerge(pre, collection, pr, None), "stage06-merged-fix.v1"
-        fallback = {"schema_version":"stage06-merged-fix.v1", "status":"blocked", "patch":"", "expected_head_sha": pr.get("head_sha"), "premerge_clean": False, "conflicts": pre.get("results", []), "defaulted": True}
+            return create_merged_fix_from_premerge(pre, collection, pr, None), "fix-merge-merged-fix.v1"
+        fallback = {"schema_version":"fix-merge-merged-fix.v1", "status":"blocked", "patch":"", "expected_head_sha": pr.get("head_sha"), "premerge_clean": False, "conflicts": pre.get("results", []), "defaulted": True}
         if not args.prompt:
             args.prompt = str(write_prompt_if_needed(build_fix_merge_prompt(collection, pre, pr, {}, _maybe_text(args.docs_context)), args.out))
-        return run_model_or_fallback(stage="stage06_merge", prompt_path=args.prompt, output_path=args.out, expected_schema="stage06-merged-fix.v1", fallback=fallback, model_command=args.model_command, cwd=args.model_cwd, target_repo_path=args.repo_path), "stage06-merged-fix.v1"
+        return run_model_or_fallback(stage="fix_merge_merge", prompt_path=args.prompt, output_path=args.out, expected_schema="fix-merge-merged-fix.v1", fallback=fallback, model_command=args.model_command, cwd=args.model_cwd, target_repo_path=args.repo_path), "fix-merge-merged-fix.v1"
     if cmd in {"build-merge-prompt", "prompt"}:
-        from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
+        from .stages.fix_merge.prompt import build_fix_merge_prompt
         return build_fix_merge_prompt(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {}), _maybe_json(args.result, {}), {}, _maybe_text(args.docs_context)), None
     if cmd in {"prepare-merge-model", "prepare-model-merge"}:
-        from .stages.stage06_fix_merge.premerge import create_merged_fix_from_premerge
-        from .stages.stage06_fix_merge.prompt import build_fix_merge_prompt
+        from .stages.fix_merge.premerge import create_merged_fix_from_premerge
+        from .stages.fix_merge.prompt import build_fix_merge_prompt
         pre = _maybe_json(args.inventory, {})
         collection = _maybe_json(args.in_path, {})
         pr = _maybe_json(args.pr_context, {})
@@ -838,7 +838,7 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         if pre.get("clean") or not collection.get("results"):
             merged = create_merged_fix_from_premerge(pre, collection, pr, raw_out)
             if raw_out and not Path(raw_out).exists():
-                write_json(raw_out, merged, "stage06-merged-fix.v1")
+                write_json(raw_out, merged, "fix-merge-merged-fix.v1")
             route = {"needs_model": False, "raw_output": raw_out, "status": merged.get("status")}
             if os.environ.get("GITHUB_OUTPUT"):
                 write_output("needs_model", "false")
@@ -852,16 +852,16 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         return route, None
     if cmd == "default-merged-fix":
         pre = _maybe_json(args.inventory or args.in_path, {})
-        return {"schema_version": "stage06-merged-fix.v1", "status": "no_fix", "patch": "", "premerge_clean": pre.get("clean", False), "defaulted": True}, "stage06-merged-fix.v1"
+        return {"schema_version": "fix-merge-merged-fix.v1", "status": "no_fix", "patch": "", "premerge_clean": pre.get("clean", False), "defaulted": True}, "fix-merge-merged-fix.v1"
     if cmd == "validate":
-        from .stages.stage06_fix_merge.validate import validate_merged_fix
+        from .stages.fix_merge.validate import validate_merged_fix
         from .fix_edits import ensure_patch_from_edits
         pre = _maybe_json(args.inventory, {})
         chief = _maybe_json(args.result or args.chief_decision, {})
         merged = ensure_patch_from_edits(_maybe_json(args.in_path, {}), args.repo_path)
-        return validate_merged_fix(merged, pre, chief, config.get("autofix", {}), args.repo_path), "stage06-merged-fix.v1"
+        return validate_merged_fix(merged, pre, chief, config.get("autofix", {}), args.repo_path), "fix-merge-merged-fix.v1"
     if cmd in {"build-semantic-safety-prompt", "semantic-safety-prompt"}:
-        from .stages.stage06_fix_merge.semantic_safety import build_semantic_patch_safety_prompt
+        from .stages.fix_merge.semantic_safety import build_semantic_patch_safety_prompt
         prompt = build_semantic_patch_safety_prompt(
             _maybe_json(args.in_path, {}),
             _maybe_json(args.pr_context, {}),
@@ -871,31 +871,31 @@ def _handle_stage06(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         )
         return prompt, None
     if cmd in {"validate-semantic-safety", "semantic-safety-validate"}:
-        from .stages.stage06_fix_merge.semantic_safety import validate_semantic_patch_safety_result
-        return validate_semantic_patch_safety_result(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {})), "stage06-semantic-patch-safety.v1"
+        from .stages.fix_merge.semantic_safety import validate_semantic_patch_safety_result
+        return validate_semantic_patch_safety_result(_maybe_json(args.in_path, {}), _maybe_json(args.inventory, {})), "fix-merge-semantic-patch-safety.v1"
     if cmd in {"write-semantic-safety-outputs", "semantic-safety-outputs"}:
-        from .stages.stage06_fix_merge.semantic_safety import write_semantic_safety_outputs
+        from .stages.fix_merge.semantic_safety import write_semantic_safety_outputs
         return write_semantic_safety_outputs(_maybe_json(args.in_path, {})), None
     if cmd == "render":
-        from .stages.stage06_fix_merge.render import render_merged_fix_summary
+        from .stages.fix_merge.render import render_merged_fix_summary
         return render_merged_fix_summary(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage06 command: {cmd}")
+    raise ValueError(f"unknown fix_merge command: {cmd}")
 
 
-def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_push(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd == "validate-current-head":
-        from .stages.stage07_push.validate import validate_current_head
+        from .stages.push.validate import validate_current_head
         validate_current_head(_maybe_json(args.pr_context, {}), _maybe_json(args.in_path, {}), args.token)
         return {"ok": True}, None
     if cmd == "apply-patch":
-        from .stages.stage07_push.apply_patch import apply_merged_patch
+        from .stages.push.apply_patch import apply_merged_patch
         return apply_merged_patch(args.patch or args.in_path, args.repo_path), None
     if cmd == "run-tests":
-        from .stages.stage07_push.run_tests import run_required_tests, select_test_commands
+        from .stages.push.run_tests import run_required_tests, select_test_commands
         return run_required_tests(select_test_commands(_maybe_json(args.in_path, {}), config), args.repo_path), None
     if cmd in {"validate-fix", "test-apply", "validate-and-test"}:
-        from .stages.stage07_push.orchestrate import validate_and_test_fix
+        from .stages.push.orchestrate import validate_and_test_fix
         return validate_and_test_fix(
             _maybe_json(args.in_path, {}),
             _maybe_json(args.pr_context, {}),
@@ -903,22 +903,22 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             args.repo_path,
             dry_run=args.dry_run,
             semantic_safety=_json_or_default(args.semantic_safety, {}),
-        ), "stage07-validated-fix.v1"
+        ), "push-validated-fix.v1"
     if cmd == "commit":
-        from .stages.stage07_push.orchestrate import commit_validated_fix
+        from .stages.push.orchestrate import commit_validated_fix
         return commit_validated_fix(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path), None
     if cmd in {"commit-push", "push-validated"}:
-        from .stages.stage07_push.orchestrate import commit_and_push_validated_fix
-        return commit_and_push_validated_fix(_maybe_json(args.in_path, {}), _maybe_json(args.validation, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "stage07-push-result.v1"
+        from .stages.push.orchestrate import commit_and_push_validated_fix
+        return commit_and_push_validated_fix(_maybe_json(args.in_path, {}), _maybe_json(args.validation, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "push-result.v1"
     if cmd in {"push", "run"}:
-        from .stages.stage07_push.orchestrate import run_push_flow
-        return run_push_flow(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "stage07-push-result.v1"
+        from .stages.push.orchestrate import run_push_flow
+        return run_push_flow(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), config, args.repo_path, args.token, dry_run=args.dry_run), "push-result.v1"
     if cmd in {"check-loop-budget", "loop-budget"}:
         from .loop.state import build_push_entry, detect_oscillation
         validated = _maybe_json(args.in_path, {})
         # Only a patch that WOULD push can continue an oscillation; otherwise pass through.
         if not validated.get("validated"):
-            return {**validated, "loop_budget_ok": True}, "stage07-validated-fix.v1"
+            return {**validated, "loop_budget_ok": True}, "push-validated-fix.v1"
         merged = _json_or_default(args.result, {})
         patch = merged.get("patch") or merged.get("patch_text") or ""
         if not patch and merged.get("patch_path"):
@@ -928,7 +928,7 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         candidate = build_push_entry(int(prior.get("round_count", 0)) + 1, validated, patch, design_plan)
         verdict = detect_oscillation(prior, candidate, config)
         if verdict["ok"]:
-            return {**validated, "loop_budget_ok": True}, "stage07-validated-fix.v1"
+            return {**validated, "loop_budget_ok": True}, "push-validated-fix.v1"
         return {
             **validated,
             "status": verdict["status"],
@@ -937,7 +937,7 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             "loop_budget_ok": False,
             "loop_budget_status": verdict["status"],
             "loop_budget_reason": verdict["reason"],
-        }, "stage07-validated-fix.v1"
+        }, "push-validated-fix.v1"
     if cmd in {"record-push", "record-loop-state"}:
         from .loop.state import append_push_to_loop_state, build_push_entry, write_loop_state_comment
         push_result = _maybe_json(args.in_path, {})
@@ -988,52 +988,52 @@ def _handle_stage07(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
         write_output("push_status", status)
         return {"push_status": status}, None
     if cmd == "render":
-        from .stages.stage07_push.render import render_push_summary
+        from .stages.push.render import render_push_summary
         return render_push_summary(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage07 command: {cmd}")
+    raise ValueError(f"unknown push command: {cmd}")
 
 
-def _handle_stage08(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_reentry(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd in {"record-reentry", "record"}:
-        from .stages.stage08_reentry.record import build_reentry_record, persist_reentry_loop_state
+        from .stages.reentry.record import build_reentry_record, persist_reentry_loop_state
         push_result = _maybe_json(args.in_path, {})
         loop_state = _json_or_default(args.loop_state, {}) or _maybe_json(args.inventory, {})
         record = build_reentry_record(push_result, loop_state, {"push_result": push_result})
         if args.token and args.pr_context:
             record = persist_reentry_loop_state(record, _maybe_json(args.pr_context, {}), args.token)
-        return record, "stage08-loop-reentry.v1"
+        return record, "reentry-loop-state.v1"
     if cmd == "validate":
-        from .stages.stage08_reentry.validate import validate_reentry_record
-        return validate_reentry_record(_maybe_json(args.in_path, {}), _json_or_default(args.loop_state, {})), "stage08-loop-reentry.v1"
+        from .stages.reentry.validate import validate_reentry_record
+        return validate_reentry_record(_maybe_json(args.in_path, {}), _json_or_default(args.loop_state, {})), "reentry-loop-state.v1"
     if cmd == "route":
-        from .stages.stage08_reentry.route import determine_reentry_expectation
+        from .stages.reentry.route import determine_reentry_expectation
         return determine_reentry_expectation(_maybe_json(args.in_path, {})), None
     if cmd == "render":
-        from .stages.stage08_reentry.render import render_reentry_summary
+        from .stages.reentry.render import render_reentry_summary
         return render_reentry_summary(_maybe_json(args.in_path, {})), None
-    raise ValueError(f"unknown stage08 command: {cmd}")
+    raise ValueError(f"unknown reentry command: {cmd}")
 
 
-def _handle_stage09(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
+def _handle_issue_fallback(args: argparse.Namespace, config: dict[str, Any]) -> tuple[Any, str | None]:
     cmd = args.command
     if cmd in {"plan", "build-plan"}:
-        from .stages.stage09_issue_fallback.issue import build_issue_fallback_plan
+        from .stages.issue_fallback.issue import build_issue_fallback_plan
         payload = _json_or_default(args.in_path, {})
         reason = args.mode or payload.get("reason") or payload.get("route") or payload.get("status") or "manual_fallback"
         attempted = payload.get("attempted_stages") if isinstance(payload.get("attempted_stages"), list) else []
         deferred_items = payload.get("deferred_items") if isinstance(payload.get("deferred_items"), list) else []
         if deferred_items and not attempted:
-            attempted = ["stage02_defer_to_issue"]
+            attempted = ["techlead_defer_to_issue"]
         return build_issue_fallback_plan(
             reason=str(reason),
             pr_context=_maybe_json(args.pr_context, {}),
             openspec_context=_json_or_default(args.openspec_context, {}),
             attempted_stages=attempted,
             deferred_items=deferred_items,
-        ), "stage09-issue-fallback.v1"
+        ), "issue-fallback.v1"
     if cmd in {"infer-reason", "reason"}:
-        from .stages.stage09_issue_fallback.issue import infer_issue_reason
+        from .stages.issue_fallback.issue import infer_issue_reason
         return infer_issue_reason(
             review_publication=_json_or_default(args.review_context, {}),
             design_route=_json_or_default(args.chief_decision, {}),
@@ -1041,30 +1041,30 @@ def _handle_stage09(args: argparse.Namespace, config: dict[str, Any]) -> tuple[A
             fallback_reason=args.mode,
         ), None
     if cmd in {"build-prompt", "content-prompt"}:
-        from .stages.stage09_issue_fallback.issue import build_issue_content_prompt
+        from .stages.issue_fallback.issue import build_issue_content_prompt
         return build_issue_content_prompt(_maybe_json(args.in_path, {})), None
     if cmd in {"compose", "compose-content"}:
-        from .stages.stage09_issue_fallback.issue import build_issue_content_prompt, compose_issue_content
+        from .stages.issue_fallback.issue import build_issue_content_prompt, compose_issue_content
         plan = _maybe_json(args.in_path, {})
         if args.result:
             content = _json_or_default(args.result, {})
         else:
-            from .stages.stage09_issue_fallback.issue import CONTENT_SCHEMA_VERSION
+            from .stages.issue_fallback.issue import CONTENT_SCHEMA_VERSION
             prompt_path = args.prompt
             if not prompt_path and args.prompt_out:
                 from .model_adapter import write_prompt_if_needed
                 prompt_path = str(write_prompt_if_needed(build_issue_content_prompt(plan), args.prompt_out))
             content = _model_or_fallback(
                 argparse.Namespace(**{**vars(args), "prompt": prompt_path}),
-                stage="stage09",
+                stage="issue_fallback",
                 expected_schema=CONTENT_SCHEMA_VERSION,
                 fallback={"title": plan.get("title"), "body": plan.get("body")},
             )
-        return compose_issue_content(plan, content), "stage09-issue-fallback.v1"
+        return compose_issue_content(plan, content), "issue-fallback.v1"
     if cmd in {"apply", "publish"}:
-        from .stages.stage09_issue_fallback.issue import apply_issue_fallback
-        return apply_issue_fallback(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.token, dry_run=args.dry_run), "stage09-issue-fallback.v1"
-    raise ValueError(f"unknown stage09 command: {cmd}")
+        from .stages.issue_fallback.issue import apply_issue_fallback
+        return apply_issue_fallback(_maybe_json(args.in_path, {}), _maybe_json(args.pr_context, {}), args.token, dry_run=args.dry_run), "issue-fallback.v1"
+    raise ValueError(f"unknown issue_fallback command: {cmd}")
 
 
 def _handle_auth(args: argparse.Namespace) -> tuple[Any, str | None]:
@@ -1135,11 +1135,11 @@ def _handle_schema(args: argparse.Namespace) -> tuple[Any, str | None]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="codex-review")
-    parser.add_argument("area", choices=["auth", "oidc", "io", "event", "context", "loop", "schema", "stage00", "stage01", "stage02", "stage03", "stage04", "stage05", "stage06", "stage07", "stage08", "stage09"])
+    parser.add_argument("area", choices=["auth", "oidc", "io", "event", "context", "loop", "schema", "resolve_gate", "review", "techlead", "design", "design_chief", "fix_dispatch", "fix_merge", "push", "reentry", "issue_fallback"])
     _add_common(parser)
     args = parser.parse_args(argv)
     try:
-        config = load_config(args.config) if args.area.startswith("stage") or args.area == "context" else {}
+        config = load_config(args.config) if args.area not in {"auth", "oidc", "io", "event", "loop", "schema"} else {}
         if args.area == "auth": payload, schema = _handle_auth(args)
         elif args.area == "oidc": payload, schema = _handle_oidc(args)
         elif args.area == "io": payload, schema = _handle_io(args)
@@ -1147,16 +1147,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.area == "context": payload, schema = _handle_context(args, config)
         elif args.area == "loop": payload, schema = _handle_loop(args)
         elif args.area == "schema": payload, schema = _handle_schema(args)
-        elif args.area == "stage00": payload, schema = _handle_stage00(args, config)
-        elif args.area == "stage01": payload, schema = _handle_stage01(args, config)
-        elif args.area == "stage02": payload, schema = _handle_stage02(args, config)
-        elif args.area == "stage03": payload, schema = _handle_stage03(args, config)
-        elif args.area == "stage04": payload, schema = _handle_stage04(args, config)
-        elif args.area == "stage05": payload, schema = _handle_stage05(args, config)
-        elif args.area == "stage06": payload, schema = _handle_stage06(args, config)
-        elif args.area == "stage07": payload, schema = _handle_stage07(args, config)
-        elif args.area == "stage08": payload, schema = _handle_stage08(args, config)
-        elif args.area == "stage09": payload, schema = _handle_stage09(args, config)
+        elif args.area == "resolve_gate": payload, schema = _handle_resolve_gate(args, config)
+        elif args.area == "review": payload, schema = _handle_review(args, config)
+        elif args.area == "techlead": payload, schema = _handle_techlead(args, config)
+        elif args.area == "design": payload, schema = _handle_design(args, config)
+        elif args.area == "design_chief": payload, schema = _handle_design_chief(args, config)
+        elif args.area == "fix_dispatch": payload, schema = _handle_fix_dispatch(args, config)
+        elif args.area == "fix_merge": payload, schema = _handle_fix_merge(args, config)
+        elif args.area == "push": payload, schema = _handle_push(args, config)
+        elif args.area == "reentry": payload, schema = _handle_reentry(args, config)
+        elif args.area == "issue_fallback": payload, schema = _handle_issue_fallback(args, config)
         else: raise ValueError(args.area)
         _emit(payload, args.out, schema)
         if args.summary and isinstance(payload, str):

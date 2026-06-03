@@ -122,7 +122,7 @@ def append_push_to_loop_state(prior: dict[str, Any] | None, entry: dict[str, Any
     return {
         **prior,
         "schema_version": "loop-state.v1",
-        "stage": "stage08_reentry",
+        "stage": "reentry",
         "recent_pushes": recent,
         "round_count": int(prior.get("round_count", 0)) + 1,
         "head_sha": entry.get("head_sha") or prior.get("head_sha"),

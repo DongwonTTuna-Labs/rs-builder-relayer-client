@@ -380,9 +380,9 @@ def sections_for_stage(stage: str | None) -> set[str] | None:
     if not stage:
         return None
     s = str(stage)
-    if s.startswith(("stage01", "stage02")) or s in {"review", "techlead"}:
+    if s.startswith(("review", "techlead")) or s in {"review", "techlead"}:
         return {"proposal", "spec", "other"}
-    if s.startswith(("stage03", "stage04", "stage05", "stage06")) or s in {"design", "fix"}:
+    if s.startswith(("design", "design_chief", "fix_dispatch", "fix_merge")) or s in {"design", "fix"}:
         return {"tasks", "spec", "design", "proposal", "config", "other"}
     return None
 

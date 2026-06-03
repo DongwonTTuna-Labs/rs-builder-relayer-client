@@ -11,7 +11,7 @@ CONFIG = str(Path(__file__).resolve().parents[2] / "config.yml")
 
 def _clusters(n):
     return {
-        "schema_version": "stage03-design-clusters.v1",
+        "schema_version": "design-clusters.v1",
         "clusters": [{"cluster_id": f"c{i}", "finding_ids": [f"f{i}"], "summary": f"cluster {i}"} for i in range(n)],
         "cluster_count": n,
     }
@@ -21,10 +21,10 @@ def test_prepare_analysis_matrix_batches_clusters(tmp_path):
     clusters_file = tmp_path / "clusters.json"
     clusters_file.write_text(json.dumps(_clusters(6)), encoding="utf-8")
     ctx_file = tmp_path / "ctx.json"
-    ctx_file.write_text(json.dumps({"schema_version": "stage03-design-context.v1"}), encoding="utf-8")
+    ctx_file.write_text(json.dumps({"schema_version": "design-context.v1"}), encoding="utf-8")
     out = tmp_path / "matrix.json"
     rc = main([
-        "stage03", "prepare-analysis-matrix", "--config", CONFIG,
+        "design", "prepare-analysis-matrix", "--config", CONFIG,
         "--in", str(clusters_file), "--pr-context", str(ctx_file),
         "--work-dir", str(tmp_path / "batches"), "--repo-path", "pr-head", "--out", str(out),
     ])
@@ -48,7 +48,7 @@ def test_prepare_analysis_matrix_empty_when_no_clusters(tmp_path):
     clusters_file.write_text(json.dumps(_clusters(0)), encoding="utf-8")
     out = tmp_path / "matrix.json"
     rc = main([
-        "stage03", "prepare-analysis-matrix", "--config", CONFIG,
+        "design", "prepare-analysis-matrix", "--config", CONFIG,
         "--in", str(clusters_file), "--work-dir", str(tmp_path / "batches"), "--out", str(out),
     ])
     assert rc == 0
@@ -58,16 +58,16 @@ def test_prepare_analysis_matrix_empty_when_no_clusters(tmp_path):
 def test_collect_analyses_merges_per_batch_validated_files(tmp_path):
     root = tmp_path / "downloads"
     for idx, cid in enumerate(["c0", "c1"]):
-        d = root / f"codex-review-stage03-analysis-{idx}"
+        d = root / f"codex-review-design-analysis-{idx}"
         d.mkdir(parents=True)
         (d / "analysis.validated.json").write_text(
-            json.dumps({"schema_version": "stage03-cluster-analysis.v1", "analyses": [{"cluster_id": cid, "status": "fix_now"}]}),
+            json.dumps({"schema_version": "design-cluster-analysis.v1", "analyses": [{"cluster_id": cid, "status": "fix_now"}]}),
             encoding="utf-8",
         )
         # raw output must NOT be collected
         (d / "analysis.raw.json").write_text(json.dumps({"analyses": [{"cluster_id": "RAW", "status": "x"}]}), encoding="utf-8")
     out = tmp_path / "collected.json"
-    rc = main(["stage03", "collect-analyses", "--config", CONFIG, "--artifacts", str(root), "--out", str(out)])
+    rc = main(["design", "collect-analyses", "--config", CONFIG, "--artifacts", str(root), "--out", str(out)])
     assert rc == 0
     collected = json.loads(out.read_text(encoding="utf-8"))
     assert collected["analysis_count"] == 2

@@ -114,13 +114,13 @@ def test_no_placeholder_echo_json_or_error_suppression():
     assert "model-result" not in fix_text
     assert "run-agents" not in fix_text
     assert "model-merged-fix" not in fix_text
-    assert "stage08 validate" not in fix_text
+    assert "reentry validate" not in fix_text
     # The semantic-safety + push commands now live in the fix workflow.
-    assert "stage06 build-semantic-safety-prompt" in fix_text
-    assert "stage06 validate-semantic-safety" in fix_text
-    assert "stage07 validate-fix" in fix_text
-    assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in fix_text
-    assert "stage07 commit-push" in fix_text
+    assert "fix_merge build-semantic-safety-prompt" in fix_text
+    assert "fix_merge validate-semantic-safety" in fix_text
+    assert "push validate-fix" in fix_text
+    assert "--semantic-safety trusted/codex-review-artifacts/fix_merge/semantic-safety.json" in fix_text
+    assert "push commit-push" in fix_text
 
 
 def test_workflow_routes_design_and_fix_stages():
@@ -129,7 +129,7 @@ def test_workflow_routes_design_and_fix_stages():
     assert "run_design" in REVIEW.read_text(encoding="utf-8")
     assert "리뷰완료" in REVIEW.read_text(encoding="utf-8")
     design_text = DESIGN.read_text(encoding="utf-8")
-    assert 'DESIGN_ROUTE" = "run_stage05"' in design_text
+    assert 'DESIGN_ROUTE" = "run_fix_dispatch"' in design_text
     assert "설계완료" in design_text
     assert "리뷰중" in FIX.read_text(encoding="utf-8")
 
@@ -142,10 +142,10 @@ def test_actions_are_pinned_and_checkout_credentials_not_persisted():
     assert text.count("actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955") == text.count("persist-credentials: false")
 
 
-def test_stage03_plan_is_validated_in_workflow():
+def test_design_plan_is_validated_in_workflow():
     text = DESIGN.read_text(encoding="utf-8")
-    assert "stage03 build-plan-prompt" in text
-    assert "stage03 validate-plan" in text
+    assert "design build-plan-prompt" in text
+    assert "design validate-plan" in text
     assert "design-plan.raw.json" in text
 
 
@@ -221,7 +221,7 @@ def _assert_pr_head_worktree(job, job_name, head_job):
             assert with_inputs["output-schema-file"].startswith("${{ github.workspace }}/"), job_name
 
 
-def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
+def test_review_to_design_chief_model_jobs_use_pr_head_worktree():
     # Review-stage model jobs source the PR head from guard_and_event;
     # design-stage jobs source it from guard_and_inputs. Both split workflows.
     review_jobs = load_review()["jobs"]
@@ -232,20 +232,20 @@ def test_stage01_to_stage04_model_jobs_use_pr_head_worktree():
         _assert_pr_head_worktree(design_jobs[job_name], job_name, "guard")
 
 
-def test_stage01_to_stage04_validators_receive_pr_head_repo_path():
+def test_review_to_design_chief_validators_receive_pr_head_repo_path():
     text = pipeline_text()
     for command in [
-        "stage01 validate",
-        "stage02 validate",
-        "stage03 validate-plan",
-        "stage04 validate",
+        "review validate",
+        "techlead validate",
+        "design validate-plan",
+        "design_chief validate",
     ]:
         assert command in text
     for snippet in [
-        "stage01 validate --axis ${{ matrix.axis }}",
-        "stage02 validate --inventory",
-        "stage03 validate-plan --in",
-        "stage04 validate --in",
+        "review validate --axis ${{ matrix.axis }}",
+        "techlead validate --inventory",
+        "design validate-plan --in",
+        "design_chief validate --in",
     ]:
         start = text.index(snippet)
         line = text[start:text.index("\n", start)]
@@ -288,13 +288,13 @@ def test_workflow_has_no_model_runner_default_or_codex_cli_env_contract():
     assert "codex-review-model-runner" not in text
 
 
-def test_fix_and_stage07_use_pr_head_worktree():
+def test_fix_and_push_use_pr_head_worktree():
     text = FIX.read_text(encoding="utf-8")
     assert "path: pr-head" in text
-    assert "stage05 prepare-agents" in text and "--repo-path pr-head" in text
-    assert "stage06 premerge" in text and "--repo-path pr-head" in text
-    assert "stage06 build-semantic-safety-prompt" in text and "--repo-path pr-head" in text
-    assert "stage07 validate-fix" in text and "--repo-path pr-head" in text
+    assert "fix_dispatch prepare-agents" in text and "--repo-path pr-head" in text
+    assert "fix_merge premerge" in text and "--repo-path pr-head" in text
+    assert "fix_merge build-semantic-safety-prompt" in text and "--repo-path pr-head" in text
+    assert "push validate-fix" in text and "--repo-path pr-head" in text
 
 
 def test_no_token_validation_job_does_not_request_app_token():
@@ -302,22 +302,22 @@ def test_no_token_validation_job_does_not_request_app_token():
     section = text.split("validate_patch:", 1)[1].split("commit_push:", 1)[0]
     assert "auth app-token" not in section
     assert "GITHUB_TOKEN:" not in section
-    assert "stage07 validate-fix" in section
-    assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in section
-    assert "stage02 write-deferred-outputs" not in section
+    assert "push validate-fix" in section
+    assert "--semantic-safety trusted/codex-review-artifacts/fix_merge/semantic-safety.json" in section
+    assert "techlead write-deferred-outputs" not in section
 
 
-def test_semantic_patch_safety_model_gates_stage07_push_validation():
+def test_semantic_patch_safety_model_gates_push_validation():
     text = FIX.read_text(encoding="utf-8")
     jobs = load_fix()["jobs"]
     assert "patch_safety" in jobs
     semantic = jobs["patch_safety"]
     assert semantic["needs"] == ["guard", "merge_fixes"]
     semantic_text = text.split("patch_safety:", 1)[1].split("validate_patch:", 1)[0]
-    assert "stage06 build-semantic-safety-prompt" in semantic_text
-    assert "schema openai-strict --schema stage06-semantic-patch-safety.v1" in semantic_text
-    assert "stage06 validate-semantic-safety" in semantic_text
-    assert "stage06 write-semantic-safety-outputs" in semantic_text
+    assert "fix_merge build-semantic-safety-prompt" in semantic_text
+    assert "schema openai-strict --schema fix-merge-semantic-patch-safety.v1" in semantic_text
+    assert "fix_merge validate-semantic-safety" in semantic_text
+    assert "fix_merge write-semantic-safety-outputs" in semantic_text
     assert "oidc relay-token" in semantic_text
     validate_job = jobs["validate_patch"]
     assert validate_job["needs"] == ["guard", "merge_fixes", "patch_safety"]
@@ -329,29 +329,29 @@ def test_push_and_issue_fallback_are_default_actual_write_paths():
     assert push_flag not in pipeline_text()
     assert issue_flag not in pipeline_text()
 
-    # stage02 deferred-output emission now lives in the split review workflow.
-    assert "stage02 write-deferred-outputs" in pipeline_text()
+    # techlead deferred-output emission now lives in the split review workflow.
+    assert "techlead write-deferred-outputs" in pipeline_text()
 
     # Validation + push now live in the fix workflow.
     fix_text = FIX.read_text(encoding="utf-8")
     validate_section = fix_text.split("validate_patch:", 1)[1].split("commit_push:", 1)[0]
-    assert "stage07 validate-fix --dry-run" not in validate_section
-    assert "--semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json" in validate_section
-    assert "stage07 write-validation-outputs" in validate_section
+    assert "push validate-fix --dry-run" not in validate_section
+    assert "--semantic-safety trusted/codex-review-artifacts/fix_merge/semantic-safety.json" in validate_section
+    assert "push write-validation-outputs" in validate_section
     assert "requires_push_token" in validate_section
 
     push_section = fix_text.split("commit_push:", 1)[1]
     assert "if: always() && needs.validate_patch.outputs.requires_push_token == 'true'" in push_section
     assert "auth app-token --mode push" in push_section
-    assert "stage07 commit-push --in" in push_section
-    assert "stage07 push --dry-run" not in push_section
+    assert "push commit-push --in" in push_section
+    assert "push push --dry-run" not in push_section
     assert "record_reentry:" not in fix_text
 
     # Issue fallback (default actual write) now lives in the dedicated issue workflow.
     issue_section = ISSUE.read_text(encoding="utf-8").split("publish_issue:", 1)[1]
-    assert "auth app-token --mode stage09" in issue_section
-    assert "stage09 apply --in" in issue_section
-    assert "stage09 apply --dry-run" not in issue_section
+    assert "auth app-token --mode issue_fallback" in issue_section
+    assert "issue_fallback apply --in" in issue_section
+    assert "issue_fallback apply --dry-run" not in issue_section
 
 
 def test_workflow_installs_helper_dependencies_and_pins_python_runtime():
@@ -409,18 +409,18 @@ def test_autofix_path_is_same_repo_and_pr_head_checkout_is_explicit():
 
 
 
-def test_stage09_issue_fallback_uses_app_token_and_never_github_token_write():
+def test_issue_fallback_uses_app_token_and_never_github_token_write():
     text = ISSUE.read_text(encoding="utf-8")
     # Reason inference + plan + codex content live in the read-only model job;
     # the actual issue write happens in issue_publish via the app token.
-    assert "stage09 infer-reason" in text
-    assert "stage09 plan" in text
-    assert "stage09 compose" in text
-    assert "stage09 apply --in" in text
-    assert "auth app-token --mode stage09" in text
+    assert "issue_fallback infer-reason" in text
+    assert "issue_fallback plan" in text
+    assert "issue_fallback compose" in text
+    assert "issue_fallback apply --in" in text
+    assert "auth app-token --mode issue_fallback" in text
     issue_flag = "CODEX_REVIEW" + "_ENABLE" + "_ISSUE_FALLBACK"
     assert issue_flag not in text
-    assert "stage09 apply --dry-run" not in text
+    assert "issue_fallback apply --dry-run" not in text
     # GITHUB_TOKEN job permission is never issues:write; the app token does the write.
     assert "issues: write" not in text
 
@@ -462,7 +462,7 @@ def test_guards_allow_trusted_pipeline_bot_through_permission_check():
 
 
 def test_review_finalize_routes_upstream_breakage_to_issue_not_lgtm():
-    # apply_threads has no route gating, so a non-success result means stage00
+    # apply_threads has no route gating, so a non-success result means resolve_gate
     # broke; finalize must route to needs-issue rather than defaulting to lgtm.
     text = REVIEW.read_text(encoding="utf-8")
     assert '[ "$RESOLVE_RESULT" != "success" ]' in text
@@ -474,11 +474,11 @@ def test_small_intra_workflow_handoffs_use_job_outputs_not_artifacts():
     # matrix fan-in, and large payload artifacts intentionally remain.
     text = pipeline_text()
     for removed in [
-        "codex-review-stage00-collect",
-        "codex-review-stage00-model",
-        "codex-review-stage03-context",
-        "codex-review-stage04-model",
-        "codex-review-stage06-semantic-safety",
+        "codex-review-resolve_gate-collect",
+        "codex-review-resolve_gate-model",
+        "codex-review-design-context",
+        "codex-review-design_chief-model",
+        "codex-review-fix_merge-semantic-safety",
         "codex-issue-plan",
     ]:
         assert removed not in text, removed
@@ -486,8 +486,8 @@ def test_small_intra_workflow_handoffs_use_job_outputs_not_artifacts():
     assert text.count("io to-output --name ") == 8
     # Large / matrix / cross-workflow artifacts are still passed as artifacts.
     for kept in [
-        "codex-review-stage01-combined",  # large combined findings
-        "codex-review-stage05-06",        # multi-MB merged patch
+        "codex-review-review-combined",  # large combined findings
+        "codex-review-fix_merge",        # multi-MB merged patch
         "codex-review-event",             # cross-workflow boundary
     ]:
         assert kept in text, kept

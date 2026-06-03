@@ -111,15 +111,15 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.guard.outputs.proceed == 'true'
         with:
-          name: codex-review-stage03
-          path: fix-inputs/stage03
+          name: codex-review-design
+          path: fix-inputs/design
           run-id: ${{ steps.guard.outputs.design_run_id }}
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: steps.guard.outputs.proceed == 'true'
         with:
-          name: codex-review-stage04
-          path: fix-inputs/stage04
+          name: codex-review-design_chief
+          path: fix-inputs/design_chief
           run-id: ${{ steps.guard.outputs.design_run_id }}
           github-token: ${{ github.token }}
       - id: paths
@@ -161,13 +161,13 @@ jobs:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
           CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}/trusted
         run: |
-          workflow-helper/setup/codex-review/bin/codex-review stage05 plan --in trusted/codex-review-artifacts/stage03/design-plan.json --inventory trusted/codex-review-artifacts/stage04/chief-decision.validated.json --out trusted/codex-review-artifacts/stage05/manifest.json
-          python3 -c "import json,os; m=json.load(open('trusted/codex-review-artifacts/stage05/manifest.json')); open(os.environ['GITHUB_OUTPUT'],'a').write('no_fix_needed=%s\n' % ('true' if m.get('no_fix_needed') else 'false'))"
-          workflow-helper/setup/codex-review/bin/codex-review stage05 prepare-agents --inventory trusted/codex-review-artifacts/stage05/manifest.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --work-dir trusted/codex-review-artifacts/stage05/agents --out trusted/codex-review-artifacts/stage05/agent-matrix.json
+          workflow-helper/setup/codex-review/bin/codex-review fix_dispatch plan --in trusted/codex-review-artifacts/design/design-plan.json --inventory trusted/codex-review-artifacts/design_chief/chief-decision.validated.json --out trusted/codex-review-artifacts/fix_dispatch/manifest.json
+          python3 -c "import json,os; m=json.load(open('trusted/codex-review-artifacts/fix_dispatch/manifest.json')); open(os.environ['GITHUB_OUTPUT'],'a').write('no_fix_needed=%s\n' % ('true' if m.get('no_fix_needed') else 'false'))"
+          workflow-helper/setup/codex-review/bin/codex-review fix_dispatch prepare-agents --inventory trusted/codex-review-artifacts/fix_dispatch/manifest.json --design-plan trusted/codex-review-artifacts/design/design-plan.json --chief-decision trusted/codex-review-artifacts/design_chief/chief-decision.validated.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --work-dir trusted/codex-review-artifacts/fix_dispatch/agents --out trusted/codex-review-artifacts/fix_dispatch/agent-matrix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage05-prepare
-          path: trusted/codex-review-artifacts/stage05
+          name: codex-review-fix_dispatch-prepare
+          path: trusted/codex-review-artifacts/fix_dispatch
 
   run_agents:
     name: Run fix agents
@@ -193,8 +193,8 @@ jobs:
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage05-prepare
-          path: trusted/codex-review-artifacts/stage05
+          name: codex-review-fix_dispatch-prepare
+          path: trusted/codex-review-artifacts/fix_dispatch
       - name: Mint Codex relay token
         id: codex_oidc
         run: |
@@ -203,7 +203,7 @@ jobs:
       - name: Prepare fix agent schema
         run: |
           mkdir -p trusted/codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage05-fix-agent-result.v1 --out trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema fix-dispatch-agent-result.v1 --out trusted/codex-review-artifacts/schemas/fix-dispatch-agent-result.v1.openai.schema.json
       - name: Run Codex fix agent model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
@@ -212,7 +212,7 @@ jobs:
           codex-home: ${{ runner.temp }}/codex-home
           prompt-file: ${{ github.workspace }}/${{ matrix.prompt_file }}
           output-file: ${{ github.workspace }}/${{ matrix.output_file }}
-          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage05-fix-agent-result.v1.openai.schema.json
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/fix-dispatch-agent-result.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -220,11 +220,11 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate fix agent result
-        run: workflow-helper/setup/codex-review/bin/codex-review stage05 validate-agent-result --inventory "${{ github.workspace }}/${{ matrix.task_file }}" --in "${{ github.workspace }}/${{ matrix.output_file }}" --out "${{ github.workspace }}/${{ matrix.validated_file }}" --repo-path "${{ github.workspace }}/pr-head"
+        run: workflow-helper/setup/codex-review/bin/codex-review fix_dispatch validate-agent-result --inventory "${{ github.workspace }}/${{ matrix.task_file }}" --in "${{ github.workspace }}/${{ matrix.output_file }}" --out "${{ github.workspace }}/${{ matrix.validated_file }}" --repo-path "${{ github.workspace }}/pr-head"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage05-agent-${{ matrix.task_path }}
-          path: ${{ github.workspace }}/trusted/codex-review-artifacts/stage05/agents/${{ matrix.task_path }}
+          name: codex-review-fix_dispatch-agent-${{ matrix.task_path }}
+          path: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_dispatch/agents/${{ matrix.task_path }}
 
   merge_fixes:
     name: Collect & merge fixes
@@ -256,23 +256,23 @@ jobs:
           path: trusted/codex-review-artifacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage05-prepare
-          path: trusted/codex-review-artifacts/stage05
+          name: codex-review-fix_dispatch-prepare
+          path: trusted/codex-review-artifacts/fix_dispatch
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.plan_tasks.outputs.has_agent_tasks == 'true'
         with:
-          pattern: codex-review-stage05-agent-*
-          path: trusted/codex-review-artifacts/stage05-agent-downloads
+          pattern: codex-review-fix_dispatch-agent-*
+          path: trusted/codex-review-artifacts/fix_dispatch-agent-downloads
           merge-multiple: false
       - id: merge_route
         env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
           CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}/trusted
         run: |
-          mkdir -p trusted/codex-review-artifacts/stage05-agent-downloads trusted/codex-review-artifacts/stage06
-          workflow-helper/setup/codex-review/bin/codex-review stage05 collect --inventory trusted/codex-review-artifacts/stage05/manifest.json --artifacts trusted/codex-review-artifacts/stage05-agent-downloads --out trusted/codex-review-artifacts/stage05/collection.json
-          workflow-helper/setup/codex-review/bin/codex-review stage06 premerge --in trusted/codex-review-artifacts/stage05/collection.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/premerge-report.json
-          workflow-helper/setup/codex-review/bin/codex-review stage06 prepare-merge-model --inventory trusted/codex-review-artifacts/stage06/premerge-report.json --in trusted/codex-review-artifacts/stage05/collection.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --prompt-out trusted/codex-review-artifacts/stage06/merge-prompt.md --raw-out trusted/codex-review-artifacts/stage06/merged-fix.raw.json --out trusted/codex-review-artifacts/stage06/merge-route.json
+          mkdir -p trusted/codex-review-artifacts/fix_dispatch-agent-downloads trusted/codex-review-artifacts/fix_merge
+          workflow-helper/setup/codex-review/bin/codex-review fix_dispatch collect --inventory trusted/codex-review-artifacts/fix_dispatch/manifest.json --artifacts trusted/codex-review-artifacts/fix_dispatch-agent-downloads --out trusted/codex-review-artifacts/fix_dispatch/collection.json
+          workflow-helper/setup/codex-review/bin/codex-review fix_merge premerge --in trusted/codex-review-artifacts/fix_dispatch/collection.json --repo-path pr-head --out trusted/codex-review-artifacts/fix_merge/premerge-report.json
+          workflow-helper/setup/codex-review/bin/codex-review fix_merge prepare-merge-model --inventory trusted/codex-review-artifacts/fix_merge/premerge-report.json --in trusted/codex-review-artifacts/fix_dispatch/collection.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --prompt-out trusted/codex-review-artifacts/fix_merge/merge-prompt.md --raw-out trusted/codex-review-artifacts/fix_merge/merged-fix.raw.json --out trusted/codex-review-artifacts/fix_merge/merge-route.json
       - name: Mint Codex relay token
         id: codex_oidc
         if: steps.merge_route.outputs.needs_model == 'true'
@@ -283,7 +283,7 @@ jobs:
         if: steps.merge_route.outputs.needs_model == 'true'
         run: |
           mkdir -p trusted/codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage06-merged-fix.v1 --out trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema fix-merge-merged-fix.v1 --out trusted/codex-review-artifacts/schemas/fix-merge-merged-fix.v1.openai.schema.json
       - name: Run Codex merged fix model
         if: steps.merge_route.outputs.needs_model == 'true'
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
@@ -291,9 +291,9 @@ jobs:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merge-prompt.md
-          output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/merged-fix.raw.json
-          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-merged-fix.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_merge/merge-prompt.md
+          output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_merge/merged-fix.raw.json
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/fix-merge-merged-fix.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -301,10 +301,10 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate merged fix
-        run: workflow-helper/setup/codex-review/bin/codex-review stage06 validate --inventory trusted/codex-review-artifacts/stage06/premerge-report.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --in trusted/codex-review-artifacts/stage06/merged-fix.raw.json --repo-path pr-head --out trusted/codex-review-artifacts/stage06/merged-fix.json
+        run: workflow-helper/setup/codex-review/bin/codex-review fix_merge validate --inventory trusted/codex-review-artifacts/fix_merge/premerge-report.json --chief-decision trusted/codex-review-artifacts/design_chief/chief-decision.validated.json --in trusted/codex-review-artifacts/fix_merge/merged-fix.raw.json --repo-path pr-head --out trusted/codex-review-artifacts/fix_merge/merged-fix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage05-06
+          name: codex-review-fix_merge
           path: trusted/codex-review-artifacts
 
   patch_safety:
@@ -338,10 +338,10 @@ jobs:
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage05-06
+          name: codex-review-fix_merge
           path: trusted/codex-review-artifacts
       - name: Build semantic patch safety prompt
-        run: workflow-helper/setup/codex-review/bin/codex-review stage06 build-semantic-safety-prompt --in trusted/codex-review-artifacts/stage06/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --out trusted/codex-review-artifacts/stage06/semantic-safety-prompt.md
+        run: workflow-helper/setup/codex-review/bin/codex-review fix_merge build-semantic-safety-prompt --in trusted/codex-review-artifacts/fix_merge/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --out trusted/codex-review-artifacts/fix_merge/semantic-safety-prompt.md
       - name: Mint Codex relay token
         id: codex_oidc
         run: |
@@ -350,16 +350,16 @@ jobs:
       - name: Prepare semantic patch safety schema
         run: |
           mkdir -p trusted/codex-review-artifacts/schemas
-          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema stage06-semantic-patch-safety.v1 --out trusted/codex-review-artifacts/schemas/stage06-semantic-patch-safety.v1.openai.schema.json
+          workflow-helper/setup/codex-review/bin/codex-review schema openai-strict --schema fix-merge-semantic-patch-safety.v1 --out trusted/codex-review-artifacts/schemas/fix-merge-semantic-patch-safety.v1.openai.schema.json
       - name: Run Codex semantic patch safety model
         uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
         with:
           openai-api-key: ${{ steps.codex_oidc.outputs.relay_token }}
           responses-api-endpoint: https://relay-ai.dongwontuna.net/v1/responses
           codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/semantic-safety-prompt.md
-          output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/stage06/semantic-safety.raw.json
-          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/stage06-semantic-patch-safety.v1.openai.schema.json
+          prompt-file: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_merge/semantic-safety-prompt.md
+          output-file: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_merge/semantic-safety.raw.json
+          output-schema-file: ${{ github.workspace }}/trusted/codex-review-artifacts/schemas/fix-merge-semantic-patch-safety.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
           safety-strategy: unsafe
@@ -367,12 +367,12 @@ jobs:
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate semantic patch safety result
-        run: workflow-helper/setup/codex-review/bin/codex-review stage06 validate-semantic-safety --in trusted/codex-review-artifacts/stage06/semantic-safety.raw.json --inventory trusted/codex-review-artifacts/stage06/merged-fix.json --out trusted/codex-review-artifacts/stage06/semantic-safety.json
+        run: workflow-helper/setup/codex-review/bin/codex-review fix_merge validate-semantic-safety --in trusted/codex-review-artifacts/fix_merge/semantic-safety.raw.json --inventory trusted/codex-review-artifacts/fix_merge/merged-fix.json --out trusted/codex-review-artifacts/fix_merge/semantic-safety.json
       - id: semantic_safety_outputs
-        run: workflow-helper/setup/codex-review/bin/codex-review stage06 write-semantic-safety-outputs --in trusted/codex-review-artifacts/stage06/semantic-safety.json
+        run: workflow-helper/setup/codex-review/bin/codex-review fix_merge write-semantic-safety-outputs --in trusted/codex-review-artifacts/fix_merge/semantic-safety.json
       - name: Export semantic safety to job output
         id: export
-        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name semantic_safety --in trusted/codex-review-artifacts/stage06/semantic-safety.json
+        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name semantic_safety --in trusted/codex-review-artifacts/fix_merge/semantic-safety.json
 
   validate_patch:
     name: Validate patch & loop budget
@@ -405,27 +405,27 @@ jobs:
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage05-06
+          name: codex-review-fix_merge
           path: trusted/codex-review-artifacts
       - name: Materialize semantic safety (if present)
         env:
           SEMANTIC_SAFETY: ${{ needs.patch_safety.outputs.semantic_safety }}
         run: |
-          mkdir -p trusted/codex-review-artifacts/stage06
+          mkdir -p trusted/codex-review-artifacts/fix_merge
           if [ -n "$SEMANTIC_SAFETY" ]; then
-            printf '%s' "$SEMANTIC_SAFETY" > trusted/codex-review-artifacts/stage06/semantic-safety.json
+            printf '%s' "$SEMANTIC_SAFETY" > trusted/codex-review-artifacts/fix_merge/semantic-safety.json
           fi
       - env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
-        run: workflow-helper/setup/codex-review/bin/codex-review stage07 validate-fix --in trusted/codex-review-artifacts/stage06/merged-fix.json --semantic-safety trusted/codex-review-artifacts/stage06/semantic-safety.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/validated-fix.json
+        run: workflow-helper/setup/codex-review/bin/codex-review push validate-fix --in trusted/codex-review-artifacts/fix_merge/merged-fix.json --semantic-safety trusted/codex-review-artifacts/fix_merge/semantic-safety.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/push/validated-fix.json
       - name: Check autofix loop budget (oscillation / round cap)
-        run: workflow-helper/setup/codex-review/bin/codex-review stage07 check-loop-budget --in trusted/codex-review-artifacts/stage07/validated-fix.json --result trusted/codex-review-artifacts/stage06/merged-fix.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --out trusted/codex-review-artifacts/stage07/validated-fix.json
+        run: workflow-helper/setup/codex-review/bin/codex-review push check-loop-budget --in trusted/codex-review-artifacts/push/validated-fix.json --result trusted/codex-review-artifacts/fix_merge/merged-fix.json --design-plan trusted/codex-review-artifacts/design/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --out trusted/codex-review-artifacts/push/validated-fix.json
       - id: validation_result
-        run: workflow-helper/setup/codex-review/bin/codex-review stage07 write-validation-outputs --in trusted/codex-review-artifacts/stage07/validated-fix.json
+        run: workflow-helper/setup/codex-review/bin/codex-review push write-validation-outputs --in trusted/codex-review-artifacts/push/validated-fix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage07-validation
-          path: trusted/codex-review-artifacts/stage07
+          name: codex-review-push-validation
+          path: trusted/codex-review-artifacts/push
 
   commit_push:
     name: Commit & push fix
@@ -455,12 +455,12 @@ jobs:
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage05-06
+          name: codex-review-fix_merge
           path: trusted/codex-review-artifacts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: codex-review-stage07-validation
-          path: trusted/codex-review-artifacts/stage07
+          name: codex-review-push-validation
+          path: trusted/codex-review-artifacts/push
       - id: app_token
         env:
           CODEX_REVIEW_GITHUB_APP_ID: ${{ secrets.CODEX_REVIEW_GITHUB_APP_ID }}
@@ -469,14 +469,14 @@ jobs:
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
           CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
           CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode push --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/app-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode push --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/push/app-token.json
       - env:
           GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token.outputs.permissions_json }}
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
-        run: workflow-helper/setup/codex-review/bin/codex-review stage07 commit-push --in trusted/codex-review-artifacts/stage06/merged-fix.json --validation trusted/codex-review-artifacts/stage07/validated-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/stage07/push-result.json
+        run: workflow-helper/setup/codex-review/bin/codex-review push commit-push --in trusted/codex-review-artifacts/fix_merge/merged-fix.json --validation trusted/codex-review-artifacts/push/validated-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/push/push-result.json
       - id: push_result
-        run: workflow-helper/setup/codex-review/bin/codex-review stage07 write-outputs --in trusted/codex-review-artifacts/stage07/push-result.json
+        run: workflow-helper/setup/codex-review/bin/codex-review push write-outputs --in trusted/codex-review-artifacts/push/push-result.json
       - id: app_token_loop_state
         if: steps.push_result.outputs.push_status == 'pushed'
         env:
@@ -486,17 +486,17 @@ jobs:
           GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_REVIEW_APP_PRIVATE_KEY }}
           CODEX_APP_ID: ${{ secrets.CODEX_APP_ID }}
           CODEX_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode loop-state --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/loop-state-token.json
+        run: workflow-helper/setup/codex-review/bin/codex-review auth app-token --mode loop-state --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/push/loop-state-token.json
       - name: Record push into loop state history
         if: steps.push_result.outputs.push_status == 'pushed'
         env:
           GITHUB_TOKEN: ${{ steps.app_token_loop_state.outputs.token }}
           CODEX_REVIEW_APP_TOKEN_PERMISSIONS_JSON: ${{ steps.app_token_loop_state.outputs.permissions_json }}
-        run: workflow-helper/setup/codex-review/bin/codex-review stage07 record-push --in trusted/codex-review-artifacts/stage07/push-result.json --result trusted/codex-review-artifacts/stage06/merged-fix.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/stage07/loop-state-record.json
+        run: workflow-helper/setup/codex-review/bin/codex-review push record-push --in trusted/codex-review-artifacts/push/push-result.json --result trusted/codex-review-artifacts/fix_merge/merged-fix.json --design-plan trusted/codex-review-artifacts/design/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --out trusted/codex-review-artifacts/push/loop-state-record.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: codex-review-stage07
-          path: trusted/codex-review-artifacts/stage07
+          name: codex-review-push
+          path: trusted/codex-review-artifacts/push
 
   finalize:
     name: Finalize labels (loop or issue)

@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from codex_review.stages.stage07_push.run_tests import run_required_tests, select_test_commands
+from codex_review.stages.push.run_tests import run_required_tests, select_test_commands
 from codex_review.errors import ValidationError
 
 

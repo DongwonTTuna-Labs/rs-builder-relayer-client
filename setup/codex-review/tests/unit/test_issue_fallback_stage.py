@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from codex_review.stages.stage09_issue_fallback.issue import (
+from codex_review.stages.issue_fallback.issue import (
     apply_issue_fallback,
     build_issue_fallback_plan,
     compose_issue_content,
@@ -28,10 +28,10 @@ def test_issue_fallback_plan_is_idempotent_and_openspec_aware():
         reason="missing_openspec_spec",
         pr_context=pr_context,
         openspec_context=openspec_context,
-        attempted_stages=["stage03", "stage04"],
+        attempted_stages=["design", "design_chief"],
     )
 
-    assert plan["schema_version"] == "stage09-issue-fallback.v1"
+    assert plan["schema_version"] == "issue-fallback.v1"
     assert plan["idempotency_key"]
     assert "missing_openspec_spec" in plan["title"]
     assert "openspec/changes/demo/tasks.md" in plan["body"]
@@ -44,7 +44,7 @@ def test_issue_fallback_body_names_required_follow_up():
         reason="no-diff-repeat",
         pr_context={"pr_number": 41},
         openspec_context={"present": False, "decision": "missing_openspec_spec"},
-        attempted_stages=["stage07"],
+        attempted_stages=["push"],
         required_follow_up="Create an OpenSpec change or adjust the PR body link.",
     )
 
@@ -53,9 +53,9 @@ def test_issue_fallback_body_names_required_follow_up():
     assert "원본 PR: #41" in body
 
 
-def test_issue_fallback_plan_includes_stage02_deferred_items():
+def test_issue_fallback_plan_includes_techlead_deferred_items():
     plan = build_issue_fallback_plan(
-        reason="stage02_defer_to_issue",
+        reason="techlead_defer_to_issue",
         pr_context={"owner":"o", "repo":"r", "repository":"o/r", "pr_number":7},
         openspec_context={"present": True, "source_summary": ["openspec/changes/demo/tasks.md"]},
         deferred_items=[{
@@ -72,7 +72,7 @@ def test_issue_fallback_plan_includes_stage02_deferred_items():
     assert "이관된 지적사항" in plan["body"]
     assert "F-1" in plan["body"]
     assert "outside-pr-scope" in plan["body"]
-    assert "stage02_defer_to_issue" in plan["title"]
+    assert "techlead_defer_to_issue" in plan["title"]
 
 
 def test_issue_fallback_actual_apply_requires_app_token():
@@ -100,7 +100,7 @@ def test_issue_fallback_no_diff_repeat_uses_specific_follow_up():
         reason="no_diff_repeat",
         pr_context={"owner":"o", "repo":"r", "repository":"o/r", "pr_number":7},
         openspec_context={"present": True, "source_summary": ["openspec/changes/demo/tasks.md"]},
-        attempted_stages=["stage07"],
+        attempted_stages=["push"],
     )
 
     assert "비어있지 않은 패치" in plan["required_follow_up"]
@@ -110,18 +110,18 @@ def test_issue_fallback_no_diff_repeat_uses_specific_follow_up():
 def test_infer_reason_prioritizes_terminal_fix_loop():
     inferred = infer_issue_reason(
         fix_validation={"status": "blocked", "loop_terminal_reason": "oscillation_detected"},
-        design_route={"route": "run_stage05"},
+        design_route={"route": "run_fix_dispatch"},
         review_publication={"deferred_items": [{"finding_id": "F-1"}]},
     )
     assert inferred["reason"] == "oscillation_detected"
-    assert "stage07" in inferred["attempted_stages"]
+    assert "push" in inferred["attempted_stages"]
 
 
 def test_infer_reason_falls_back_to_deferred_items():
     inferred = infer_issue_reason(
         review_publication={"deferred_items": [{"finding_id": "F-2", "title": "x"}]},
     )
-    assert inferred["reason"] == "stage02_defer_to_issue"
+    assert inferred["reason"] == "techlead_defer_to_issue"
     assert inferred["deferred_items"] and inferred["deferred_items"][0]["finding_id"] == "F-2"
 
 

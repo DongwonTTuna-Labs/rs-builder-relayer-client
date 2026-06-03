@@ -15,7 +15,7 @@ side effect request artifact만 생성하고 직접 실행하지 않는다.
 ## 반드시 지킬 규칙
 - issue idempotency key는 trusted code가 재계산한다.
 - current head comment는 자동 resolve하지 않는다.
-- push owner는 stage07 하나뿐이다.
+- push owner는 push 하나뿐이다.
 
 ## 구현 시 채워야 할 섹션
 - System role statement

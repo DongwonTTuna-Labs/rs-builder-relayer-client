@@ -1,6 +1,6 @@
 import pytest
 
-from codex_review.stages.stage07_push.validate import validate_push_target
+from codex_review.stages.push.validate import validate_push_target
 
 
 def test_push_target_rejects_fork_pr():

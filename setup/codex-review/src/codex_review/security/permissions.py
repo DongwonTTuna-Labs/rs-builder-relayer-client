@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from codex_review.errors import PolicyViolation
 
-WRITE_STAGES = {"stage00_apply", "stage02_publish", "stage04_publish", "stage07_push", "stage08_record"}
+WRITE_STAGES = {"resolve_gate_apply", "techlead_publish", "design_chief_publish", "push", "reentry_record"}
 
 
 def is_write_stage(stage: str) -> bool:

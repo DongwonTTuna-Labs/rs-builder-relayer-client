@@ -4,17 +4,17 @@ from codex_review.schema import load_schema_json, make_openai_structured_output_
 
 
 ACTION_SCHEMA_NAMES = [
-    "stage00-lifecycle-result.v1",
-    "stage01-axis-findings.v1",
-    "stage02-techlead-decision.v1",
-    "stage03-design-inventory.v1",
-    "stage03-design-clusters.v1",
-    "stage03-cluster-analysis.v1",
-    "stage03-design-plan.v1",
-    "stage04-design-chief-decision.v1",
-    "stage05-fix-agent-result.v1",
-    "stage06-merged-fix.v1",
-    "stage06-semantic-patch-safety.v1",
+    "resolve-gate-lifecycle-result.v1",
+    "review-axis-findings.v1",
+    "techlead-decision.v1",
+    "design-inventory.v1",
+    "design-clusters.v1",
+    "design-cluster-analysis.v1",
+    "design-plan.v1",
+    "design-chief-decision.v1",
+    "fix-dispatch-agent-result.v1",
+    "fix-merge-merged-fix.v1",
+    "fix-merge-semantic-patch-safety.v1",
 ]
 
 
@@ -68,8 +68,8 @@ def test_openai_action_schemas_are_strict_structured_outputs():
                 assert "null" in enum_types, (name, path)
 
 
-def test_stage03_design_plan_schema_does_not_expose_open_questions():
-    schema = load_schema_json("stage03-design-plan.v1")
+def test_design_plan_schema_does_not_expose_open_questions():
+    schema = load_schema_json("design-plan.v1")
     assert "open_questions" not in schema["properties"]
     assert "acceptance_criteria" in schema["properties"]
     assert "openspec_backed" in schema["properties"]
@@ -81,25 +81,25 @@ def test_stage03_design_plan_schema_does_not_expose_open_questions():
 
 
 def test_openai_strict_schema_keeps_defer_issue_payload_shape():
-    schema = make_openai_structured_output_schema(load_schema_json("stage00-lifecycle-result.v1"))
+    schema = make_openai_structured_output_schema(load_schema_json("resolve-gate-lifecycle-result.v1"))
     issue = schema["properties"]["decisions"]["items"]["properties"]["issue_request"]
     assert "null" in issue["type"]
     assert set(issue["properties"]) == {"title", "body", "root_cause_key", "labels"}
 
 
 def test_openai_strict_schema_keeps_fix_policy_payload_shape():
-    schema = make_openai_structured_output_schema(load_schema_json("stage04-design-chief-decision.v1"))
+    schema = make_openai_structured_output_schema(load_schema_json("design-chief-decision.v1"))
     policy = schema["properties"]["fix_policy"]
     assert "null" in policy["type"]
     assert {"allowed_files", "allowed_prefixes", "forbidden_files", "forbidden_prefixes"}.issubset(policy["properties"])
 
 
-def test_stage01_to_stage04_schemas_require_inspection_evidence():
+def test_review_to_design_chief_schemas_require_inspection_evidence():
     for name in [
-        "stage01-axis-findings.v1",
-        "stage02-techlead-decision.v1",
-        "stage03-design-plan.v1",
-        "stage04-design-chief-decision.v1",
+        "review-axis-findings.v1",
+        "techlead-decision.v1",
+        "design-plan.v1",
+        "design-chief-decision.v1",
     ]:
         schema = make_openai_structured_output_schema(load_schema_json(name))
         assert "inspection_evidence" in schema["properties"], name
