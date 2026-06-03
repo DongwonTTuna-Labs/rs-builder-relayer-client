@@ -145,6 +145,13 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-design-inputs
@@ -179,6 +186,13 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
       - name: Materialize design context
         env:
           DESIGN_CONTEXT: ${{ needs.design_context.outputs.design_context }}
@@ -262,6 +276,13 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-stage03-prepare
@@ -314,6 +335,13 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-stage03-prepare
@@ -378,6 +406,13 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
       - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
+      - name: Checkout PR head for model inspection
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
+          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
+          path: pr-head
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: codex-review-stage03
