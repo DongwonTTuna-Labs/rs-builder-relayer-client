@@ -28,3 +28,28 @@ def test_plan_keeps_distinct_ids_untouched():
     chief = {"status": "approved_for_fix", "fix_policy": {"max_tasks": 4}}
     manifest = plan_fix_tasks(design_plan, chief, {})
     assert [t["task_id"] for t in manifest["tasks"]] == ["one", "two"]
+
+
+def test_plan_allows_more_than_four_tasks():
+    # The max_tasks cap was removed: a design with many distinct-file tasks must
+    # plan all of them instead of escalating to an issue.
+    design_plan = {
+        "edit_sequence": [
+            {"task_id": f"fix-{i}", "files": [f"src/f{i}.py"], "summary": f"fix {i}"}
+            for i in range(6)
+        ],
+    }
+    chief = {"status": "approved_for_fix", "fix_policy": {"allowed_prefixes": ["src/"]}}
+    manifest = plan_fix_tasks(design_plan, chief, {})
+    assert len(manifest["tasks"]) == 6
+    assert not manifest.get("no_fix_needed")
+
+
+def test_plan_approved_with_no_tasks_is_no_fix_needed():
+    # An approved design with nothing concrete to change is a no-op (LGTM),
+    # not a blocker that escalates to an issue.
+    design_plan = {"edit_sequence": []}
+    chief = {"status": "approved_for_fix", "fix_policy": {"allowed_prefixes": ["src/"]}}
+    manifest = plan_fix_tasks(design_plan, chief, {})
+    assert manifest["tasks"] == []
+    assert manifest["no_fix_needed"] is True

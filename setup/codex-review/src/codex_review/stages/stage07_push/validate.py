@@ -4,9 +4,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 from codex_review.errors import PolicyViolation, ValidationError
-from codex_review.github.pull_requests import get_current_head_sha, list_pull_request_commits
+from codex_review.github.pull_requests import get_current_head_sha
 from codex_review.security.provenance import validate_pull_request_target_safety
-from codex_review.security.provenance import count_existing_codex_autofix_commits
 from codex_review.security.subprocess_env import sanitized_env
 
 
@@ -40,17 +39,6 @@ def validate_push_target(pr_context: dict[str, Any]) -> None:
         raise ValidationError("autofix push requires pr_context.head_ref")
     if not pr_context.get("owner") or not pr_context.get("repo") or not pr_context.get("pr_number"):
         raise ValidationError("autofix push requires owner/repo/pr_number")
-
-
-def validate_autofix_commit_cap(owner: str, repo: str, pr_number: int, token: str | None, policy: dict[str, Any]) -> dict[str, Any]:
-    max_commits = int(policy.get("max_commits", 0) or 0)
-    if not max_commits:
-        return {"checked": False, "max_commits": max_commits, "existing_autofix_commits": 0}
-    commits = list_pull_request_commits(owner, repo, pr_number, token)
-    count = count_existing_codex_autofix_commits(commits, policy)
-    if count >= max_commits:
-        raise PolicyViolation(f"autofix commit cap reached: {count} >= {max_commits}")
-    return {"checked": True, "max_commits": max_commits, "existing_autofix_commits": count}
 
 
 def validate_worktree_clean(repo_path: str | Path) -> None:

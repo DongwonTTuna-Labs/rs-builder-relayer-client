@@ -59,9 +59,6 @@ def validate_axis_findings(
     if payload_axis and payload_axis != axis:
         raise ValidationError(f"axis mismatch: {payload.get('axis')} != {axis}")
     items=payload.get("findings") or []
-    max_count=int(config.get("review", {}).get("max_findings_per_axis", 13))
-    if len(items) > max_count:
-        raise ValidationError(f"too many findings for {axis}: {len(items)} > {max_count}")
     ids=set()
     require_changed=config.get("review", {}).get("require_changed_right_line", True)
     for f in items:

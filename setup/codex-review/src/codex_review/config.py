@@ -14,8 +14,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "trusted": {"user": "", "codex_review_authors": []},
     "review": {
         "axes": ["correctness", "security", "performance", "test-coverage", "domain"],
-        "max_findings_per_axis": 13,
-        "max_combined_findings": 40,
         "max_inline_comments": 12,
         "max_inline_comments_per_file": 3,
         "require_changed_right_line": True,
@@ -40,10 +38,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "design": {"require_design_chief": True, "max_clusters": 12, "max_cluster_analysis_batch_size": 4},
     "autofix": {
         "enabled": False,
-        "max_tasks": 4,
-        "max_commits": 0,
-        "max_files": 8,
-        "max_patch_bytes": 120000,
         "max_rounds": 5,
         "oscillation_window": 10,
         "pingpong_threshold": 2,
@@ -106,7 +100,7 @@ def validate_config(config: dict[str, Any]) -> None:
     if not isinstance(axes, list) or not axes or len(set(axes)) != len(axes):
         raise ValidationError("review.axes must be a non-empty list with unique values")
     auto = config["autofix"]
-    for int_key in ["max_tasks", "max_commits", "max_files", "max_patch_bytes", "max_rounds", "oscillation_window", "pingpong_threshold"]:
+    for int_key in ["max_rounds", "oscillation_window", "pingpong_threshold"]:
         if int(auto.get(int_key, 0)) < 0:
             raise ValidationError(f"autofix.{int_key} must be non-negative")
     if not (0.0 <= float(auto.get("revert_threshold", 0.8)) <= 1.0):

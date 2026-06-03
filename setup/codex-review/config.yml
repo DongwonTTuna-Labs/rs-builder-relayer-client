@@ -16,8 +16,6 @@ review:
     - performance
     - test-coverage
     - domain
-  max_findings_per_axis: 13
-  max_combined_findings: 40
   max_inline_comments: 12
   max_inline_comments_per_file: 3
   require_changed_right_line: true
@@ -65,10 +63,6 @@ design:
 
 autofix:
   enabled: true
-  max_tasks: 4
-  max_commits: 0
-  max_files: 8
-  max_patch_bytes: 120000
   # Convergence guards: stop the loop instead of ping-ponging forever.
   max_rounds: 5            # max autofix pushes per PR before escalating to an issue
   oscillation_window: 10   # how many recent pushes to remember for cycle detection

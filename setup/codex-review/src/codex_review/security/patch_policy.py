@@ -62,22 +62,12 @@ def assert_allowed_paths(touched_files: list[str], policy: dict[str, Any]) -> No
     allowed_prefixes = policy.get("allowed_prefixes") or []
     forbidden = set(policy.get("forbidden_files") or [])
     forbidden_prefixes = policy.get("forbidden_prefixes") or []
-    max_files = int(policy.get("max_files", 0) or 0)
-    if max_files and len(touched_files) > max_files:
-        raise PolicyViolation(f"patch touches too many files: {len(touched_files)} > {max_files}")
     for path in touched_files:
         if path in forbidden or _matches_any(path, forbidden_prefixes):
             raise PolicyViolation(f"patch touches forbidden path: {path}")
         if allowed or allowed_prefixes:
             if path not in allowed and not _matches_any(path, allowed_prefixes):
                 raise PolicyViolation(f"patch touches path outside allowlist: {path}")
-
-
-def assert_patch_size_within_limit(patch_text: str, policy: dict[str, Any]) -> None:
-    limit=int(policy.get("max_patch_bytes", 0) or 0)
-    size=len((patch_text or "").encode("utf-8"))
-    if limit and size > limit:
-        raise PolicyViolation(f"patch too large: {size} > {limit}")
 
 
 def assert_no_binary_mode_rename_or_symlink(patch_text: str) -> None:
@@ -147,7 +137,6 @@ def git_apply_check(patch_text: str, repo_path: str | Path) -> None:
 
 def validate_patch_policy(patch_text: str, policy: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     context=context or {}
-    assert_patch_size_within_limit(patch_text, policy)
     assert_no_binary_mode_rename_or_symlink(patch_text)
     touched=parse_patch_touched_files(patch_text)
     assert_allowed_paths(touched, policy)

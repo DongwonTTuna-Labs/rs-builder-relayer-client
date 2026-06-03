@@ -79,8 +79,6 @@ def plan_fix_tasks(design_plan: dict[str, Any], chief_decision: dict[str, Any], 
                 "openspec_backed": bool(step.get("openspec_backed") or design_plan.get("openspec_backed")),
             }
         )
-    if not tasks and chief_decision.get("status") == "approved_for_fix":
-        raise ValidationError("approved design has no fix tasks")
     manifest={
         "schema_version":"stage05-fix-task-manifest.v1",
         "tasks":_ensure_unique_task_ids(merge_tasks_touching_same_files(tasks)),
@@ -89,14 +87,16 @@ def plan_fix_tasks(design_plan: dict[str, Any], chief_decision: dict[str, Any], 
         "openspec_backed": bool(design_plan.get("openspec_backed")),
         "openspec_sources": plan_sources,
     }
-    validate_task_manifest(manifest, chief_decision, config)
+    # An approved design with nothing concrete to change is a no-op (LGTM), not a blocker.
+    if not manifest["tasks"]:
+        manifest["no_fix_needed"] = True
+        return manifest
+    validate_task_manifest(manifest)
     return manifest
 
 
-def validate_task_manifest(manifest: dict[str, Any], chief_decision: dict[str, Any], config: dict[str, Any]) -> None:
-    max_tasks=int(chief_decision.get("fix_policy", {}).get("max_tasks", config.get("autofix", {}).get("max_tasks", 4)) or 4)
+def validate_task_manifest(manifest: dict[str, Any]) -> None:
     tasks=manifest.get("tasks", [])
-    if len(tasks)>max_tasks: raise ValidationError(f"too many fix tasks: {len(tasks)} > {max_tasks}")
     ids=[t.get("task_id") for t in tasks]
     if len(ids)!=len(set(ids)): raise ValidationError("duplicate task_id in manifest")
     for t in tasks:

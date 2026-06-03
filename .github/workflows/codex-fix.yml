@@ -159,6 +159,7 @@ jobs:
     outputs:
       agent_matrix: ${{ steps.prepare.outputs.agent_matrix }}
       has_agent_tasks: ${{ steps.prepare.outputs.has_agent_tasks }}
+      no_fix_needed: ${{ steps.prepare.outputs.no_fix_needed }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -189,6 +190,7 @@ jobs:
           CODEX_REVIEW_TRUSTED_CHECKOUT: ${{ github.workspace }}/trusted
         run: |
           workflow-helper/setup/codex-review/bin/codex-review stage05 plan --in trusted/codex-review-artifacts/stage03/design-plan.json --inventory trusted/codex-review-artifacts/stage04/chief-decision.validated.json --out trusted/codex-review-artifacts/stage05/manifest.json
+          python3 -c "import json,os; m=json.load(open('trusted/codex-review-artifacts/stage05/manifest.json')); open(os.environ['GITHUB_OUTPUT'],'a').write('no_fix_needed=%s\n' % ('true' if m.get('no_fix_needed') else 'false'))"
           workflow-helper/setup/codex-review/bin/codex-review stage05 prepare-agents --inventory trusted/codex-review-artifacts/stage05/manifest.json --design-plan trusted/codex-review-artifacts/stage03/design-plan.json --chief-decision trusted/codex-review-artifacts/stage04/chief-decision.validated.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --work-dir trusted/codex-review-artifacts/stage05/agents --out trusted/codex-review-artifacts/stage05/agent-matrix.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -271,7 +273,7 @@ jobs:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
     needs: [guard, plan_tasks, run_agents]
-    if: always() && needs.plan_tasks.result == 'success' && (needs.run_agents.result == 'success' || needs.run_agents.result == 'skipped')
+    if: always() && needs.plan_tasks.result == 'success' && needs.plan_tasks.outputs.no_fix_needed != 'true' && (needs.run_agents.result == 'success' || needs.run_agents.result == 'skipped')
     permissions:
       contents: read
       pull-requests: read
@@ -594,7 +596,7 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard, validate_patch, commit_push]
+    needs: [guard, plan_tasks, validate_patch, commit_push]
     if: always() && needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
@@ -638,11 +640,16 @@ jobs:
           PUSH_STATUS: ${{ needs.commit_push.outputs.push_status }}
           SHOULD_CONTINUE: ${{ needs.validate_patch.outputs.should_continue }}
           LOOP_TERMINAL: ${{ needs.validate_patch.outputs.loop_terminal_reason }}
+          NO_FIX_NEEDED: ${{ needs.plan_tasks.outputs.no_fix_needed }}
         run: |
           set -euo pipefail
           label_add() { gh api --silent -X POST "repos/$REPO/issues/$PR_NUMBER/labels" -f "labels[]=$1"; }
           label_del() { gh api --silent -X DELETE "repos/$REPO/issues/$PR_NUMBER/labels/$(python3 -c 'import sys,urllib.parse as u;print(u.quote(sys.argv[1],safe=""))' "$1")" >/dev/null 2>&1 || true; }
-          if [ -n "$LOOP_TERMINAL" ]; then
+          if [ "$NO_FIX_NEEDED" = "true" ]; then
+            # Design approved but nothing concrete to change: this is LGTM, not a blocker.
+            label_del '수정중'; label_add 'codex:lgtm'
+            echo "No fix needed: 수정중 -> codex:lgtm"
+          elif [ -n "$LOOP_TERMINAL" ]; then
             # Oscillation / round cap: stop the loop and hand to a human via issue.
             label_del '수정중'; label_add 'codex:needs-issue'
             echo "Loop terminal ($LOOP_TERMINAL): 수정중 -> codex:needs-issue"
