@@ -226,8 +226,8 @@ jobs:
           name: codex-review-fix_dispatch-agent-${{ matrix.task_path }}
           path: ${{ github.workspace }}/trusted/codex-review-artifacts/fix_dispatch/agents/${{ matrix.task_path }}
 
-  merge_fixes:
-    name: Collect & merge fixes
+  merge_validate:
+    name: Merge fixes, safety-check & validate
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
@@ -236,7 +236,13 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      issues: read
       id-token: write
+    outputs:
+      validation_status: ${{ steps.validation_result.outputs.validation_status }}
+      requires_push_token: ${{ steps.validation_result.outputs.requires_push_token }}
+      loop_terminal_reason: ${{ steps.validation_result.outputs.loop_terminal_reason }}
+      should_continue: ${{ steps.validation_result.outputs.should_continue }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -264,6 +270,11 @@ jobs:
           pattern: codex-review-fix_dispatch-agent-*
           path: trusted/codex-review-artifacts/fix_dispatch-agent-downloads
           merge-multiple: false
+      - name: Mint Codex relay token
+        id: codex_oidc
+        run: |
+          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
+          mkdir -p "${{ runner.temp }}/codex-home"
       - id: merge_route
         env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
@@ -273,12 +284,6 @@ jobs:
           workflow-helper/setup/codex-review/bin/codex-review fix_dispatch collect --inventory trusted/codex-review-artifacts/fix_dispatch/manifest.json --artifacts trusted/codex-review-artifacts/fix_dispatch-agent-downloads --out trusted/codex-review-artifacts/fix_dispatch/collection.json
           workflow-helper/setup/codex-review/bin/codex-review fix_merge premerge --in trusted/codex-review-artifacts/fix_dispatch/collection.json --repo-path pr-head --out trusted/codex-review-artifacts/fix_merge/premerge-report.json
           workflow-helper/setup/codex-review/bin/codex-review fix_merge prepare-merge-model --inventory trusted/codex-review-artifacts/fix_merge/premerge-report.json --in trusted/codex-review-artifacts/fix_dispatch/collection.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --prompt-out trusted/codex-review-artifacts/fix_merge/merge-prompt.md --raw-out trusted/codex-review-artifacts/fix_merge/merged-fix.raw.json --out trusted/codex-review-artifacts/fix_merge/merge-route.json
-      - name: Mint Codex relay token
-        id: codex_oidc
-        if: steps.merge_route.outputs.needs_model == 'true'
-        run: |
-          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
-          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare merged fix schema
         if: steps.merge_route.outputs.needs_model == 'true'
         run: |
@@ -302,51 +307,8 @@ jobs:
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate merged fix
         run: workflow-helper/setup/codex-review/bin/codex-review fix_merge validate --inventory trusted/codex-review-artifacts/fix_merge/premerge-report.json --chief-decision trusted/codex-review-artifacts/design_chief/chief-decision.validated.json --in trusted/codex-review-artifacts/fix_merge/merged-fix.raw.json --repo-path pr-head --out trusted/codex-review-artifacts/fix_merge/merged-fix.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: codex-review-fix_merge
-          path: trusted/codex-review-artifacts
-
-  patch_safety:
-    name: Semantic patch safety
-    runs-on:
-      group: "Home Server Runners"
-      labels: dongwontuna-labs-runner
-    needs: [guard, merge_fixes]
-    if: always() && needs.merge_fixes.result == 'success'
-    permissions:
-      contents: read
-      pull-requests: read
-      id-token: write
-    outputs:
-      semantic_safety_status: ${{ steps.semantic_safety_outputs.outputs.semantic_safety_status }}
-      semantic_safety_approved: ${{ steps.semantic_safety_outputs.outputs.semantic_safety_approved }}
-      semantic_safety_patch_hash: ${{ steps.semantic_safety_outputs.outputs.semantic_safety_patch_hash }}
-      semantic_safety: ${{ steps.export.outputs.semantic_safety }}
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          path: trusted
-          persist-credentials: false
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
-          path: pr-head
-          persist-credentials: false
-      - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-fix_merge
-          path: trusted/codex-review-artifacts
       - name: Build semantic patch safety prompt
         run: workflow-helper/setup/codex-review/bin/codex-review fix_merge build-semantic-safety-prompt --in trusted/codex-review-artifacts/fix_merge/merged-fix.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --docs-context trusted/codex-review-artifacts/event/docs-context.md --repo-path pr-head --out trusted/codex-review-artifacts/fix_merge/semantic-safety-prompt.md
-      - name: Mint Codex relay token
-        id: codex_oidc
-        run: |
-          workflow-helper/setup/codex-review/bin/codex-review oidc relay-token
-          mkdir -p "${{ runner.temp }}/codex-home"
       - name: Prepare semantic patch safety schema
         run: |
           mkdir -p trusted/codex-review-artifacts/schemas
@@ -368,53 +330,6 @@ jobs:
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
       - name: Validate semantic patch safety result
         run: workflow-helper/setup/codex-review/bin/codex-review fix_merge validate-semantic-safety --in trusted/codex-review-artifacts/fix_merge/semantic-safety.raw.json --inventory trusted/codex-review-artifacts/fix_merge/merged-fix.json --out trusted/codex-review-artifacts/fix_merge/semantic-safety.json
-      - id: semantic_safety_outputs
-        run: workflow-helper/setup/codex-review/bin/codex-review fix_merge write-semantic-safety-outputs --in trusted/codex-review-artifacts/fix_merge/semantic-safety.json
-      - name: Export semantic safety to job output
-        id: export
-        run: workflow-helper/setup/codex-review/bin/codex-review io to-output --name semantic_safety --in trusted/codex-review-artifacts/fix_merge/semantic-safety.json
-
-  validate_patch:
-    name: Validate patch & loop budget
-    runs-on:
-      group: "Home Server Runners"
-      labels: dongwontuna-labs-runner
-    needs: [guard, merge_fixes, patch_safety]
-    if: always() && needs.merge_fixes.result == 'success'
-    permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-    outputs:
-      validation_status: ${{ steps.validation_result.outputs.validation_status }}
-      requires_push_token: ${{ steps.validation_result.outputs.requires_push_token }}
-      loop_terminal_reason: ${{ steps.validation_result.outputs.loop_terminal_reason }}
-      should_continue: ${{ steps.validation_result.outputs.should_continue }}
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          path: trusted
-          persist-credentials: false
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          repository: ${{ needs.guard.outputs.head_repo_full_name || github.repository }}
-          ref: ${{ needs.guard.outputs.head_sha || github.sha }}
-          path: pr-head
-          persist-credentials: false
-      - uses: DongwonTTuna-Labs/rs-builder-relayer-client/.github/actions/setup-codex-review@main
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: codex-review-fix_merge
-          path: trusted/codex-review-artifacts
-      - name: Materialize semantic safety (if present)
-        env:
-          SEMANTIC_SAFETY: ${{ needs.patch_safety.outputs.semantic_safety }}
-        run: |
-          mkdir -p trusted/codex-review-artifacts/fix_merge
-          if [ -n "$SEMANTIC_SAFETY" ]; then
-            printf '%s' "$SEMANTIC_SAFETY" > trusted/codex-review-artifacts/fix_merge/semantic-safety.json
-          fi
       - env:
           CODEX_REVIEW_ARTIFACT_ROOT: ${{ github.workspace }}/trusted/codex-review-artifacts
         run: workflow-helper/setup/codex-review/bin/codex-review push validate-fix --in trusted/codex-review-artifacts/fix_merge/merged-fix.json --semantic-safety trusted/codex-review-artifacts/fix_merge/semantic-safety.json --pr-context trusted/codex-review-artifacts/event/pr-context.json --repo-path pr-head --out trusted/codex-review-artifacts/push/validated-fix.json
@@ -422,6 +337,10 @@ jobs:
         run: workflow-helper/setup/codex-review/bin/codex-review push check-loop-budget --in trusted/codex-review-artifacts/push/validated-fix.json --result trusted/codex-review-artifacts/fix_merge/merged-fix.json --design-plan trusted/codex-review-artifacts/design/design-plan.json --loop-state trusted/codex-review-artifacts/event/loop-state.json --out trusted/codex-review-artifacts/push/validated-fix.json
       - id: validation_result
         run: workflow-helper/setup/codex-review/bin/codex-review push write-validation-outputs --in trusted/codex-review-artifacts/push/validated-fix.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-review-fix_merge
+          path: trusted/codex-review-artifacts
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: codex-review-push-validation
@@ -432,8 +351,8 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard, validate_patch]
-    if: always() && needs.validate_patch.outputs.requires_push_token == 'true'
+    needs: [guard, merge_validate]
+    if: always() && needs.merge_validate.outputs.requires_push_token == 'true'
     permissions:
       contents: read
       pull-requests: read
@@ -503,7 +422,7 @@ jobs:
     runs-on:
       group: "Home Server Runners"
       labels: dongwontuna-labs-runner
-    needs: [guard, plan_tasks, validate_patch, commit_push]
+    needs: [guard, plan_tasks, merge_validate, commit_push]
     if: always() && needs.guard.outputs.proceed == 'true'
     permissions:
       contents: read
@@ -532,8 +451,8 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PUSH_STATUS: ${{ needs.commit_push.outputs.push_status }}
-          SHOULD_CONTINUE: ${{ needs.validate_patch.outputs.should_continue }}
-          LOOP_TERMINAL: ${{ needs.validate_patch.outputs.loop_terminal_reason }}
+          SHOULD_CONTINUE: ${{ needs.merge_validate.outputs.should_continue }}
+          LOOP_TERMINAL: ${{ needs.merge_validate.outputs.loop_terminal_reason }}
           NO_FIX_NEEDED: ${{ needs.plan_tasks.outputs.no_fix_needed }}
         run: |
           set -euo pipefail

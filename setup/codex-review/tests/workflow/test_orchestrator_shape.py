@@ -72,9 +72,7 @@ def test_workflow_declares_expected_stage_order():
         "guard",
         "plan_tasks",
         "run_agents",
-        "merge_fixes",
-        "patch_safety",
-        "validate_patch",
+        "merge_validate",
         "commit_push",
         "finalize",
     ]
@@ -299,7 +297,7 @@ def test_fix_and_push_use_pr_head_worktree():
 
 def test_no_token_validation_job_does_not_request_app_token():
     text = FIX.read_text(encoding="utf-8")
-    section = text.split("validate_patch:", 1)[1].split("commit_push:", 1)[0]
+    section = text.split("merge_validate:", 1)[1].split("commit_push:", 1)[0]
     assert "auth app-token" not in section
     assert "GITHUB_TOKEN:" not in section
     assert "push validate-fix" in section
@@ -308,19 +306,21 @@ def test_no_token_validation_job_does_not_request_app_token():
 
 
 def test_semantic_patch_safety_model_gates_push_validation():
+    # Merge, semantic-safety, and validation share one no-write-token job; the
+    # write-token push job depends on its requires_push_token output.
     text = FIX.read_text(encoding="utf-8")
     jobs = load_fix()["jobs"]
-    assert "patch_safety" in jobs
-    semantic = jobs["patch_safety"]
-    assert semantic["needs"] == ["guard", "merge_fixes"]
-    semantic_text = text.split("patch_safety:", 1)[1].split("validate_patch:", 1)[0]
-    assert "fix_merge build-semantic-safety-prompt" in semantic_text
-    assert "schema openai-strict --schema fix-merge-semantic-patch-safety.v1" in semantic_text
-    assert "fix_merge validate-semantic-safety" in semantic_text
-    assert "fix_merge write-semantic-safety-outputs" in semantic_text
-    assert "oidc relay-token" in semantic_text
-    validate_job = jobs["validate_patch"]
-    assert validate_job["needs"] == ["guard", "merge_fixes", "patch_safety"]
+    assert "merge_validate" in jobs
+    assert "patch_safety" not in jobs and "validate_patch" not in jobs
+    assert jobs["merge_validate"]["needs"] == ["guard", "plan_tasks", "run_agents"]
+    assert "id-token: write" in text.split("merge_validate:", 1)[1].split("commit_push:", 1)[0]
+    section = text.split("merge_validate:", 1)[1].split("commit_push:", 1)[0]
+    assert "fix_merge build-semantic-safety-prompt" in section
+    assert "schema openai-strict --schema fix-merge-semantic-patch-safety.v1" in section
+    assert "fix_merge validate-semantic-safety" in section
+    assert "oidc relay-token" in section
+    assert "push validate-fix" in section and "push write-validation-outputs" in section
+    assert jobs["commit_push"]["needs"] == ["guard", "merge_validate"]
 
 
 def test_push_and_issue_fallback_are_default_actual_write_paths():
@@ -334,14 +334,14 @@ def test_push_and_issue_fallback_are_default_actual_write_paths():
 
     # Validation + push now live in the fix workflow.
     fix_text = FIX.read_text(encoding="utf-8")
-    validate_section = fix_text.split("validate_patch:", 1)[1].split("commit_push:", 1)[0]
+    validate_section = fix_text.split("merge_validate:", 1)[1].split("commit_push:", 1)[0]
     assert "push validate-fix --dry-run" not in validate_section
     assert "--semantic-safety trusted/codex-review-artifacts/fix_merge/semantic-safety.json" in validate_section
     assert "push write-validation-outputs" in validate_section
     assert "requires_push_token" in validate_section
 
     push_section = fix_text.split("commit_push:", 1)[1]
-    assert "if: always() && needs.validate_patch.outputs.requires_push_token == 'true'" in push_section
+    assert "if: always() && needs.merge_validate.outputs.requires_push_token == 'true'" in push_section
     assert "auth app-token --mode push" in push_section
     assert "push commit-push --in" in push_section
     assert "push push --dry-run" not in push_section
@@ -427,7 +427,7 @@ def test_issue_fallback_uses_app_token_and_never_github_token_write():
 
 def test_fix_model_commands_run_from_trusted_checkout_not_pr_head():
     text = FIX.read_text(encoding="utf-8")
-    section = text.split("run_agents:", 1)[1].split("merge_fixes:", 1)[0]
+    section = text.split("run_agents:", 1)[1].split("merge_validate:", 1)[0]
     assert "working-directory: ${{ github.workspace }}/pr-head" in section
     assert "CODEX_REVIEW_MODEL_CWD" not in section
     assert "CODEX_REVIEW_TARGET_REPO_PATH" not in section
@@ -482,8 +482,9 @@ def test_small_intra_workflow_handoffs_use_job_outputs_not_artifacts():
         "codex-issue-plan",
     ]:
         assert removed not in text, removed
-    # One export per converted handoff (8 output keys across the 4 workflows).
-    assert text.count("io to-output --name ") == 8
+    # One export per converted handoff. The semantic-safety handoff no longer needs
+    # an output export now that merge/safety/validate share one job (filesystem).
+    assert text.count("io to-output --name ") == 7
     # Large / matrix / cross-workflow artifacts are still passed as artifacts.
     for kept in [
         "codex-review-review-combined",  # large combined findings
