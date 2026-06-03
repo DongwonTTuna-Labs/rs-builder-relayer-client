@@ -265,7 +265,7 @@ jobs:
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-inventory.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
-          safety-strategy: drop-sudo
+          safety-strategy: unsafe
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -284,7 +284,7 @@ jobs:
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-clusters.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
-          safety-strategy: drop-sudo
+          safety-strategy: unsafe
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -361,7 +361,7 @@ jobs:
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-cluster-analysis.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
-          safety-strategy: drop-sudo
+          safety-strategy: unsafe
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -444,7 +444,7 @@ jobs:
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage03-design-plan.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
-          safety-strategy: drop-sudo
+          safety-strategy: unsafe
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
@@ -519,7 +519,7 @@ jobs:
           output-schema-file: ${{ github.workspace }}/codex-review-artifacts/schemas/stage04-design-chief-decision.v1.openai.schema.json
           working-directory: ${{ github.workspace }}/pr-head
           sandbox: danger-full-access
-          safety-strategy: drop-sudo
+          safety-strategy: unsafe
           allow-users: DongwonTTuna
           allow-bots: true
           allow-bot-users: codex-reviewer-for-dongwonttuna[bot]
