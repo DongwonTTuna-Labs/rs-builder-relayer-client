@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from .client import github_api_url, rest_paginated, rest_request
 
 

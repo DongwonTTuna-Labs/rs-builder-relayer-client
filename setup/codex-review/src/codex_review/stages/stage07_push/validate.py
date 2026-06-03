@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from typing import Any
-from codex_review.errors import PolicyViolation, ValidationError
+from codex_review.core.errors import PolicyViolation, ValidationError
 from codex_review.github.pull_requests import get_current_head_sha
 from codex_review.security.provenance import validate_pull_request_target_safety
 from codex_review.security.subprocess_env import sanitized_env

@@ -4,10 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_json
-from codex_review.context.changed_lines import build_changed_line_map, serialize_changed_line_map
+from codex_review.core.artifacts import write_json
+from codex_review.context.diff import build_changed_line_map, serialize_changed_line_map
 from codex_review.context.diff import hunk_headers, summarize_diff
-from codex_review.context.token_budget import estimate_tokens, tokens_to_chars
+from codex_review.context.budget import estimate_tokens, tokens_to_chars
 
 # Defaults mirror config["context"]; kept here so build_pr_context stays usable
 # without a fully-populated config (e.g. local dry-runs and unit tests).

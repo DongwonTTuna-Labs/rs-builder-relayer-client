@@ -2,7 +2,7 @@ import json
 import sys
 from pathlib import Path
 
-from codex_review.model_adapter import run_model_or_fallback
+from codex_review.model.adapter import run_model_or_fallback
 
 
 def test_model_adapter_uses_fallback_without_command(monkeypatch, tmp_path):
@@ -60,7 +60,7 @@ def test_model_adapter_runs_from_trusted_cwd_and_exposes_target_repo(monkeypatch
 
 
 def test_model_adapter_rejects_pr_head_as_model_cwd(monkeypatch, tmp_path):
-    from codex_review.errors import ValidationError
+    from codex_review.core.errors import ValidationError
 
     target = tmp_path / "pr-head"
     target.mkdir()

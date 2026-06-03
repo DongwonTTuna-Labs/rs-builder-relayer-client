@@ -5,8 +5,8 @@ import json
 from copy import deepcopy
 from typing import Any, Iterable
 
-from .errors import ValidationError
-from .paths import schema_path
+from codex_review.core.errors import ValidationError
+from codex_review.core.paths import schema_path
 
 
 def load_schema_text(name: str) -> str:

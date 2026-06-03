@@ -1,4 +1,4 @@
-from codex_review.context.changed_lines import build_changed_line_map, serialize_changed_line_map
+from codex_review.context.diff import build_changed_line_map, serialize_changed_line_map
 
 
 def test_build_changed_line_map_extracts_github_file_patch_lines():

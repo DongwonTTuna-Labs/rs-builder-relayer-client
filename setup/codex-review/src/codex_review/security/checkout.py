@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from codex_review.errors import PolicyViolation
+from codex_review.core.errors import PolicyViolation
 
 
 def assert_running_from_trusted_checkout() -> dict[str, str | None]:

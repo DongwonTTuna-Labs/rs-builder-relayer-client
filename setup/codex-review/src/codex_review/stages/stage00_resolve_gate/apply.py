@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_text
-from codex_review.constants import TERMINAL_LIFECYCLE_STATES
-from codex_review.errors import PolicyViolation, ValidationError
+from codex_review.core.artifacts import write_text
+from codex_review.core.constants import TERMINAL_LIFECYCLE_STATES
+from codex_review.core.errors import PolicyViolation, ValidationError
 from codex_review.github.app_token import assert_installation_token_for_repo, permissions_for_write_mode
 from codex_review.github.comments import upsert_sticky_comment
 from codex_review.github.issues import build_deferred_issue_body, create_or_update_deferred_issue, make_issue_idempotency_key

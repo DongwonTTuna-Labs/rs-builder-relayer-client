@@ -16,8 +16,8 @@ from codex_review.security.subprocess_env import sanitized_env
 from pathlib import Path
 from typing import Any
 
-from codex_review.errors import PolicyViolation
-from codex_review.paths import safe_relative_path
+from codex_review.core.errors import PolicyViolation
+from codex_review.core.paths import safe_relative_path
 from .redaction import scan_patch_for_secrets
 
 DIFF_PATH_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")

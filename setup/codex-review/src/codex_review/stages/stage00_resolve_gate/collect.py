@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_json
+from codex_review.core.artifacts import write_json
 from codex_review.github.markers import extract_root_cause_metadata, has_marker, parse_marker
 from codex_review.github.review_threads import is_thread_resolved, normalize_thread_node
 from codex_review.security.provenance import is_trusted_codex_review_author

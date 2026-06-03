@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from codex_review.context.diff import parse_unified_diff
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from codex_review.github.comments import upsert_sticky_comment
 from codex_review.github.markers import parse_marker, render_marker
 

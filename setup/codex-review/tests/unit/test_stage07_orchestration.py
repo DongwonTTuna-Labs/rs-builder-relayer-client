@@ -141,7 +141,7 @@ def test_ready_status_with_empty_patch_routes_to_empty_patch():
 
 def _semantic_approval_for_patch(patch: str) -> dict:
     import hashlib
-    from codex_review.commit_plan import extract_patch_paths
+    from codex_review.patches.commit_plan import extract_patch_paths
 
     paths = extract_patch_paths(patch) or ["src/a.txt"]
 

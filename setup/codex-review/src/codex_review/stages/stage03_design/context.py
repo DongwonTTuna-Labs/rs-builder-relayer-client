@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
+from codex_review.core.artifacts import write_json
 
 
 def select_design_relevant_files(techlead_decision: dict[str, Any], pr_context: dict[str, Any]) -> list[str]:

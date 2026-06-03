@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_json
-from codex_review.constants import NON_TERMINAL_LIFECYCLE_STATES, TERMINAL_LIFECYCLE_STATES
-from codex_review.github_output import set_route_outputs
+from codex_review.core.artifacts import write_json
+from codex_review.core.constants import NON_TERMINAL_LIFECYCLE_STATES, TERMINAL_LIFECYCLE_STATES
+from codex_review.core.output import set_route_outputs
 
 
 def determine_route(gate_context: dict[str, Any]) -> str:

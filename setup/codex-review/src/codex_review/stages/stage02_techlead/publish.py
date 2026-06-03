@@ -2,9 +2,9 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
+from codex_review.core.artifacts import write_json
 from codex_review.github.comments import upsert_sticky_comment
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from codex_review.github.app_token import assert_installation_token_for_repo, permissions_for_write_mode
 from codex_review.github.pull_requests import get_current_head_sha
 from codex_review.github.reviews import create_pull_request_review, limit_inline_comments, validate_inline_comment_position

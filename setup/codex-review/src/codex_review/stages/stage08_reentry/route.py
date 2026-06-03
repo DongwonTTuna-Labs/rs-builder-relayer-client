@@ -1,7 +1,7 @@
 """Stage08 route/output helpers."""
 from __future__ import annotations
 from typing import Any
-from codex_review.github_output import write_output
+from codex_review.core.output import write_output
 
 def determine_reentry_expectation(push_result: dict[str, Any]) -> dict[str, Any]:
     pushed=bool(push_result.get("pushed") or push_result.get("status") == "pushed")

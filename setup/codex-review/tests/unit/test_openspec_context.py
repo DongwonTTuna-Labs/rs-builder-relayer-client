@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from codex_review.context.openspec_context import collect_openspec_context, extract_openspec_sources, render_openspec_context_markdown
+from codex_review.context.openspec import collect_openspec_context, extract_openspec_sources, render_openspec_context_markdown
 from codex_review.cli import main
 
 

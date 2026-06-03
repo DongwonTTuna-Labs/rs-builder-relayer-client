@@ -3,7 +3,7 @@ import os
 import pytest
 
 from codex_review.stages.stage07_push.run_tests import run_required_tests, select_test_commands
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 
 
 def test_model_tests_must_be_allowlisted_ids():

@@ -2,8 +2,8 @@ import subprocess
 
 import pytest
 
-from codex_review.errors import ValidationError
-from codex_review.fix_edits import apply_edits_and_generate_patch, ensure_patch_from_edits
+from codex_review.core.errors import ValidationError
+from codex_review.patches.fix_edits import apply_edits_and_generate_patch, ensure_patch_from_edits
 
 
 def _git(args, cwd):

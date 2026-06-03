@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .errors import ValidationError
+from codex_review.core.errors import ValidationError
 
 
 def require_env(name: str) -> str:

@@ -11,7 +11,7 @@ from typing import Any
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 from .client import api_root, github_api_url, rest_request
 
 

@@ -7,9 +7,9 @@ model output to ``approved_for_fix`` so stage05 can implement the PR to LGTM.
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
-from codex_review.artifacts import write_json
-from codex_review.errors import ValidationError
-from codex_review.inspection import validate_inspection_evidence
+from codex_review.core.artifacts import write_json
+from codex_review.core.errors import ValidationError
+from codex_review.model.inspection import validate_inspection_evidence
 
 VALID_STATUSES={"approved_for_fix","needs_human","rejected_plan","no_fix_needed"}
 NON_EXECUTABLE_BLOCKERS={

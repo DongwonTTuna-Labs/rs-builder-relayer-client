@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from codex_review.context.budget import compact_json
-from codex_review.context.token_budget import estimate_tokens
-from codex_review.errors import ValidationError
-from codex_review.github_output import write_output
-from codex_review.commit_plan import normalize_commit_plan
+from codex_review.context.budget import estimate_tokens
+from codex_review.core.errors import ValidationError
+from codex_review.core.output import write_output
+from codex_review.patches.commit_plan import normalize_commit_plan
 
 
 def patch_text_from_merged_fix(merged_fix: dict[str, Any]) -> str:

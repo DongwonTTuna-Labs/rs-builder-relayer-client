@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 
 
 CONVENTIONAL_SUBJECT_RE = re.compile(r"^[a-z]+(?:\([^)]+\))?: .{8,}$")

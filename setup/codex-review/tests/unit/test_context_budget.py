@@ -5,10 +5,10 @@ import pytest
 
 from codex_review.context.budget import compact_json
 from codex_review.context.diff import hunk_headers
-from codex_review.context.openspec_context import render_openspec_context_markdown, sections_for_stage
-from codex_review.context.pr_context import build_pr_context, context_truncation_evidence
-from codex_review.context.token_budget import estimate_tokens, fit_to_budget, within_budget
-from codex_review.errors import ValidationError
+from codex_review.context.openspec import render_openspec_context_markdown, sections_for_stage
+from codex_review.context.pr import build_pr_context, context_truncation_evidence
+from codex_review.context.budget import estimate_tokens, fit_to_budget, within_budget
+from codex_review.core.errors import ValidationError
 from codex_review.stages.stage01_review.combine import cap_combined_findings, combine_axis_findings
 from codex_review.stages.stage06_fix_merge.semantic_safety import build_semantic_patch_safety_prompt
 

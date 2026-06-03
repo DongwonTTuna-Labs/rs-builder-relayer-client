@@ -1,5 +1,5 @@
 import json
-from codex_review.env import read_event_payload, resolve_repository_parts
+from codex_review.core.env import read_event_payload, resolve_repository_parts
 
 
 def test_read_event_payload(tmp_path):

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from codex_review.artifacts import write_text
+from codex_review.core.artifacts import write_text
 
 
 def render_thread_item_for_prompt(item: dict[str, Any]) -> str:

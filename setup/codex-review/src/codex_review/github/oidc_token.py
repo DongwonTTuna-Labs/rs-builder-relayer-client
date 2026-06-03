@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from codex_review.errors import ValidationError
+from codex_review.core.errors import ValidationError
 
 DEFAULT_AUDIENCE = "https://relay-ai.dongwontuna.net/github-actions"
 DEFAULT_BROKER_URL = "https://relay-ai.dongwontuna.net/v1/oidc/token"
