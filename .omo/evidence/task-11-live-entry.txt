@@ -1,0 +1,143 @@
+# Task 11: RS gated live workflow_dispatch entry
+
+Timestamp: 2026-06-05T00:00:00Z
+Repository: DongwonTTuna-Labs/rs-builder-relayer-client
+Branch: ci/codex-loop-repin-live
+Base task-10 commit observed: ec4db50 ci(codex-loop): re-pin adapters to home-server-infra 3540af4
+HSI reusable SHA inspected: 3540af40d3ef8614ec978a4de90caa69b47f3b99
+
+## HSI workflow_call input contract summary
+
+Fetched with:
+
+```bash
+gh api 'repos/DongwonTTuna-Labs/home-server-infra/contents/.github/workflows/codex-loop-reusable.yml?ref=3540af40d3ef8614ec978a4de90caa69b47f3b99' -H 'Accept: application/vnd.github.raw'
+```
+
+Required inputs at that SHA:
+
+```text
+base_ref
+correlation_id
+head_sha
+iteration
+pr_number
+requested_by
+stage
+```
+
+Optional inputs/defaults at that SHA:
+
+```text
+dry_run: boolean, required=false, default=true
+enable_live_autofix: boolean, required=false, default=false
+max_iterations: number, required=false, default=5
+state_artifact_name: string, required=false
+state_run_id: string, required=false
+```
+
+Contract conclusion: the required HSI inputs are forwarded by the manual adapter. `state_run_id` and `state_artifact_name` are optional in the HSI contract and are not forwarded by the manual adapter, preserving the initial `stage=review`, `iteration=0` bootstrap path without fabricated state pointers.
+
+## Manual input/default proof
+
+Manual workflow_dispatch inputs in `.github/workflows/codex-loop-manual-adapter.yml` now include:
+
+```yaml
+dry_run:
+  description: Keep manual runs non-writing by default.
+  type: boolean
+  required: false
+  default: true
+enable_live_autofix:
+  description: Explicitly allow live model calls, writes, pushes, and continuation dispatch when dry_run is false.
+  type: boolean
+  required: false
+  default: false
+```
+
+## Manual forwarding proof
+
+Manual reusable `with:` forwards:
+
+```yaml
+pr_number: ${{ inputs.pr_number }}
+head_sha: ${{ inputs.head_sha }}
+base_ref: ${{ inputs.base_ref }}
+stage: ${{ inputs.stage }}
+iteration: ${{ inputs.iteration }}
+correlation_id: ${{ inputs.correlation_id }}
+requested_by: ${{ inputs.requested_by }}
+max_iterations: ${{ inputs.max_iterations }}
+dry_run: ${{ inputs.dry_run }}
+enable_live_autofix: ${{ inputs.enable_live_autofix }}
+```
+
+No manual `with:` entries exist for `state_run_id` or `state_artifact_name`.
+
+## Review adapter dry-run proof
+
+`rg -n 'dry_run: true|enable_live_autofix|state_run_id|state_artifact_name' .github/workflows/codex-loop-review-adapter.yml .github/workflows/codex-loop-manual-adapter.yml` output:
+
+```text
+.github/workflows/codex-loop-manual-adapter.yml:66:      enable_live_autofix:
+.github/workflows/codex-loop-manual-adapter.yml:93:      enable_live_autofix: ${{ inputs.enable_live_autofix }}
+.github/workflows/codex-loop-review-adapter.yml:46:      dry_run: true
+```
+
+Conclusion: automatic review adapter remains hardcoded `dry_run: true`, does not forward `enable_live_autofix`, and does not set `enable_live_autofix: true`.
+
+## Static contract comparison output
+
+```json
+{
+  "errors": [],
+  "hsi_required_inputs": [
+    "base_ref",
+    "correlation_id",
+    "head_sha",
+    "iteration",
+    "pr_number",
+    "requested_by",
+    "stage"
+  ],
+  "manual_dry_run_default": true,
+  "manual_enable_live_autofix": {
+    "default": false,
+    "description": "Explicitly allow live model calls, writes, pushes, and continuation dispatch when dry_run is false.",
+    "required": false,
+    "type": "boolean"
+  },
+  "manual_forwarded_inputs": [
+    "base_ref",
+    "correlation_id",
+    "dry_run",
+    "enable_live_autofix",
+    "head_sha",
+    "iteration",
+    "max_iterations",
+    "pr_number",
+    "requested_by",
+    "stage"
+  ],
+  "review_dry_run": true,
+  "review_enable_live_autofix_present": false
+}
+```
+
+## Validation outputs
+
+```bash
+actionlint .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-review-adapter.yml
+# output: none; exit 0
+```
+
+```bash
+GIT_MASTER=1 git diff --check
+# output: none; exit 0
+```
+
+YAML LSP note: local `yaml-language-server` is configured but not installed, so LSP diagnostics could not run for `.yml`; `actionlint` and static YAML parsing were used as the workflow-specific validation gates.
+
+## Contract mismatch file
+
+No `.omo/evidence/task-11-contract-mismatch.txt` file was created because static comparison found no missing required HSI input forwarding and no default mismatch.

@@ -12,9 +12,9 @@ name: Codex Loop Manual Adapter
 # never in labels/comments/issues. This adapter therefore requests no
 # issues/labels permissions.
 #
-# Input forwarding intentionally remains limited to this adapter's existing manual
-# contract for Task 10. State-pointer and live-entry changes are deferred to the
-# follow-up manual adapter task.
+# Input forwarding includes the manual live gate but still omits state pointers.
+# Initial review bootstrap for stage=review, iteration=0 is handled by the
+# reusable core; resume/non-initial runs should use dispatch-produced state.
 on:
   workflow_dispatch:
     inputs:
@@ -63,6 +63,11 @@ on:
         type: boolean
         required: false
         default: true
+      enable_live_autofix:
+        description: Explicitly allow live model calls, writes, pushes, and continuation dispatch when dry_run is false.
+        type: boolean
+        required: false
+        default: false
 
 permissions: {}
 
@@ -85,6 +90,7 @@ jobs:
       requested_by: ${{ inputs.requested_by }}
       max_iterations: ${{ inputs.max_iterations }}
       dry_run: ${{ inputs.dry_run }}
+      enable_live_autofix: ${{ inputs.enable_live_autofix }}
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
