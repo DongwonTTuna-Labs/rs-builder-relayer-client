@@ -1,13 +1,17 @@
 name: Codex Issue
 
-# Label-driven stage of the split Codex pipeline.
-# Trigger: any stage attaches `codex:needs-issue` (blocker / deferred / failure).
-# compose_content (read-only) infers the reason and has codex compose a Korean
-# title + body; publish_issue opens/updates the issue with an app token and
-# swaps the label to codex:issue-created so it does not re-fire.
+# Legacy label-driven stage of the split Codex pipeline.
+# Disabled during Codex loop migration to prevent overlap with the new adapters.
+# Removal is reserved for Task 30 after dry-run/live parity evidence is accepted.
+# Former trigger: any stage attaches `codex:needs-issue` (blocker / deferred / failure).
+# Former compose_content inferred the reason and publish_issue opened/updated the issue.
 on:
-  pull_request_target:
-    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      disabled_reason:
+        description: "Disabled legacy workflow retained for Task 30 removal. Do not run."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -63,10 +67,12 @@ jobs:
               --json databaseId,headSha,conclusion \
               -q "[.[] | select(.headSha==\"$HEAD_SHA\" and .conclusion==\"success\")][0].databaseId" 2>/dev/null || echo ""
           }
-          echo "proceed=true" >> "$GITHUB_OUTPUT"
-          echo "review_run_id=$(find_run codex-review.yml)" >> "$GITHUB_OUTPUT"
-          echo "design_run_id=$(find_run codex-design.yml)" >> "$GITHUB_OUTPUT"
-          echo "fix_run_id=$(find_run codex-fix.yml)" >> "$GITHUB_OUTPUT"
+          {
+            echo "proceed=true"
+            echo "review_run_id=$(find_run codex-review.yml)"
+            echo "design_run_id=$(find_run codex-design.yml)"
+            echo "fix_run_id=$(find_run codex-fix.yml)"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         if: steps.guard.outputs.proceed == 'true'
         with:

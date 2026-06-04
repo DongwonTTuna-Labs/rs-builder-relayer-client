@@ -1,0 +1,91 @@
+name: Codex Loop Manual Adapter
+
+# Thin SHA-pinned manual/debug entry point for the org-reusable Codex loop core.
+# Entry point: an operator running `workflow_dispatch` from the Actions UI/API to
+# replay or debug a single loop stage. This adapter holds NO loop logic; it only
+# forwards typed inputs to the reusable workflow in home-server-infra, pinned to a
+# 40-char commit SHA, and defaults to dry-run. Live capability is intentionally
+# deferred (a live run still requires the operator to opt out of dry-run plus
+# the reusable core's GitHub App secrets and trust guards).
+#
+# Loop state lives in the reusable core's typed payload + state-pointer artifacts,
+# never in labels/comments/issues. This adapter therefore requests no
+# issues/labels permissions.
+#
+# Input contract is matched to the pinned reusable scaffold
+# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
+# PR #18 scaffold and does NOT yet accept the later state_run_id/state_artifact_name
+# pointers. Those inputs are deliberately omitted here to stay compatible with the
+# pin; do not add them until the consumer re-pins to a reusable SHA that accepts
+# them.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to process.
+        type: number
+        required: true
+      head_sha:
+        description: Expected pull request head SHA.
+        type: string
+        required: true
+      base_ref:
+        description: Expected pull request base ref.
+        type: string
+        required: true
+      stage:
+        description: Loop stage to run.
+        type: choice
+        required: true
+        default: review
+        options:
+          - review
+          - design
+          - fix
+          - issue
+      iteration:
+        description: Zero-based loop iteration.
+        type: number
+        required: true
+        default: 0
+      correlation_id:
+        description: Stable loop correlation id.
+        type: string
+        required: true
+      requested_by:
+        description: GitHub actor or app slug requesting this manual run.
+        type: string
+        required: true
+      max_iterations:
+        description: Maximum accepted loop iterations.
+        type: number
+        required: false
+        default: 5
+      dry_run:
+        description: Keep manual runs non-writing by default.
+        type: boolean
+        required: false
+        default: true
+
+permissions: {}
+
+jobs:
+  codex-loop-manual:
+    name: Codex loop manual (dry-run default)
+    # Permission ceiling for the called reusable workflow only. No issues/labels.
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      head_sha: ${{ inputs.head_sha }}
+      base_ref: ${{ inputs.base_ref }}
+      stage: ${{ inputs.stage }}
+      iteration: ${{ inputs.iteration }}
+      correlation_id: ${{ inputs.correlation_id }}
+      requested_by: ${{ inputs.requested_by }}
+      max_iterations: ${{ inputs.max_iterations }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit

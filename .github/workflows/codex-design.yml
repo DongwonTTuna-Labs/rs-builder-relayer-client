@@ -1,14 +1,20 @@
 name: Codex Design
 
-# Label-driven stage of the split Codex pipeline.
-# Trigger: codex-review attaches `리뷰완료` (or a maintainer does, to re-run design).
-# guard pulls the prior codex-review run's artifacts, then stage 03-04
-# run. finalize transitions the PR:
-#   - approved for fix -> remove 설계중, add 설계완료 (triggers codex-fix)
-#   - blocker          -> remove 설계중, add codex:needs-issue (triggers codex-issue)
+# Legacy label-driven stage of the split Codex pipeline.
+# Disabled during Codex loop migration to prevent overlap with the new adapters.
+# Removal is reserved for Task 30 after dry-run/live parity evidence is accepted.
+# Former trigger: codex-review attaches `리뷰완료` (or a maintainer does, to re-run design).
+# Former guard pulled the prior codex-review run's artifacts, then stage 03-04 ran.
+# Former finalize transitions:
+#   - approved for fix -> remove 설계중, add 설계완료 (formerly triggered codex-fix)
+#   - blocker          -> remove 설계중, add codex:needs-issue (formerly triggered codex-issue)
 on:
-  pull_request_target:
-    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      disabled_reason:
+        description: "Disabled legacy workflow retained for Task 30 removal. Do not run."
+        required: false
+        type: string
 
 permissions:
   contents: read
