@@ -1,0 +1,20 @@
+# Gate A HSI SHA Evidence
+
+Timestamp: 2026-06-04T16:16:47Z
+
+Immutable merged HSI SHA: 3540af40d3ef8614ec978a4de90caa69b47f3b99
+PR URL: https://github.com/DongwonTTuna-Labs/home-server-infra/pull/20
+
+Verification command:
+
+```bash
+gh pr view 20 --repo DongwonTTuna-Labs/home-server-infra --json state,url,mergeCommit --jq '{state: .state, url: .url, mergeCommit: .mergeCommit.oid}'
+```
+
+Result:
+
+```json
+{"mergeCommit":"3540af40d3ef8614ec978a4de90caa69b47f3b99","state":"MERGED","url":"https://github.com/DongwonTTuna-Labs/home-server-infra/pull/20"}
+```
+
+Note: `3540af40d3ef8614ec978a4de90caa69b47f3b99` is the merge commit on `DongwonTTuna-Labs/home-server-infra` PR #20. It is not a branch, tag, or PR-head ref.
