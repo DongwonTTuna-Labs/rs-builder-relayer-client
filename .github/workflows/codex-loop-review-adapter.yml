@@ -32,6 +32,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
+      actions: read
     uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@3540af40d3ef8614ec978a4de90caa69b47f3b99
     with:
       pr_number: ${{ github.event.pull_request.number }}
