@@ -1,0 +1,50 @@
+Task 27 - SHA-pin / no-moving-ref evidence (verification-fix refresh)
+Repository: DongwonTTuna-Labs/rs-builder-relayer-client
+File: .github/workflows/codex-loop-review-adapter.yml
+Date: 2026-06-04T12:06:33Z
+
+The SC2129 verification-fix touched only legacy codex-issue.yml; the adapter's
+SHA pin is unchanged. Re-proving the pin is exact and no moving ref is used.
+
+Pin target (from .omo/evidence/task-1-merge-sha.txt, HSI main merge of PR #18):
+  727f713d2fc497b735ac17b575b74e282b09830e
+
+================================================================================
+1. exact 40-char commit SHA pin present
+================================================================================
+$ grep -n 'home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e' .github/workflows/codex-loop-review-adapter.yml
+35:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+exit=0 (0 = pin present)
+
+SHA length/hex check:
+len=40 hex=True
+
+================================================================================
+2. moving-ref pin must NOT match: @(main|work/|v[0-9]|master)
+================================================================================
+$ grep -nE 'codex-loop-reusable\.yml@(main|work/|v[0-9]|master)' .github/workflows/codex-loop-review-adapter.yml
+grep_exit=1 (1 = NO moving-ref pin; required)
+
+================================================================================
+3. reusable uses: is a 40-hex SHA, no non-hex ref char
+================================================================================
+$ grep -nE 'codex-loop-reusable\.yml@[0-9a-f]{40}' .github/workflows/codex-loop-review-adapter.yml ; expect a match
+35:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+exit=0 (0 = pinned to 40-hex SHA)
+$ grep -nE 'codex-loop-reusable\.yml@[^0-9a-f]' .github/workflows/codex-loop-review-adapter.yml ; expect NO match
+grep_exit=1 (1 = no non-SHA ref)
+
+================================================================================
+4. no branch/tag pin anywhere in RS workflows for the reusable core
+================================================================================
+$ grep -rnE 'codex-loop-reusable\.yml@' .github/workflows/
+.github/workflows/codex-loop-review-adapter.yml:35:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+
+================================================================================
+5. cross-check: pin == HSI main HEAD (read-only gh api)
+================================================================================
+$ gh api repos/DongwonTTuna-Labs/home-server-infra/commits/main -q .sha
+727f713d2fc497b735ac17b575b74e282b09830e
+$ gh api '.../contents/.github/workflows/codex-loop-reusable.yml?ref=727f713d...' -q .sha
+a8070dc36e06cdf6422a63c4e01beb00238206d2
+(blob reachable at the pinned ref confirms the reusable workflow resolves by SHA)

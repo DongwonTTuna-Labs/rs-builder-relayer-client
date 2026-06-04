@@ -1,0 +1,62 @@
+name: Codex Loop Repository Dispatch Adapter
+
+# Thin SHA-pinned repository_dispatch receiver for the org-reusable Codex loop core.
+# Entry point: a `repository_dispatch` event of type `codex-loop`, posted by a
+# trusted continuation emitter with a JSON `client_payload`. This adapter holds NO
+# loop logic; it only maps payload fields to the reusable workflow in
+# home-server-infra, pinned to a 40-char commit SHA, and defaults to dry-run.
+#
+# !!! DEFAULT-BRANCH REQUIREMENT !!!
+# repository_dispatch only triggers workflow files that already exist on the
+# repository's DEFAULT branch. This adapter therefore does nothing until it is
+# merged to the default branch. Any dispatch smoke test (even dry_run) must wait
+# until this file is on the default branch AND a prior reusable run has produced
+# the loop-state artifact the continuation references. Do not claim runtime
+# dispatch evidence before that precondition is met.
+#
+# This adapter does not mutate the payload or store loop state; loop state lives in
+# the reusable core's typed payload + state-pointer artifacts, never in
+# labels/comments/issues. It therefore requests no issues/labels permissions.
+#
+# Input contract is matched to the pinned reusable scaffold
+# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
+# PR #18 scaffold and does NOT yet accept state_run_id/state_artifact_name. Those
+# payload fields, if present, are intentionally ignored here to stay compatible
+# with the pin; do not forward them until the consumer re-pins to a reusable SHA
+# that accepts them.
+on:
+  repository_dispatch:
+    types: [codex-loop]
+
+permissions: {}
+
+# Keyed on the payload correlation_id so all events for one logical loop serialize.
+# Distinct prefix from the reusable core's `codex-loop-${correlation_id}` group so
+# the caller and callee never cancel each other. cancel-in-progress is false to
+# preserve in-flight loop iteration work (matches the core's loop semantics).
+concurrency:
+  group: codex-loop-dispatch-adapter-${{ github.event.client_payload.correlation_id }}
+  cancel-in-progress: false
+
+jobs:
+  codex-loop-dispatch:
+    name: Codex loop dispatch (dry-run default)
+    # Permission ceiling for the called reusable workflow only. No issues/labels.
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+    with:
+      pr_number: ${{ github.event.client_payload.pr_number }}
+      head_sha: ${{ github.event.client_payload.head_sha }}
+      base_ref: ${{ github.event.client_payload.base_ref }}
+      stage: ${{ github.event.client_payload.stage }}
+      iteration: ${{ github.event.client_payload.iteration }}
+      correlation_id: ${{ github.event.client_payload.correlation_id }}
+      requested_by: ${{ github.event.client_payload.requested_by }}
+      max_iterations: ${{ github.event.client_payload.max_iterations }}
+      # Default to dry-run when the payload omits dry_run (null != false -> true)
+      # while still honoring an explicit boolean false from a trusted emitter.
+      dry_run: ${{ github.event.client_payload.dry_run != false }}
+    secrets: inherit

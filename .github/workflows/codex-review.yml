@@ -1,14 +1,20 @@
 name: Codex Review
 
-# Label-driven stage of the split Codex pipeline.
-# Trigger: a maintainer attaches the `리뷰중` label to a PR.
-# On completion finalize transitions the PR to the next state:
-#   - findings to fix         -> remove 리뷰중, add 리뷰완료  (triggers codex-design)
+# Legacy label-driven stage of the split Codex pipeline.
+# Disabled during Codex loop migration to prevent overlap with the new adapters.
+# Removal is reserved for Task 30 after dry-run/live parity evidence is accepted.
+# Former trigger: a maintainer attaches the `리뷰중` label to a PR.
+# Former label transitions:
+#   - findings to fix         -> remove 리뷰중, add 리뷰완료  (formerly triggered codex-design)
 #   - clean / no findings     -> remove 리뷰중, add codex:lgtm
-#   - blocker / deferred      -> remove 리뷰중, add codex:needs-issue (triggers codex-issue)
+#   - blocker / deferred      -> remove 리뷰중, add codex:needs-issue (formerly triggered codex-issue)
 on:
-  pull_request_target:
-    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      disabled_reason:
+        description: "Disabled legacy workflow retained for Task 30 removal. Do not run."
+        required: false
+        type: string
 
 permissions:
   contents: read

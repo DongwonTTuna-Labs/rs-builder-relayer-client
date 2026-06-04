@@ -1,0 +1,109 @@
+Task 27 - thin SHA-pinned pull_request_target adapter (dry-run) evidence
+Repository: DongwonTTuna-Labs/rs-builder-relayer-client
+File: .github/workflows/codex-loop-review-adapter.yml
+Verification-fix refresh date: 2026-06-04T12:06:11Z
+
+Note: this refresh follows the orchestrator's full-gate failure. The required
+gate is actionlint over .github/workflows/*.yml (not adapter-only). A pre-existing
+SC2129 shellcheck STYLE finding in legacy codex-issue.yml:52 was the only blocker;
+it is fixed by grouping the four consecutive $GITHUB_OUTPUT writes into one block
+redirected once (keys/values unchanged). No other legacy behavior changed.
+
+================================================================================
+1. actionlint on adapter
+================================================================================
+$ /opt/homebrew/bin/actionlint --version
+1.7.12
+installed by building from source
+built with go1.26.1 compiler for darwin/arm64
+
+$ /opt/homebrew/bin/actionlint .github/workflows/codex-loop-review-adapter.yml
+exit=0  (0 = clean)
+
+================================================================================
+2. REQUIRED FULL GATE: actionlint .github/workflows/*.yml -> exit 0
+================================================================================
+$ /opt/homebrew/bin/actionlint .github/workflows/*.yml
+exit=0  (0 = full gate PASSES; SC2129 in codex-issue.yml resolved)
+
+================================================================================
+3. narrow SC2129 fix in legacy codex-issue.yml (diff)
+================================================================================
+$ git diff .github/workflows/codex-issue.yml
+diff --git a/.github/workflows/codex-issue.yml b/.github/workflows/codex-issue.yml
+index ea5860f..eb73e93 100644
+--- a/.github/workflows/codex-issue.yml
++++ b/.github/workflows/codex-issue.yml
+@@ -63,10 +63,12 @@ jobs:
+               --json databaseId,headSha,conclusion \
+               -q "[.[] | select(.headSha==\"$HEAD_SHA\" and .conclusion==\"success\")][0].databaseId" 2>/dev/null || echo ""
+           }
+-          echo "proceed=true" >> "$GITHUB_OUTPUT"
+-          echo "review_run_id=$(find_run codex-review.yml)" >> "$GITHUB_OUTPUT"
+-          echo "design_run_id=$(find_run codex-design.yml)" >> "$GITHUB_OUTPUT"
+-          echo "fix_run_id=$(find_run codex-fix.yml)" >> "$GITHUB_OUTPUT"
++          {
++            echo "proceed=true"
++            echo "review_run_id=$(find_run codex-review.yml)"
++            echo "design_run_id=$(find_run codex-design.yml)"
++            echo "fix_run_id=$(find_run codex-fix.yml)"
++          } >> "$GITHUB_OUTPUT"
+       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+         if: steps.guard.outputs.proceed == 'true'
+         with:
+
+Output keys preserved (grep):
+67:            echo "proceed=true"
+68:            echo "review_run_id=$(find_run codex-review.yml)"
+69:            echo "design_run_id=$(find_run codex-design.yml)"
+70:            echo "fix_run_id=$(find_run codex-fix.yml)"
+
+================================================================================
+4. adapter trigger + draft exclusion + dry-run + secrets (unchanged)
+================================================================================
+$ grep -nA2 'pull_request_target:' .github/workflows/codex-loop-review-adapter.yml
+13:  pull_request_target:
+14-    types: [opened, synchronize, reopened, ready_for_review]
+15-
+
+$ grep -n 'draft == false' .github/workflows/codex-loop-review-adapter.yml
+29:    if: ${{ github.event.pull_request.draft == false }}
+
+$ grep -n 'dry_run: true' .github/workflows/codex-loop-review-adapter.yml
+46:      dry_run: true
+$ grep -n 'dry_run: false' ... ; expect NO match
+grep_exit=1 (1 = no match)
+
+$ grep -n 'secrets: inherit' .github/workflows/codex-loop-review-adapter.yml
+47:    secrets: inherit
+
+$ grep -nE 'workflow_dispatch|repository_dispatch' .github/workflows/codex-loop-review-adapter.yml ; expect NO match
+grep_exit=1 (1 = no match)
+
+================================================================================
+5. parsed contract (python3 yaml)
+================================================================================
+on: {'pull_request_target': {'types': ['opened', 'synchronize', 'reopened', 'ready_for_review']}}
+top-level permissions: {}
+job if: ${{ github.event.pull_request.draft == false }}
+job permissions: {'contents': 'write', 'pull-requests': 'write', 'id-token': 'write'}
+job has issues perm: False
+uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+with keys: ['base_ref', 'correlation_id', 'dry_run', 'head_sha', 'iteration', 'pr_number', 'requested_by', 'stage']
+with.stage: 'review'
+with.iteration: 0 int
+with.dry_run: True bool
+secrets: inherit
+CONTRACT OK
+
+================================================================================
+6. git diff --check + status + generated-artifact scan
+================================================================================
+$ git diff --check
+exit=0
+$ git status --short
+ M .github/workflows/codex-issue.yml
+?? .github/workflows/codex-loop-review-adapter.yml
+?? .omo/
+$ find .github .omo -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' -o -name '*.egg-info'
+(empty above = no generated python artifacts)

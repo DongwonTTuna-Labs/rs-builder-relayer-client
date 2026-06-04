@@ -1,0 +1,50 @@
+Task 29 - Live/dry-run parity blocked (no dispatch sent)
+Repository: DongwonTTuna-Labs/rs-builder-relayer-client
+Date: 2026-06-04T12:23:35Z
+
+Decision:
+- No dry-run repository_dispatch/manual smoke was sent.
+- No live `dry_run=false` run was sent.
+- Therefore no `.omo/evidence/task-29-loop-runs.json` was created; this blocker file is the required alternate evidence output.
+
+Required preconditions checked:
+1. Explicit approved same-repo test PR exists.
+2. New RS adapters are on the default branch.
+3. HSI reusable pin points to a live-capable SHA, not the PR #18 scaffold.
+4. Cross-repo actions settings are enabled and compatible.
+5. GitHub App secrets/actions settings are available.
+6. Dry-run smoke succeeded before any live parity.
+
+Read-only observations:
+
+$ gh repo view --json nameWithOwner,defaultBranchRef --jq '{nameWithOwner:.nameWithOwner,defaultBranch:.defaultBranchRef.name}'
+{"defaultBranch":"main","nameWithOwner":"DongwonTTuna-Labs/rs-builder-relayer-client"}
+
+$ gh workflow list --all --json name,path,state,id
+[{"id":287833196,"name":"Codex Design","path":".github/workflows/codex-design.yml","state":"active"},{"id":287833198,"name":"Codex Fix","path":".github/workflows/codex-fix.yml","state":"active"},{"id":287833200,"name":"Codex Issue","path":".github/workflows/codex-issue.yml","state":"active"},{"id":287833202,"name":"Codex Review","path":".github/workflows/codex-review.yml","state":"active"}]
+
+Interpretation: the new Task 27/28 adapter workflows are not visible as default-branch workflows. A repository_dispatch/manual smoke would not exercise the adapter code under this task on the default branch.
+
+$ gh api repos/DongwonTTuna-Labs/home-server-infra/commits/727f713d2fc497b735ac17b575b74e282b09830e --jq '{sha:.sha,message:.commit.message,html_url:.html_url}'
+{"html_url":"https://github.com/DongwonTTuna-Labs/home-server-infra/commit/727f713d2fc497b735ac17b575b74e282b09830e","message":"Merge pull request #18 from DongwonTTuna-Labs/work/codex-loop-reusable-workflow\n\nci(actions): add reusable Codex loop workflows","sha":"727f713d2fc497b735ac17b575b74e282b09830e"}
+
+Interpretation: the pinned reusable SHA is the PR #18 scaffold noted by Tasks 26/27/28, not the later Task 5-25 live-capable continuation pipeline. The RS adapters intentionally match this scaffold input contract and omit state_run_id/state_artifact_name.
+
+$ gh pr list --state open --json number,title,headRepositoryOwner,baseRefName,headRefName,isDraft,reviewDecision,labels --limit 50
+[{"baseRefName":"main","headRefName":"test/codex-push-smoke","headRepositoryOwner":{"id":"O_kgDOERQrhA","login":"DongwonTTuna-Labs"},"isDraft":false,"labels":[{"id":"LA_kwDOSh3WDc8AAAAClvKNyA","name":"수정완료","description":"Codex 자동 수정/푸시 완료","color":"0E8A16"},{"id":"LA_kwDOSh3WDc8AAAAClvKOFQ","name":"codex:lgtm","description":"리뷰 결과 지적사항 없음 (루프 종료)","color":"2CBE4E"}],"number":98,"reviewDecision":"","title":"test(openspec): codex push smoke (additive docs autofix)"},{"baseRefName":"main","headRefName":"feature/openspec-codex-review-lgtm-loop-smoke-v3","headRepositoryOwner":{"id":"O_kgDOERQrhA","login":"DongwonTTuna-Labs"},"isDraft":false,"labels":[{"id":"LA_kwDOSh3WDc8AAAAClvKOzw","name":"codex:issue-created","description":"폴백 이슈 생성/갱신 완료","color":"5319E7"}],"number":46,"reviewDecision":"","title":"docs(openspec): specify codex review lgtm loop smoke"},{"baseRefName":"main","headRefName":"feature/deposit-wallet-mutation-state","headRepositoryOwner":{"id":"O_kgDOERQrhA","login":"DongwonTTuna-Labs"},"isDraft":false,"labels":[],"number":37,"reviewDecision":"","title":"Feature/deposit-wallet mutation state"},{"baseRefName":"feature/deposit-wallet-mutation-state","headRefName":"feature/deposit-wallet-polling-recovery","headRepositoryOwner":{"id":"O_kgDOERQrhA","login":"DongwonTTuna-Labs"},"isDraft":false,"labels":[],"number":22,"reviewDecision":"","title":"feat(deposit-wallet): add polling recovery"}]
+
+Interpretation: there are same-repo open PRs, but no read-only evidence in labels/reviewDecision/title identifies an explicitly approved Task 29 live same-repo loop parity PR. PR #98 is a previous Codex push smoke and already carries terminal legacy labels; using it for live parity without explicit approval would violate the task preconditions.
+
+Root cause (who / what / when / why / how):
+- who: RS Task 27/28 adapter rollout state plus HSI reusable pin state.
+- what: Task 29 cannot honestly run dry-run or live same-repo loop parity from this working tree.
+- when: 2026-06-04T12:23:35Z, after disabling legacy label triggers and before any attempted dispatch.
+- why: new adapters are not visible on the RS default branch; the pinned HSI reusable SHA is the PR #18 scaffold and is documented by prior evidence as not accepting state pointers or emitting live continuation; no explicit approved Task 29 live parity PR and no prior dry-run smoke success are available.
+- how: read-only `gh repo view`, `gh workflow list`, `gh pr list`, and `gh api commit` checks above; no mutating `gh workflow run`, `gh api repos/.../dispatches`, label, comment, issue, or live `dry_run=false` operation was executed.
+
+Unblock path:
+1. Merge the RS adapter workflows to the default branch.
+2. Re-pin RS adapters to a HSI reusable SHA that contains the full live-capable Task 5-25 continuation pipeline, including state pointers and continuation dispatch.
+3. Record an explicitly approved same-repo Task 29 live test PR and required GitHub App/action settings availability.
+4. Run and capture a dry-run smoke first.
+5. Only after the dry-run smoke passes, run exactly one live `dry_run=false` same-repo loop parity and capture `gh run` chain evidence in `.omo/evidence/task-29-loop-runs.json`.

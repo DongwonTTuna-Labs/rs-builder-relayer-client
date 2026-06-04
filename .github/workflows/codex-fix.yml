@@ -1,15 +1,21 @@
 name: Codex Fix
 
-# Label-driven stage of the split Codex pipeline.
-# Trigger: codex-design attaches `설계완료` (or a maintainer does).
-# guard blocks fork PRs, pulls the design run's artifacts, then
-# stage 05-07 run. finalize closes the loop:
-#   - pushed a fix      -> remove 수정중, add 수정완료 + 리뷰중 (re-review)
+# Legacy label-driven stage of the split Codex pipeline.
+# Disabled during Codex loop migration to prevent overlap with the new adapters.
+# Removal is reserved for Task 30 after dry-run/live parity evidence is accepted.
+# Former trigger: codex-design attaches `설계완료` (or a maintainer does).
+# Former guard blocked fork PRs and pulled the design run's artifacts.
+# Former finalize closed the loop:
+#   - pushed a fix      -> remove 수정중, add 수정완료 + 리뷰중 (formerly re-reviewed)
 #   - oscillation/cap   -> remove 수정중, add codex:needs-issue
 #   - nothing to push   -> remove 수정중, add codex:needs-issue
 on:
-  pull_request_target:
-    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      disabled_reason:
+        description: "Disabled legacy workflow retained for Task 30 removal. Do not run."
+        required: false
+        type: string
 
 permissions:
   contents: read

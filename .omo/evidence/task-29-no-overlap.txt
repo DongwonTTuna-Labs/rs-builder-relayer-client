@@ -1,0 +1,64 @@
+Task 29 - No-overlap evidence for legacy label workflow disable
+Repository: DongwonTTuna-Labs/rs-builder-relayer-client
+Date: 2026-06-04T12:23:35Z
+
+Scope:
+- Legacy workflows preserved, not deleted:
+  - .github/workflows/codex-review.yml
+  - .github/workflows/codex-design.yml
+  - .github/workflows/codex-fix.yml
+  - .github/workflows/codex-issue.yml
+- New Codex loop adapters preserved:
+  - .github/workflows/codex-loop-review-adapter.yml
+  - .github/workflows/codex-loop-manual-adapter.yml
+  - .github/workflows/codex-loop-dispatch-adapter.yml
+
+Decision:
+- Reversible disable strategy: replace each legacy `pull_request_target: types: [labeled]` trigger with `workflow_dispatch` only.
+- Each legacy file now carries an explicit comment: "Disabled during Codex loop migration to prevent overlap with the new adapters." Removal is reserved for Task 30.
+- No legacy workflow file was deleted. `.github/actions/setup-codex-review` was not deleted.
+
+No-overlap proof:
+
+$ if grep -n 'types: \[labeled\]' .github/workflows/codex-review.yml .github/workflows/codex-design.yml .github/workflows/codex-fix.yml .github/workflows/codex-issue.yml; then printf 'exit=0\n'; else printf 'exit=1 (no legacy labeled trigger types)\n'; fi
+exit=1 (no legacy labeled trigger types)
+
+$ if grep -n 'pull_request_target:' .github/workflows/codex-review.yml .github/workflows/codex-design.yml .github/workflows/codex-fix.yml .github/workflows/codex-issue.yml; then printf 'exit=0\n'; else printf 'exit=1 (no legacy pull_request_target triggers)\n'; fi
+exit=1 (no legacy pull_request_target triggers)
+
+$ grep -n 'workflow_dispatch:' .github/workflows/codex-review.yml .github/workflows/codex-design.yml .github/workflows/codex-fix.yml .github/workflows/codex-issue.yml
+.github/workflows/codex-review.yml:12:  workflow_dispatch:
+.github/workflows/codex-design.yml:12:  workflow_dispatch:
+.github/workflows/codex-fix.yml:13:  workflow_dispatch:
+.github/workflows/codex-issue.yml:9:  workflow_dispatch:
+
+Residual label guards are dead code under the manual-only trigger, and are retained only to preserve the files for Task 30 removal:
+$ grep -n 'github.event.label.name' .github/workflows/codex-review.yml .github/workflows/codex-design.yml .github/workflows/codex-fix.yml .github/workflows/codex-issue.yml
+.github/workflows/codex-review.yml:37:    if: github.event.label.name == '리뷰중'
+.github/workflows/codex-design.yml:37:    if: github.event.label.name == '리뷰완료'
+.github/workflows/codex-fix.yml:38:    if: github.event.label.name == '설계완료'
+.github/workflows/codex-issue.yml:34:    if: github.event.label.name == 'codex:needs-issue'
+
+New adapter entry points remain:
+$ grep -nE 'pull_request_target:|workflow_dispatch:|repository_dispatch:|codex-loop-reusable.yml@[0-9a-f]{40}|dry_run:' .github/workflows/codex-loop-review-adapter.yml .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-dispatch-adapter.yml
+.github/workflows/codex-loop-review-adapter.yml:13:  pull_request_target:
+.github/workflows/codex-loop-review-adapter.yml:35:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+.github/workflows/codex-loop-review-adapter.yml:46:      dry_run: true
+.github/workflows/codex-loop-manual-adapter.yml:16:# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
+.github/workflows/codex-loop-manual-adapter.yml:22:  workflow_dispatch:
+.github/workflows/codex-loop-manual-adapter.yml:64:      dry_run:
+.github/workflows/codex-loop-manual-adapter.yml:80:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+.github/workflows/codex-loop-manual-adapter.yml:90:      dry_run: ${{ inputs.dry_run }}
+.github/workflows/codex-loop-dispatch-adapter.yml:22:# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
+.github/workflows/codex-loop-dispatch-adapter.yml:28:  repository_dispatch:
+.github/workflows/codex-loop-dispatch-adapter.yml:49:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+.github/workflows/codex-loop-dispatch-adapter.yml:61:      dry_run: ${{ github.event.client_payload.dry_run != false }}
+
+Read-only GitHub state:
+$ gh workflow list --all --json name,path,state,id
+[{"id":287833196,"name":"Codex Design","path":".github/workflows/codex-design.yml","state":"active"},{"id":287833198,"name":"Codex Fix","path":".github/workflows/codex-fix.yml","state":"active"},{"id":287833200,"name":"Codex Issue","path":".github/workflows/codex-issue.yml","state":"active"},{"id":287833202,"name":"Codex Review","path":".github/workflows/codex-review.yml","state":"active"}]
+
+Interpretation:
+- Default branch currently exposes only the legacy workflow file names, not the new adapter workflow names.
+- In this working tree, legacy workflows cannot auto-fire on PR label events because their auto label triggers are removed.
+- New adapter files remain present and SHA-pinned in the working tree, but are not yet default-branch active according to read-only `gh workflow list`.

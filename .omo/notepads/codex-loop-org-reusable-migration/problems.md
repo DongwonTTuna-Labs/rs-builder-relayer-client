@@ -1,0 +1,3 @@
+# Problems
+
+- 2026-06-04 ORCHESTRATION ROOT CAUSE: Dispatching two foreground (run_in_background=false) Task delegations in a single turn (Task 3 + Task 6) caused both to abort (~3.6-3.8s). The task runtime allows only ONE synchronous subagent at a time; true parallelism requires run_in_background=true. Concurrent foreground tasks also race on shared .omo/boulder.json + notepad writes. FIX: dispatch foreground tasks sequentially (one at a time). Partial artifact left by aborted Task 3: home-server-infra/schemas/terminal-reason.v1.json exists but docs taxonomy table + evidence were incomplete; re-run Task 3 to finish/verify rather than trusting the partial file.

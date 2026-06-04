@@ -1,0 +1,124 @@
+Task 28 - manual workflow_dispatch + repository_dispatch adapters (default branch) evidence
+Repository: DongwonTTuna-Labs/rs-builder-relayer-client
+Files: .github/workflows/codex-loop-manual-adapter.yml
+       .github/workflows/codex-loop-dispatch-adapter.yml
+Date: 2026-06-04T12:17:24Z
+
+Pin target (from .omo/evidence/task-1-merge-sha.txt, HSI main merge of PR #18):
+  727f713d2fc497b735ac17b575b74e282b09830e
+Pinned reusable scaffold input contract (fetched via gh api at the pinned SHA):
+  9 inputs only: pr_number, head_sha, base_ref, stage, iteration, correlation_id,
+  requested_by, max_iterations(default 5), dry_run(default true).
+  NO state_run_id / state_artifact_name (PR #18 scaffold is pre-Task-10), so those
+  pointers are intentionally NOT passed/forwarded by either adapter.
+
+================================================================================
+1. actionlint version + REQUIRED FULL GATE: actionlint .github/workflows/*.yml
+================================================================================
+$ /opt/homebrew/bin/actionlint --version
+1.7.12
+installed by building from source
+built with go1.26.1 compiler for darwin/arm64
+$ /opt/homebrew/bin/actionlint .github/workflows/*.yml
+exit=0  (0 = full glob gate PASSES)
+$ /opt/homebrew/bin/actionlint .github/workflows/codex-loop-manual-adapter.yml
+manual_exit=0
+$ /opt/homebrew/bin/actionlint .github/workflows/codex-loop-dispatch-adapter.yml
+dispatch_exit=0
+
+================================================================================
+2. triggers: manual=workflow_dispatch, dispatch=repository_dispatch types:[codex-loop]
+================================================================================
+$ grep -nE '^\s*workflow_dispatch:' .github/workflows/codex-loop-manual-adapter.yml
+22:  workflow_dispatch:
+exit=0
+$ grep -nE '^\s*repository_dispatch:' .github/workflows/codex-loop-dispatch-adapter.yml
+28:  repository_dispatch:
+exit=0
+$ grep -nE 'types:\s*\[codex-loop\]' .github/workflows/codex-loop-dispatch-adapter.yml
+29:    types: [codex-loop]
+exit=0
+
+================================================================================
+3. exact 40-char SHA pin in both adapters' uses:
+================================================================================
+$ grep -nE 'home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e' (uses lines)
+.github/workflows/codex-loop-manual-adapter.yml:80:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+.github/workflows/codex-loop-dispatch-adapter.yml:49:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+exit=0
+$ grep -nE 'codex-loop-reusable.yml@[0-9a-f]{40}' (uses lines, expect match)
+.github/workflows/codex-loop-manual-adapter.yml:80:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+.github/workflows/codex-loop-dispatch-adapter.yml:49:    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+exit=0
+$ grep -nE 'codex-loop-reusable.yml@[^0-9a-f]' (expect NO match -> exit 1)
+exit=1 (1 = no non-hex ref char)
+
+================================================================================
+4. NO moving ref: @(main|work/|v[0-9]|master) -> expect NO match (exit 1)
+================================================================================
+$ grep -nE 'codex-loop-reusable.yml@(main|work/|v[0-9]|master)' .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-dispatch-adapter.yml
+exit=1 (1 = no moving ref)
+
+================================================================================
+5. secrets: inherit only on the reusable-calling job (both adapters)
+================================================================================
+$ grep -nE '^\s*secrets:\s*inherit' .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-dispatch-adapter.yml
+.github/workflows/codex-loop-manual-adapter.yml:91:    secrets: inherit
+.github/workflows/codex-loop-dispatch-adapter.yml:62:    secrets: inherit
+exit=0
+
+================================================================================
+6. default-branch requirement comment in dispatch adapter
+================================================================================
+$ grep -niE 'default branch|default-branch' .github/workflows/codex-loop-dispatch-adapter.yml
+9:# !!! DEFAULT-BRANCH REQUIREMENT !!!
+11:# repository's DEFAULT branch. This adapter therefore does nothing until it is
+12:# merged to the default branch. Any dispatch smoke test (even dry_run) must wait
+13:# until this file is on the default branch AND a prior reusable run has produced
+exit=0
+
+================================================================================
+7. parsed contract (python3 yaml): single job, permissions, with-keys, pin, secrets
+================================================================================
+FILE: .github/workflows/codex-loop-manual-adapter.yml
+  on: {'workflow_dispatch': {'inputs': {'pr_number': {'description': 'Pull request number to process.', 'type': 'number', 'required': True}, 'head_sha': {'description': 'Expected pull request head SHA.', 'type': 'string', 'required': True}, 'base_ref': {'description': 'Expected pull request base ref.', 'type': 'string', 'required': True}, 'stage': {'description': 'Loop stage to run.', 'type': 'choice', 'required': True, 'default': 'review', 'options': ['review', 'design', 'fix', 'issue']}, 'iteration': {'description': 'Zero-based loop iteration.', 'type': 'number', 'required': True, 'default': 0}, 'correlation_id': {'description': 'Stable loop correlation id.', 'type': 'string', 'required': True}, 'requested_by': {'description': 'GitHub actor or app slug requesting this manual run.', 'type': 'string', 'required': True}, 'max_iterations': {'description': 'Maximum accepted loop iterations.', 'type': 'number', 'required': False, 'default': 5}, 'dry_run': {'description': 'Keep manual runs non-writing by default.', 'type': 'boolean', 'required': False, 'default': True}}}}
+  top-level permissions: {}
+  job count: 1 (expect 1)
+  job: codex-loop-manual
+  job permissions: {'contents': 'write', 'pull-requests': 'write', 'id-token': 'write'}
+  job has issues perm: False
+  uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+  uses == pin: True
+  with keys: ['base_ref', 'correlation_id', 'dry_run', 'head_sha', 'iteration', 'max_iterations', 'pr_number', 'requested_by', 'stage']
+  with == 9 pinned inputs: True
+  state pointers absent: True
+  secrets: inherit
+  CONTRACT OK
+FILE: .github/workflows/codex-loop-dispatch-adapter.yml
+  on: {'repository_dispatch': {'types': ['codex-loop']}}
+  top-level permissions: {}
+  job count: 1 (expect 1)
+  job: codex-loop-dispatch
+  job permissions: {'contents': 'write', 'pull-requests': 'write', 'id-token': 'write'}
+  job has issues perm: False
+  uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+  uses == pin: True
+  with keys: ['base_ref', 'correlation_id', 'dry_run', 'head_sha', 'iteration', 'max_iterations', 'pr_number', 'requested_by', 'stage']
+  with == 9 pinned inputs: True
+  state pointers absent: True
+  secrets: inherit
+  CONTRACT OK
+
+================================================================================
+8. git diff --check + status + generated-artifact scan
+================================================================================
+$ git diff --check
+exit=0
+$ git status --short
+ M .github/workflows/codex-issue.yml
+?? .github/workflows/codex-loop-dispatch-adapter.yml
+?? .github/workflows/codex-loop-manual-adapter.yml
+?? .github/workflows/codex-loop-review-adapter.yml
+?? .omo/
+$ find .github .omo \( -name '__pycache__' -o -name '*.pyc' -o -name '*.pyo' -o -name '*.egg-info' \) -print
+(empty above = no generated python artifacts)
