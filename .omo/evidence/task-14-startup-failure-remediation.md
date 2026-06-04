@@ -49,7 +49,7 @@ LSP diagnostics were attempted on changed YAML/Markdown files. YAML diagnostics 
 
 ## Pull Request
 
-PR URL: pending until branch is pushed and PR is opened.
+PR URL: https://github.com/DongwonTTuna-Labs/rs-builder-relayer-client/pull/116
 
 ## Follow-up
 
