@@ -1,0 +1,33 @@
+# Task 10 SHA Verification Evidence
+
+Timestamp: 2026-06-04T16:16:47Z
+
+## PR #20 merged state
+
+Command:
+
+```bash
+gh pr view 20 --repo DongwonTTuna-Labs/home-server-infra --json state,url,mergeCommit --jq '{state: .state, url: .url, mergeCommit: .mergeCommit.oid}'
+```
+
+Result:
+
+```json
+{"mergeCommit":"3540af40d3ef8614ec978a4de90caa69b47f3b99","state":"MERGED","url":"https://github.com/DongwonTTuna-Labs/home-server-infra/pull/20"}
+```
+
+## GitHub API commit verification
+
+Command:
+
+```bash
+gh api repos/DongwonTTuna-Labs/home-server-infra/commits/3540af40d3ef8614ec978a4de90caa69b47f3b99 --jq '{sha: .sha, html_url: .html_url, parents: [.parents[].sha]}'
+```
+
+Result:
+
+```json
+{"html_url":"https://github.com/DongwonTTuna-Labs/home-server-infra/commit/3540af40d3ef8614ec978a4de90caa69b47f3b99","parents":["72aa28647e35e22486474de368512ff4870ccb5e","1a90d02d557f5a593b71d323ed13446e3b447554"],"sha":"3540af40d3ef8614ec978a4de90caa69b47f3b99"}
+```
+
+Conclusion: target SHA resolves as a commit in `DongwonTTuna-Labs/home-server-infra` and matches PR #20 merge commit. The second parent is the PR-head SHA; the adapter pin uses the merge commit only.
