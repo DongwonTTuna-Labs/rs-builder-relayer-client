@@ -24,4 +24,4 @@ Validation summaries:
 - YAML LSP diagnostics were attempted for all three changed workflow files, but `yaml-language-server` is not installed; actionlint/static assertions were used as the workflow validation gate.
 
 PR URL:
-- PENDING: will be recorded after PR creation.
+- https://github.com/DongwonTTuna-Labs/rs-builder-relayer-client/pull/117
