@@ -32,8 +32,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-      actions: read
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@3540af40d3ef8614ec978a4de90caa69b47f3b99
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
@@ -45,6 +44,4 @@ jobs:
       correlation_id: codex-loop-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
       requested_by: ${{ github.event.sender.login }}
       dry_run: true
-    secrets:
-      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
-      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+    secrets: inherit

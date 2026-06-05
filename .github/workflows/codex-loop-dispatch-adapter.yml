@@ -18,9 +18,12 @@ name: Codex Loop Repository Dispatch Adapter
 # the reusable core's typed payload + state-pointer artifacts, never in
 # labels/comments/issues. It therefore requests no issues/labels permissions.
 #
-# Input forwarding intentionally remains limited to this adapter's existing
-# payload contract for Task 10. State-pointer forwarding changes are deferred to a
-# follow-up adapter task.
+# Input contract is matched to the pinned reusable scaffold
+# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
+# PR #18 scaffold and does NOT yet accept state_run_id/state_artifact_name. Those
+# payload fields, if present, are intentionally ignored here to stay compatible
+# with the pin; do not forward them until the consumer re-pins to a reusable SHA
+# that accepts them.
 on:
   repository_dispatch:
     types: [codex-loop]
@@ -43,8 +46,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-      actions: read
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@3540af40d3ef8614ec978a4de90caa69b47f3b99
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
     with:
       pr_number: ${{ github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.client_payload.head_sha }}
@@ -57,6 +59,4 @@ jobs:
       # Default to dry-run when the payload omits dry_run (null != false -> true)
       # while still honoring an explicit boolean false from a trusted emitter.
       dry_run: ${{ github.event.client_payload.dry_run != false }}
-    secrets:
-      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
-      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+    secrets: inherit

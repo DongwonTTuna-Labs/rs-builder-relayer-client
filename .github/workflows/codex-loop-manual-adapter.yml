@@ -12,9 +12,12 @@ name: Codex Loop Manual Adapter
 # never in labels/comments/issues. This adapter therefore requests no
 # issues/labels permissions.
 #
-# Input forwarding includes the manual live gate but still omits state pointers.
-# Initial review bootstrap for stage=review, iteration=0 is handled by the
-# reusable core; resume/non-initial runs should use dispatch-produced state.
+# Input contract is matched to the pinned reusable scaffold
+# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
+# PR #18 scaffold and does NOT yet accept the later state_run_id/state_artifact_name
+# pointers. Those inputs are deliberately omitted here to stay compatible with the
+# pin; do not add them until the consumer re-pins to a reusable SHA that accepts
+# them.
 on:
   workflow_dispatch:
     inputs:
@@ -63,11 +66,6 @@ on:
         type: boolean
         required: false
         default: true
-      enable_live_autofix:
-        description: Explicitly allow live model calls, writes, pushes, and continuation dispatch when dry_run is false.
-        type: boolean
-        required: false
-        default: false
 
 permissions: {}
 
@@ -79,8 +77,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-      actions: read
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@3540af40d3ef8614ec978a4de90caa69b47f3b99
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
     with:
       pr_number: ${{ inputs.pr_number }}
       head_sha: ${{ inputs.head_sha }}
@@ -91,7 +88,4 @@ jobs:
       requested_by: ${{ inputs.requested_by }}
       max_iterations: ${{ inputs.max_iterations }}
       dry_run: ${{ inputs.dry_run }}
-      enable_live_autofix: ${{ inputs.enable_live_autofix }}
-    secrets:
-      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
-      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+    secrets: inherit
