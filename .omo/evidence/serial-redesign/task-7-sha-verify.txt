@@ -1,0 +1,13 @@
+# Task 7 HSI SHA Provenance
+
+Date: 2026-06-05
+HSI repository: DongwonTTuna-Labs/home-server-infra
+Required reusable pin: b85e316c9023e1cd1995983dea0430a47648dc78
+
+Verification performed:
+- `gh pr view 21 --repo DongwonTTuna-Labs/home-server-infra --json number,state,mergedAt,mergeCommit,baseRefName,headRefName` returned state `MERGED`, base `main`, head `feat/codex-loop-serial`, merge commit `b85e316c9023e1cd1995983dea0430a47648dc78`, merged at `2026-06-05T06:20:55Z`.
+- `gh api repos/DongwonTTuna-Labs/home-server-infra/commits/b85e316c9023e1cd1995983dea0430a47648dc78` resolved the commit and returned parent SHAs `3540af40d3ef8614ec978a4de90caa69b47f3b99` and `8386d87fcf826e835b11c4322e1d246306029878`.
+- `gh api repos/DongwonTTuna-Labs/home-server-infra/branches/main --jq .commit.sha` returned `b85e316c9023e1cd1995983dea0430a47648dc78`.
+
+Conclusion:
+- `b85e316c9023e1cd1995983dea0430a47648dc78` is a 40-hex merged HSI commit on the default branch history, not a PR-head-only ref.

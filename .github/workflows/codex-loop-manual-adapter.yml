@@ -12,12 +12,8 @@ name: Codex Loop Manual Adapter
 # never in labels/comments/issues. This adapter therefore requests no
 # issues/labels permissions.
 #
-# Input contract is matched to the pinned reusable scaffold
-# (codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e), which is the
-# PR #18 scaffold and does NOT yet accept the later state_run_id/state_artifact_name
-# pointers. Those inputs are deliberately omitted here to stay compatible with the
-# pin; do not add them until the consumer re-pins to a reusable SHA that accepts
-# them.
+# Input contract is intentionally limited to this adapter's current manual fields.
+# Later state-pointer or live-autofix inputs belong to follow-up adapter tasks.
 on:
   workflow_dispatch:
     inputs:
@@ -74,10 +70,11 @@ jobs:
     name: Codex loop manual (dry-run default)
     # Permission ceiling for the called reusable workflow only. No issues/labels.
     permissions:
+      actions: read
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@b85e316c9023e1cd1995983dea0430a47648dc78
     with:
       pr_number: ${{ inputs.pr_number }}
       head_sha: ${{ inputs.head_sha }}
@@ -88,4 +85,6 @@ jobs:
       requested_by: ${{ inputs.requested_by }}
       max_iterations: ${{ inputs.max_iterations }}
       dry_run: ${{ inputs.dry_run }}
-    secrets: inherit
+    secrets:
+      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
+      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}

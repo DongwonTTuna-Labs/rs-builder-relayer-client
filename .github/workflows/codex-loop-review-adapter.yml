@@ -29,10 +29,11 @@ jobs:
     if: ${{ github.event.pull_request.draft == false }}
     # Permission ceiling for the called reusable workflow only. No issues/labels.
     permissions:
+      actions: read
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@727f713d2fc497b735ac17b575b74e282b09830e
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@b85e316c9023e1cd1995983dea0430a47648dc78
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
@@ -44,4 +45,6 @@ jobs:
       correlation_id: codex-loop-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
       requested_by: ${{ github.event.sender.login }}
       dry_run: true
-    secrets: inherit
+    secrets:
+      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
+      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
