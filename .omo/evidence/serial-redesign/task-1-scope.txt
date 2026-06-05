@@ -1,0 +1,20 @@
+# Task 1 RS Adapter Revert Scope
+
+Staged diff stat before commit:
+
+```text
+ .github/workflows/codex-loop-dispatch-adapter.yml | 15 ++++++++-------
+ .github/workflows/codex-loop-manual-adapter.yml   | 21 ++++++++-------------
+ .github/workflows/codex-loop-review-adapter.yml   |  6 ++----
+ 3 files changed, 18 insertions(+), 24 deletions(-)
+```
+
+Staged workflow files:
+
+```text
+.github/workflows/codex-loop-dispatch-adapter.yml
+.github/workflows/codex-loop-manual-adapter.yml
+.github/workflows/codex-loop-review-adapter.yml
+```
+
+Required evidence/notepad files were added/appended separately under `.omo/evidence/serial-redesign/` and `.omo/notepads/codex-loop-serial-redesign/`.

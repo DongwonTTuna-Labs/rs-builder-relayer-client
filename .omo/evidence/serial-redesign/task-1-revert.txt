@@ -1,0 +1,27 @@
+# Task 1 RS Adapter Revert Evidence
+
+Date: 2026-06-05
+Branch: ci/codex-loop-revert-727
+
+Source of truth:
+- PR #115 merge commit inspected: f5eafd478627b033d7fac7e817d0fe61c06cdf9e
+- Pre-115 first parent/source commit used: dcb4185ec9acd999b1459c6d1e7b8c37a5d43ea3
+- Restore command source: `git checkout dcb4185ec9acd999b1459c6d1e7b8c37a5d43ea3 -- .github/workflows/codex-loop-review-adapter.yml .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-dispatch-adapter.yml`
+
+Static assertions:
+- `rg -n "727f713d2fc497b735ac17b575b74e282b09830e" .github/workflows/codex-loop-review-adapter.yml .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-dispatch-adapter.yml` exit status: 0
+- Found required 727 pin in all three adapter workflows; manual and dispatch also retain the pre-115 compatibility comments that mention the same pin.
+- `rg -n "3540af40d3ef8614ec978a4de90caa69b47f3b99|3540af40|actions: read" .github/workflows/codex-loop-review-adapter.yml .github/workflows/codex-loop-manual-adapter.yml .github/workflows/codex-loop-dispatch-adapter.yml` exit status: 1
+- No broken 3540 pin and no `actions: read` references remain in the three adapters.
+
+Validation summaries:
+- `actionlint .github/workflows/codex-loop-*.yml` exit status: 0
+- `cargo fmt --all --check` exit status: 0
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` exit status: 0
+- `cargo test --workspace --all-features` exit status: 0; observed 115 Rust tests passing across unit/integration/doc-test targets, with 0 failures.
+- `git diff --check` exit status: 0
+- `git diff --cached --check` exit status: 0
+- YAML LSP diagnostics were attempted for all three changed workflow files, but `yaml-language-server` is not installed; actionlint/static assertions were used as the workflow validation gate.
+
+PR URL:
+- PENDING: will be recorded after PR creation.
