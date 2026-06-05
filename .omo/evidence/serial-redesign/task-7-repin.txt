@@ -1,0 +1,26 @@
+# Task 7 RS Adapter Re-pin Evidence
+
+Date: 2026-06-05
+Branch: ci/codex-loop-repin-serial
+RS base commit: 0152045045cab6345a882bbea540309a5fe3e082
+HSI reusable pin: b85e316c9023e1cd1995983dea0430a47648dc78
+
+Files updated:
+- .github/workflows/codex-loop-dispatch-adapter.yml
+- .github/workflows/codex-loop-manual-adapter.yml
+- .github/workflows/codex-loop-review-adapter.yml
+
+Required adapter contract:
+- All three adapter jobs call `DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@b85e316c9023e1cd1995983dea0430a47648dc78`.
+- All three reusable caller jobs map secrets explicitly:
+  - `CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}`
+  - `CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}`
+- All three reusable caller jobs grant `actions: read` while preserving `contents: write`, `pull-requests: write`, and `id-token: write`.
+- No `secrets: inherit` remains in the three adapter workflows.
+- No `727f713d2fc497b735ac17b575b74e282b09830e` or `3540af40d3ef8614ec978a4de90caa69b47f3b99` remains in the three adapter workflows.
+
+Validation results:
+- `actionlint .github/workflows/codex-loop-*.yml`: PASS, no output.
+- Python static adapter assertions: PASS. Confirmed three adapters use the required SHA pin, explicit App-secret mapping, `actions: read`, preserved write permissions, no `secrets: inherit`, no old 727/3540 pins, and no manual `enable_live_autofix` input change.
+- `git diff --check`: PASS, no output.
+- YAML LSP diagnostics: attempted for all three changed workflow files; `yaml-language-server` is not installed, so `actionlint` and static assertions were used as the YAML validation gate.

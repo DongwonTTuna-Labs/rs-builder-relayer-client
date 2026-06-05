@@ -1,0 +1,115 @@
+# Task 8 live workflow_dispatch entry evidence
+
+Date: 2026-06-05
+Branch: ci/codex-loop-repin-serial
+
+## HSI reusable input confirmation
+
+Command:
+
+```bash
+gh api 'repos/DongwonTTuna-Labs/home-server-infra/contents/.github/workflows/codex-loop-reusable.yml?ref=b85e316c9023e1cd1995983dea0430a47648dc78' --jq .content | base64 --decode
+```
+
+Confirmed `workflow_call.inputs` at HSI SHA `b85e316c9023e1cd1995983dea0430a47648dc78` include the manual-entry fields and callable stages `review`, `design`, `fix`, and `push`:
+
+- `pr_number` required number
+- `head_sha` required string
+- `base_ref` required string
+- `stage` required string
+- `iteration` required number
+- `correlation_id` required string
+- `requested_by` required string
+- `max_iterations` optional number default `5`
+- `dry_run` optional boolean default `true`
+- `enable_live_autofix` optional boolean default `false`
+- `state_run_id` optional string
+- `state_artifact_name` optional string
+
+Task 8 intentionally forwards only the bootstrap manual-entry fields and does not fabricate `state_run_id` or `state_artifact_name`.
+
+## Static assertions
+
+Command:
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+manual = Path('.github/workflows/codex-loop-manual-adapter.yml').read_text()
+review = Path('.github/workflows/codex-loop-review-adapter.yml').read_text()
+dispatch = Path('.github/workflows/codex-loop-dispatch-adapter.yml').read_text()
+sha = 'b85e316c9023e1cd1995983dea0430a47648dc78'
+required_forward = [
+    'pr_number: ${{ inputs.pr_number }}',
+    'head_sha: ${{ inputs.head_sha }}',
+    'base_ref: ${{ inputs.base_ref }}',
+    'stage: ${{ inputs.stage }}',
+    'iteration: ${{ inputs.iteration }}',
+    'correlation_id: ${{ inputs.correlation_id }}',
+    'requested_by: ${{ inputs.requested_by }}',
+    'max_iterations: ${{ inputs.max_iterations }}',
+    'dry_run: ${{ inputs.dry_run }}',
+    'enable_live_autofix: ${{ inputs.enable_live_autofix }}',
+]
+assert manual.count('enable_live_autofix:') == 2, 'manual must define and forward enable_live_autofix exactly once each'
+assert '      enable_live_autofix:\n        description: Explicitly allow live autofix only when dry_run is false.\n        type: boolean\n        required: false\n        default: false' in manual, 'manual enable_live_autofix input shape/default mismatch'
+assert '      dry_run:\n        description: Keep manual runs non-writing by default.\n        type: boolean\n        required: false\n        default: true' in manual, 'manual dry_run default must remain true'
+stage_block = manual.split('      stage:\n', 1)[1].split('      iteration:\n', 1)[0]
+actual_stage_options = [line.strip()[2:] for line in stage_block.splitlines() if line.strip().startswith('- ')]
+assert actual_stage_options == ['review', 'design', 'fix', 'push'], f'manual stage options mismatch: {actual_stage_options}'
+assert '          - issue' not in stage_block, 'manual stage options must not include issue'
+for item in required_forward:
+    assert item in manual, f'manual missing forwarding: {item}'
+assert 'state_run_id' not in manual and 'state_artifact_name' not in manual, 'manual bootstrap must not fabricate state pointers'
+for text in (manual, review, dispatch):
+    assert sha in text, 'Task 7 SHA pin must be preserved in all adapters'
+    assert 'actions: read' in text, 'Task 7 actions: read must be preserved in all adapters'
+    assert 'CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}' in text, 'Task 7 App ID secret mapping must be preserved'
+    assert 'CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}' in text, 'Task 7 App private key secret mapping must be preserved'
+assert 'dry_run: true' in review, 'review adapter must remain hardcoded dry_run true'
+assert 'enable_live_autofix' not in review, 'review adapter must not forward enable_live_autofix'
+assert 'state_run_id' not in review and 'state_artifact_name' not in review, 'review adapter must not fabricate state pointers'
+print('static assertions passed')
+PY
+```
+
+Output:
+
+```text
+static assertions passed
+```
+
+## actionlint
+
+Command:
+
+```bash
+actionlint .github/workflows/codex-loop-*.yml
+```
+
+Output: no output, exit code 0.
+
+## diff whitespace
+
+Command:
+
+```bash
+git diff --check
+```
+
+Output: no output, exit code 0.
+
+## LSP diagnostics
+
+Command:
+
+```text
+lsp_diagnostics .github/workflows/codex-loop-manual-adapter.yml
+```
+
+Output:
+
+```text
+LSP server 'yaml-ls' is configured but NOT INSTALLED.
+Command not found: yaml-language-server
+```
