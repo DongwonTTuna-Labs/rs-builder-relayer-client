@@ -13,7 +13,8 @@ name: Codex Loop Manual Adapter
 # issues/labels permissions.
 #
 # Input contract is intentionally limited to this adapter's current manual fields.
-# Later state-pointer or live-autofix inputs belong to follow-up adapter tasks.
+# Initial manual review bootstrap does not fabricate state pointer inputs; later
+# continuation runs use state pointers emitted by the reusable core.
 on:
   workflow_dispatch:
     inputs:
@@ -38,7 +39,7 @@ on:
           - review
           - design
           - fix
-          - issue
+          - push
       iteration:
         description: Zero-based loop iteration.
         type: number
@@ -62,6 +63,11 @@ on:
         type: boolean
         required: false
         default: true
+      enable_live_autofix:
+        description: Explicitly allow live autofix only when dry_run is false.
+        type: boolean
+        required: false
+        default: false
 
 permissions: {}
 
@@ -85,6 +91,7 @@ jobs:
       requested_by: ${{ inputs.requested_by }}
       max_iterations: ${{ inputs.max_iterations }}
       dry_run: ${{ inputs.dry_run }}
+      enable_live_autofix: ${{ inputs.enable_live_autofix }}
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
