@@ -62,3 +62,13 @@
 - Branch dispatch did prove the changed branch workflow file can materialize jobs: run `27002333429` completed success with five reusable jobs present.
 - This remediation does not remove the user merge gate. After the PR is merged to `main`, Task 10 should be retried on `main` before Task 11 proceeds.
 
+## 2026-06-05 HSI reusable trusted core ref blocker
+- RS automatic review adapter run `27002571893` materialized jobs but failed in `Setup Codex Relay / Checkout trusted Codex loop core` because HSI reusable checkout of `DongwonTTuna-Labs/home-server-infra` used `${{ github.workflow_sha }}`, which resolved to RS caller SHA `ccd08dfe107472aa64811673f09fa8e510af81a6` instead of an HSI commit.
+- HSI branch `fix/codex-loop-trusted-core-ref` adds required `workflow_call` input `trusted_core_ref` and uses it for all trusted HSI helper checkouts in setup-relay, run-stage, and finalize live continuation.
+- Follow-up remains blocked until the HSI PR is merged; then RS adapters must be repinned to the new HSI merge SHA and pass `trusted_core_ref: <same SHA>`.
+
+## 2026-06-05 Task 10 trusted core ref runtime blocker
+- PR #119 automatic run `27004405557` materialized reusable jobs but did not exercise the PR branch adapter change because `pull_request_target` executed the base-branch caller workflow, shown by logs as `Uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@b85e316c9023e1cd1995983dea0430a47648dc78` with no `trusted_core_ref` input.
+- The same automatic run failed in `Setup Codex Relay / Checkout trusted Codex loop core`; checkout still attempted HSI at RS SHA `ccd08dfe107472aa64811673f09fa8e510af81a6` and ended with `remote: Repository not found` / git exit 128.
+- Branch manual dry-run `27004426779` did use the branch workflow and completed success, but stopped at trust gating with `TRUSTED=false`, `TRUST_REASON=untrusted-requester`; this proved graph materialization and typed trusted-core input propagation, not full setup checkout success.
+

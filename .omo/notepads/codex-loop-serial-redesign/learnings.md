@@ -55,3 +55,8 @@
 - Manual adapter zero-job startup was reproduced on `main` as a caller-boundary type issue candidate because only `workflow_dispatch` inputs were forwarded directly into HSI `workflow_call` number/boolean inputs; automatic review adapter had already materialized jobs with the same HSI SHA.
 - Remediation branch `ci/codex-loop-manual-dispatch-fix` wraps `pr_number`, `iteration`, `max_iterations`, `dry_run`, and `enable_live_autofix` with `fromJSON(format('{0}', inputs.<name>))` while leaving string inputs unchanged.
 - Branch dry-run run `27002333429` materialized five reusable jobs and completed successfully, proving the zero-job startup failure is fixed on the remediation branch; `Setup Codex Relay` and `Run Stage` were skipped by reusable gating, not by graph materialization failure.
+
+## 2026-06-05 Task 10 trusted core ref update
+- RS PR #119 branch adapters now pin HSI PR #22 merge SHA `95686f21da9e839bff1956dd0809cdfc02e3529c` in `uses:` and pass the same value as `trusted_core_ref`.
+- Manual `workflow_dispatch` number/boolean conversions remained intact with `fromJSON(format('{0}', inputs.<name>))`; review remains `dry_run: true`, and manual live defaults remain off.
+- Branch manual dry-run `27004426779` materialized reusable jobs and carried `INPUT_TRUSTED_CORE_REF=95686f21da9e839bff1956dd0809cdfc02e3529c`; it completed success after stopping as `untrusted-requester`, with PR #98 head unchanged.
