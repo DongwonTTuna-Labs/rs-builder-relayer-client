@@ -82,16 +82,16 @@ jobs:
       id-token: write
     uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@b85e316c9023e1cd1995983dea0430a47648dc78
     with:
-      pr_number: ${{ inputs.pr_number }}
+      pr_number: ${{ fromJSON(format('{0}', inputs.pr_number)) }}
       head_sha: ${{ inputs.head_sha }}
       base_ref: ${{ inputs.base_ref }}
       stage: ${{ inputs.stage }}
-      iteration: ${{ inputs.iteration }}
+      iteration: ${{ fromJSON(format('{0}', inputs.iteration)) }}
       correlation_id: ${{ inputs.correlation_id }}
       requested_by: ${{ inputs.requested_by }}
-      max_iterations: ${{ inputs.max_iterations }}
-      dry_run: ${{ inputs.dry_run }}
-      enable_live_autofix: ${{ inputs.enable_live_autofix }}
+      max_iterations: ${{ fromJSON(format('{0}', inputs.max_iterations)) }}
+      dry_run: ${{ fromJSON(format('{0}', inputs.dry_run)) }}
+      enable_live_autofix: ${{ fromJSON(format('{0}', inputs.enable_live_autofix)) }}
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
