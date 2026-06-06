@@ -72,3 +72,13 @@
 - The same automatic run failed in `Setup Codex Relay / Checkout trusted Codex loop core`; checkout still attempted HSI at RS SHA `ccd08dfe107472aa64811673f09fa8e510af81a6` and ended with `remote: Repository not found` / git exit 128.
 - Branch manual dry-run `27004426779` did use the branch workflow and completed success, but stopped at trust gating with `TRUSTED=false`, `TRUST_REASON=untrusted-requester`; this proved graph materialization and typed trusted-core input propagation, not full setup checkout success.
 
+## 2026-06-05 Task 10 retry on main after PR #119
+- Main dry-run `27005144024` used PR #119 merge commit `f788dd484f92c0d14d2727ab09faf70e621e1927` and HSI SHA `95686f21da9e839bff1956dd0809cdfc02e3529c`; it materialized five reusable jobs and logs showed `trusted_core_ref` / `INPUT_TRUSTED_CORE_REF` set to the required SHA.
+- The run still failed in `Setup Codex Relay / Checkout trusted Codex loop core` with `Repository not found` while fetching `DongwonTTuna-Labs/home-server-infra`, indicating the RS caller run token/context cannot access the private HSI repo for checkout.
+- Forbidden side-effect checks passed over logs/metadata: no `openai/codex-action`, no relay-token mint, no App-token mint, no `codex-review push commit-push`, no repository_dispatch continuation, and PR #98 head stayed `a04e7eeb6598ea2d1c69837aaaa9ee02c97d216d`.
+- Evidence written: `.omo/evidence/serial-redesign/task-10-head-before.txt`, `.omo/evidence/serial-redesign/task-10-dryrun.md`, and `.omo/evidence/serial-redesign/task-10-dryrun-error.md`; Task 11 remains blocked.
+
+## 2026-06-06 Task 10 RS read-token mapping blocker
+- A name-only `gh secret list` check in RS returned absent for `CODEX_TRUSTED_CORE_READ_TOKEN`; no secret value was requested, read, or printed.
+- The adapter mapping PR can proceed, but the Task 10 main dry-run must not be retried until this repository secret is configured and the mapping PR is merged.
+

@@ -60,3 +60,8 @@
 - RS PR #119 branch adapters now pin HSI PR #22 merge SHA `95686f21da9e839bff1956dd0809cdfc02e3529c` in `uses:` and pass the same value as `trusted_core_ref`.
 - Manual `workflow_dispatch` number/boolean conversions remained intact with `fromJSON(format('{0}', inputs.<name>))`; review remains `dry_run: true`, and manual live defaults remain off.
 - Branch manual dry-run `27004426779` materialized reusable jobs and carried `INPUT_TRUSTED_CORE_REF=95686f21da9e839bff1956dd0809cdfc02e3529c`; it completed success after stopping as `untrusted-requester`, with PR #98 head unchanged.
+
+## 2026-06-06 Task 10 RS read-token mapping
+- All three RS codex-loop adapters now target HSI PR #23 merge SHA `97321913ee853aff0ef1476490899b133f968523` in both `uses:` and `trusted_core_ref`.
+- The callers explicitly map `CODEX_TRUSTED_CORE_READ_TOKEN` alongside the existing App secret mappings while preserving `actions: read`, manual `fromJSON(format('{0}', inputs.<name>))` conversions, dry-run review behavior, and manual live defaults off.
+- Runtime Task 10 remains externally blocked until the RS repository secret name `CODEX_TRUSTED_CORE_READ_TOKEN` exists; no secret value was read or printed.
