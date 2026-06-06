@@ -43,7 +43,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@95686f21da9e839bff1956dd0809cdfc02e3529c
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@97321913ee853aff0ef1476490899b133f968523
     with:
       pr_number: ${{ github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.client_payload.head_sha }}
@@ -56,7 +56,8 @@ jobs:
       # Default to dry-run when the payload omits dry_run (null != false -> true)
       # while still honoring an explicit boolean false from a trusted emitter.
       dry_run: ${{ github.event.client_payload.dry_run != false }}
-      trusted_core_ref: 95686f21da9e839bff1956dd0809cdfc02e3529c
+      trusted_core_ref: 97321913ee853aff0ef1476490899b133f968523
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+      CODEX_TRUSTED_CORE_READ_TOKEN: ${{ secrets.CODEX_TRUSTED_CORE_READ_TOKEN }}
