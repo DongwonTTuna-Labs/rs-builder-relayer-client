@@ -48,7 +48,7 @@ Python static assertions passed for all three adapter workflows:
 - `cargo fmt --all --check`: passed.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: passed.
 - `cargo test --workspace --all-features`: passed, 118 tests passed plus doc-tests with 0 tests.
-- `git diff --check`: passed before evidence creation; rerun after final evidence commit.
+- `git diff --check`: passed before evidence creation and passed again after the evidence/notepad commit was pushed.
 
 ## Secret-name check
 - Command used: `gh secret list --repo DongwonTTuna-Labs/rs-builder-relayer-client --json name --jq 'any(.[]; .name == "CODEX_TRUSTED_CORE_READ_TOKEN")'`
