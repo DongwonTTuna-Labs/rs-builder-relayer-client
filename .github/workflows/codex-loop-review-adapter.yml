@@ -33,7 +33,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@97321913ee853aff0ef1476490899b133f968523
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@ce6a1494031d91b7bc39dcb835de279cc67090db
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
@@ -45,8 +45,9 @@ jobs:
       correlation_id: codex-loop-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
       requested_by: ${{ github.event.sender.login }}
       dry_run: true
-      trusted_core_ref: 97321913ee853aff0ef1476490899b133f968523
+      # Initial PR entry has no prior loop state; the reusable core bootstraps an
+      # empty state when no state pointer is passed. State stays a core concern,
+      # so this adapter never fabricates a seed artifact.
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-      CODEX_TRUSTED_CORE_READ_TOKEN: ${{ secrets.CODEX_TRUSTED_CORE_READ_TOKEN }}
