@@ -48,11 +48,7 @@ jobs:
       pr_number: ${{ github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.client_payload.head_sha }}
       base_ref: ${{ github.event.client_payload.base_ref }}
-      stage: ${{ github.event.client_payload.stage }}
       iteration: ${{ github.event.client_payload.iteration }}
       correlation_id: ${{ github.event.client_payload.correlation_id }}
       requested_by: ${{ github.event.client_payload.requested_by }}
-      # Continuation state pointers emitted by the core's terminal summary.
-      state_run_id: ${{ github.event.client_payload.state_run_id }}
-      state_artifact_name: ${{ github.event.client_payload.state_artifact_name }}
     # No secrets: the core reads credentials from the runner environment.

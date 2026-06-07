@@ -39,7 +39,6 @@ jobs:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
       base_ref: ${{ github.event.pull_request.base.ref }}
-      stage: review
       iteration: 0
       # Deterministic per (PR, head SHA); a new head (synchronize) yields a new
       # correlation id, preserving uniqueness across synchronize events.
