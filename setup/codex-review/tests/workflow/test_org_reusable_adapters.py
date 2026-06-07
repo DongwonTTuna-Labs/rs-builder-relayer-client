@@ -86,37 +86,26 @@ def test_adapters_drop_max_iterations():
         assert "max_iterations" not in _text(name), f"{name}: max_iterations must be gone"
 
 
-def test_review_adapter_is_thin_and_omits_state_pointers():
-    job = _only_job(REVIEW)
-    with_block = job["with"]
-    # Initial PR entry: no prior state, so no pointers are forwarded and the
-    # core bootstraps empty state. The adapter must not fabricate a seed.
-    assert "state_run_id" not in with_block
-    assert "state_artifact_name" not in with_block
-    assert with_block["stage"] == "review"
+def test_no_adapter_forwards_stage_or_state_pointers():
+    # The core runs the whole loop in one run, so adapters no longer select a
+    # stage or carry cross-run state pointers. None of the three may forward
+    # `stage`, `state_run_id`, or `state_artifact_name`.
+    for name in ADAPTERS:
+        with_block = _only_job(name)["with"]
+        for field in ("stage", "state_run_id", "state_artifact_name"):
+            assert field not in with_block, f"{name}: must not forward {field}"
+
+
+def test_review_adapter_is_thin_and_omits_seed_state():
     text = _text(REVIEW)
     assert "upload-artifact" not in text, "review adapter must not create a seed state artifact"
     assert "loop-state.v1" not in text and "schema_version" not in text
 
 
-def test_manual_adapter_exposes_optional_state_pointers_and_forwards_them():
-    doc = _doc(MANUAL)
-    inputs = _on(doc)["workflow_dispatch"]["inputs"]
-    for field in ("state_run_id", "state_artifact_name"):
-        assert field in inputs, f"manual adapter must expose optional {field} input"
-        assert inputs[field].get("required") in (False, None)
-        assert inputs[field].get("default", "") == ""
-    with_block = _only_job(MANUAL)["with"]
-    assert with_block["state_run_id"] == "${{ inputs.state_run_id }}"
-    assert with_block["state_artifact_name"] == "${{ inputs.state_artifact_name }}"
-
-
-def test_manual_adapter_full_stage_enum():
+def test_manual_adapter_drops_stage_and_state_inputs():
     inputs = _on(_doc(MANUAL))["workflow_dispatch"]["inputs"]
-    assert inputs["stage"]["options"] == ["review", "design", "fix", "push"]
-
-
-def test_dispatch_adapter_forwards_payload_state_pointers():
-    with_block = _only_job(DISPATCH)["with"]
-    assert with_block["state_run_id"] == "${{ github.event.client_payload.state_run_id }}"
-    assert with_block["state_artifact_name"] == "${{ github.event.client_payload.state_artifact_name }}"
+    for field in ("stage", "state_run_id", "state_artifact_name"):
+        assert field not in inputs, f"manual adapter must not expose {field} input"
+    # The remaining entry-point inputs are still present.
+    for field in ("pr_number", "head_sha", "base_ref", "iteration", "correlation_id", "requested_by"):
+        assert field in inputs, f"manual adapter must keep {field} input"

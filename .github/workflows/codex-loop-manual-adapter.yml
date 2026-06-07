@@ -30,16 +30,6 @@ on:
         description: Expected pull request base ref.
         type: string
         required: true
-      stage:
-        description: Loop stage to run.
-        type: choice
-        required: true
-        default: review
-        options:
-          - review
-          - design
-          - fix
-          - push
       iteration:
         description: Zero-based loop iteration.
         type: number
@@ -53,22 +43,6 @@ on:
         description: GitHub actor or app slug requesting this manual run.
         type: string
         required: true
-      state_run_id:
-        description: >-
-          Continuation only. Workflow run id that owns the prior loop-state
-          artifact, taken from a previous run's terminal summary. Leave empty
-          for an initial run; the reusable core then bootstraps empty state.
-        type: string
-        required: false
-        default: ""
-      state_artifact_name:
-        description: >-
-          Continuation only. Prior loop-state artifact name from a previous
-          run's terminal summary. Must be set together with state_run_id; the
-          reusable core rejects exactly one of the pair.
-        type: string
-        required: false
-        default: ""
 
 permissions: {}
 
@@ -86,12 +60,7 @@ jobs:
       pr_number: ${{ fromJSON(format('{0}', inputs.pr_number)) }}
       head_sha: ${{ inputs.head_sha }}
       base_ref: ${{ inputs.base_ref }}
-      stage: ${{ inputs.stage }}
       iteration: ${{ fromJSON(format('{0}', inputs.iteration)) }}
       correlation_id: ${{ inputs.correlation_id }}
       requested_by: ${{ inputs.requested_by }}
-      # Forwarded as-is; both empty on an initial run. The core enforces the
-      # both-or-neither rule, so the adapter stays a pure passthrough.
-      state_run_id: ${{ inputs.state_run_id }}
-      state_artifact_name: ${{ inputs.state_artifact_name }}
     # No secrets: the core reads credentials from the runner environment.
