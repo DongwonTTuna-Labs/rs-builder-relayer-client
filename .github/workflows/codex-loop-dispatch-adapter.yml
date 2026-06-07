@@ -18,8 +18,8 @@ name: Codex Loop Repository Dispatch Adapter
 # the reusable core's typed payload + state-pointer artifacts, never in
 # labels/comments/issues. It therefore requests no issues/labels permissions.
 #
-# Input contract is intentionally limited to this adapter's current payload fields.
-# Later state-pointer or live-autofix wiring belongs to follow-up adapter tasks.
+# Continuation-only: it forwards the state pointers and live-autofix flag that the
+# reusable core emitted into this dispatch payload, and never seeds new state.
 on:
   repository_dispatch:
     types: [codex-loop]
@@ -43,7 +43,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@97321913ee853aff0ef1476490899b133f968523
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@ce6a1494031d91b7bc39dcb835de279cc67090db
     with:
       pr_number: ${{ github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.client_payload.head_sha }}
@@ -56,8 +56,11 @@ jobs:
       # Default to dry-run when the payload omits dry_run (null != false -> true)
       # while still honoring an explicit boolean false from a trusted emitter.
       dry_run: ${{ github.event.client_payload.dry_run != false }}
-      trusted_core_ref: 97321913ee853aff0ef1476490899b133f968523
+      # Live autofix is opt-in: true only when the emitter set it explicitly.
+      enable_live_autofix: ${{ github.event.client_payload.enable_live_autofix == true }}
+      # Continuation state pointers emitted by the core's terminal summary.
+      state_run_id: ${{ github.event.client_payload.state_run_id }}
+      state_artifact_name: ${{ github.event.client_payload.state_artifact_name }}
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-      CODEX_TRUSTED_CORE_READ_TOKEN: ${{ secrets.CODEX_TRUSTED_CORE_READ_TOKEN }}

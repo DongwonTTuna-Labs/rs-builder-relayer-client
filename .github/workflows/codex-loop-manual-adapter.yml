@@ -68,6 +68,22 @@ on:
         type: boolean
         required: false
         default: false
+      state_run_id:
+        description: >-
+          Continuation only. Workflow run id that owns the prior loop-state
+          artifact, taken from a previous run's terminal summary. Leave empty
+          for an initial run; the reusable core then bootstraps empty state.
+        type: string
+        required: false
+        default: ""
+      state_artifact_name:
+        description: >-
+          Continuation only. Prior loop-state artifact name from a previous
+          run's terminal summary. Must be set together with state_run_id; the
+          reusable core rejects exactly one of the pair.
+        type: string
+        required: false
+        default: ""
 
 permissions: {}
 
@@ -80,7 +96,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@97321913ee853aff0ef1476490899b133f968523
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@ce6a1494031d91b7bc39dcb835de279cc67090db
     with:
       pr_number: ${{ fromJSON(format('{0}', inputs.pr_number)) }}
       head_sha: ${{ inputs.head_sha }}
@@ -92,8 +108,10 @@ jobs:
       max_iterations: ${{ fromJSON(format('{0}', inputs.max_iterations)) }}
       dry_run: ${{ fromJSON(format('{0}', inputs.dry_run)) }}
       enable_live_autofix: ${{ fromJSON(format('{0}', inputs.enable_live_autofix)) }}
-      trusted_core_ref: 97321913ee853aff0ef1476490899b133f968523
+      # Forwarded as-is; both empty on an initial run. The core enforces the
+      # both-or-neither rule, so the adapter stays a pure passthrough.
+      state_run_id: ${{ inputs.state_run_id }}
+      state_artifact_name: ${{ inputs.state_artifact_name }}
     secrets:
       CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
       CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
-      CODEX_TRUSTED_CORE_READ_TOKEN: ${{ secrets.CODEX_TRUSTED_CORE_READ_TOKEN }}
