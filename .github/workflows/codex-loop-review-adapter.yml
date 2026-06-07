@@ -3,8 +3,9 @@ name: Codex Loop Review Adapter
 # Thin SHA-pinned consumer adapter for the org-reusable Codex loop core.
 # Entry point: a non-draft pull request opened/updated/reopened/marked-ready.
 # This adapter holds NO loop logic; it only forwards typed inputs to the
-# reusable workflow in home-server-infra, pinned to a 40-char commit SHA, and
-# always enters dry-run. Live capability is intentionally deferred.
+# reusable workflow in home-server-infra, pinned to a 40-char commit SHA. The
+# loop runs live for eligible PRs; the core's trust/stale guard and relay
+# presence are the only gates.
 #
 # Loop state lives in the reusable core's typed payload + state-pointer
 # artifacts, never in labels/comments/issues. This adapter therefore requests
@@ -24,7 +25,7 @@ concurrency:
 
 jobs:
   codex-loop-review:
-    name: Codex loop review (dry-run)
+    name: Codex loop review
     # Skip drafts; `ready_for_review` re-enters here once draft is cleared.
     if: ${{ github.event.pull_request.draft == false }}
     # Permission ceiling for the called reusable workflow only. No issues/labels.
@@ -33,7 +34,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@ef23d91c60d09dc95de594cce71325a2e1a89106
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@4f1bf18a358a6c2db2d79f9f8e2dea4e473d2abd
     with:
       pr_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
@@ -44,7 +45,6 @@ jobs:
       # correlation id, preserving uniqueness across synchronize events.
       correlation_id: codex-loop-pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
       requested_by: ${{ github.event.sender.login }}
-      dry_run: true
       # Initial PR entry has no prior loop state; the reusable core bootstraps an
       # empty state when no state pointer is passed. State stays a core concern,
       # so this adapter never fabricates a seed artifact.

@@ -9,7 +9,7 @@ name: Codex Loop Repository Dispatch Adapter
 # !!! DEFAULT-BRANCH REQUIREMENT !!!
 # repository_dispatch only triggers workflow files that already exist on the
 # repository's DEFAULT branch. This adapter therefore does nothing until it is
-# merged to the default branch. Any dispatch smoke test (even dry_run) must wait
+# merged to the default branch. Any dispatch smoke test must wait
 # until this file is on the default branch AND a prior reusable run has produced
 # the loop-state artifact the continuation references. Do not claim runtime
 # dispatch evidence before that precondition is met.
@@ -43,7 +43,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@ef23d91c60d09dc95de594cce71325a2e1a89106
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@4f1bf18a358a6c2db2d79f9f8e2dea4e473d2abd
     with:
       pr_number: ${{ github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.client_payload.head_sha }}
@@ -53,11 +53,6 @@ jobs:
       correlation_id: ${{ github.event.client_payload.correlation_id }}
       requested_by: ${{ github.event.client_payload.requested_by }}
       max_iterations: ${{ github.event.client_payload.max_iterations }}
-      # Default to dry-run when the payload omits dry_run (null != false -> true)
-      # while still honoring an explicit boolean false from a trusted emitter.
-      dry_run: ${{ github.event.client_payload.dry_run != false }}
-      # Live autofix is opt-in: true only when the emitter set it explicitly.
-      enable_live_autofix: ${{ github.event.client_payload.enable_live_autofix == true }}
       # Continuation state pointers emitted by the core's terminal summary.
       state_run_id: ${{ github.event.client_payload.state_run_id }}
       state_artifact_name: ${{ github.event.client_payload.state_artifact_name }}

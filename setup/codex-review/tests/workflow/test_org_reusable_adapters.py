@@ -66,6 +66,15 @@ def test_no_trusted_core_ref_or_read_token_anywhere():
         assert "CODEX_TRUSTED_CORE_READ_TOKEN" not in text, f"{name}: read token must be gone"
 
 
+def test_no_dry_run_or_enable_live_autofix_flags():
+    # The loop is always-live; the dry-run scaffolding was removed from the core,
+    # so adapters must not forward or expose those flags.
+    for name in ADAPTERS:
+        text = _text(name)
+        assert "dry_run" not in text, f"{name}: dry_run flag must be gone"
+        assert "enable_live_autofix" not in text, f"{name}: enable_live_autofix flag must be gone"
+
+
 def test_adapters_keep_app_secret_mapping_only():
     for name in ADAPTERS:
         secrets = _only_job(name).get("secrets") or {}
@@ -99,15 +108,12 @@ def test_manual_adapter_exposes_optional_state_pointers_and_forwards_them():
     assert with_block["state_artifact_name"] == "${{ inputs.state_artifact_name }}"
 
 
-def test_manual_adapter_keeps_live_autofix_and_full_stage_enum():
+def test_manual_adapter_full_stage_enum():
     inputs = _on(_doc(MANUAL))["workflow_dispatch"]["inputs"]
-    assert "enable_live_autofix" in inputs
-    assert "enable_live_autofix" in _only_job(MANUAL)["with"]
     assert inputs["stage"]["options"] == ["review", "design", "fix", "push"]
 
 
-def test_dispatch_adapter_forwards_payload_state_pointers_and_live_autofix():
+def test_dispatch_adapter_forwards_payload_state_pointers():
     with_block = _only_job(DISPATCH)["with"]
     assert with_block["state_run_id"] == "${{ github.event.client_payload.state_run_id }}"
     assert with_block["state_artifact_name"] == "${{ github.event.client_payload.state_artifact_name }}"
-    assert with_block["enable_live_autofix"] == "${{ github.event.client_payload.enable_live_autofix == true }}"
