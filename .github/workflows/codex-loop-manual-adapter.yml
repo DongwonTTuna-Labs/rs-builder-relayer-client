@@ -53,11 +53,6 @@ on:
         description: GitHub actor or app slug requesting this manual run.
         type: string
         required: true
-      max_iterations:
-        description: Maximum accepted loop iterations.
-        type: number
-        required: false
-        default: 5
       state_run_id:
         description: >-
           Continuation only. Workflow run id that owns the prior loop-state
@@ -86,7 +81,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@4f1bf18a358a6c2db2d79f9f8e2dea4e473d2abd
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@main
     with:
       pr_number: ${{ fromJSON(format('{0}', inputs.pr_number)) }}
       head_sha: ${{ inputs.head_sha }}
@@ -95,11 +90,8 @@ jobs:
       iteration: ${{ fromJSON(format('{0}', inputs.iteration)) }}
       correlation_id: ${{ inputs.correlation_id }}
       requested_by: ${{ inputs.requested_by }}
-      max_iterations: ${{ fromJSON(format('{0}', inputs.max_iterations)) }}
       # Forwarded as-is; both empty on an initial run. The core enforces the
       # both-or-neither rule, so the adapter stays a pure passthrough.
       state_run_id: ${{ inputs.state_run_id }}
       state_artifact_name: ${{ inputs.state_artifact_name }}
-    secrets:
-      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
-      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+    # No secrets: the core reads credentials from the runner environment.

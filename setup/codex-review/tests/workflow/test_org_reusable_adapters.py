@@ -52,11 +52,10 @@ def _pinned_sha(name: str) -> str:
     return sha
 
 
-def test_all_adapters_pin_same_40hex_core_sha():
-    shas = {name: _pinned_sha(name) for name in ADAPTERS}
-    for name, sha in shas.items():
-        assert SHA_RE.match(sha), f"{name}: pin must be a 40-char commit SHA, got {sha!r}"
-    assert len(set(shas.values())) == 1, f"adapters pin divergent core SHAs: {shas}"
+def test_all_adapters_pin_core_at_main():
+    # Consumers track the core at @main (no SHA pin / re-pin churn).
+    for name in ADAPTERS:
+        assert _pinned_sha(name) == "main", f"{name}: must pin the core @main"
 
 
 def test_no_trusted_core_ref_or_read_token_anywhere():
@@ -75,12 +74,16 @@ def test_no_dry_run_or_enable_live_autofix_flags():
         assert "enable_live_autofix" not in text, f"{name}: enable_live_autofix flag must be gone"
 
 
-def test_adapters_keep_app_secret_mapping_only():
+def test_adapters_pass_no_secrets():
+    # Credentials live on the runner env; adapters map no secrets.
     for name in ADAPTERS:
-        secrets = _only_job(name).get("secrets") or {}
-        assert set(secrets) == {"CODEX_GITHUB_APP_ID", "CODEX_GITHUB_APP_PRIVATE_KEY"}, (
-            f"{name}: secrets must be only the App id/key, got {sorted(secrets)}"
-        )
+        assert "secrets" not in _only_job(name), f"{name}: must not map any secrets"
+        assert "${{ secrets." not in _text(name), f"{name}: no secrets.* references"
+
+
+def test_adapters_drop_max_iterations():
+    for name in ADAPTERS:
+        assert "max_iterations" not in _text(name), f"{name}: max_iterations must be gone"
 
 
 def test_review_adapter_is_thin_and_omits_state_pointers():
