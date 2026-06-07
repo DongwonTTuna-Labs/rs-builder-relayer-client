@@ -43,7 +43,7 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@4f1bf18a358a6c2db2d79f9f8e2dea4e473d2abd
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@main
     with:
       pr_number: ${{ github.event.client_payload.pr_number }}
       head_sha: ${{ github.event.client_payload.head_sha }}
@@ -52,10 +52,7 @@ jobs:
       iteration: ${{ github.event.client_payload.iteration }}
       correlation_id: ${{ github.event.client_payload.correlation_id }}
       requested_by: ${{ github.event.client_payload.requested_by }}
-      max_iterations: ${{ github.event.client_payload.max_iterations }}
       # Continuation state pointers emitted by the core's terminal summary.
       state_run_id: ${{ github.event.client_payload.state_run_id }}
       state_artifact_name: ${{ github.event.client_payload.state_artifact_name }}
-    secrets:
-      CODEX_GITHUB_APP_ID: ${{ secrets.CODEX_APP_ID }}
-      CODEX_GITHUB_APP_PRIVATE_KEY: ${{ secrets.CODEX_APP_PRIVATE_KEY }}
+    # No secrets: the core reads credentials from the runner environment.
