@@ -4,9 +4,9 @@ name: Codex Loop Manual Adapter
 # Entry point: an operator running `workflow_dispatch` from the Actions UI/API to
 # replay or debug a single loop stage. This adapter holds NO loop logic; it only
 # forwards typed inputs to the reusable workflow in home-server-infra, pinned to a
-# 40-char commit SHA, and defaults to dry-run. Live capability is intentionally
-# deferred (a live run still requires the operator to opt out of dry-run plus
-# the reusable core's GitHub App secrets and trust guards).
+# 40-char commit SHA. The loop runs live: an eligible (trusted/non-fork/non-stale)
+# PR with the core's relay/App secrets present will make real model calls, post
+# review comments, push autofix commits, and dispatch continuation.
 #
 # Loop state lives in the reusable core's typed payload + state-pointer artifacts,
 # never in labels/comments/issues. This adapter therefore requests no
@@ -58,16 +58,6 @@ on:
         type: number
         required: false
         default: 5
-      dry_run:
-        description: Keep manual runs non-writing by default.
-        type: boolean
-        required: false
-        default: true
-      enable_live_autofix:
-        description: Explicitly allow live autofix only when dry_run is false.
-        type: boolean
-        required: false
-        default: false
       state_run_id:
         description: >-
           Continuation only. Workflow run id that owns the prior loop-state
@@ -89,14 +79,14 @@ permissions: {}
 
 jobs:
   codex-loop-manual:
-    name: Codex loop manual (dry-run default)
+    name: Codex loop manual
     # Permission ceiling for the called reusable workflow only. No issues/labels.
     permissions:
       actions: read
       contents: write
       pull-requests: write
       id-token: write
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@ef23d91c60d09dc95de594cce71325a2e1a89106
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/codex-loop-reusable.yml@4f1bf18a358a6c2db2d79f9f8e2dea4e473d2abd
     with:
       pr_number: ${{ fromJSON(format('{0}', inputs.pr_number)) }}
       head_sha: ${{ inputs.head_sha }}
@@ -106,8 +96,6 @@ jobs:
       correlation_id: ${{ inputs.correlation_id }}
       requested_by: ${{ inputs.requested_by }}
       max_iterations: ${{ fromJSON(format('{0}', inputs.max_iterations)) }}
-      dry_run: ${{ fromJSON(format('{0}', inputs.dry_run)) }}
-      enable_live_autofix: ${{ fromJSON(format('{0}', inputs.enable_live_autofix)) }}
       # Forwarded as-is; both empty on an initial run. The core enforces the
       # both-or-neither rule, so the adapter stays a pure passthrough.
       state_run_id: ${{ inputs.state_run_id }}
