@@ -138,9 +138,14 @@ impl SignedDepositWalletBatch {
         self.verified_signer
     }
 
-    pub(crate) fn with_nonce_lease_binding(mut self, binding: H256) -> Self {
+    pub(crate) fn try_with_nonce_lease_binding(mut self, binding: H256) -> Result<Self> {
+        if self.nonce_lease_binding.is_some() {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch already has a WALLET nonce lease binding".to_string(),
+            ));
+        }
         self.nonce_lease_binding = Some(binding);
-        self
+        Ok(self)
     }
 
     pub(crate) fn nonce_lease_binding(&self) -> Option<H256> {

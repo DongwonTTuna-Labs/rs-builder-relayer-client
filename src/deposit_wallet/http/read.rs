@@ -4,6 +4,9 @@ use super::response::{
 };
 use super::state::OwnerNonceReadReservation;
 use super::*;
+use crate::deposit_wallet::{
+    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
+};
 use serde_json::value::RawValue;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -127,16 +130,53 @@ impl DepositWalletNonceLeaseSigningContext {
         self.chain_id
     }
 
-    /// Marks a signed WALLET batch as having been produced for this nonce lease.
+    /// Builds and validates a signed WALLET batch for this nonce lease.
     ///
-    /// `sign_and_submit_wallet_batch_with_nonce_lease` only accepts signed
-    /// batches returned through this method, which prevents callers from
-    /// replaying an older same-nonce `SignedDepositWalletBatch` under a fresh
-    /// owner nonce lease.
+    /// The owner, nonce owner, submit-from address, derived deposit wallet,
+    /// chain id, and nonce are taken from this context. Only deadline, calls,
+    /// and the raw owner signature are caller inputs.
+    pub fn validate_batch_signature(
+        &self,
+        deadline: U256,
+        calls: Vec<DepositWalletCall>,
+        signature: &str,
+    ) -> Result<SignedDepositWalletBatch> {
+        let batch = DepositWalletBatchToSign {
+            owner: self.owner,
+            nonce_owner: self.nonce_owner,
+            submit_from: self.submit_from,
+            deposit_wallet: self.deposit_wallet,
+            chain_id: self.chain_id,
+            nonce: self.nonce,
+            deadline,
+            calls,
+        };
+
+        validate_deposit_wallet_batch_signature(batch, signature)?
+            .try_with_nonce_lease_binding(self.nonce_lease_binding)
+    }
+
+    /// Validates that a signed WALLET batch already carries this nonce lease binding.
+    ///
+    /// This compatibility guard no longer grants a binding to arbitrary signed
+    /// batches. Call [`Self::validate_batch_signature`] with the raw signature
+    /// to build a batch from the current lease fields and bind it to this
+    /// context.
     pub fn validate_signed_batch(
         &self,
         signed: SignedDepositWalletBatch,
     ) -> Result<SignedDepositWalletBatch> {
+        self.validate_signed_batch_fields(&signed)?;
+        if signed.nonce_lease_binding() != Some(self.nonce_lease_binding) {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch was not produced by the current WALLET nonce lease signing context"
+                    .to_string(),
+            ));
+        }
+        Ok(signed)
+    }
+
+    fn validate_signed_batch_fields(&self, signed: &SignedDepositWalletBatch) -> Result<()> {
         if signed.owner() != self.owner {
             return Err(RelayerError::Signing(
                 "signed deposit wallet batch owner does not match WALLET nonce lease".to_string(),
@@ -170,7 +210,7 @@ impl DepositWalletNonceLeaseSigningContext {
                 "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
             ));
         }
-        Ok(signed.with_nonce_lease_binding(self.nonce_lease_binding))
+        Ok(())
     }
 }
 

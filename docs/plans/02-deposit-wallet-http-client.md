@@ -45,9 +45,13 @@ without touching live relayer endpoints.
   sign)`: gives the caller a lease-bound signing context, then submits the
   signed `WALLET` request only when an explicit mutation gate permits relayer
   mutation and the crate-owned nonce lease matches the signed owner and nonce.
-  The returned signed batch must be passed through
-  `DepositWalletNonceLeaseSigningContext::validate_signed_batch`; an older
-  same-nonce signed batch is not accepted under a fresh lease.
+  The sign callback must produce the returned signed batch through
+  `DepositWalletNonceLeaseSigningContext::validate_batch_signature`, which
+  constructs the EIP-712 payload from the current lease owner, nonce owner,
+  submit-from address, deposit wallet, chain id, and nonce, then verifies the
+  raw owner signature before adding the private lease binding. A pre-existing
+  `SignedDepositWalletBatch`, including an older same-nonce batch, is not
+  accepted under a fresh lease.
 - `poll_transaction(transaction_id, poll_policy)`: polls under a bounded policy
   until terminal success or terminal failure, preserving unknown states.
 

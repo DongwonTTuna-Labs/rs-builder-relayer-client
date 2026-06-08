@@ -463,9 +463,10 @@ async fn sign_and_submit_batch_with_lease(
     gate: DepositWalletMutationGate,
     lease: DepositWalletNonceLease,
 ) -> Result<DepositWalletTransactionReceipt> {
+    let signature = wallet_batch_owner_signature_fixture();
     client
         .sign_and_submit_wallet_batch_with_nonce_lease(lease, gate, |ctx| {
-            ctx.validate_signed_batch(signed)
+            ctx.validate_batch_signature(signed.deadline(), signed.calls().to_vec(), &signature)
         })
         .await
 }
@@ -518,6 +519,13 @@ fn signed_wallet_batch_fixture() -> SignedDepositWalletBatch {
     };
     validate_deposit_wallet_batch_signature(batch, data["ownerSignature"].as_str().unwrap())
         .unwrap()
+}
+
+fn wallet_batch_owner_signature_fixture() -> String {
+    fixture_value("wallet_batch_eip712.json")["ownerSignature"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn manual_reconciliation_evidence(
@@ -1174,6 +1182,7 @@ async fn aborted_submit_after_post_boundary_leaves_ambiguous_owner_block() {
 async fn sign_and_submit_wallet_batch_with_nonce_lease_sends_fixture_body() {
     let expected = fixture_value("wallet_signed_http_submit_request.json");
     let signed = signed_wallet_batch_fixture();
+    let signature = wallet_batch_owner_signature_fixture();
     let owner = signed.owner();
     let (url, handle) = spawn_server(vec![
         TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
@@ -1200,7 +1209,7 @@ async fn sign_and_submit_wallet_batch_with_nonce_lease_sends_fixture_body() {
             assert_eq!(ctx.deposit_wallet(), expected_deposit_wallet);
             assert_eq!(ctx.chain_id(), expected_chain_id);
             assert_eq!(ctx.nonce(), expected_nonce);
-            ctx.validate_signed_batch(signed)
+            ctx.validate_batch_signature(signed.deadline(), signed.calls().to_vec(), &signature)
         })
         .await
         .unwrap();
@@ -1220,6 +1229,43 @@ async fn sign_and_submit_wallet_batch_with_nonce_lease_sends_fixture_body() {
         serde_json::from_str::<Value>(&requests[1].body).unwrap(),
         expected["body"]
     );
+}
+
+#[tokio::test]
+async fn pre_existing_same_nonce_signed_batch_cannot_be_rebound_before_auth_or_post() {
+    let signed = signed_wallet_batch_fixture();
+    let owner = signed.owner();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+
+    let lease = client
+        .get_wallet_nonce_with_lease(owner, wallet_nonce_read_permit_for(owner))
+        .await
+        .unwrap();
+    let error = client
+        .sign_and_submit_wallet_batch_with_nonce_lease(
+            lease,
+            wallet_batch_permit_for(owner),
+            |ctx| ctx.validate_signed_batch(signed),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("not produced by the current WALLET nonce lease signing context")
+    );
+    assert!(client.ambiguous_submit_block(owner).is_none());
+    client.ensure_owner_unblocked(owner).unwrap();
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
 }
 
 #[tokio::test]
@@ -1258,6 +1304,7 @@ async fn unbound_same_nonce_signed_batch_is_rejected_before_auth_or_post() {
 #[tokio::test]
 async fn stale_bound_same_nonce_signed_batch_is_rejected_before_auth_or_post() {
     let signed = signed_wallet_batch_fixture();
+    let signature = wallet_batch_owner_signature_fixture();
     let owner = signed.owner();
     let (url, handle) = spawn_server(vec![
         TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
@@ -1276,7 +1323,11 @@ async fn stale_bound_same_nonce_signed_batch_is_rejected_before_auth_or_post() {
             first_lease,
             wallet_batch_permit_for(owner),
             |ctx| {
-                stale_signed = Some(ctx.validate_signed_batch(signed.clone())?);
+                stale_signed = Some(ctx.validate_batch_signature(
+                    signed.deadline(),
+                    signed.calls().to_vec(),
+                    &signature,
+                )?);
                 Err(RelayerError::Signing(
                     "unit-test stops after binding stale signed batch".to_string(),
                 ))
