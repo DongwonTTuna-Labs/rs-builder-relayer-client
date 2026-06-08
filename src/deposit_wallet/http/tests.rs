@@ -1926,6 +1926,19 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
         .as_object_mut()
         .unwrap()
         .remove("owner");
+    let mut missing_state =
+        wallet_create_transaction_response_value("tx-reconcile-poll-missing-state", "STATE_CONFIRMED");
+    missing_state.as_object_mut().unwrap().remove("state");
+    let mut non_string_state = wallet_create_transaction_response_value(
+        "tx-reconcile-poll-non-string-state",
+        "STATE_CONFIRMED",
+    );
+    non_string_state["state"] = json!(137);
+    let mut matching_array_malformed_state = wallet_create_transaction_response_value(
+        "tx-reconcile-poll-array-malformed-state",
+        "STATE_CONFIRMED",
+    );
+    matching_array_malformed_state["state"] = json!(137);
     for (transaction_id, transaction_response) in [
         (
             "tx-reconcile-poll-unknown",
@@ -1940,6 +1953,15 @@ async fn reconciliation_required_poll_transitions_inflight_to_ambiguous_block() 
             confirmed_empty_hash,
         ),
         ("tx-reconcile-poll-missing-owner", missing_owner_evidence),
+        ("tx-reconcile-poll-missing-state", missing_state),
+        ("tx-reconcile-poll-non-string-state", non_string_state),
+        (
+            "tx-reconcile-poll-array-malformed-state",
+            json!([
+                wallet_create_transaction_response_value("other-tx", "STATE_CONFIRMED"),
+                matching_array_malformed_state
+            ]),
+        ),
     ] {
         let (url, handle) = spawn_server(vec![
             TestResponse::json(
@@ -3529,7 +3551,7 @@ fn transaction_response_rejects_partial_required_fields() {
             .unwrap_err()
             .error;
         assert!(
-            matches!(object_error, RelayerError::Other(ref message) if message.contains("could not parse transaction response object")),
+            object_error.is_deposit_wallet_reconciliation_required(),
             "{label}: {object_error}"
         );
 
@@ -3546,7 +3568,7 @@ fn transaction_response_rejects_partial_required_fields() {
             }
             "missing state" | "non-string state" => {
                 assert!(
-                    matches!(array_error, RelayerError::Other(ref message) if message.contains("could not parse transaction response array")),
+                    array_error.is_deposit_wallet_reconciliation_required(),
                     "{label}: {array_error}"
                 );
             }

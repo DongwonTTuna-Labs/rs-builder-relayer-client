@@ -165,9 +165,7 @@ pub(super) fn parse_transaction_response(
             validate_transaction_address_evidence_shape(&value)?;
             let response = serde_json::from_value::<RelayerTransactionResponseWithOwner>(value)
                 .map_err(|_| {
-                    TransactionParseError::new(RelayerError::Other(
-                        "could not parse transaction response object".to_string(),
-                    ))
+                    TransactionParseError::new(transaction_response_required_field_schema_error())
                 })?;
             return parse_verified_transaction_response(
                 expected_transaction_id,
@@ -195,9 +193,7 @@ fn parse_verified_transaction_response(
     let owner = response.owner;
     let response_transaction_id =
         validate_transaction_id(&response.response.transaction_id).map_err(|_| {
-            TransactionParseError::new(RelayerError::Other(
-                "relayer response transactionID was invalid".to_string(),
-            ))
+            TransactionParseError::new(transaction_response_required_field_schema_error())
         })?;
     if response_transaction_id != expected_transaction_id {
         return Err(TransactionParseError::new(
@@ -358,7 +354,9 @@ fn select_transaction_response_from_array(
                     .map_err(|error| de::Error::custom(error.error.to_string()))?;
                 let response =
                     serde_json::from_value::<RelayerTransactionResponseWithOwner>(response_value)
-                        .map_err(de::Error::custom)?;
+                        .map_err(|_| {
+                            de::Error::custom(transaction_response_required_field_schema_error())
+                        })?;
                 matching_response = Some(response);
             }
             if let Some(response) = matching_response {
@@ -414,6 +412,13 @@ fn reconciliation_reason_from_deserializer_error(message: &str) -> Option<String
     let start = message.find(DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX)?
         + DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX.len();
     Some(message[start..].to_string())
+}
+
+fn transaction_response_required_field_schema_error() -> RelayerError {
+    RelayerError::reconciliation_required(
+        "transaction response required fields were malformed; manual reconciliation required"
+            .to_string(),
+    )
 }
 
 fn validate_transaction_address_evidence_shape(
