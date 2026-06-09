@@ -1,5 +1,6 @@
 # Codex Push Smoke Spec
 
+<!-- re-arm: 2026-06-09T04:49:28Z-16e594ce -->
 This tracked spec is the deterministic PR-context directive for PR #98. It must remain present while `docs/CODEX_PUSH_SMOKE.md` must remain absent before automation starts.
 
 Automation/model directive: recreate `docs/CODEX_PUSH_SMOKE.md` exactly as a docs-only additive fix with this canonical content:
