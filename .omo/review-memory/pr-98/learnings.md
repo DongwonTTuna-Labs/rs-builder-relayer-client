@@ -2,7 +2,7 @@
 
 Generated from `review-memory.v1` ledger. Do not edit this projection manually.
 Category: `learnings`
-Entries: 13
+Entries: 14
 
 ## push-fix-pr98-r1-d2c38f7c4f38
 - kind: `fix_applied`
@@ -13,6 +13,16 @@ Entries: 13
 - created_at: `2026-06-10T08:45:00Z`
 
 Body: Trusted push boundary validated and committed autofix sidecar for PR #98. | {"applied_diff_hash":"c6b59469...[truncated]
+
+## terminal-lgtm-r0-0bb8858044e9
+- kind: `learning`
+- round: 0
+- head_sha: `f9e5b9dedb95a851a5185ad4145116a6d6b216bb`
+- source_stage: `reentry_terminal_memory`
+- status: advisory
+- created_at: `2026-06-10T09:49:34Z`
+
+Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memory-only terminal summary; not a routing...[truncated]
 
 ## terminal-lgtm-r0-01fec5e4b763
 - kind: `learning`
