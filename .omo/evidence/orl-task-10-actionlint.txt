@@ -19,10 +19,10 @@ Observed results:
 - PyYAML parse PASS: both workflow files parse as YAML.
 - Static assertion PASS: trigger is `pull_request` only with exact required types, and `pull_request_target` is absent.
 - Static assertion PASS: permissions are `{}` and the concurrency group is `orl-${{ github.event.pull_request.number }}` with `cancel-in-progress: true`.
-- Static assertion PASS: PAT auth prefers `secrets.GRIMOIRE_PAT`, falls back to runner `CODEX_LOOP_PAT`, masks the selected value, and manual checkout uses a PAT-derived auth header.
+- Static assertion PASS: PAT auth prefers `secrets.GRIMOIRE_PAT`, falls back to runner `CODEX_LOOP_PAT`, masks the selected value, uses pinned `actions/checkout` with `token: ${{ secrets.GRIMOIRE_PAT }}` for the secret source, and keeps a PAT-derived manual checkout fallback for runner env auth.
 - Static assertion PASS: no default-token auth literal is present in `.github/workflows/grimoire.yml`.
 - Static assertion PASS: no forbidden write/admin permissions are requested.
-- Static assertion PASS: no `uses:` floating refs and no unpinned opencode install URL are present; opencode/OMO package versions are explicit env pins.
+- Static assertion PASS: no `uses:` floating refs and no unpinned opencode install URL are present; `actions/checkout` is pinned to SHA `11bd71901bbe5b1630ceea73d27597364c9af683`, and opencode/OMO package versions are explicit env pins.
 - Static assertion PASS: missing driver check exits nonzero before the driver call; current repo has no `.github/scripts/grimoire-cast.sh`, so ready PR execution intentionally fails closed until Task 11.
 
 RESULT: PASS

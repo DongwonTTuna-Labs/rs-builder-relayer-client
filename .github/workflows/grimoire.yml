@@ -106,10 +106,21 @@ jobs:
             printf '__GRIMOIRE_GH_TOKEN__\n'
             printf 'GRIMOIRE_PAT_SOURCE=%s\n' "${source}"
           } >> "${GITHUB_ENV}"
+          printf 'source=%s\n' "${source}" >> "${GITHUB_OUTPUT}"
           printf 'grimoire auth: selected PAT source %s\n' "${source}"
 
-      - name: Checkout PR head with PAT-only git
-        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+      - name: Checkout PR head with GRIMOIRE_PAT
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.pat-auth.outputs.source == 'secret' }}
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 50
+          persist-credentials: false
+          token: ${{ secrets.GRIMOIRE_PAT }}
+
+      - name: Checkout PR head with runner PAT fallback
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.pat-auth.outputs.source == 'runner-env' }}
         shell: bash
         env:
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
