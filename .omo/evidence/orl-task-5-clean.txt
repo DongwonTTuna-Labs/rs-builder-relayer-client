@@ -1,0 +1,40 @@
+# Grimoire Task 5 Clean Fixture Evidence
+
+Timestamp: 2026-06-11T03:20:00Z
+Scope: `.github/scripts/grimoire-review.sh` clean fixture, CLI surface, and JSON approval signal.
+Secrets: no secret values were printed or recorded.
+
+## Commands and Results
+
+### CLI surface
+Command: `./.github/scripts/grimoire-review.sh --help`
+Expected: exit 0 and useful usage text documenting modes, default output, and JSON contract.
+Observed: exit 0. Help text listed `--mode`, `--fixture`, `--input`, `--output`, `--repo-root`, `--help`, default `.omo/ci/review-findings.json`, root JSON fields, and finding fields.
+Result: PASS
+
+Command: `if ./.github/scripts/grimoire-review.sh --bad-option >/tmp/grimoire-review-bad.out 2>&1; then exit 99; else rc=$?; test "$rc" -eq 2; fi`
+Expected: exit 0 from wrapper proving bad option returned 2.
+Observed: exit 0.
+Result: PASS
+
+### Manual CLI QA through terminal surface
+Command: tmux session `grimoire-review-qa`; ran `./.github/scripts/grimoire-review.sh --help`, bad-option wrapper, and `./.github/scripts/grimoire-review.sh --mode mock-clean --output /tmp/grimoire-review-tmux-clean.json`.
+Expected: help renders, bad input returns `RC:2`, clean mode writes approval artifact.
+Observed: terminal capture showed help text, `RC:2`, and `grimoire-review: wrote clean review artifact to /tmp/grimoire-review-tmux-clean.json`.
+Result: PASS
+
+### Clean fixture
+Command: `./.github/scripts/grimoire-review.sh --mode mock-clean --fixture /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/clean.diff --output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/review-clean.json`
+Expected: exit 0, zero findings, and clear approval signal.
+Observed: `grimoire-review: wrote clean review artifact to .../review-clean.json`.
+Result: PASS
+
+Command: `python3 -m json.tool /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/review-clean.json >/dev/null`
+Expected: valid JSON.
+Observed: exit 0.
+Result: PASS
+
+Command: Python clean-contract assertion over `review-clean.json`.
+Expected: `status=approved`, `approval_signal=GRIMOIRE_REVIEW_APPROVED`, `read_only=true`, `mutation_allowed=false`, and `findings=[]`.
+Observed: `PASS clean contract approval=GRIMOIRE_REVIEW_APPROVED findings=0`.
+Result: PASS

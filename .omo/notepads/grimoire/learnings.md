@@ -251,3 +251,11 @@
 - Marker placement is current and idempotent: `OMO_CI_AUTONOMOUS_V1` appears exactly once in `opencode.json`, at the end of `agent.momus.prompt_append`. Rerunning the same config merge should replace/keep the same values, not append duplicate marker text.
 - `opencode agent list` with isolated HOME/XDG and placeholder relay env resolved Atlas, Sisyphus, Prometheus, `explore`, and Momus. It generated ignored `.opencode` npm artifacts, which were removed; `.opencode` contains only `oh-my-openagent.jsonc` afterward.
 - Best-effort live Prometheus no-ask smoke is blocked locally: a temp-project `opencode run --agent prometheus --format json` attempt exceeded the 180s tool timeout despite `AI_RELAY_API_KEY` being present by name. No no-Question transcript is claimed; Task 4 evidence is static/config-load plus honest blocker documentation until live CI can run after default-branch workflow availability.
+
+## 2026-06-11 - grimoire task 5 review stage implementation
+
+- `.github/scripts/grimoire-review.sh` now owns the Task 5 review contract and writes `.omo/ci/review-findings.json` by default with `status`, `approval_signal`, `read_only`, `mutation_allowed`, and a stable `findings` array for Task 6.
+- The four review lenses are fixed as `security`, `correctness`, `maintainability`, and `repo-policy`; the real-mode prompt includes AGENTS.md priorities for secret hygiene, wire-format caution, auth identity separation, no branch-pin production dependency, no venue-facing guesswork, and read-only review boundaries.
+- Local mock review evidence is deterministic: `mock-defect` scans unified diffs or plain files for `GRIMOIRE_REVIEW_DEFECT` and emits exact file/line findings, while `mock-clean` emits `GRIMOIRE_REVIEW_APPROVED` with zero findings.
+- Real mode is fail-closed and read-only by construction: before any model invocation it requires `AI_RELAY_API_KEY`, `opencode`, and `GRIMOIRE_TEAM_MODE_ENABLED=1`, sets `OPENCODE_PERMISSION` to deny edit/bash/task/webfetch/external-directory/question/plan changes, and avoids `--pure` so project OMO config can load.
+- Local Task 5 verification passed for help, bad-option rejection, `bash -n`, shellcheck, JSON syntax, clean/defect contract assertions, exact defect location `src/demo.rs:3`, terminal-surface manual QA, and real-mode blocked JSON. No live Team Mode/model success is claimed.

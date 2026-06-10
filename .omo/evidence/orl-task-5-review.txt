@@ -1,0 +1,82 @@
+# Grimoire Task 5 Review Fixture Evidence
+
+Timestamp: 2026-06-11T03:20:00Z
+Scope: `.github/scripts/grimoire-review.sh` deterministic defect fixture and real-mode readiness gate.
+Secrets: no secret values were printed or recorded.
+
+## Commands and Results
+
+### Syntax and shell lint
+Command: `bash -n .github/scripts/grimoire-review.sh`
+Expected: exit 0.
+Observed: exit 0.
+Result: PASS
+
+Command: `command -v shellcheck`
+Expected: shellcheck path or honest unavailable note.
+Observed: `/opt/homebrew/bin/shellcheck`.
+Result: PASS
+
+Command: `shellcheck .github/scripts/grimoire-review.sh`
+Expected: exit 0.
+Observed: exit 0.
+Result: PASS
+
+### Defect fixture
+Command: `./.github/scripts/grimoire-review.sh --mode mock-defect --fixture /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/defect.diff --output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/review-defect.json`
+Expected: exit 0 and one finding for `GRIMOIRE_REVIEW_DEFECT`.
+Observed: `grimoire-review: wrote defect review artifact to .../review-defect.json`.
+Result: PASS
+
+Command: `python3 -m json.tool /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/review-defect.json >/dev/null`
+Expected: valid JSON.
+Observed: exit 0.
+Result: PASS
+
+Command: Python contract assertion over `review-defect.json`.
+Expected: root fields `status`, `approval_signal`, `read_only`, `mutation_allowed`, `findings`; one finding with all required fields; `file=src/demo.rs`; `line=3`.
+Observed: `PASS defect contract file=src/demo.rs line=3 findings=1`.
+Result: PASS
+
+### Read-only proof
+Command: `GIT_MASTER=1 git status --short` after local scenarios and before evidence/notepad edits.
+Expected: no source changes from running the fixture; runtime output written outside the repository.
+Observed: `?? .github/scripts/` only. No Rust source, docs, workflow, or `.omo/ci/review-findings.json` tracked change was produced by the review scenario.
+Result: PASS
+
+### Real-mode fail-closed gate
+Command: `./.github/scripts/grimoire-review.sh --mode real --output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/review-real-blocked.json`
+Expected: nonzero exit and blocked JSON unless `GRIMOIRE_TEAM_MODE_ENABLED=1`, relay auth, and `opencode` are ready.
+Observed: wrapper verified exit 1.
+Result: PASS
+
+Command: `python3 -m json.tool /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task5-review/review-real-blocked.json >/dev/null`
+Expected: valid JSON.
+Observed: exit 0.
+Result: PASS
+
+Command: Python blocked-contract assertion over `review-real-blocked.json`.
+Expected: `status=blocked`, `approval_signal=GRIMOIRE_REVIEW_BLOCKED`, `read_only=true`, `mutation_allowed=false`, `findings=[]`, and blocker includes missing `GRIMOIRE_TEAM_MODE_ENABLED=1` readiness.
+Observed: `PASS real-mode fail-closed contract blockers=1`.
+Result: PASS
+
+### Hygiene scans
+Command: `/opt/homebrew/bin/rg -n "TODO|FIXME|HACK|xxx" .github/scripts/grimoire-review.sh .omo/evidence/orl-task-5-review.txt .omo/evidence/orl-task-5-clean.txt`
+Expected: no matches.
+Observed: no matches.
+Result: PASS
+
+Command: Python scan of the appended Task 5 notepad sections for `TODO`, `FIXME`, `HACK`, and `xxx`.
+Expected: no matches in new Task 5 sections.
+Observed: `PASS task5 notepad appended sections contain no TODO/FIXME/HACK/xxx`.
+Result: PASS
+
+Command: `/opt/homebrew/bin/rg -n "GITHUB_TOKEN|github_pat_|gh[pousr]_|PRIVATE KEY|AI_RELAY_API_KEY=.*|GRIMOIRE_PAT=.*|CODEX_LOOP_PAT=.*" .github/scripts/grimoire-review.sh .omo/evidence/orl-task-5-review.txt .omo/evidence/orl-task-5-clean.txt`
+Expected: no secret-shaped values or forbidden token usage.
+Observed: no matches.
+Result: PASS
+
+Command: `/opt/homebrew/bin/rg -n -- "--pure|GITHUB_TOKEN|GitHub App|gh pr|gh api|git push|git commit|git add|pull_request comment|label create" .github/scripts/grimoire-review.sh`
+Expected: no forbidden live GitHub mutation, git mutation, or pure-mode operation in the review script.
+Observed: no matches.
+Result: PASS
