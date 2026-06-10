@@ -2,7 +2,7 @@
 
 Generated from `review-memory.v1` ledger. Do not edit this projection manually.
 Category: `learnings`
-Entries: 19
+Entries: 20
 
 ## push-fix-pr98-r1-d2c38f7c4f38
 - kind: `fix_applied`
@@ -12,7 +12,17 @@ Entries: 19
 - status: advisory
 - created_at: `2026-06-10T08:45:00Z`
 
-Body: Trusted push boundary validated and committed autofix sidecar for...[truncated]
+Body: Trusted push boundary vali...[truncated]
+
+## terminal-lgtm-r0-1d8f064aadbf
+- kind: `learning`
+- round: 0
+- head_sha: `42817ed8eb5dd5d0e75095d55f0d31b6327101bd`
+- source_stage: `reentry_terminal_memory`
+- status: advisory
+- created_at: `2026-06-10T10:16:32Z`
+
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-441e650d7854
 - kind: `learning`
@@ -22,7 +32,7 @@ Body: Trusted push boundary validated and committed autofix sidecar for...[trunc
 - status: advisory
 - created_at: `2026-06-10T10:12:20Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-cd428717cf3e
 - kind: `learning`
@@ -32,7 +42,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T10:07:34Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-7099da1a81bc
 - kind: `learning`
@@ -42,7 +52,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T10:02:44Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-fb400f49c216
 - kind: `learning`
@@ -52,7 +62,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:58:19Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-16ce17d74d55
 - kind: `learning`
@@ -62,7 +72,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:53:47Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-0bb8858044e9
 - kind: `learning`
@@ -72,7 +82,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:49:34Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-01fec5e4b763
 - kind: `learning`
@@ -82,7 +92,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:44:57Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-b1a8aaac6520
 - kind: `learning`
@@ -92,7 +102,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:40:13Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-e90563c29c49
 - kind: `learning`
@@ -102,7 +112,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:35:22Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-70baa0408a57
 - kind: `learning`
@@ -112,7 +122,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:30:49Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-5c9588ed9937
 - kind: `learning`
@@ -122,7 +132,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:25:43Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-411ded713f15
 - kind: `learning`
@@ -132,7 +142,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:21:53Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-51c10180a044
 - kind: `learning`
@@ -142,7 +152,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:16:53Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-799b579f5f2d
 - kind: `learning`
@@ -152,7 +162,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:11:32Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-4409e87dec77
 - kind: `learning`
@@ -162,7 +172,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:05:34Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-fc81edf3974b
 - kind: `learning`
@@ -172,7 +182,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T09:00:18Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-b4222a091134
 - kind: `learning`
@@ -182,7 +192,7 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T08:55:09Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-0fdaa5d1488e
 - kind: `learning`
@@ -192,4 +202,4 @@ Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[trun
 - status: advisory
 - created_at: `2026-06-10T08:50:03Z`
 
-Body: Terminal LGTM outcome recorded for review memory. | {"audit":"memo...[truncated]
+Body: Terminal LGTM outcome reco...[truncated]
