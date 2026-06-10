@@ -1,0 +1,79 @@
+# orl-task-9-reject evidence
+timestamp: 2026-06-10T19:45:45Z
+scope: REJECT, missing, invalid, and real-mode fail-closed scenarios
+
+COMMAND: .github/scripts/grimoire-verify.sh --mode mock-reject --output '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/reject.json'
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-verify: wrote mock REJECT verdict to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/reject.json
+RESULT: PASS
+
+COMMAND: python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); fields=["f1_oracle","f2_quality","f3_real_qa","f4_scope"]; assert p["schema_version"]==1 and p["stage"]=="grimoire-verify" and p["approved"] is False and any(p[f]=="REJECT" for f in fields) and isinstance(p["notes"], dict); print("approved=false contains_REJECT notes=object")' '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/reject.json'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+approved=false contains_REJECT notes=object
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --validate '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/reject.json'
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/reject.json does not satisfy all-APPROVE predicate
+RESULT: PASS
+
+COMMAND: jq -e "$(.github/scripts/grimoire-verify.sh --jq-expression)" '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/reject.json' >/dev/null
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --validate '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing.json'
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+jq: error: Could not open file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing.json: No such file or directory
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing.json does not satisfy all-APPROVE predicate
+RESULT: PASS
+
+COMMAND: jq -e "$(.github/scripts/grimoire-verify.sh --jq-expression)" '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing.json' >/dev/null
+EXPECTED: nonzero
+OBSERVED_EXIT: 2
+STDERR:
+jq: error: Could not open file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing.json: No such file or directory
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --mode mock-invalid --output '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/invalid.json'
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-verify: wrote invalid verdict fixture to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/invalid.json
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --validate '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/invalid.json'
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/invalid.json does not satisfy all-APPROVE predicate
+RESULT: PASS
+
+COMMAND: jq -e "$(.github/scripts/grimoire-verify.sh --jq-expression)" '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/invalid.json' >/dev/null
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+RESULT: PASS
+
+COMMAND: env -u AI_RELAY_API_KEY -u GRIMOIRE_VERIFY_READY .github/scripts/grimoire-verify.sh --mode real --output '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/blocked.json' --spec-sufficiency '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing-spec.json' --spec-gap-status '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing-gap.json' --fix-status '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/missing-fix.json'
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-verify: real mode blocked; REJECT artifact written to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/blocked.json
+RESULT: PASS
+
+COMMAND: python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); fields=["f1_oracle","f2_quality","f3_real_qa","f4_scope"]; assert p["schema_version"]==1 and p["stage"]=="grimoire-verify" and p["approved"] is False and all(p[f]=="REJECT" for f in fields) and p["blocked_reason"] and p["model_called"] is False and p["real_mode_attempted"] is True; print("blocked real-mode verdict is fail-closed REJECT")' '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-reject.sJ1fRp/blocked.json'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+blocked real-mode verdict is fail-closed REJECT
+RESULT: PASS
+
+OVERALL: PASS

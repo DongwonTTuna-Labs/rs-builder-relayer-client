@@ -267,3 +267,11 @@
 - Deterministic local modes are model-free: `mock-sufficient` binds findings by title, binding key, or `file:line` token in supplied OpenSpec evidence; `mock-insufficient` records concrete missing items and overwrites stale plan content with a halt-only markdown artifact.
 - Real mode is fail-closed before any model call unless `AI_RELAY_API_KEY`, `opencode`, `GRIMOIRE_DESIGN_READY=1`, and `GRIMOIRE_TEAM_MODE_ENABLED=1` are present. The prompt uses Prometheus, avoids `--pure`, and constrains planning to markdown-only `.omo` paths with no GitHub mutation.
 - Local Task 6 verification passed for help, invalid option, `bash -n`, shellcheck, sufficient JSON/plan citation validation, insufficient JSON/halt/no-stale-plan validation, and real-mode blocked JSON. No live Prometheus/model success is claimed.
+
+## 2026-06-10T19:46:00Z - grimoire task 9 F1-F4 verification contract
+
+- `.github/scripts/grimoire-verify.sh` now owns the Task 9 verdict contract and writes `.omo/grimoire/verdict.json` by default unless `--output` overrides it.
+- The driver-facing `--jq-expression` requires `schema_version == 1`, `stage == "grimoire-verify"`, a `notes` object with per-lens note objects, all four F fields exactly `APPROVE`, and `approved == true`; missing, malformed, invalid, or `REJECT` verdicts fail closed.
+- `approved` is derived from the four enum fields inside the script-generated payloads, not accepted from free-form text. Mock modes are deterministic: `mock-approve` exits 0 and satisfies the predicate, while `mock-reject`, `mock-invalid`, missing verdict validation, and real-mode blocked prerequisites exit nonzero.
+- Real mode checks Task 6 `.omo/ci/spec-sufficiency.json`, Task 7 `.omo/ci/spec-gap-status.json`, and Task 8 `.omo/ci/fix-status.json` before any model call, then also requires `AI_RELAY_API_KEY`, `opencode`, and `GRIMOIRE_VERIFY_READY=1`. Missing prerequisites write a REJECT/blocked verdict instead of approving.
+- Local Task 9 verification passed for help, invalid option, `bash -n`, shellcheck, jq expression emission, mock all-APPROVE validation, reject/missing/invalid fail-closed checks, default output creation/removal, and real-mode blocked JSON. No live F1-F4 model success is claimed.

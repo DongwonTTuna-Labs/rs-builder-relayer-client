@@ -1,0 +1,253 @@
+# orl-task-9-approve evidence
+timestamp: 2026-06-10T19:45:02Z
+scope: all-APPROVE fixture, jq predicate, syntax/help/shellcheck, default output proof
+
+COMMAND: bash -n .github/scripts/grimoire-verify.sh
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --help
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+Usage: grimoire-verify.sh [options]
+
+F1-F4 grimoire verification stage. Writes and validates the machine-readable
+Task 9 verdict JSON used by the driver termination gate.
+
+Options:
+  --mode MODE                real, mock-approve, mock-reject, mock-invalid,
+                             or validate. Default: real.
+  --output PATH              Verdict output path. Default: .omo/grimoire/verdict.json.
+  --input PATH               Verdict input path for validate mode. Default: --output.
+  --validate PATH            Validate PATH with the driver all-APPROVE predicate.
+  --jq-expression            Print the exact jq predicate used for termination.
+  --spec-sufficiency PATH    Task 6 JSON prerequisite. Default: .omo/ci/spec-sufficiency.json.
+  --spec-gap-status PATH     Task 7 JSON prerequisite. Default: .omo/ci/spec-gap-status.json.
+  --fix-status PATH          Task 8 JSON prerequisite. Default: .omo/ci/fix-status.json.
+  --repo-root PATH           Repository root for real-mode opencode execution.
+  --help                     Show this help text.
+
+Verdict JSON contract:
+  Required root fields: schema_version, stage, approved, f1_oracle,
+  f2_quality, f3_real_qa, f4_scope, and notes. Each F field is an enum:
+  APPROVE or REJECT. The script derives approved=true only when all four
+  F fields are exactly APPROVE.
+
+Driver jq predicate:
+  Use --jq-expression to print the stable predicate. The predicate requires
+  schema_version=1, stage="grimoire-verify", a notes object with per-lens
+  objects, all four F fields exactly APPROVE, and approved=true. Missing files,
+  malformed JSON, missing keys, invalid verdicts, and any REJECT fail closed.
+
+Modes:
+  mock-approve  Deterministic local mode. Writes all F fields APPROVE and exits 0.
+  mock-reject   Deterministic local mode. Writes a valid REJECT verdict and exits nonzero.
+  mock-invalid  Deterministic local negative fixture. Writes malformed contract JSON and exits nonzero.
+  validate      Does not write. Validates --input/--output using jq when available,
+                otherwise a Python equivalent of the same all-APPROVE predicate.
+  real          Validates Task 6/7/8 machine prerequisites before any model call,
+                then requires AI_RELAY_API_KEY, opencode, and
+                GRIMOIRE_VERIFY_READY=1. Missing or malformed prerequisites write
+                a REJECT/blocked artifact and exit nonzero.
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --bad-option
+EXPECTED: nonzero
+OBSERVED_EXIT: 2
+STDERR:
+grimoire-verify: unknown option: --bad-option
+
+Usage: grimoire-verify.sh [options]
+
+F1-F4 grimoire verification stage. Writes and validates the machine-readable
+Task 9 verdict JSON used by the driver termination gate.
+
+Options:
+  --mode MODE                real, mock-approve, mock-reject, mock-invalid,
+                             or validate. Default: real.
+  --output PATH              Verdict output path. Default: .omo/grimoire/verdict.json.
+  --input PATH               Verdict input path for validate mode. Default: --output.
+  --validate PATH            Validate PATH with the driver all-APPROVE predicate.
+  --jq-expression            Print the exact jq predicate used for termination.
+  --spec-sufficiency PATH    Task 6 JSON prerequisite. Default: .omo/ci/spec-sufficiency.json.
+  --spec-gap-status PATH     Task 7 JSON prerequisite. Default: .omo/ci/spec-gap-status.json.
+  --fix-status PATH          Task 8 JSON prerequisite. Default: .omo/ci/fix-status.json.
+  --repo-root PATH           Repository root for real-mode opencode execution.
+  --help                     Show this help text.
+
+Verdict JSON contract:
+  Required root fields: schema_version, stage, approved, f1_oracle,
+  f2_quality, f3_real_qa, f4_scope, and notes. Each F field is an enum:
+  APPROVE or REJECT. The script derives approved=true only when all four
+  F fields are exactly APPROVE.
+
+Driver jq predicate:
+  Use --jq-expression to print the stable predicate. The predicate requires
+  schema_version=1, stage="grimoire-verify", a notes object with per-lens
+  objects, all four F fields exactly APPROVE, and approved=true. Missing files,
+  malformed JSON, missing keys, invalid verdicts, and any REJECT fail closed.
+
+Modes:
+  mock-approve  Deterministic local mode. Writes all F fields APPROVE and exits 0.
+  mock-reject   Deterministic local mode. Writes a valid REJECT verdict and exits nonzero.
+  mock-invalid  Deterministic local negative fixture. Writes malformed contract JSON and exits nonzero.
+  validate      Does not write. Validates --input/--output using jq when available,
+                otherwise a Python equivalent of the same all-APPROVE predicate.
+  real          Validates Task 6/7/8 machine prerequisites before any model call,
+                then requires AI_RELAY_API_KEY, opencode, and
+                GRIMOIRE_VERIFY_READY=1. Missing or malformed prerequisites write
+                a REJECT/blocked artifact and exit nonzero.
+RESULT: PASS
+
+COMMAND: if command -v shellcheck >/dev/null 2>&1; then shellcheck .github/scripts/grimoire-verify.sh; else printf "%s\n" SHELLCHECK_UNAVAILABLE; fi
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --jq-expression > '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/expression.txt' && python3 -c 'import pathlib,sys; text=pathlib.Path(sys.argv[1]).read_text(); assert "schema_version == 1" in text and "approved == true" in text and "f4_scope" in text; print(text, end="")' '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/expression.txt'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+type == "object" and .schema_version == 1 and .stage == "grimoire-verify" and (.notes | type == "object") and (.notes.f1_oracle | type == "object") and (.notes.f2_quality | type == "object") and (.notes.f3_real_qa | type == "object") and (.notes.f4_scope | type == "object") and .f1_oracle == "APPROVE" and .f2_quality == "APPROVE" and .f3_real_qa == "APPROVE" and .f4_scope == "APPROVE" and .approved == true
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --mode mock-approve --output '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/approve.json'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+grimoire-verify: wrote mock APPROVE verdict to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/approve.json
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-verify.sh --validate '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/approve.json'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/approve.json satisfies all-APPROVE predicate
+RESULT: PASS
+
+COMMAND: jq -e "$(.github/scripts/grimoire-verify.sh --jq-expression)" '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/approve.json' >/dev/null
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); fields=["f1_oracle","f2_quality","f3_real_qa","f4_scope"]; assert p["schema_version"]==1 and p["stage"]=="grimoire-verify" and p["approved"] is True and all(p[f]=="APPROVE" for f in fields) and isinstance(p["notes"], dict) and all(isinstance(p["notes"].get(f), dict) for f in fields); print("approved=true all_f=APPROVE notes=object")' '/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-task9-approve.k2ZsoY/approve.json'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+approved=true all_f=APPROVE notes=object
+RESULT: PASS
+
+COMMAND: rm -f .omo/grimoire/verdict.json && .github/scripts/grimoire-verify.sh --mode mock-approve && test -s .omo/grimoire/verdict.json && .github/scripts/grimoire-verify.sh --validate .omo/grimoire/verdict.json && rm -f .omo/grimoire/verdict.json
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+grimoire-verify: wrote mock APPROVE verdict to .omo/grimoire/verdict.json
+grimoire-verify: .omo/grimoire/verdict.json satisfies all-APPROVE predicate
+RESULT: PASS
+
+# post-edit executable verification: 2026-06-10T19:49:00Z
+
+COMMAND: test -x .github/scripts/grimoire-verify.sh
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/grimoire-verify-final.XXXXXX") && approve="$tmp_dir/approve.json" && reject="$tmp_dir/reject.json" && invalid="$tmp_dir/invalid.json" && blocked="$tmp_dir/blocked.json" && .github/scripts/grimoire-verify.sh --mode mock-approve --output "$approve" && .github/scripts/grimoire-verify.sh --validate "$approve" && if .github/scripts/grimoire-verify.sh --mode mock-reject --output "$reject"; then exit 10; fi && if .github/scripts/grimoire-verify.sh --validate "$reject"; then exit 11; fi && if .github/scripts/grimoire-verify.sh --validate "$tmp_dir/missing.json"; then exit 12; fi && if .github/scripts/grimoire-verify.sh --mode mock-invalid --output "$invalid"; then exit 13; fi && if .github/scripts/grimoire-verify.sh --validate "$invalid"; then exit 14; fi && if env -u AI_RELAY_API_KEY -u GRIMOIRE_VERIFY_READY .github/scripts/grimoire-verify.sh --mode real --output "$blocked" --spec-sufficiency "$tmp_dir/missing-spec.json" --spec-gap-status "$tmp_dir/missing-gap.json" --fix-status "$tmp_dir/missing-fix.json"; then exit 15; fi && python3 - "$approve" "$reject" "$invalid" "$blocked" <<'PY'
+import json, pathlib, sys
+approve, reject, invalid, blocked = map(pathlib.Path, sys.argv[1:])
+a=json.loads(approve.read_text())
+r=json.loads(reject.read_text())
+i=json.loads(invalid.read_text())
+b=json.loads(blocked.read_text())
+fields=["f1_oracle","f2_quality","f3_real_qa","f4_scope"]
+assert a["approved"] is True and all(a[f] == "APPROVE" for f in fields)
+assert r["approved"] is False and any(r[f] == "REJECT" for f in fields)
+assert i["f2_quality"] == "MAYBE"
+assert b["approved"] is False and b["model_called"] is False and b["real_mode_attempted"] is True
+print("FINAL_SCENARIO_SMOKE_PASS")
+PY
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+grimoire-verify: wrote mock APPROVE verdict to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/approve.json
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/approve.json satisfies all-APPROVE predicate
+grimoire-verify: wrote mock REJECT verdict to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/reject.json
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/reject.json does not satisfy all-APPROVE predicate
+jq: error: Could not open file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/missing.json: No such file or directory
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/missing.json does not satisfy all-APPROVE predicate
+grimoire-verify: wrote invalid verdict fixture to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/invalid.json
+grimoire-verify: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/invalid.json does not satisfy all-APPROVE predicate
+grimoire-verify: real mode blocked; REJECT artifact written to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T//grimoire-verify-final.lXRgYX/blocked.json
+FINAL_SCENARIO_SMOKE_PASS
+RESULT: PASS
+
+# final required gate summary: 2026-06-10T19:52:00Z
+
+COMMAND: cargo fmt --all --check
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: cargo clippy --workspace --all-targets --all-features -- -D warnings
+EXPECTED: 0
+OBSERVED_EXIT: 0
+OBSERVED: Finished `dev` profile without warnings.
+RESULT: PASS
+
+COMMAND: cargo test --workspace --all-features
+EXPECTED: 0
+OBSERVED_EXIT: 0
+OBSERVED: 118 Rust tests passed across unit/integration test binaries; doc-tests passed with 0 tests.
+RESULT: PASS
+
+COMMAND: GIT_MASTER=1 git diff --check
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: test ! -e .omo/grimoire/verdict.json
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: python3 - <<'PY'
+import re
+from pathlib import Path
+files = [
+    Path('.github/scripts/grimoire-verify.sh'),
+    Path('.omo/evidence/orl-task-9-approve.txt'),
+    Path('.omo/evidence/orl-task-9-reject.txt'),
+]
+patterns = {
+    'todo_marker': re.compile(r'TODO|FIXME|HACK|xxx'),
+    'unsafe_fallback': re.compile(r'\|\|\s*true'),
+    'secret_value_shape': re.compile(r'github_pat_|gh[pousr]_|BEGIN .*PRIVATE|AI_RELAY_API_KEY=.*|GRIMOIRE_PAT=.*|CODEX_LOOP_PAT=.*'),
+    'github_mutation': re.compile(r'\bgh\s+(api|pr|label|workflow)\b|\bgit\s+push\b|\bgit\s+merge\b|GITHUB_TOKEN'),
+    'freeform_approve_parser': re.compile(r'\b(grep|rg|sed|awk)\b.*APPROVE'),
+}
+for path in files:
+    text = path.read_text(encoding='utf-8')
+    if path.name == 'orl-task-9-approve.txt':
+        text = text.split('# final required gate summary:', 1)[0]
+    for name, pattern in patterns.items():
+        matches = [m.group(0) for m in pattern.finditer(text)]
+        if matches:
+            raise SystemExit(f'{path}: {name}: {matches[:3]}')
+for path, heading in [
+    (Path('.omo/notepads/grimoire/learnings.md'), '## 2026-06-10T19:46:00Z - grimoire task 9 F1-F4 verification contract'),
+    (Path('.omo/notepads/grimoire/issues.md'), '## 2026-06-10T19:46:00Z - grimoire task 9 live verification readiness caveat'),
+]:
+    text = path.read_text(encoding='utf-8')
+    section = text.split(heading, 1)[1]
+    if re.search(r'github_pat_|gh[pousr]_|BEGIN .*PRIVATE|AI_RELAY_API_KEY=.*|GRIMOIRE_PAT=.*|CODEX_LOOP_PAT=.*', section):
+        raise SystemExit(f'{path}: task9 section has secret-shaped value')
+print('SCOPED_HAZARD_SCAN_PASS')
+PY
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT: SCOPED_HAZARD_SCAN_PASS
+RESULT: PASS
+
+OVERALL: PASS
