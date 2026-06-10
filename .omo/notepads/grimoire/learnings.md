@@ -223,3 +223,19 @@
 
 - RESOLVED: `.omo/evidence/orl-task-2-config.txt` briefly contradicted itself by showing Atlas/Sisyphus/Prometheus/`explore` in `selected_output` while recording FAIL assertions. who=Task 2 evidence matcher script; what=assertion matcher did not reflect actual `opencode agent list` lines; when=post-Task-2 verification; why=the matcher was buggy evidence code, not a repo config or OMO load failure; how=re-ran `opencode agent list` from repo root with isolated HOME/XDG and rewrote the assertions as PASS with exact matched lines quoted.
 - Permanent `.opencode` artifact fix is now added to the tracked root `.gitignore`, not local `.git/info/exclude`: `.opencode/node_modules/`, `.opencode/package.json`, `.opencode/package-lock.json`, and `.opencode/.gitignore` are ignored while `.opencode/oh-my-openagent.jsonc` remains tracked. OpenCode also auto-writes a transient `.opencode/.gitignore` during plugin install, and that generated `.opencode/.gitignore` is itself ignored by the durable root rule. Investigation showed `.omo` is ignored by the user-level default file `/Users/dongwon/.config/git/ignore`, so required `.omo` evidence/notepad files still need explicit `git add -f`.
+
+## 2026-06-11 - grimoire task 3 secrets/provider/model mapping refresh
+
+- `gh secret list` was run name-only. It returned `CODEX_APP_ID`, `CODEX_APP_PRIVATE_KEY`, and `GRIMOIRE_PAT`; `GRIMOIRE_PAT` is present as a repo secret and `AI_RELAY_API_KEY` is absent as a repo secret.
+- The current secret-source model is dual-source for relay auth: workflow `AI_RELAY_API_KEY_SECRET` from repo secret first, runner-inherited `AI_RELAY_API_KEY` from the self-hosted runner docker env second. Absence of the repo secret is acceptable when runner env is the intended source.
+- Grimoire GitHub auth remains PAT-only: `GRIMOIRE_PAT` first, runner `CODEX_LOOP_PAT` fallback when present. Existing `CODEX_APP_ID`/`CODEX_APP_PRIVATE_KEY` are not used because GitHub App auth violates the grimoire PAT-only invariant.
+- `opencode.json` keeps the relay base URL in config, not in a secret. `.opencode/oh-my-openagent.jsonc` maps every CI agent/category to `ai-relay/gpt-5.5` with xhigh/medium/high variants; local Anthropic mappings for `sisyphus` and `prometheus` are replaced by `ai-relay/gpt-5.5` xhigh in CI.
+- Negative relay evidence for Task 3 references Task 2's missing-key model-call observation instead of re-running a live model call: missing key produced an error event without printing a key, and scripts must not trust exit code alone.
+
+## 2026-06-11 - grimoire task 3 CI secret/auth/model mapping stub
+
+- `docs/GRIMOIRE.md` was recreated as a Task 3 stub only: it records CI secret names, ai-relay provider wiring, PAT-only GitHub auth, model tier mapping, rotation, and least-privilege notes, while deferring the full architecture/operations guide to Task 18.
+- `AI_RELAY_API_KEY` is documented as dual-source: `secrets.AI_RELAY_API_KEY` enters the workflow as `AI_RELAY_API_KEY_SECRET` and wins first, runner-inherited `AI_RELAY_API_KEY` is fallback, and missing both sources fails closed before model smoke. The relay URL remains source-configured in `opencode.json`, not a secret.
+- `GRIMOIRE_PAT` is documented as the primary PAT-only GitHub auth source for checkout, push, `gh`, comments, and labels; runner-provided `CODEX_LOOP_PAT` remains the fallback. `GITHUB_TOKEN` and GitHub App tokens remain forbidden for grimoire git/gh auth.
+- Name-only `gh secret list` findings for this task: `GRIMOIRE_PAT` is present as a repo secret, while `AI_RELAY_API_KEY` is intentionally absent as a repo secret because the current relay key path is runner Docker env. No values were printed or recorded.
+- CI model mapping remains all `ai-relay/gpt-5.5`: xhigh for heavy agents and heavy categories, medium for librarian/explore/sisyphus-junior/quick/unspecified-low, and high for writing.

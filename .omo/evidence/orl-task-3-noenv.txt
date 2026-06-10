@@ -1,0 +1,11 @@
+# orl-task-3-noenv
+
+Fail-closed behavior when neither relay key source is present:
+
+- The attune resolver maps the GitHub secret to `AI_RELAY_API_KEY_SECRET` instead of directly shadowing the runtime `AI_RELAY_API_KEY` environment variable.
+- It selects `AI_RELAY_API_KEY_SECRET` first when non-empty.
+- If the secret is empty, it selects runner-inherited `AI_RELAY_API_KEY` when non-empty.
+- If both are empty, it prints a non-secret error message and exits before the model smoke.
+- The selected value is masked before export when a source exists.
+
+This evidence reuses the Task 1/20 fail-closed reasoning and the current `.github/workflows/grimoire-attune.yml` resolver inspection instead of running a live model call. No relay key value was available or needed for this docs-only task.
