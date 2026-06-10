@@ -44,9 +44,9 @@ Prometheus - Plan Builder (primary)
 explore (subagent)
 
 ## agent-list assertions
-- Atlas primary: FAIL
-- Sisyphus primary: FAIL
-- Prometheus primary: FAIL
-- explore subagent: FAIL
+- Atlas primary: PASS
+- Sisyphus primary: PASS
+- Prometheus primary: PASS
+- explore subagent: PASS
 
 secret-shaped output scan: PASS

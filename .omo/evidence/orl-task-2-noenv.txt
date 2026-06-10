@@ -1,33 +1,19 @@
-# orl-task-2 no-env negative evidence
+# orl task 2 missing-key negative evidence
 
-Timestamp: 2026-06-11
-Branch: feat/grimoire-opencode-loop
+repo: /Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client
+isolated_xdg_root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/orl-task-2-noenv-clean-4tv_0n6m
+environment: minimal PATH/TMPDIR/LANG plus isolated HOME/XDG only; AI_RELAY_API_KEY, CODEX_LB_LOCAL_API_KEY, local opencode session variables, auth tokens, and OPENCODE_CONFIG_CONTENT were not inherited
+command: opencode run --format json --dir /Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client --model ai-relay/gpt-5.5 --variant medium Return exactly ORL_TASK_2_SHOULD_NOT_SUCCEED if a model response is possible.
+timed_out: false
+exit_code: 1
+json_events_parsed: 1
+provider_or_json_error_observed: true
+session_not_found_observed: false
+success_sentinel_observed: false
+negative_result: PASS
 
-Purpose
-- Verify a repo-configured ai-relay model call fails clearly when AI_RELAY_API_KEY is unset.
-- Do not print or inspect any secret value.
+## raw output
+opencode-claude-auth: No Claude Code credentials found. Running in API key mode with transform hook enabled.
+{"type":"error","timestamp":1781108224528,"sessionID":"ses_14dad6581ffeVPNjKFLX03xx5G","error":{"name":"APIError","data":{"message":"Missing API key in Authorization header","statusCode":401,"isRetryable":false,"responseHeaders":{"alt-svc":"h3=\":443\"; ma=86400","cf-cache-status":"DYNAMIC","cf-ray":"a099af1c887bd861-NRT","connection":"keep-alive","content-length":"118","content-type":"application/json","date":"Wed, 10 Jun 2026 16:17:04 GMT","nel":"{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}","report-to":"{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=rdfWbRIoPPwimYZ3sLa3xG2FncxlEPv4Ml2wEc5w8%2FKJOslqIImTKpfjZKjcHXW53tXn32jq4CvgwTYe3%2FxS6SNEuFFXsyu9OG1%2BD6gG9li2GM5V%2FjGlfFmhiGWegWQp4Gsg4TK%2F%2FuBDmZQ%3D\"}]}","server":"cloudflare","strict-transport-security":"max-age=15552000; includeSubDomains; preload","x-content-type-options":"nosniff","x-request-id":"da1cc3c3-c583-4dc7-8c15-eebeeae43f5a"},"responseBody":"{\"error\":{\"message\":\"Missing API key in Authorization header\",\"type\":\"authentication_error\",\"code\":\"invalid_api_key\"}}","metadata":{"url":"https://relay-ai.dongwontuna.net/v1/responses"}}}}
 
-Command shape
-- Clean environment via env -i with only HOME, USER, PATH, TMPDIR, XDG_CONFIG_HOME, and XDG_DATA_HOME preserved.
-- AI_RELAY_API_KEY and CODEX_LB_LOCAL_API_KEY were not present in the command environment.
-- Command: opencode run --format json --dir <repo> --model ai-relay/gpt-5.5 --variant medium "Return exactly GRIMOIRE_TASK2_SHOULD_NOT_SUCCEED."
-
-Observed output summary
-- JSON event type: error
-- sessionID format observed: ses_...
-- error.name: APIError
-- error.data.message: Missing API key in Authorization header
-- error.data.statusCode: 401
-- error.data.isRetryable: false
-- responseBody error.type: authentication_error
-- responseBody error.code: invalid_api_key
-- metadata.url: https://relay-ai.dongwontuna.net/v1/responses
-- exit code: 1
-
-Prior nuance retained
-- Earlier grimoire notes observed a missing-key JSON error event returning exit code 0 in another local run.
-- This clean-env rerun returned exit code 1, but future CI should still inspect JSON error events or require success sentinels rather than trusting exit code alone.
-
-Secret handling
-- No API key, token, private key, or environment dump was printed.
-- The configured repo placeholder remains {env:AI_RELAY_API_KEY}; no raw key is stored in this evidence.
+secret-shaped output scan: PASS
