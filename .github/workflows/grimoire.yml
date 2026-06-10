@@ -1,0 +1,207 @@
+name: grimoire
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: orl-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cast:
+    name: Grimoire PR loop boundary
+    runs-on:
+      - self-hosted
+      - dongwontuna-labs-runner
+    timeout-minutes: 90
+    if: ${{ github.event.pull_request.draft == false && vars.GRIMOIRE_DISABLED != '1' && !contains(github.event.pull_request.labels.*.name, 'no-grimoire') }}
+    env:
+      BUN_VERSION: "1.3.10"
+      OPENCODE_MODEL: ai-relay/gpt-5.5
+      OPENCODE_VARIANT: xhigh
+      OPENCODE_VERSION: "1.17.0"
+      OMO_VERSION: "4.8.1"
+    steps:
+      - name: Guard driver inputs before secrets and checkout
+        id: driver-guard
+        shell: bash
+        env:
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
+          GRIMOIRE_DISABLED_VALUE: ${{ vars.GRIMOIRE_DISABLED }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          draft = os.environ.get("PR_DRAFT", "").strip().lower()
+          disabled = os.environ.get("GRIMOIRE_DISABLED_VALUE", "")
+          labels_raw = os.environ.get("PR_LABELS_JSON", "[]")
+          try:
+              labels = json.loads(labels_raw) if labels_raw else []
+          except json.JSONDecodeError as exc:
+              print(f"grimoire guard: invalid PR labels JSON: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          label_names = {
+              str(label.get("name", ""))
+              for label in labels
+              if isinstance(label, dict)
+          }
+          reasons = []
+          if draft == "true":
+              reasons.append("draft")
+          if disabled == "1":
+              reasons.append("off-switch")
+          if "no-grimoire" in label_names:
+              reasons.append("no-grimoire label")
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"skip={'true' if reasons else 'false'}\n")
+              output.write(f"reason={','.join(reasons)}\n")
+
+          if reasons:
+              print("grimoire guard: skipped before secrets and checkout: " + ", ".join(reasons))
+              sys.exit(0)
+          print("grimoire guard: ready PR passed draft/off-switch/label checks")
+          PY
+
+      - name: Resolve PAT-only GitHub auth
+        id: pat-auth
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          GRIMOIRE_PAT_SECRET: ${{ secrets.GRIMOIRE_PAT }}
+        run: |
+          set -euo pipefail
+          selected=""
+          source=""
+
+          if [ -n "${GRIMOIRE_PAT_SECRET:-}" ]; then
+            selected="${GRIMOIRE_PAT_SECRET}"
+            source="secret"
+          elif [ -n "${CODEX_LOOP_PAT:-}" ]; then
+            selected="${CODEX_LOOP_PAT}"
+            source="runner-env"
+          fi
+
+          if [ -z "${selected}" ]; then
+            printf 'grimoire auth: PAT unavailable from configured sources; refusing checkout\n' >&2
+            exit 1
+          fi
+
+          printf '::add-mask::%s\n' "${selected}"
+          {
+            printf 'GRIMOIRE_PAT<<__GRIMOIRE_PAT__\n'
+            printf '%s\n' "${selected}"
+            printf '__GRIMOIRE_PAT__\n'
+            printf 'GH_TOKEN<<__GRIMOIRE_GH_TOKEN__\n'
+            printf '%s\n' "${selected}"
+            printf '__GRIMOIRE_GH_TOKEN__\n'
+            printf 'GRIMOIRE_PAT_SOURCE=%s\n' "${source}"
+          } >> "${GITHUB_ENV}"
+          printf 'grimoire auth: selected PAT source %s\n' "${source}"
+
+      - name: Checkout PR head with PAT-only git
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_PAT:-}" ]; then
+            printf 'grimoire checkout: PAT env missing after auth resolution\n' >&2
+            exit 1
+          fi
+          if [ -z "${PR_HEAD_REPO}" ] || [ -z "${PR_HEAD_REF}" ] || [ -z "${PR_HEAD_SHA}" ]; then
+            printf 'grimoire checkout: PR head metadata is incomplete\n' >&2
+            exit 1
+          fi
+
+          auth_header="$(python3 - <<'PY'
+          import base64
+          import os
+
+          token = os.environ["GRIMOIRE_PAT"]
+          print(base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii"))
+          PY
+          )"
+          printf '::add-mask::%s\n' "${auth_header}"
+
+          git -C "${GITHUB_WORKSPACE}" init
+          git -C "${GITHUB_WORKSPACE}" remote remove origin >/dev/null 2>&1 || true
+          git -C "${GITHUB_WORKSPACE}" remote add origin "https://github.com/${PR_HEAD_REPO}.git"
+
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth_header}"
+          git -C "${GITHUB_WORKSPACE}" fetch --no-tags --prune --depth=50 origin "+refs/heads/${PR_HEAD_REF}:refs/remotes/origin/pr-head"
+          git -C "${GITHUB_WORKSPACE}" checkout --force --detach refs/remotes/origin/pr-head
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+
+          actual_sha="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD)"
+          if [ "${actual_sha}" != "${PR_HEAD_SHA}" ]; then
+            printf 'grimoire checkout: checked out %s, expected %s\n' "${actual_sha}" "${PR_HEAD_SHA}" >&2
+            exit 1
+          fi
+          printf 'grimoire checkout: PR head checked out at expected SHA\n'
+
+      - name: Require grimoire driver boundary
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -e ".github/scripts/grimoire-cast.sh" ]; then
+            printf 'grimoire driver missing: Task 11 must add .github/scripts/grimoire-cast.sh before ready PR execution can proceed\n' >&2
+            exit 1
+          fi
+          if [ ! -x ".github/scripts/grimoire-cast.sh" ]; then
+            printf 'grimoire driver is present but not executable; refusing to continue\n' >&2
+            exit 1
+          fi
+          printf 'grimoire driver boundary present\n'
+
+      - name: Run grimoire driver
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          AI_RELAY_API_KEY_SECRET: ${{ secrets.AI_RELAY_API_KEY }}
+          GRIMOIRE_EVENT_ACTION: ${{ github.event.action }}
+          GRIMOIRE_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GRIMOIRE_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          GRIMOIRE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GRIMOIRE_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GRIMOIRE_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GRIMOIRE_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          selected_relay=""
+          relay_source=""
+
+          if [ -n "${AI_RELAY_API_KEY_SECRET:-}" ]; then
+            selected_relay="${AI_RELAY_API_KEY_SECRET}"
+            relay_source="secret"
+          elif [ -n "${AI_RELAY_API_KEY:-}" ]; then
+            selected_relay="${AI_RELAY_API_KEY}"
+            relay_source="runner-env"
+          fi
+
+          if [ -z "${selected_relay}" ]; then
+            printf 'grimoire driver: ai-relay key unavailable from configured sources; refusing model stage\n' >&2
+            exit 1
+          fi
+
+          printf '::add-mask::%s\n' "${selected_relay}"
+          export AI_RELAY_API_KEY="${selected_relay}"
+          export GRIMOIRE_RELAY_KEY_SOURCE="${relay_source}"
+          printf 'grimoire driver: relay key source %s\n' "${relay_source}"
+
+          bash .github/scripts/grimoire-cast.sh

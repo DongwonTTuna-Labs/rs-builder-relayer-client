@@ -1,0 +1,25 @@
+# ORL Task 10 Evidence - Draft Skip
+
+Scope: local deterministic validation for `.github/workflows/grimoire.yml`; no live PR, no `gh`, no comment, no label, no push, and no GitHub API mutation were run.
+
+Command summaries:
+- `actionlint .github/workflows/grimoire.yml .github/workflows/grimoire-attune.yml`
+- Python static assertions over `.github/workflows/grimoire.yml`
+- PyYAML parse for `.github/workflows/grimoire.yml` and `.github/workflows/grimoire-attune.yml`
+
+Expected results:
+- Workflow trigger is `pull_request` only with types `[opened, ready_for_review, synchronize, reopened]`.
+- Job-level guard skips draft PRs before the job can run.
+- First step revalidates draft state before any PAT secret, checkout, model secret, git, gh, comment, label, or push path.
+- Draft skip exits 0 and records skip output rather than mutating GitHub.
+
+Observed results:
+- `pull_request` trigger exists and `pull_request_target` is absent.
+- Static assertion PASS: required pull_request types exact list.
+- Static assertion PASS: job guard contains `github.event.pull_request.draft == false`.
+- Static assertion PASS: first step `Guard driver inputs before secrets and checkout` precedes PAT auth, checkout, and model secret handling.
+- Static assertion PASS: early guard checks `if draft == "true"`, writes `skip=true`, prints a non-secret skip reason, and exits 0.
+- Static assertion PASS: no live `gh` mutation command is present in the workflow shell.
+
+RESULT: PASS
+OVERALL: PASS

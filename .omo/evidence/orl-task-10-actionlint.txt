@@ -1,0 +1,29 @@
+# ORL Task 10 Evidence - Actionlint And Static Happy Path
+
+Scope: local deterministic workflow validation only. Evidence generation did not run live workflow dispatch, PR creation/edit, comments, labels, push, merge, or GitHub API mutation.
+
+Commands run:
+- `actionlint .github/workflows/grimoire.yml .github/workflows/grimoire-attune.yml`
+- `command -v actionlint >/dev/null 2>&1 && actionlint -version || printf 'ACTIONLINT_UNAVAILABLE\n'`
+- Python static assertions over `.github/workflows/grimoire.yml`
+- PyYAML parse for `.github/workflows/grimoire.yml` and `.github/workflows/grimoire-attune.yml`
+
+Expected results:
+- `actionlint` reports zero diagnostics when available.
+- Static checks prove draft/off-switch/no-grimoire guards exist at both job and early-step layers.
+- Static checks prove no `pull_request_target`, no default-token auth literal, no `actions: write`, no `workflows: write`, no `contents: write`, no floating action refs, no unpinned opencode install URL, and no live `gh` mutation command.
+- Eligible ready PRs fail closed until `.github/scripts/grimoire-cast.sh` exists.
+
+Observed results:
+- `actionlint` is available: version `1.7.12`; `actionlint .github/workflows/grimoire.yml .github/workflows/grimoire-attune.yml` exited 0 with no diagnostics.
+- PyYAML parse PASS: both workflow files parse as YAML.
+- Static assertion PASS: trigger is `pull_request` only with exact required types, and `pull_request_target` is absent.
+- Static assertion PASS: permissions are `{}` and the concurrency group is `orl-${{ github.event.pull_request.number }}` with `cancel-in-progress: true`.
+- Static assertion PASS: PAT auth prefers `secrets.GRIMOIRE_PAT`, falls back to runner `CODEX_LOOP_PAT`, masks the selected value, and manual checkout uses a PAT-derived auth header.
+- Static assertion PASS: no default-token auth literal is present in `.github/workflows/grimoire.yml`.
+- Static assertion PASS: no forbidden write/admin permissions are requested.
+- Static assertion PASS: no `uses:` floating refs and no unpinned opencode install URL are present; opencode/OMO package versions are explicit env pins.
+- Static assertion PASS: missing driver check exits nonzero before the driver call; current repo has no `.github/scripts/grimoire-cast.sh`, so ready PR execution intentionally fails closed until Task 11.
+
+RESULT: PASS
+OVERALL: PASS

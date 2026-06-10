@@ -1,0 +1,24 @@
+# ORL Task 10 Evidence - Off-switch
+
+Scope: local deterministic validation for `.github/workflows/grimoire.yml`; no live PR, no repo variable change, no label mutation, no `gh`, no push, and no GitHub API mutation were run.
+
+Command summaries:
+- Python static assertions over `.github/workflows/grimoire.yml`
+- PyYAML parse for `.github/workflows/grimoire.yml` and `.github/workflows/grimoire-attune.yml`
+
+Expected results:
+- Job-level guard skips when `vars.GRIMOIRE_DISABLED == '1'`.
+- Job-level guard skips when PR labels include `no-grimoire`.
+- First step revalidates off-switch and label state before any PAT secret, checkout, model secret, git, gh, comment, label, or push path.
+- Ready PRs with the off-switch or label set produce zero autonomous checkout/mutation/push work.
+
+Observed results:
+- Static assertion PASS: job guard contains `vars.GRIMOIRE_DISABLED != '1'`.
+- Static assertion PASS: job guard contains `!contains(github.event.pull_request.labels.*.name, 'no-grimoire')`.
+- Static assertion PASS: early guard reads `GRIMOIRE_DISABLED_VALUE` and `PR_LABELS_JSON` from event/vars data only.
+- Static assertion PASS: early guard checks `if disabled == "1"` and `if "no-grimoire" in label_names`.
+- Static assertion PASS: first secret-bearing step appears after the early guard and is conditionally skipped when `steps.driver-guard.outputs.skip == 'true'`.
+- Static assertion PASS: no `actions: write`, `workflows: write`, or `contents: write` permission is requested.
+
+RESULT: PASS
+OVERALL: PASS
