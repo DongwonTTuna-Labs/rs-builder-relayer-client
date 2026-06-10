@@ -36,4 +36,8 @@ Variant tiers:
 
 ## Rotation And Least Privilege
 
-Rotate `AI_RELAY_API_KEY`, `GRIMOIRE_PAT`, and fallback `CODEX_LOOP_PAT` on the same schedule as other CI credentials, immediately after suspected exposure, and after any runner ownership or repository access change. Keep PAT scopes limited to the grimoire duties above, prefer repo-bound fine-grained tokens, and remove unused fallback paths when they are no longer operationally required.
+Rotate `AI_RELAY_API_KEY` by rotating the relay credential upstream, then either re-registering the GitHub Actions secret `AI_RELAY_API_KEY` or updating the self-hosted runner Docker environment variable `AI_RELAY_API_KEY`, depending on the active source. Restart or reload the runner container when the runner env changes, then rerun the attune smoke and record only the selected source name.
+
+Rotate `GRIMOIRE_PAT` by minting a replacement PAT with the least-privilege scopes above, then re-registering the repo secret `GRIMOIRE_PAT` or updating the fallback runner env `CODEX_LOOP_PAT`. Confirm checkout, `gh`, comment, label, and push paths before revoking the old PAT.
+
+Never commit, paste, print, or log any rotated value. Keep PAT scopes limited to the grimoire duties above, prefer repo-bound fine-grained tokens, and remove unused fallback paths when they are no longer operationally required.
