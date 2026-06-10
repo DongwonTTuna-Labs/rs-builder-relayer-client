@@ -1,0 +1,117 @@
+# orl-task-6-suff evidence
+timestamp: 2026-06-10T19:18:39.245665Z
+scope: sufficient design scenario, command surface, JSON contract, OpenSpec citations
+
+COMMAND: bash -n .github/scripts/grimoire-design.sh
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-design.sh --help
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+Usage: grimoire-design.sh [options]
+
+Spec-grounded grimoire design stage. Consumes Task 5 review findings and
+writes Task 6 spec sufficiency plus a markdown-only design plan or halt note.
+
+Options:
+  --mode MODE          real, mock-sufficient, or mock-insufficient. Default: real.
+  --input PATH         Review findings JSON. Default: .omo/ci/review-findings.json.
+  --review-input PATH  Alias for --input.
+  --spec PATH          OpenSpec evidence file or directory. Repeatable.
+  --spec-root PATH     OpenSpec root for default discovery. Default: openspec.
+  --output PATH        Spec sufficiency JSON. Default: .omo/ci/spec-sufficiency.json.
+  --plan PATH          Markdown plan or halt note. Default: .omo/ci/design-plan.md.
+  --repo-root PATH     Repository root for real-mode opencode execution.
+  --help               Show this help text.
+
+JSON contract:
+  Stable root fields: spec_sufficient, bindings, missing,
+  safety_default_gaps, suggested_spec_patch, plan_path, and halt_reason.
+
+Modes:
+  mock-sufficient     Deterministic local mode. Binds each review finding to
+                      explicit OpenSpec evidence from --spec or discovered specs.
+  mock-insufficient   Deterministic local mode for fail-closed gaps. Missing
+                      OpenSpec evidence produces spec_sufficient=false and a
+                      halt-only markdown note.
+  real                Fail-closed unless AI_RELAY_API_KEY, opencode,
+                      GRIMOIRE_DESIGN_READY=1, and GRIMOIRE_TEAM_MODE_ENABLED=1
+                      are present. Uses opencode without --pure, asks Prometheus
+                      for markdown-only planning, and forbids code/config/script
+                      edits, GitHub mutation, comments, labels, pushes, and
+                      secret disclosure.
+
+OpenSpec evidence:
+  If --spec is omitted, the script scans non-archived files under
+  openspec/specs and openspec/changes. Archived specs are only used when passed
+  explicitly with --spec so historical artifacts cannot silently approve work.
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-design.sh --bad-option
+EXPECTED: nonzero
+OBSERVED_EXIT: 2
+STDERR:
+grimoire-design: unknown option: --bad-option
+
+Usage: grimoire-design.sh [options]
+
+Spec-grounded grimoire design stage. Consumes Task 5 review findings and
+writes Task 6 spec sufficiency plus a markdown-only design plan or halt note.
+
+Options:
+  --mode MODE          real, mock-sufficient, or mock-insufficient. Default: real.
+  --input PATH         Review findings JSON. Default: .omo/ci/review-findings.json.
+  --review-input PATH  Alias for --input.
+  --spec PATH          OpenSpec evidence file or directory. Repeatable.
+  --spec-root PATH     OpenSpec root for default discovery. Default: openspec.
+  --output PATH        Spec sufficiency JSON. Default: .omo/ci/spec-sufficiency.json.
+  --plan PATH          Markdown plan or halt note. Default: .omo/ci/design-plan.md.
+  --repo-root PATH     Repository root for real-mode opencode execution.
+  --help               Show this help text.
+
+JSON contract:
+  Stable root fields: spec_sufficient, bindings, missing,
+  safety_default_gaps, suggested_spec_patch, plan_path, and halt_reason.
+
+Modes:
+  mock-sufficient     Deterministic local mode. Binds each review finding to
+                      explicit OpenSpec evidence from --spec or discovered specs.
+  mock-insufficient   Deterministic local mode for fail-closed gaps. Missing
+                      OpenSpec evidence produces spec_sufficient=false and a
+                      halt-only markdown note.
+  real                Fail-closed unless AI_RELAY_API_KEY, opencode,
+                      GRIMOIRE_DESIGN_READY=1, and GRIMOIRE_TEAM_MODE_ENABLED=1
+                      are present. Uses opencode without --pure, asks Prometheus
+                      for markdown-only planning, and forbids code/config/script
+                      edits, GitHub mutation, comments, labels, pushes, and
+                      secret disclosure.
+
+OpenSpec evidence:
+  If --spec is omitted, the script scans non-archived files under
+  openspec/specs and openspec/changes. Archived specs are only used when passed
+  explicitly with --spec so historical artifacts cannot silently approve work.
+RESULT: PASS
+
+COMMAND: shellcheck .github/scripts/grimoire-design.sh
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-design.sh --mode mock-sufficient --input /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/review-findings.json --spec /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/openspec/specs/grimoire-task6/spec.md --output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/spec-sufficiency.json --plan /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/design-plan.md
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+grimoire-design: wrote sufficient spec artifact to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/spec-sufficiency.json and plan to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/design-plan.md
+RESULT: PASS
+
+COMMAND: python3 -c '<validate sufficient JSON and plan citations>' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/spec-sufficiency.json /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/design-plan.md
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-suff.isp5n_2c/openspec/specs/grimoire-task6/spec.md:3
+RESULT: PASS
+
+OVERALL: PASS

@@ -259,3 +259,11 @@
 - Local mock review evidence is deterministic: `mock-defect` scans unified diffs or plain files for `GRIMOIRE_REVIEW_DEFECT` and emits exact file/line findings, while `mock-clean` emits `GRIMOIRE_REVIEW_APPROVED` with zero findings.
 - Real mode is fail-closed and read-only by construction: before any model invocation it requires `AI_RELAY_API_KEY`, `opencode`, and `GRIMOIRE_TEAM_MODE_ENABLED=1`, sets `OPENCODE_PERMISSION` to deny edit/bash/task/webfetch/external-directory/question/plan changes, and avoids `--pure` so project OMO config can load.
 - Local Task 5 verification passed for help, bad-option rejection, `bash -n`, shellcheck, JSON syntax, clean/defect contract assertions, exact defect location `src/demo.rs:3`, terminal-surface manual QA, and real-mode blocked JSON. No live Team Mode/model success is claimed.
+
+## 2026-06-11 - grimoire task 6 design stage implementation
+
+- `.github/scripts/grimoire-design.sh` now owns the Task 6 design contract and reads `.omo/ci/review-findings.json` by default, then writes `.omo/ci/spec-sufficiency.json` plus `.omo/ci/design-plan.md` unless overridden by CLI options.
+- The stable Task 6 JSON fields are `spec_sufficient`, `bindings`, `missing`, `safety_default_gaps`, `suggested_spec_patch`, `plan_path`, and `halt_reason`. Sufficient runs require every review finding to bind to an explicit OpenSpec `path:line` citation.
+- Deterministic local modes are model-free: `mock-sufficient` binds findings by title, binding key, or `file:line` token in supplied OpenSpec evidence; `mock-insufficient` records concrete missing items and overwrites stale plan content with a halt-only markdown artifact.
+- Real mode is fail-closed before any model call unless `AI_RELAY_API_KEY`, `opencode`, `GRIMOIRE_DESIGN_READY=1`, and `GRIMOIRE_TEAM_MODE_ENABLED=1` are present. The prompt uses Prometheus, avoids `--pure`, and constrains planning to markdown-only `.omo` paths with no GitHub mutation.
+- Local Task 6 verification passed for help, invalid option, `bash -n`, shellcheck, sufficient JSON/plan citation validation, insufficient JSON/halt/no-stale-plan validation, and real-mode blocked JSON. No live Prometheus/model success is claimed.

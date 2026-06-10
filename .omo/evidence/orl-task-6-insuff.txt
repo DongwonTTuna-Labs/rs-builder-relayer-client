@@ -1,0 +1,55 @@
+# orl-task-6-insuff evidence
+timestamp: 2026-06-10T19:19:16.655020Z
+scope: insufficient design scenario, stale-plan clearing, no-guess halt, real-mode fail-closed gate
+
+COMMAND: bash -n .github/scripts/grimoire-design.sh
+EXPECTED: 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: .github/scripts/grimoire-design.sh --mode mock-insufficient --input /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/review-findings.json --spec-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/openspec --output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/spec-sufficiency.json --plan /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/design-plan.md
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-design: wrote insufficient spec artifact to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/spec-sufficiency.json and halt note to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/design-plan.md
+RESULT: PASS
+
+COMMAND: python3 -c '<validate insufficient JSON and halt plan>' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/spec-sufficiency.json /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/design-plan.md
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+OpenSpec evidence is absent for review findings
+RESULT: PASS
+
+COMMAND: env -u AI_RELAY_API_KEY -u GRIMOIRE_DESIGN_READY -u GRIMOIRE_TEAM_MODE_ENABLED .github/scripts/grimoire-design.sh --mode real --input /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/review-findings.json --output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/real-blocked.json --plan /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/real-blocked-plan.md
+EXPECTED: nonzero
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-design: real mode blocked; artifact written to /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/real-blocked.json
+RESULT: PASS
+
+COMMAND: python3 -c '<validate real-mode blocked JSON>' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/real-blocked.json /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/grimoire-task6-insuff.xx0fhm4b/real-blocked-plan.md
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+real mode prerequisites missing
+RESULT: PASS
+
+OVERALL: PASS
+
+# default-input proof appended: 2026-06-10T19:24:04.899207Z
+
+COMMAND: .github/scripts/grimoire-design.sh --mode mock-insufficient
+EXPECTED: nonzero, reads .omo/ci/review-findings.json by default and writes .omo/ci/spec-sufficiency.json
+OBSERVED_EXIT: 1
+STDERR:
+grimoire-design: wrote insufficient spec artifact to .omo/ci/spec-sufficiency.json and halt note to .omo/ci/design-plan.md
+RESULT: PASS
+
+COMMAND: python3 -c '<validate default input output>'
+EXPECTED: 0
+OBSERVED_EXIT: 0
+STDOUT:
+src/default.rs:12
+RESULT: PASS
+DEFAULT_INPUT_OVERALL: PASS

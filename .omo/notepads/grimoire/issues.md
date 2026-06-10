@@ -200,3 +200,9 @@
 ## 2026-06-11 - grimoire task 5 live review readiness caveat
 
 - STILL OPEN: who=`.github/scripts/grimoire-review.sh` real-mode readiness gate and local Task 5 environment; what=real mode wrote a blocked review artifact and exited nonzero before `opencode run`; when=Task 5 verification; why=`GRIMOIRE_TEAM_MODE_ENABLED=1` was not asserted, and live Team Mode readiness must be proven before any model review is trusted; how=set the readiness flag only after CI proves team-mode tools are available, then rerun real mode with sanitized artifact evidence. This task records deterministic local evidence only and does not claim live model or Team Mode success.
+
+## 2026-06-11 - grimoire task 6 live design readiness caveat
+
+- STILL OPEN: who=`.github/scripts/grimoire-design.sh` real-mode readiness gate and local Task 6 environment; what=real mode wrote `spec_sufficient=false` blocked JSON and exited nonzero before `opencode run`; when=Task 6 verification; why=`AI_RELAY_API_KEY`, `GRIMOIRE_DESIGN_READY=1`, and `GRIMOIRE_TEAM_MODE_ENABLED=1` were deliberately unset in the fail-closed proof, and live Prometheus design readiness must be proven before model planning is trusted; how=set readiness only after CI proves non-interactive Prometheus plus OpenSpec binding can run safely, then rerun with sanitized artifact evidence.
+- STILL OPEN: no live Prometheus/OpenSpec model design success is claimed for Task 6. Deterministic local evidence proves contract behavior only; live design remains gated by default-branch workflow availability, relay auth, opencode availability, and explicit readiness flags.
+- No secret values, token-bearing URLs, workflow dispatch, PR mutation, label mutation, push, merge, or GitHub API mutation was run or recorded for Task 6.
