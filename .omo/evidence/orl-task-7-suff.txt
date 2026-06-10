@@ -1,0 +1,40 @@
+Task 7 sufficient/stale-cleanup evidence
+========================================
+
+Scope:
+- Input: Task 6 sufficient JSON generated locally at .omo/ci/task7-evidence/spec-sufficient.json
+- Output: configured comment artifact cleared, status JSON says no comment/halt.
+- Live mutation: not performed. No gh pr comment, label, workflow dispatch, commit, push, merge, GitHub API mutation, ai-relay call, or secret access was used.
+
+Sufficient fixture path:
+- .github/scripts/grimoire-design.sh --mode mock-sufficient generated .omo/ci/task7-evidence/spec-sufficient.json with an OpenSpec citation.
+- A stale comment file was prefilled with text before rendering.
+- .github/scripts/grimoire-spec-gap-comment.sh --mode render consumed the sufficient Task 6 JSON and cleared the stale comment file.
+
+Sufficient status assertions:
+- comment file empty after render: True
+- should_comment: False
+- should_halt: False
+- github_mutation_performed: False
+- no_code_or_push_action: True
+- comment_artifact_cleared: True
+- stale_comment_reuse_prevented: True
+
+Blocked-input stale cleanup assertions:
+- A stale comment file was prefilled before rendering with a missing input path.
+- missing-input render exited nonzero and cleared the stale comment: True
+- blocked should_comment: False
+- blocked should_halt: True
+- blocked github_mutation_performed: False
+- blocked no_code_or_push_action: True
+- blocked stale_comment_reuse_prevented: True
+
+Built-in mock modes:
+- mock-insufficient wrote deterministic local comment/status without ai-relay, gh, or PR mutation.
+- mock-sufficient cleared stale mock comment: True
+
+Manual CLI QA:
+- interactive_bash tmux session grimoire-task7-qa executed --help, invalid option, mock-insufficient, and mock-sufficient paths.
+- Observed --help text, invalid option exit 2, insufficient comment/status write, and sufficient stale-comment cleanup.
+
+RESULT: PASS

@@ -1,0 +1,101 @@
+Task 7 spec-gap insufficient evidence
+=====================================
+
+Scope:
+- Script: .github/scripts/grimoire-spec-gap-comment.sh
+- Input: Task 6 spec sufficiency JSON generated locally at .omo/ci/task7-evidence/spec-insufficient.json
+- Outputs: local Markdown comment artifact + machine-readable status JSON only.
+- Live mutation: not performed. No gh pr comment, label, workflow dispatch, commit, push, merge, GitHub API mutation, ai-relay call, or secret access was used.
+
+Checks:
+- executable mode: 0o755
+- bash -n .github/scripts/grimoire-spec-gap-comment.sh: PASS
+- shellcheck .github/scripts/grimoire-spec-gap-comment.sh: PASS
+- --help exits 0 and documents input/comment/status outputs, mock modes, and no-live-mutation behavior: PASS
+- invalid option exits nonzero (2): PASS
+- lsp_diagnostics: bash-language-server is not installed locally, so no LSP result is claimed.
+
+Insufficient fixture path:
+- .github/scripts/grimoire-review.sh --mode mock-defect generated .omo/ci/task7-evidence/review-findings.json
+- .github/scripts/grimoire-design.sh --mode mock-insufficient generated .omo/ci/task7-evidence/spec-insufficient.json and exited 1 as expected for halt-only design.
+- .github/scripts/grimoire-spec-gap-comment.sh --mode render consumed that Task 6 JSON and wrote .omo/ci/task7-evidence/spec-gap-comment.md plus .omo/ci/task7-evidence/spec-gap-status.json.
+
+Markdown comment assertions:
+- top-level sections (5): Summary, Intended Work, Missing OpenSpec Evidence, Suggested Spec Items, How To Rerun
+- expected sections exactly: Summary, Intended Work, Missing OpenSpec Evidence, Suggested Spec Items, How To Rerun
+- exact section order/count: True
+- line count: 52
+- contains checklist bullets: True
+- contains missing evidence details: True
+- preserves Task 6 suggested patch: True
+- contains rerun guidance: True
+
+Status JSON assertions:
+- should_comment: True
+- should_halt: True
+- github_mutation_performed: False
+- no_code_or_push_action: True
+- top_level_section_count: 5
+- missing_count: 1
+- safety_default_gaps_count: 1
+
+Code diff 0 / push 0 semantics:
+- The renderer only writes configured .omo/ci comment/status artifacts in local runs.
+- Status JSON records github_mutation_performed=false and no_code_or_push_action=true.
+- A scoped git-status comparison excluding .omo/ci runtime files was unchanged before/after the insufficient render.
+- No git commit/push commands were invoked by the renderer; no gh command is present in the script.
+
+Comment excerpt:
+```markdown
+## Summary
+
+- **Decision:** Grimoire stopped before implementation because OpenSpec evidence is not sufficient for the requested work.
+- **Halt reason:** OpenSpec evidence is absent for review findings
+- **Machine signal:** `should_halt=true`, `should_comment=true`, `github_mutation_performed=false`, `no_code_or_push_action=true`.
+- **What this means:** no code edit, commit, push, label change, merge, or live GitHub mutation is authorized by this stage.
+
+## Intended Work
+
+- Task 6 tried to turn **1** review finding(s) into a spec-grounded Prometheus plan at `.omo/ci/task7-evidence/insufficient-plan.md`.
+- The fix stage can only proceed when each finding has explicit OpenSpec evidence with a stable citation.
+- Work blocked by these unbound finding(s):
+  - Deterministic review defect marker present at `src/demo.rs:2`
+
+## Missing OpenSpec Evidence
+
+**Finding-level evidence gaps**
+
+- [ ] **Gap 1: Deterministic review defect marker present**
+  - **Location:** `src/demo.rs:2`
+  - **Why it halted:** No OpenSpec evidence files were available for binding.
+  - **Evidence needed:** Add an OpenSpec requirement or scenario that explicitly names this finding, its target file:line, or an equivalent binding key.
+
+**Safety defaults still missing**
+
+- [ ] **Safety gap 1:** No non-archived OpenSpec spec or change files were available for required bindings.
+  - **Scope:** `.omo/ci/task7-evidence/empty-spec-root`
+  - **Required default:** Set spec_sufficient=false and write a halt-only plan.
+
+## Suggested Spec Items
+
+Add the missing OpenSpec coverage before asking grimoire to plan or fix this PR:
+
+- [ ] **Spec item 1:** cover Deterministic review defect marker present at `src/demo.rs:2`.
+  - Include the intended behavior, safety default, and an observable acceptance condition.
+  - Task 6 suggested section:
+> ### Requirement: Deterministic review defect marker present
+> - Binding key: src/demo.rs:2
+> - Required behavior: describe the intended behavior and safety default.
+> - Acceptance: cite the observable pass/fail condition.
+
+**Task 6 suggested patch, preserved**
+
+> Add or update OpenSpec coverage before rerunning grimoire design:
+> - Deterministic review defect marker present (src/demo.rs:2): Add an OpenSpec requirement or scenario that explicitly names this finding, its target file:line, or an equivalent binding key.
+
+## How To Rerun
+
+1. Update OpenSpec first. Use `/opsx:prop
+```
+
+RESULT: PASS
