@@ -165,6 +165,31 @@
       "round": 0,
       "source_stage": "reentry_terminal_memory",
       "trusted": false
+    },
+    {
+      "body": {
+        "audit": "memory-only terminal summary; not a routing or CI-suppression signal",
+        "pushed": false,
+        "raw_outcome": "lgtm",
+        "reason": "no push occurred",
+        "summary": "Terminal LGTM outcome recorded for review memory.",
+        "terminal_status": "lgtm"
+      },
+      "category": "learnings",
+      "created_at": "2026-06-10T09:16:53Z",
+      "entry_id": "terminal-lgtm-r0-51c10180a044",
+      "head_sha": "605f0d57306a573376c3d4162cb5012d9d3a5a5a",
+      "kind": "learning",
+      "provenance": {
+        "algorithm": "hmac-sha256",
+        "key_id": "CODEX_MEMORY_HMAC_KEY",
+        "schema_version": "memory-provenance.v1",
+        "signature": "",
+        "trusted": false
+      },
+      "round": 0,
+      "source_stage": "reentry_terminal_memory",
+      "trusted": false
     }
   ],
   "schema_version": "review-memory.v1",
