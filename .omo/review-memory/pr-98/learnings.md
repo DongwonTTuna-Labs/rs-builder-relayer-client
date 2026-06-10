@@ -2,7 +2,7 @@
 
 Generated from `review-memory.v1` ledger. Do not edit this projection manually.
 Category: `learnings`
-Entries: 23
+Entries: 24
 
 ## push-fix-pr98-r1-d2c38f7c4f38
 - kind: `fix_applied`
@@ -13,6 +13,16 @@ Entries: 23
 - created_at: `2026-06-10T08:45:00Z`
 
 Body: Truste...[truncated]
+
+## terminal-lgtm-r0-d06f8ccd3b0c
+- kind: `learning`
+- round: 0
+- head_sha: `cd2454254504dcbf21879670e449cb98c39bf5c2`
+- source_stage: `reentry_terminal_memory`
+- status: advisory
+- created_at: `2026-06-10T10:36:29Z`
+
+Body: Termin...[truncated]
 
 ## terminal-lgtm-r0-a18079162141
 - kind: `learning`
