@@ -30,11 +30,24 @@ jobs:
       OPENCODE_VERSION: "1.17.0"
       OMO_VERSION: "4.8.1"
     steps:
-      - name: Checkout source without credentials
+      - name: Require PAT for private checkout
+        shell: bash
+        env:
+          GRIMOIRE_PAT_SECRET: ${{ secrets.GRIMOIRE_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_PAT_SECRET:-}" ]; then
+            printf 'GRIMOIRE_PAT secret is unavailable; refusing private checkout\n' >&2
+            exit 1
+          fi
+          printf '::add-mask::%s\n' "${GRIMOIRE_PAT_SECRET}"
+          printf 'GRIMOIRE_PAT preflight: secret is present\n'
+
+      - name: Checkout source with PAT
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-          token: ""
+          token: ${{ secrets.GRIMOIRE_PAT }}
 
       - name: Install pinned opencode and OMO package tools
         shell: bash

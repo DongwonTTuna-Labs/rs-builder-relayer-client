@@ -170,3 +170,8 @@
 - STILL OPEN: local nested `opencode run` smoke returned `Session not found` before producing model/tool evidence under both `opencode` `1.17.0` and a temp-installed `1.16.2`, even with isolated XDG config/data and the built-in build agent. `opencode agent list` still loads the OMO plugin successfully.
 - The local nested-run failure is recorded as a blocker for local live smoke only, not as a workflow success or failure. The committed workflow contains the actual ai-relay/read/bash smoke and must be validated by a real Actions dispatch after remote availability and runner relay env prerequisites are in place.
 - No live `gh`, workflow dispatch, PR mutation, label mutation, push, merge, or secret-bearing output was attempted for this task.
+
+## 2026-06-11 - grimoire task 1 PAT checkout repair
+
+- RESOLVED: tokenless checkout was rejected because private repo checkout must be PAT-only. who=`.github/workflows/grimoire-attune.yml` actions/checkout config; what=the Task 1 healthcheck used an empty checkout token while targeting a private repository; when=post-implementation verification after `ad482e2`; why=tokenless checkout is likely to fail before the healthcheck can run and does not prove the private-repo attune path works under the required PAT-only auth model; how=added a pre-checkout `GRIMOIRE_PAT_SECRET` presence check, masks the value before checkout, fails closed when missing, and checks out with `secrets.GRIMOIRE_PAT` while preserving `persist-credentials: false`.
+- STILL OPEN: live `workflow_dispatch` was not run from this local repair because the task forbids push and no live dispatch was authorized. No live run URL, job log, model smoke success, GitHub mutation, or secret-bearing output is claimed.
