@@ -104,7 +104,7 @@ Reason:
 - compatibility callers should migrate to `try_build_wallet_batch_request_with_signature`
   or the validated signed-batch flow before wiring any live submit path.
 - the compatibility exception is intentional:
-  - who: this PR's Codex agent changed the deposit-wallet public API boundary;
+  - who: this PR changed the deposit-wallet public API boundary;
   - what: the old safe infallible WALLET submit helper is removed from public
     exports and replaced by the fallible `try_` API;
   - when: 2026-05-22, recorded as the crate's `0.2.0` migration boundary;
