@@ -210,3 +210,11 @@
 - The workflow uses healthcheck-only `OPENCODE_CONFIG_CONTENT` instead of creating repo `opencode.json`: ai-relay provider mirrors the local source truth with `@ai-sdk/openai`, base URL `https://relay-ai.dongwontuna.net/v1`, env placeholder auth, OMO plugin `4.8.1`, and `default_agent` `atlas`.
 - Runner config/data isolation is intentional: XDG config/data dirs are moved under runner temp so stale self-hosted opencode config or sessions do not decide the healthcheck, while the package cache is not forced cold.
 - Local static checks passed: actionlint, Ruby YAML parse, embedded JSON parse/assertions, no pure-mode flag, no default-token auth literal, and opencode agent list with a non-secret placeholder found OMO Atlas, Sisyphus, Prometheus, explore, and Sisyphus-Junior.
+
+## 2026-06-11 - grimoire task 2 repo opencode config
+
+- Repo `opencode.json` pins `opencode-claude-auth@1.5.4` and `oh-my-openagent@4.8.1`; npm resolution confirmed both exact versions and no plugin entry uses `@latest`.
+- `default_agent` remains `atlas` because OMO exposes Atlas as the primary plan-execution orchestrator and the GitHub Action path must not depend on the currently unreliable `agent:` input alone.
+- The repo ai-relay provider mirrors the local model/variant shape for `gpt-5.5`, `gpt-5.4`, `gpt-5.3-codex-spark`, and `codex-auto-review`; the repo auth placeholder is `{env:AI_RELAY_API_KEY}` to match the validated attune config and CI relay secret/env contract. Difference recorded: the personal local config currently uses `{env:CODEX_LB_LOCAL_API_KEY}` and `@latest` plugin entries, which are not used in repo config.
+- `.opencode/oh-my-openagent.jsonc` preserves the local OMO agent/category tiering while replacing local Anthropic mappings for `sisyphus` and `prometheus` with `ai-relay/gpt-5.5` `xhigh`; all repo OMO agent/category models are `ai-relay/gpt-5.5` with xhigh/medium/high variants preserved.
+- Agent-list verification should be treated as a control-plane load check: it resolves Atlas, Sisyphus, Prometheus, and `explore` without a relay key, while the model-call negative check can emit a JSON API error event for a missing key and still exit 0, so scripts must inspect output rather than status alone.

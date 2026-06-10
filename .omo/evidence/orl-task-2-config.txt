@@ -1,0 +1,52 @@
+# orl task 2 config evidence
+
+repo: /Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client
+isolated_xdg_root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/orl-task-2-config-clean-w7wfuzr9
+environment: minimal PATH/TMPDIR/LANG plus isolated HOME/XDG only; provider keys, local opencode session variables, auth tokens, and OPENCODE_CONFIG_CONTENT were not inherited
+
+## opencode version
+command: opencode --version
+exit_code: 0
+output:
+1.17.0
+
+## opencode.json parse
+command: python3 -m json.tool opencode.json
+exit_code: 0
+output: json parse ok
+
+## oh-my-openagent jsonc parse
+command: python3 -c import json, pathlib; json.loads(pathlib.Path(".opencode/oh-my-openagent.jsonc").read_text()); print("jsonc parse ok")
+exit_code: 0
+output:
+jsonc parse ok
+
+## oh-my-openagent pin
+command: npm view oh-my-openagent@4.8.1 version
+exit_code: 0
+output:
+4.8.1
+
+## opencode-claude-auth pin
+command: npm view opencode-claude-auth@1.5.4 version
+exit_code: 0
+output:
+1.5.4
+
+## isolated opencode agent list
+command: opencode agent list
+exit_code: 0
+selected_output:
+opencode-claude-auth: No Claude Code credentials found. Running in API key mode with transform hook enabled.
+Atlas - Plan Executor (primary)
+Sisyphus - ultraworker (primary)
+Prometheus - Plan Builder (primary)
+explore (subagent)
+
+## agent-list assertions
+- Atlas primary: FAIL
+- Sisyphus primary: FAIL
+- Prometheus primary: FAIL
+- explore subagent: FAIL
+
+secret-shaped output scan: PASS

@@ -1,0 +1,33 @@
+# orl-task-2 no-env negative evidence
+
+Timestamp: 2026-06-11
+Branch: feat/grimoire-opencode-loop
+
+Purpose
+- Verify a repo-configured ai-relay model call fails clearly when AI_RELAY_API_KEY is unset.
+- Do not print or inspect any secret value.
+
+Command shape
+- Clean environment via env -i with only HOME, USER, PATH, TMPDIR, XDG_CONFIG_HOME, and XDG_DATA_HOME preserved.
+- AI_RELAY_API_KEY and CODEX_LB_LOCAL_API_KEY were not present in the command environment.
+- Command: opencode run --format json --dir <repo> --model ai-relay/gpt-5.5 --variant medium "Return exactly GRIMOIRE_TASK2_SHOULD_NOT_SUCCEED."
+
+Observed output summary
+- JSON event type: error
+- sessionID format observed: ses_...
+- error.name: APIError
+- error.data.message: Missing API key in Authorization header
+- error.data.statusCode: 401
+- error.data.isRetryable: false
+- responseBody error.type: authentication_error
+- responseBody error.code: invalid_api_key
+- metadata.url: https://relay-ai.dongwontuna.net/v1/responses
+- exit code: 1
+
+Prior nuance retained
+- Earlier grimoire notes observed a missing-key JSON error event returning exit code 0 in another local run.
+- This clean-env rerun returned exit code 1, but future CI should still inspect JSON error events or require success sentinels rather than trusting exit code alone.
+
+Secret handling
+- No API key, token, private key, or environment dump was printed.
+- The configured repo placeholder remains {env:AI_RELAY_API_KEY}; no raw key is stored in this evidence.
