@@ -1,0 +1,53 @@
+# Task 4 evidence: Atlas auto-finish and Momus always-on prompt_append
+
+Timestamp: 2026-06-10T17:18:38Z
+Scope: static/config-load evidence. No live Atlas/Momus model success is claimed.
+
+## Config changes verified
+
+- PASS: `opencode.json` defines `agent.atlas.prompt_append` only; no `agent.atlas.prompt` replacement exists.
+- PASS: Atlas override replaces the terminal human `user okay` wait in CI/headless contexts with machine-readable F1-F4 JSON completion.
+- PASS: Atlas override requires `f1_oracle`, `f2_quality`, `f3_real_qa`, and `f4_scope` all exactly `APPROVE`, plus `approved=true`.
+- PASS: Atlas override says to auto-complete, stop after boulder completion, report completion, and never block on human confirmation when Boulder completion and all-APPROVE verdict are present.
+- PASS: Atlas override rejects missing/malformed/non-APPROVE verdict JSON and does not parse free-form approval prose as success.
+- PASS: `opencode.json` defines `agent.momus.prompt_append` only; no `agent.momus.prompt` replacement exists.
+- PASS: Momus override is always-on in CI/headless contexts and must run at least once for every Prometheus plan before implementation starts.
+- PASS: Momus override forbids bypassing the review because no human selected high-accuracy mode or because a fast/default path exists.
+- PASS: The single marker `OMO_CI_AUTONOMOUS_V1` appears exactly once in `opencode.json`, at the end of `agent.momus.prompt_append`.
+
+## Commands and results
+
+```text
+$ python3 -m json.tool opencode.json >/dev/null
+PASS: exit 0
+
+$ python3 structural prompt_append assertions
+PASS: agent.atlas.prompt_append present with user-okay removal and F1-F4 JSON all-APPROVE auto-complete directives
+PASS: agent.momus.prompt_append present with always-on at-least-once review gate directives
+PASS: no top-level prompt or agent.*.prompt replacement keys
+PASS: OMO_CI_AUTONOMOUS_V1 marker count is 1 and marker ends the Momus appended block
+
+$ rg -c "OMO_CI_AUTONOMOUS_V1" opencode.json
+1
+```
+
+## Agent-list config-load check
+
+Command used isolated HOME/XDG config/data/cache and a placeholder relay env name only:
+
+```text
+$ opencode agent list
+PASS: Atlas resolved via Atlas - Plan Executor
+PASS: Sisyphus resolved via Sisyphus
+PASS: Prometheus resolved via Prometheus - Plan Builder
+PASS: explore resolved via explore (subagent)
+PASS: Momus resolved via Momus - Plan Critic
+```
+
+The command generated ignored `.opencode` package artifacts (`node_modules`, `package.json`, `package-lock.json`, `.gitignore`); they were removed before staging. `.opencode` now contains only `oh-my-openagent.jsonc`.
+
+## OMO/source grounding
+
+- Installed Atlas prompt contains the Final Verification Wave and an explicit final `user okay` wait after F1-F4.
+- Installed Momus metadata says Momus is used after Prometheus creates a work plan and before executing complex todo lists.
+- Installed OMO dist appends `prompt_append` to existing prompts, preserving the built-in Atlas orchestration and Momus review semantics while adding CI-specific behavior.

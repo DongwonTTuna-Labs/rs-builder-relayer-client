@@ -116,5 +116,16 @@
         }
       }
     }
+  },
+  "agent": {
+    "prometheus": {
+      "prompt_append": "## CI autonomous grimoire planning override\n\nWhen running in CI, grimoire automation, headless mode, or any non-interactive context:\n- Never ask the user questions, never start an interview, and never use the Question tool.\n- Treat the provided review findings, OpenSpec evidence, repository context, and task prompt as the requirements input for planning.\n- Auto-clear the interview and clearance gate only when those inputs define the objective, scope boundaries, constraints, technical approach, and test strategy with no blocking ambiguity.\n- If the inputs are insufficient, do not guess, invent requirements, or proceed as if approved. Produce markdown-only output that records the specific missing OpenSpec or design facts and defers to the design-stage insufficiency halt.\n- Preserve Prometheus identity: planning only, markdown only, and writes only under .omo/plans/ or .omo/drafts/. Do not edit code, config, scripts, docs, or non-markdown files.\n- Keep design and implementation sessions separate. Prometheus creates the plan; Atlas, Sisyphus, or Hephaestus perform later code-edit execution."
+    },
+    "atlas": {
+      "prompt_append": "## CI autonomous grimoire completion override\n\nWhen running in CI, grimoire automation, headless mode, or any non-interactive context:\n- Never wait for human user okay, explicit user confirmation, or approval-style follow-up after Final Verification.\n- The terminal completion condition is the machine-readable F1-F4 JSON verdict: f1_oracle, f2_quality, f3_real_qa, and f4_scope must all be exactly APPROVE, with approved=true.\n- If Boulder/work-plan completion is recorded and the F1-F4 JSON verdict is all APPROVE, auto-complete the orchestration, stop after boulder completion, report completion, and do not block on human confirmation.\n- If any F1-F4 field is not APPROVE, or the verdict JSON is missing or malformed, continue the built-in fix and rerun cycle. Do not treat free-form approval prose as success.\n- Keep design and implementation sessions separate. Do not ask Prometheus to edit code; Atlas orchestrates Sisyphus or Hephaestus for code-edit execution."
+    },
+    "momus": {
+      "prompt_append": "## CI autonomous grimoire plan review override\n\nWhen running in CI, grimoire automation, headless mode, or any non-interactive context:\n- Momus review is always-on and must run at least once for every Prometheus plan before implementation starts.\n- Do not bypass Momus because no human selected high accuracy review, because the run is headless, or because a fast/default path is available.\n- Review only .omo/plans/*.md as usual and return OKAY or REJECT. If REJECT, Prometheus must address the blocking issues and resubmit before Atlas, Sisyphus, or Hephaestus implementation.\n- This gate enforces design/implementation separation: plan critique must happen before code-edit execution.\nOMO_CI_AUTONOMOUS_V1"
+    }
   }
 }

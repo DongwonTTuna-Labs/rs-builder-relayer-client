@@ -1,0 +1,52 @@
+# Task 4 evidence: Prometheus no-ask prompt_append
+
+Timestamp: 2026-06-10T17:18:38Z
+Scope: static/config-load evidence plus best-effort local smoke attempt.
+
+## Config changes verified
+
+- PASS: `opencode.json` defines `agent.prometheus.prompt_append` only; no `agent.prometheus.prompt` replacement exists.
+- PASS: Prometheus override says CI/headless runs must never ask user questions, never start an interview, and never use the Question tool.
+- PASS: Prometheus override treats review findings, OpenSpec evidence, repository context, and the task prompt as requirements input.
+- PASS: Prometheus override auto-clears interview/clearance only when objective, scope, constraints, technical approach, and test strategy are clear.
+- PASS: Prometheus override does not guess when inputs are insufficient; it records missing OpenSpec/design facts and defers to design-stage insufficiency halt.
+- PASS: Prometheus remains planning-only and markdown-only under `.omo/plans/` or `.omo/drafts/`; implementation stays with Atlas/Sisyphus/Hephaestus later.
+
+## Commands and results
+
+```text
+$ python3 -m json.tool opencode.json >/dev/null
+PASS: exit 0
+
+$ python3 structural prompt_append assertions
+PASS: agent.prometheus.prompt_append present with no-question/OpenSpec/insufficiency/md-only directives
+PASS: no top-level prompt or agent.*.prompt replacement keys
+PASS: OMO_CI_AUTONOMOUS_V1 marker count is 1 and marker ends the Momus appended block
+
+$ rg -c "OMO_CI_AUTONOMOUS_V1" opencode.json
+1
+
+$ rg -n '"prompt_append"|"prompt"|OMO_CI_AUTONOMOUS_V1|Question tool|user okay|Momus review|F1-F4|stop after boulder completion' opencode.json
+122: agent.prometheus.prompt_append includes Question tool, review findings, OpenSpec, insufficiency halt, markdown-only, and session separation directives.
+125: agent.atlas.prompt_append includes user okay removal, F1-F4 JSON all-APPROVE, and stop-after-boulder directives.
+128: agent.momus.prompt_append ends with OMO_CI_AUTONOMOUS_V1.
+```
+
+## OMO/source grounding
+
+- Official OpenCode config docs confirm project `opencode.json` supports the top-level `agent` option and project configs are merged rather than replacing the whole config.
+- Installed OMO dist confirms `prompt_append` is appended to existing prompts instead of replacing them: `mergeAgentConfig` removes `prompt_append` from the deep-merged override and appends it to `merged.prompt`; Prometheus config builder applies the same append-only behavior.
+- Installed Prometheus prompt contains default interview/Question-tool/high-accuracy choice behavior and markdown-only planning constraints, so this task uses `prompt_append` to override CI interactivity without erasing md-only planning constraints.
+
+## Best-effort live Prometheus smoke
+
+```text
+AI_RELAY_API_KEY_PRESENT=1
+Command attempted in an isolated temporary project copy:
+opencode run --agent prometheus --format json --dir <temp-work> "CI no-ask smoke..."
+RESULT: BLOCKED
+The command exceeded the 180000 ms tool timeout before producing a transcript.
+No live no-Question transcript is claimed.
+```
+
+Live behavioral proof is deferred to live CI after the workflow/default-branch prerequisites are available. Static/config-load assertions above are the minimum Task 4 evidence floor.
