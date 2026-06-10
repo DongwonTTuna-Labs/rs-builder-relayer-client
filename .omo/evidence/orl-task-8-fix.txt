@@ -1,0 +1,93 @@
+# orl-task-8-fix evidence
+
+timestamp: 2026-06-10T20:34:39Z
+scope: Task 8 fix-stage script, scoped fix fixture, scope violation guard, real-mode fail-closed readiness
+secrets: no secret values were printed or recorded
+
+## Syntax, Lint, And CLI Surface
+
+COMMAND: bash -n .github/scripts/grimoire-fix.sh
+EXPECTED: exit 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: command -v shellcheck
+EXPECTED: shellcheck path or honest unavailable note
+OBSERVED: /opt/homebrew/bin/shellcheck
+RESULT: PASS
+
+COMMAND: shellcheck .github/scripts/grimoire-fix.sh
+EXPECTED: exit 0
+OBSERVED_EXIT: 0
+RESULT: PASS
+
+COMMAND: ./.github/scripts/grimoire-fix.sh --help
+EXPECTED: exit 0 with documented inputs, outputs, mock modes, real readiness, scope guard, and no-op guard
+OBSERVED_EXIT: 0
+OBSERVED: help text includes Task 6 JSON, design plan, Task 7 status, fix-status output, handoff prompt, mock modes, real mode readiness, scope guard, and no-op guard
+RESULT: PASS
+
+COMMAND: ./.github/scripts/grimoire-fix.sh --bad-option
+EXPECTED: nonzero usage error
+OBSERVED_EXIT: 2
+OBSERVED: grimoire-fix: unknown option: --bad-option
+RESULT: PASS
+
+COMMAND: lsp_diagnostics .github/scripts/grimoire-fix.sh
+EXPECTED: diagnostics if Bash LSP is installed, otherwise honest unavailable note
+OBSERVED: bash-language-server is not installed
+RESULT: PASS
+
+## Mock Scoped Fix Fixture
+
+COMMAND: tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/grimoire-task8-final.XXXXXX") && ./.github/scripts/grimoire-fix.sh --mode mock-fix --output "$tmp_dir/fix-status.json" --handoff-prompt "$tmp_dir/fix-handoff-prompt.md" --plan "$tmp_dir/design-plan.md"
+EXPECTED: exit 0 and status=fixed with scope_ok=true
+OBSERVED_EXIT: 0
+OBSERVED_STDOUT: grimoire-fix: mock scoped fix passed; status written to .../fix-status.json and handoff prompt to .../fix-handoff-prompt.md
+RESULT: PASS
+
+COMMAND: python3 assert mock-fix JSON and handoff prompt
+EXPECTED: status=fixed, scope_ok=true, should_commit=true, should_push=true, no commit or push attempted, four scoped changed files, and prompt includes /start-work
+OBSERVED: mock-fix PASS; changed files were src/deposit_wallet/http/read.rs, tests/deposit_wallet/http/read_scope_guard.rs, docs/grimoire-fix-scope.md, and openspec/changes/grimoire-fix/specs/fix-stage/spec.md
+RESULT: PASS
+
+## Scope Violation Negative Fixture
+
+COMMAND: ./.github/scripts/grimoire-fix.sh --mode mock-scope-violation --output "$tmp_dir/violation-status.json" --handoff-prompt "$tmp_dir/violation-prompt.md" --plan "$tmp_dir/violation-plan.md"
+EXPECTED: nonzero exit with scope_ok=false and no commit or push signal
+OBSERVED_EXIT: 1
+OBSERVED_STDERR: grimoire-fix: mock scope violation failed closed; status written to .../violation-status.json
+RESULT: PASS
+
+COMMAND: python3 assert mock-scope-violation JSON
+EXPECTED: status=scope-violation, .github/workflows/grimoire.yml in scope_violations, should_commit=false, should_push=false
+OBSERVED: mock-scope-violation PASS
+RESULT: PASS
+
+## Spec/Gap Blocked Fixture
+
+COMMAND: ./.github/scripts/grimoire-fix.sh --mode mock-blocked --output "$tmp_dir/blocked-status.json" --handoff-prompt "$tmp_dir/blocked-prompt.md" --plan "$tmp_dir/blocked-plan.md"
+EXPECTED: nonzero exit before handoff authorization
+OBSERVED_EXIT: 1
+OBSERVED_STDERR: grimoire-fix: mock blocked fixture failed closed; status written to .../blocked-status.json
+RESULT: PASS
+
+COMMAND: python3 assert mock-blocked JSON and prompt
+EXPECTED: status=blocked, spec_sufficient=false, task7_should_halt=true, should_commit=false, should_push=false, empty handoff prompt
+OBSERVED: mock-blocked PASS
+RESULT: PASS
+
+## Real-Mode Fail-Closed Fixture
+
+COMMAND: env -u AI_RELAY_API_KEY -u GRIMOIRE_FIX_READY ./.github/scripts/grimoire-fix.sh --mode real --spec-sufficiency "$spec" --spec-gap-status "$gap" --plan "$plan" --output "$fix" --handoff-prompt "$prompt" --pr-touched "$pr" --changed-files "$changed"
+EXPECTED: nonzero exit and blocked status before model/code authorization
+OBSERVED_EXIT: 1
+OBSERVED_STDERR: grimoire-fix: real mode blocked or failed closed; status written to .../fix-status.json
+RESULT: PASS
+
+COMMAND: python3 assert real blocked JSON and prompt
+EXPECTED: status=blocked, real_mode_attempted=true, model_called=false, blockers include relay env name and GRIMOIRE_FIX_READY=1, empty handoff prompt
+OBSERVED: real-blocked PASS
+RESULT: PASS
+
+OVERALL: PASS

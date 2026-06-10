@@ -1,0 +1,43 @@
+# orl-task-8-noop evidence
+
+timestamp: 2026-06-10T20:34:39Z
+scope: Task 8 no-op guard and empty post-fix diff contract
+secrets: no secret values were printed or recorded
+
+## No-op Fixture
+
+COMMAND: tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/grimoire-task8-final.XXXXXX") && ./.github/scripts/grimoire-fix.sh --mode mock-noop --output "$tmp_dir/noop-status.json" --handoff-prompt "$tmp_dir/noop-prompt.md" --plan "$tmp_dir/noop-plan.md"
+EXPECTED: exit 0 and status=clear-noop
+OBSERVED_EXIT: 0
+OBSERVED_STDOUT: grimoire-fix: mock no-op passed; status written to .../noop-status.json and handoff prompt to .../noop-prompt.md
+RESULT: PASS
+
+COMMAND: python3 assert mock-noop JSON
+EXPECTED: status=clear-noop, noop=true, scope_ok=true, changed_files=[], should_commit=false, should_push=false, commit_attempted=false, push_attempted=false
+OBSERVED: mock-noop PASS
+RESULT: PASS
+
+## Commit/Push Guard
+
+COMMAND: inspect mock-noop status JSON fields
+EXPECTED: no commit or push signal when the post-fix changed-file list is empty
+OBSERVED:
+- status: clear-noop
+- noop: true
+- scope_ok: true
+- changed_files: []
+- should_commit: false
+- should_push: false
+- commit_attempted: false
+- push_attempted: false
+- github_mutation_performed: false
+RESULT: PASS
+
+## Runtime Artifact Hygiene
+
+COMMAND: run mock-noop with --output, --handoff-prompt, and --plan all under a temporary directory
+EXPECTED: no durable .omo/ci runtime artifact is required for no-op proof; durable evidence is this file under .omo/evidence
+OBSERVED: fixture artifacts were written under /var/folders/.../grimoire-task8-final.* only
+RESULT: PASS
+
+OVERALL: PASS
