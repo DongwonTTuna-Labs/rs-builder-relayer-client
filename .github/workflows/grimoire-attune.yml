@@ -1,0 +1,454 @@
+name: grimoire attune
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_note:
+        description: Optional non-secret note to include in the healthcheck prompt.
+        required: false
+        type: string
+        default: manual headless control-plane healthcheck
+
+permissions: {}
+
+concurrency:
+  group: grimoire-attune-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  headless-opencode-healthcheck:
+    name: Headless opencode/OMO healthcheck
+    runs-on:
+      - self-hosted
+      - dongwontuna-labs-runner
+    timeout-minutes: 30
+    env:
+      ATTUNE_SUBDIR: grimoire-attune
+      BUN_VERSION: "1.3.10"
+      OPENCODE_MODEL: ai-relay/gpt-5.5
+      OPENCODE_VARIANT: medium
+      OPENCODE_VERSION: "1.17.0"
+      OMO_VERSION: "4.8.1"
+    steps:
+      - name: Checkout source without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          token: ""
+
+      - name: Install pinned opencode and OMO package tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          ATTUNE_DIR="${RUNNER_TEMP}/${ATTUNE_SUBDIR}"
+          echo "ATTUNE_DIR=${ATTUNE_DIR}" >> "${GITHUB_ENV}"
+          mkdir -p \
+            "${ATTUNE_DIR}/npm-global" \
+            "${ATTUNE_DIR}/xdg-config" \
+            "${ATTUNE_DIR}/xdg-data"
+          {
+            printf 'XDG_CONFIG_HOME=%s\n' "${ATTUNE_DIR}/xdg-config"
+            printf 'XDG_DATA_HOME=%s\n' "${ATTUNE_DIR}/xdg-data"
+          } >> "${GITHUB_ENV}"
+          export XDG_CONFIG_HOME="${ATTUNE_DIR}/xdg-config"
+          export XDG_DATA_HOME="${ATTUNE_DIR}/xdg-data"
+          echo "${ATTUNE_DIR}/npm-global/bin" >> "${GITHUB_PATH}"
+          export PATH="${ATTUNE_DIR}/npm-global/bin:${PATH}"
+
+          if ! command -v npm >/dev/null 2>&1; then
+            printf 'npm is required to install pinned opencode tooling\n' >&2
+            exit 1
+          fi
+
+          npm install --global --prefix "${ATTUNE_DIR}/npm-global" \
+            "bun@${BUN_VERSION}" \
+            "opencode-ai@${OPENCODE_VERSION}"
+
+          actual_opencode_version="$(opencode --version)"
+          if [ "${actual_opencode_version}" != "${OPENCODE_VERSION}" ]; then
+            printf 'opencode version mismatch: expected %s, got %s\n' \
+              "${OPENCODE_VERSION}" "${actual_opencode_version}" >&2
+            exit 1
+          fi
+          printf 'opencode %s\n' "${actual_opencode_version}" | tee "${ATTUNE_DIR}/opencode-version.txt"
+
+          actual_bun_version="$(bun --version)"
+          if [ "${actual_bun_version}" != "${BUN_VERSION}" ]; then
+            printf 'bun version mismatch: expected %s, got %s\n' \
+              "${BUN_VERSION}" "${actual_bun_version}" >&2
+            exit 1
+          fi
+          printf 'bun %s\n' "${actual_bun_version}" | tee "${ATTUNE_DIR}/bun-version.txt"
+
+          (
+            cd "${ATTUNE_DIR}"
+            bunx "oh-my-openagent@${OMO_VERSION}" --version
+          ) | tee "${ATTUNE_DIR}/omo-version.txt"
+          if ! grep -Fxq "${OMO_VERSION}" "${ATTUNE_DIR}/omo-version.txt"; then
+            printf 'oh-my-openagent version mismatch: expected %s\n' "${OMO_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Resolve ai-relay key from secret or runner env
+        id: relay-key
+        shell: bash
+        env:
+          AI_RELAY_API_KEY_SECRET: ${{ secrets.AI_RELAY_API_KEY }}
+        run: |
+          set -euo pipefail
+          selected=""
+          source=""
+
+          if [ -n "${AI_RELAY_API_KEY_SECRET:-}" ]; then
+            selected="${AI_RELAY_API_KEY_SECRET}"
+            source="secret"
+          elif [ -n "${AI_RELAY_API_KEY:-}" ]; then
+            selected="${AI_RELAY_API_KEY}"
+            source="runner-env"
+          fi
+
+          if [ -z "${selected}" ]; then
+            printf 'ai-relay key unavailable from both configured sources; refusing model smoke\n' >&2
+            exit 1
+          fi
+
+          printf '::add-mask::%s\n' "${selected}"
+          {
+            printf 'AI_RELAY_API_KEY<<__GRIMOIRE_ATTUNE_KEY__\n'
+            printf '%s\n' "${selected}"
+            printf '__GRIMOIRE_ATTUNE_KEY__\n'
+            printf 'AI_RELAY_KEY_SOURCE=%s\n' "${source}"
+          } >> "${GITHUB_ENV}"
+          printf 'source=%s\n' "${source}" >> "${GITHUB_OUTPUT}"
+          printf 'Resolved relay key source: %s\n' "${source}"
+
+      - name: Configure healthcheck-only opencode settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "${ATTUNE_DIR}/opencode-config.json" <<'JSON'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "model": "ai-relay/gpt-5.5",
+            "small_model": "ai-relay/gpt-5.5",
+            "share": "disabled",
+            "autoupdate": false,
+            "plugin": [
+              "oh-my-openagent@4.8.1"
+            ],
+            "default_agent": "atlas",
+            "provider": {
+              "ai-relay": {
+                "npm": "@ai-sdk/openai",
+                "name": "AI Relay",
+                "options": {
+                  "baseURL": "https://relay-ai.dongwontuna.net/v1",
+                  "apiKey": "{env:AI_RELAY_API_KEY}"
+                },
+                "models": {
+                  "gpt-5.5": {
+                    "name": "GPT-5.5",
+                    "attachment": true,
+                    "modalities": {
+                      "input": ["text", "image", "pdf"],
+                      "output": ["text"]
+                    },
+                    "limit": {
+                      "context": 272000,
+                      "input": 272000,
+                      "output": 128000
+                    },
+                    "variants": {
+                      "medium": {
+                        "reasoningEffort": "medium",
+                        "providerOptions": {
+                          "openai": {
+                            "reasoningEffort": "medium"
+                          }
+                        }
+                      },
+                      "high": {
+                        "reasoningEffort": "high",
+                        "providerOptions": {
+                          "openai": {
+                            "reasoningEffort": "high"
+                          }
+                        }
+                      },
+                      "xhigh": {
+                        "reasoningEffort": "xhigh",
+                        "providerOptions": {
+                          "openai": {
+                            "reasoningEffort": "xhigh"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "gpt-5.4": {
+                    "name": "GPT-5.4"
+                  },
+                  "gpt-5.3-codex-spark": {
+                    "name": "Codex Spark"
+                  },
+                  "codex-auto-review": {
+                    "name": "Codex Auto Review"
+                  }
+                }
+              }
+            },
+            "permission": {
+              "read": {
+                "*": "allow",
+                "*.env": "deny",
+                "*.env.*": "deny",
+                "*.env.example": "allow"
+              },
+              "edit": "deny",
+              "bash": {
+                "*": "deny",
+                "printf GRIMOIRE_ATTUNE_BASH_OK": "allow",
+                "printf GRIMOIRE_ATTUNE_BASH_OK*": "allow",
+                "printf *GRIMOIRE_ATTUNE_BASH_OK*": "allow"
+              },
+              "task": "deny",
+              "webfetch": "deny",
+              "external_directory": "deny",
+              "question": "deny",
+              "plan_enter": "deny",
+              "plan_exit": "deny"
+            },
+            "agent": {
+              "atlas": {
+                "permission": {
+                  "read": {
+                    "*": "allow",
+                    "*.env": "deny",
+                    "*.env.*": "deny",
+                    "*.env.example": "allow"
+                  },
+                  "edit": "deny",
+                  "bash": {
+                    "*": "deny",
+                    "printf GRIMOIRE_ATTUNE_BASH_OK": "allow",
+                    "printf GRIMOIRE_ATTUNE_BASH_OK*": "allow",
+                    "printf *GRIMOIRE_ATTUNE_BASH_OK*": "allow"
+                  },
+                  "task": "deny",
+                  "webfetch": "deny",
+                  "external_directory": "deny",
+                  "question": "deny",
+                  "plan_enter": "deny",
+                  "plan_exit": "deny"
+                }
+              }
+            }
+          }
+          JSON
+
+          python3 -m json.tool "${ATTUNE_DIR}/opencode-config.json" >/dev/null
+          {
+            printf 'OPENCODE_CONFIG_CONTENT<<__GRIMOIRE_ATTUNE_CONFIG__\n'
+            cat "${ATTUNE_DIR}/opencode-config.json"
+            printf '__GRIMOIRE_ATTUNE_CONFIG__\n'
+          } >> "${GITHUB_ENV}"
+
+      - name: Verify OMO plugin and default agent resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${ATTUNE_DIR}/agent-list.txt" <<'PY'
+          import subprocess
+          import sys
+
+          output_path = sys.argv[1]
+          with open(output_path, "w", encoding="utf-8") as output:
+              try:
+                  result = subprocess.run(
+                      ["opencode", "agent", "list"],
+                      stdout=output,
+                      stderr=subprocess.STDOUT,
+                      check=False,
+                      timeout=180,
+                  )
+              except subprocess.TimeoutExpired:
+                  print("opencode agent list timed out", file=sys.stderr)
+                  sys.exit(124)
+          if result.returncode != 0:
+              print("opencode agent list failed", file=sys.stderr)
+              sys.exit(result.returncode)
+          PY
+
+          grep -Eq '^Atlas - .*\(primary\)' "${ATTUNE_DIR}/agent-list.txt"
+          grep -Eq '^Sisyphus - .*\(primary\)' "${ATTUNE_DIR}/agent-list.txt"
+          grep -Eq '^Prometheus - .*\(primary\)' "${ATTUNE_DIR}/agent-list.txt"
+          grep -Eq '^explore \(subagent\)' "${ATTUNE_DIR}/agent-list.txt"
+
+          printf 'plugin oh-my-openagent loaded\n' | tee "${ATTUNE_DIR}/omo-plugin.txt"
+          printf 'default_agent atlas configured for the next model smoke\n' | tee "${ATTUNE_DIR}/default-agent.txt"
+
+      - name: Run ai-relay default-agent read and bash smoke
+        shell: bash
+        env:
+          SMOKE_NOTE: ${{ inputs.smoke_note }}
+        run: |
+          set -euo pipefail
+          cat > "${ATTUNE_DIR}/tool-smoke-prompt.txt" <<'PROMPT'
+          You are running the grimoire attune control-plane healthcheck.
+          Do not reveal, list, encode, transform, or summarize any environment variables or secrets.
+          Use the read tool exactly once on README.md.
+          Use the bash tool exactly once with this command: printf GRIMOIRE_ATTUNE_BASH_OK
+          After both tool calls complete, respond with exactly: GRIMOIRE_ATTUNE_MODEL_OK
+          PROMPT
+          printf '\nNon-secret operator note: %s\n' "${SMOKE_NOTE}" >> "${ATTUNE_DIR}/tool-smoke-prompt.txt"
+
+          python3 - "${ATTUNE_DIR}/tool-smoke-prompt.txt" "${ATTUNE_DIR}/tool-smoke.jsonl" <<'PY'
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          prompt_path = pathlib.Path(sys.argv[1])
+          output_path = pathlib.Path(sys.argv[2])
+          command = [
+              "opencode",
+              "run",
+              "--format",
+              "json",
+              "--dir",
+              os.environ["GITHUB_WORKSPACE"],
+              "--model",
+              os.environ["OPENCODE_MODEL"],
+              "--variant",
+              os.environ["OPENCODE_VARIANT"],
+              prompt_path.read_text(encoding="utf-8"),
+          ]
+          with output_path.open("w", encoding="utf-8") as output:
+              try:
+                  result = subprocess.run(
+                      command,
+                      stdout=output,
+                      stderr=subprocess.STDOUT,
+                      check=False,
+                      timeout=240,
+                  )
+              except subprocess.TimeoutExpired:
+                  print("opencode run timed out", file=sys.stderr)
+                  sys.exit(124)
+          if result.returncode != 0:
+              print("opencode run failed", file=sys.stderr)
+              sys.exit(result.returncode)
+          PY
+
+          python3 - "${ATTUNE_DIR}/tool-smoke.jsonl" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+          raw = open(path, "r", encoding="utf-8", errors="replace").read()
+          parsed = []
+          for line in raw.splitlines():
+              line = line.strip()
+              if not line:
+                  continue
+              try:
+                  parsed.append(json.loads(line))
+              except json.JSONDecodeError:
+                  pass
+
+          def walk(value):
+              if isinstance(value, dict):
+                  yield value
+                  for child in value.values():
+                      yield from walk(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      yield from walk(child)
+
+          tool_objects = []
+          assistant_text = []
+          for item in parsed:
+              for obj in walk(item):
+                  obj_text = json.dumps(obj, sort_keys=True)
+                  obj_type = str(obj.get("type", "")).lower()
+                  role = str(obj.get("role", "")).lower()
+                  if "tool" in obj_type or "tool" in obj or "tool_call" in obj_text:
+                      tool_objects.append(obj_text)
+                  if role == "assistant" or "assistant" in obj_type:
+                      assistant_text.append(obj_text)
+
+          tool_blob = "\n".join(tool_objects)
+          assistant_blob = "\n".join(assistant_text)
+          errors = []
+          if "read" not in tool_blob.lower():
+              errors.append("read tool event not observed")
+          if "bash" not in tool_blob.lower():
+              errors.append("bash tool event not observed")
+          if "GRIMOIRE_ATTUNE_BASH_OK" not in tool_blob:
+              errors.append("bash sentinel not observed in a tool event")
+          if "GRIMOIRE_ATTUNE_MODEL_OK" not in assistant_blob and "GRIMOIRE_ATTUNE_MODEL_OK" not in raw:
+              errors.append("model sentinel not observed")
+          if "error" in raw.lower() and "GRIMOIRE_ATTUNE_MODEL_OK" not in raw:
+              errors.append("error event observed without model sentinel")
+
+          if errors:
+              for error in errors:
+                  print(error, file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Scan healthcheck artifacts for secret-shaped output
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${ATTUNE_DIR}" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          root = pathlib.Path(sys.argv[1])
+          paths = [
+              root / "opencode-version.txt",
+              root / "bun-version.txt",
+              root / "omo-version.txt",
+              root / "agent-list.txt",
+              root / "omo-plugin.txt",
+              root / "default-agent.txt",
+              root / "tool-smoke.jsonl",
+          ]
+          patterns = {
+              "github_classic_prefix": re.compile(r"gh" + r"[pousr]_[A-Za-z0-9_]{20,}"),
+              "github_fine_grained_prefix": re.compile("github" + r"_pat_[A-Za-z0-9_]{20,}"),
+              "private_key_block": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+              "relay_assignment": re.compile("AI_RELAY_API_KEY" + "="),
+          }
+          findings = []
+          for path in paths:
+              if not path.exists():
+                  continue
+              text = path.read_text(encoding="utf-8", errors="replace")
+              for name, pattern in patterns.items():
+                  if pattern.search(text):
+                      findings.append(f"{path.name}:{name}")
+
+          if findings:
+              for finding in findings:
+                  print(finding, file=sys.stderr)
+              sys.exit(1)
+          print("secret-shaped artifact scan passed")
+          PY
+
+      - name: Summarize attune result
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf '## Grimoire attune healthcheck\n\n'
+            printf '- opencode: %s\n' "$(cat "${ATTUNE_DIR}/opencode-version.txt")"
+            printf '- bun: %s\n' "$(cat "${ATTUNE_DIR}/bun-version.txt")"
+            printf '- OMO package: %s\n' "$(cat "${ATTUNE_DIR}/omo-version.txt" | tail -n 1)"
+            printf '- relay key source: %s\n' "${AI_RELAY_KEY_SOURCE}"
+            printf '- OMO plugin/default agent: PASS\n'
+            printf '- ai-relay read/bash smoke: PASS\n'
+            printf '- secret-shaped artifact scan: PASS\n'
+          } >> "${GITHUB_STEP_SUMMARY}"

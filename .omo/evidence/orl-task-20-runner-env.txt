@@ -1,0 +1,23 @@
+# orl-task-20-runner-env
+
+Task: dual-source relay-key resolver simulation for attune
+Date: 2026-06-11
+
+RESULT: LOCAL NON-SECRET RESOLVER SIMULATION PASS.
+
+Resolver order implemented in .github/workflows/grimoire-attune.yml:
+1. Secret-mapped env name AI_RELAY_API_KEY_SECRET.
+2. Runner-inherited env name AI_RELAY_API_KEY.
+3. Fail closed if both are empty.
+
+Simulation cases used placeholder strings only; no real key values were printed or stored.
+
+Cases:
+- runner-env-only: selected source runner-env, PASS.
+- secret-only: selected source secret, PASS.
+- both-present precedence: selected source secret, PASS.
+
+Workflow export behavior:
+- The selected value is masked first.
+- The selected value is then exported through the Actions env file so opencode child processes inherit AI_RELAY_API_KEY.
+- The workflow never maps the secret directly onto AI_RELAY_API_KEY at step env level, avoiding empty-secret shadowing of a runner-provided key.

@@ -1,0 +1,18 @@
+# orl-task-20-failclosed
+
+Task: neither-source fail-closed proof for attune relay-key resolver
+Date: 2026-06-11
+
+RESULT: LOCAL NON-SECRET RESOLVER SIMULATION PASS.
+
+Neither-source simulation:
+- Secret-mapped env placeholder: unset.
+- Runner-inherited env placeholder: unset.
+- Resolver output class: missing.
+- Resolver exit: nonzero.
+- Expected workflow behavior: stop before any model smoke.
+
+Safety notes:
+- No real key values were used.
+- No model call was attempted for the missing-key case.
+- The workflow error message names the missing condition but does not include any secret value, runner env value, token-bearing URL, or environment dump.

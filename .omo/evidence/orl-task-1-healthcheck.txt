@@ -1,0 +1,64 @@
+# orl-task-1-healthcheck
+
+Task: grimoire attune headless opencode/OMO control-plane healthcheck
+Date: 2026-06-11
+Branch: feat/grimoire-opencode-loop
+
+RESULT: LOCAL/STATIC PASS; LIVE WORKFLOW DISPATCH BLOCKED.
+
+Implemented workflow:
+- Path: .github/workflows/grimoire-attune.yml
+- Trigger: workflow_dispatch only.
+- Runner: self-hosted + dongwontuna-labs-runner.
+- GitHub permissions: empty object.
+- Checkout: actions/checkout pinned to 11bd71901bbe5b1630ceea73d27597364c9af683 with credentials disabled and empty token input.
+- No push, PR comment, label, merge, or autonomous mutation behavior.
+
+Pinned current truth:
+- Local opencode --version: 1.17.0.
+- npm view opencode-ai@1.17.0 version: 1.17.0.
+- Local bun --version: 1.3.10.
+- npm view bun@1.3.10 version: 1.3.10.
+- bunx oh-my-openagent@4.8.1 --version: 4.8.1.
+- npm view oh-my-openagent@4.8.1 version: 4.8.1.
+
+Official docs checked:
+- https://opencode.ai/docs/cli/ confirms opencode run, --agent, --model, --variant, --format json, and the global pure flag behavior.
+- https://opencode.ai/docs/config/ confirms OPENCODE_CONFIG_CONTENT, default_agent, provider env substitution, plugin config, share, autoupdate, and precedence.
+- https://opencode.ai/docs/providers/ confirms provider baseURL customization.
+- https://opencode.ai/docs/plugins/ confirms npm plugin loading and plugin cache behavior.
+- https://opencode.ai/docs/permissions/ confirms granular permission syntax and available read/bash/edit/task/webfetch permissions.
+
+Workflow healthcheck coverage:
+- Installs pinned bun and opencode into runner temp npm prefix.
+- Verifies opencode --version equals 1.17.0.
+- Verifies bun version equals 1.3.10.
+- Verifies oh-my-openagent package pin 4.8.1.
+- Resolves relay key before any model call.
+- Writes workflow-local OPENCODE_CONFIG_CONTENT with ai-relay provider, OMO plugin 4.8.1, share disabled, autoupdate disabled, default_agent atlas, and restricted healthcheck permissions.
+- Sets XDG config/data dirs to runner temp so stale self-hosted runner config or sessions do not control the run; package cache is not forced cold.
+- Runs opencode agent list and requires Atlas, Sisyphus, Prometheus, and explore to prove OMO plugin/default-agent surface is loaded without pure mode.
+- Runs opencode run without an explicit agent so default_agent handles the ai-relay smoke.
+- The model smoke prompt requires one README.md read tool call, one bash tool call that prints the healthcheck sentinel, and the final model sentinel.
+- Python validators fail closed on opencode timeout, nonzero exit, missing tool events, missing sentinels, or error output without success sentinel.
+- Final step scans generated healthcheck artifacts for secret-shaped output.
+
+Local/static validation evidence:
+- actionlint .github/workflows/grimoire-attune.yml: PASS.
+- Ruby YAML parser load of .github/workflows/grimoire-attune.yml: PASS.
+- Embedded opencode config extracted from workflow and parsed with Python json: PASS.
+- Embedded config assertions for plugin, default_agent, provider npm, baseURL, apiKey env placeholder, and autoupdate false: PASS.
+- Local opencode agent list with embedded config and non-secret placeholder key found: Atlas - Plan Executor (primary), Sisyphus - ultraworker (primary), Prometheus - Plan Builder (primary), explore (subagent), Sisyphus-Junior (subagent).
+- Static scan for pure-mode flag in the workflow: 0 matches.
+- Static scan for default-token auth literal and token prefixes in the workflow: 0 matches.
+
+Live dispatch evidence:
+- gh workflow run was not executed.
+- Reason: the workflow is newly created locally and this task forbids push unless strictly required; no remote/default-branch workflow exists to dispatch yet from this local-only implementation step.
+- No live run URL, live job log, or live GitHub artifact is claimed.
+
+Local live model-smoke caveat:
+- A controlled local opencode run attempt mapped the existing local relay alias into the workflow's expected env name without printing the value.
+- It failed before producing a healthcheck log with: Session not found.
+- The same local nested-run failure occurred with opencode 1.17.0 and a temp-installed opencode 1.16.2, including when using the built-in build agent and isolated XDG config/data dirs.
+- Therefore this file does not claim local ai-relay/tool-call success; the workflow contains the real healthcheck and must produce live success on the Actions runner after commit/push/dispatch prerequisites are satisfied.
