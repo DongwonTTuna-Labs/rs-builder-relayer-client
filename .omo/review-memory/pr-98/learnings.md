@@ -2,7 +2,7 @@
 
 Generated from `review-memory.v1` ledger. Do not edit this projection manually.
 Category: `learnings`
-Entries: 20
+Entries: 21
 
 ## push-fix-pr98-r1-d2c38f7c4f38
 - kind: `fix_applied`
@@ -13,6 +13,16 @@ Entries: 20
 - created_at: `2026-06-10T08:45:00Z`
 
 Body: Trusted push boundary vali...[truncated]
+
+## terminal-lgtm-r0-3e27d137b244
+- kind: `learning`
+- round: 0
+- head_sha: `7b597a8d4f5813ec1ac74b7dcf8b056b780582f9`
+- source_stage: `reentry_terminal_memory`
+- status: advisory
+- created_at: `2026-06-10T10:22:48Z`
+
+Body: Terminal LGTM outcome reco...[truncated]
 
 ## terminal-lgtm-r0-1d8f064aadbf
 - kind: `learning`
