@@ -37,3 +37,9 @@ __pycache__/
 
 # Claude Code
 .claude/
+
+# opencode plugin install artifacts (generated at runtime; keep only oh-my-openagent.jsonc tracked)
+.opencode/node_modules/
+.opencode/package.json
+.opencode/package-lock.json
+.opencode/.gitignore

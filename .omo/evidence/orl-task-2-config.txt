@@ -1,8 +1,8 @@
 # orl task 2 config evidence
 
 repo: /Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client
-isolated_xdg_root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/orl-task-2-config-clean-w7wfuzr9
-environment: minimal PATH/TMPDIR/LANG plus isolated HOME/XDG only; provider keys, local opencode session variables, auth tokens, and OPENCODE_CONFIG_CONTENT were not inherited
+isolated_root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/orl-task-2-config-repair-5n89lhm_
+environment: env -i style minimal PATH/TMPDIR/LANG/USER plus isolated HOME/XDG only; provider keys, local opencode session variables, auth tokens, and OPENCODE_CONFIG_CONTENT were not inherited
 
 ## opencode version
 command: opencode --version
@@ -44,9 +44,37 @@ Prometheus - Plan Builder (primary)
 explore (subagent)
 
 ## agent-list assertions
-- Atlas primary: PASS
-- Sisyphus primary: PASS
-- Prometheus primary: PASS
-- explore subagent: PASS
+- Atlas primary: PASS, matched line: "Atlas - Plan Executor (primary)"
+- Sisyphus primary: PASS, matched line: "Sisyphus - ultraworker (primary)"
+- Prometheus primary: PASS, matched line: "Prometheus - Plan Builder (primary)"
+- explore subagent: PASS, matched line: "explore (subagent)"
+
+matcher correction note: prior FAIL assertions were caused by a buggy matcher, not by missing OMO agents; this rerun matches the actual opencode agent list lines above.
 
 secret-shaped output scan: PASS
+
+## post-ignore opencode agent list verification
+isolated_root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/orl-task-2-ignore-verify-rzg2lecw
+command: opencode agent list, then GIT_MASTER=1 git status --short
+opencode_exit_code: 0
+- Atlas primary: PASS, matched line: "Atlas - Plan Executor (primary)"
+- Sisyphus primary: PASS, matched line: "Sisyphus - ultraworker (primary)"
+- Prometheus primary: PASS, matched line: "Prometheus - Plan Builder (primary)"
+- explore subagent: PASS, matched line: "explore (subagent)"
+git_status_short_opencode_generated_junk: PASS (no .opencode generated artifact lines)
+note: opencode may regenerate plugin install artifacts, but root .gitignore now keeps them out of shared git status; generated artifacts are removed again before commit.
+
+## final post-normalized ignore verification
+isolated_root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/orl-task-2-ignore-final-9fc0otci
+command: opencode agent list, then GIT_MASTER=1 git status --short, then GIT_MASTER=1 git check-ignore -v --no-index <generated paths>
+opencode_exit_code: 0
+- Atlas primary: PASS, matched line: "Atlas - Plan Executor (primary)"
+- Sisyphus primary: PASS, matched line: "Sisyphus - ultraworker (primary)"
+- Prometheus primary: PASS, matched line: "Prometheus - Plan Builder (primary)"
+- explore subagent: PASS, matched line: "explore (subagent)"
+git_status_short_opencode_generated_junk: PASS (no .opencode generated artifact lines)
+git_check_ignore_root_rules:
+  .opencode/.gitignore:2:package.json	.opencode/package.json
+  .opencode/.gitignore:3:package-lock.json	.opencode/package-lock.json
+  .opencode/.gitignore:1:node_modules	.opencode/node_modules/example
+  .opencode/.gitignore:5:.gitignore	.opencode/.gitignore
