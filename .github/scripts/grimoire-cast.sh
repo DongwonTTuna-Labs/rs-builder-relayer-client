@@ -876,6 +876,64 @@ select_pat_source() {
   fi
 }
 
+pat_value_for_source() {
+  local pat_source="$1"
+  case "$pat_source" in
+    GRIMOIRE_PAT)
+      [ -n "${GRIMOIRE_PAT:-}" ] || return 1
+      printf '%s' "$GRIMOIRE_PAT"
+      ;;
+    CODEX_LOOP_PAT)
+      [ -n "${CODEX_LOOP_PAT:-}" ] || return 1
+      printf '%s' "$CODEX_LOOP_PAT"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+mask_github_actions_value() {
+  local value="$1"
+  if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "$value" ]; then
+    printf '::add-mask::%s\n' "$value"
+  fi
+}
+
+push_with_pat_source() {
+  local pat_source="$1"
+  local refspec="$2"
+  local pat_value
+  local encoded_auth
+  local extraheader
+
+  if ! pat_value="$(pat_value_for_source "$pat_source")"; then
+    return 1
+  fi
+  if ! encoded_auth="$(GRIMOIRE_SELECTED_PAT_VALUE="$pat_value" python3 - <<'PY'
+import base64
+import os
+import sys
+
+token = os.environ.get("GRIMOIRE_SELECTED_PAT_VALUE", "")
+if not token:
+    sys.exit(1)
+sys.stdout.write(base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii"))
+PY
+  )"; then
+    return 1
+  fi
+  extraheader="AUTHORIZATION: basic ${encoded_auth}"
+  mask_github_actions_value "$pat_value"
+  mask_github_actions_value "$encoded_auth"
+  mask_github_actions_value "$extraheader"
+
+  GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+    GIT_CONFIG_VALUE_0="$extraheader" \
+    git push origin "$refspec"
+}
+
 preflight_real() {
   local blockers=()
   [ -n "${AI_RELAY_API_KEY:-}" ] || blockers+=("AI_RELAY_API_KEY is not set")
@@ -1128,7 +1186,7 @@ commit_and_push_if_allowed() {
     fail_closed "empty-commit-refused" "scoped mutation paths produced no staged diff; refusing empty commit/push" 36
   fi
   git commit -m "$BOT_COMMIT_MESSAGE" --author "$BOT_AUTHOR_NAME <$BOT_AUTHOR_EMAIL>"
-  git push origin "HEAD:${GRIMOIRE_HEAD_REF}"
+  push_with_pat_source "$pat_source" "HEAD:${GRIMOIRE_HEAD_REF}"
   write_decision "fixed-pushed" "Task 8 fixed and Task 9 all-APPROVE; one bot commit/push path completed" 0
 }
 

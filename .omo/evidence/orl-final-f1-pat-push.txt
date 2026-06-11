@@ -1,0 +1,30 @@
+# orl-final-f1-pat-push
+
+PASS: `.github/scripts/grimoire-cast.sh` now wires the selected mutation PAT into the actual push path.
+
+Implementation evidence:
+- PASS: PAT precedence stays `GRIMOIRE_PAT` first, `CODEX_LOOP_PAT` second through the existing `select_pat_source` function.
+- PASS: `push_with_pat_source` resolves the selected source by name, derives a GitHub HTTPS basic auth extraheader, masks the raw selected PAT plus derived auth material on GitHub Actions, and scopes `http.https://github.com/.extraheader` to the single `git push` command.
+- PASS: The no-op and dry-run branches still return before commit/push setup, so they do not call the PAT push helper.
+- PASS: The selected source log remains names-only: `grimoire-cast: PAT source selected for mutation: <source-name>`.
+
+Verification evidence:
+- PASS: `bash -n .github/scripts/grimoire-cast.sh` exited 0.
+- PASS: `shellcheck .github/scripts/grimoire-cast.sh` exited 0 (`shellcheck` was available at `/opt/homebrew/bin/shellcheck`).
+- PASS: Deterministic temp fixture ran full real-mode non-dry-run primary-source flow with a fake `git` wrapper. The fake push recorded only booleans/refspec and observed extraheader key present, value present, expected fake primary-token header match, and refspec `HEAD:primary-branch`.
+- PASS: Deterministic temp fixture ran full real-mode non-dry-run fallback-source flow with only the fallback PAT env set. The fake push recorded only booleans/refspec and observed extraheader key present, value present, expected fake fallback-token header match, and refspec `HEAD:fallback-branch`.
+- PASS: Deterministic temp fixture ran `mock-noop --dry-run` and `mock-fixed --dry-run`; neither case recorded commit nor push markers.
+- PASS: Static scan of `.github/scripts/grimoire-cast.sh` found no default Actions token fallback symbols.
+- PASS: Static token scan of `.github/scripts/grimoire-cast.sh` found no raw token-shaped literals and no concrete basic-auth header literal.
+- PASS: `GIT_MASTER=1 git diff --check` exited 0 after the evidence file was written.
+- PASS: `cargo fmt --all --check` exited 0.
+- PASS: `cargo clippy --workspace --all-targets --all-features -- -D warnings` exited 0.
+- PASS: `cargo test --workspace --all-features` exited 0 (119 tests plus doc-tests passed).
+
+Secret hygiene:
+- PASS: No real token values were read, printed, stored, hashed, length-measured, prefixed, or fingerprinted.
+- PASS: The deterministic fixture used fake placeholder tokens only, and its recorded evidence excluded token and header values.
+- PASS: No live GitHub mutation, live `git push`, workflow dispatch, PR mutation, label mutation, comment, merge, or secret operation was run.
+
+Unavailable local tool:
+- BLOCKED: Bash LSP diagnostics could not run because `bash-language-server` is not installed. Syntax, shellcheck, static scans, and deterministic fixture QA passed.
