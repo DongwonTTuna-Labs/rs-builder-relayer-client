@@ -1,0 +1,175 @@
+# Task 12 protected-path halt/read-only reason-comment local proof
+Generated: 2026-06-11T02:44:35.722269Z
+Result: PASS
+Scope: deterministic local fixture only. No live GitHub comment, label, workflow dispatch, push, merge, or secret change was run.
+
+Fixture root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair
+Base controller: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller
+PR workspace: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+
+Protected changed files:
+- .github/workflows/grimoire.yml
+- .opencode/oh-my-openagent.jsonc
+- opencode.json
+- AGENTS.md
+- nested/AGENTS.md
+- docs/SECURITY.md
+- docs/REVIEW_CHECKLIST.md
+- docs/FORKED_RELAYER_CRATE.md
+- docs/PUBLISHING_DISABLED.md
+
+Assertions:
+- halt controller exit 0: PASS
+- read-only controller exit 0: PASS
+- halt status/action: protected / halt
+- read-only status/action: protected / read-only
+- read_only=true: True
+- model_execution_allowed=false: True
+- write_allowed=false: True
+- commit_allowed=false: True
+- push_allowed=false: True
+- github_mutation_allowed=false: True
+- push_attempts=0: True
+- protected_comment_required=true: True
+- trusted protected-comment helper path under base-controller: True
+- dry-run comment artifact written: True
+- comment sections present: PASS (Summary, Protected Paths, Disabled Capabilities, How To Proceed, Source/Status Artifact)
+- post mode without GRIMOIRE_PAT/GH_TOKEN blocked before gh invocation: PASS (exit 1, fake gh marker absent)
+- cast driver blocks before mock stages/model/write path: exit 32 decision trusted-controller-blocked
+- jq status contract checks: PASS
+
+Reason: protected path change requires trusted-controller halt/read-only: .github/workflows/grimoire.yml, .opencode/oh-my-openagent.jsonc, opencode.json, AGENTS.md, nested/AGENTS.md, docs/SECURITY.md, docs/REVIEW_CHECKLIST.md, docs/FORKED_RELAYER_CRATE.md, docs/PUBLISHING_DISABLED.md
+Protected paths: .github/workflows/grimoire.yml, .opencode/oh-my-openagent.jsonc, opencode.json, AGENTS.md, nested/AGENTS.md, docs/SECURITY.md, docs/REVIEW_CHECKLIST.md, docs/FORKED_RELAYER_CRATE.md, docs/PUBLISHING_DISABLED.md
+Status artifact: .omo/ci/trusted-controller-status.json
+Comment artifact: .omo/ci/trusted-controller-comment.md
+Comment body preview:
+```markdown
+<!-- grimoire-trusted-controller-protected-path -->
+## Summary
+Grimoire halted this PR before model execution, writes, commits, pushes, or general GitHub mutations because trusted-controller detected protected controller or security paths.
+
+## Protected Paths
+- `.github/workflows/grimoire.yml` - .github/** controller/workflow path
+- `.opencode/oh-my-openagent.jsonc` - .opencode/** model/controller config path
+- `opencode.json` - opencode.json model/controller config
+- `AGENTS.md` - root or nested AGENTS.md instruction path
+- `nested/AGENTS.md` - root or nested AGENTS.md instruction path
+- `docs/SECURITY.md` - security-critical documentation path
+- `docs/REVIEW_CHECKLIST.md` - security-critical documentation path
+- `docs/FORKED_RELAYER_CRATE.md` - security-critical documentation path
+- `docs/PUBLISHING_DISABLED.md` - security-critical documentation path
+
+## Disabled Capabilities
+- `model_execution_allowed=false`
+- `write_allowed=false`
+- `commit_allowed=false`
+- `push_allowed=false`
+- `github_mutation_allowed=false`
+- `read_only=true`
+- `push_attempts=0`
+
+## How To Proceed
+- Review the protected controller/security changes manually before trusting this PR's automation changes.
+- If the automation or policy change is intended, merge or otherwise update the trusted base controller first, then rerun grimoire from that trusted base.
+- This halt comment is generated from trusted base-controller material and does not require model or relay credentials.
+
+## Source/Status Artifact
+- Status artifact: `.omo/ci/trusted-controller-status.json`
+- Comment artifact: `.omo/ci/trusted-controller-comment.md`
+- Comment mode: `post`
+- Generated at: `2026-06-11T02:44:35.185977Z`
+```
+
+Commands and exact exit codes:
+### protected-controller-halt
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-trusted-controller.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected --base-controller /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller --changed-files /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected/changed-files.txt --output .omo/ci/trusted-controller-status.json --protected-action halt`
+exit_code: 0
+stdout:
+```text
+grimoire-trusted-controller: status=protected action=halt protected_paths=9 output=.omo/ci/trusted-controller-status.json
+```
+stderr:
+```text
+(empty)
+```
+
+### protected-controller-read-only
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-trusted-controller.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected --base-controller /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller --changed-files /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected/changed-files.txt --output .omo/ci/trusted-controller-status-read-only.json --protected-action read-only`
+exit_code: 0
+stdout:
+```text
+grimoire-trusted-controller: status=protected action=read-only protected_paths=9 output=.omo/ci/trusted-controller-status-read-only.json
+```
+stderr:
+```text
+(empty)
+```
+
+### protected-comment-dry-run
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-protected-comment.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected --status .omo/ci/trusted-controller-status.json --output .omo/ci/trusted-controller-comment.md --mode dry-run`
+exit_code: 0
+stdout:
+```text
+grimoire-protected-comment: rendered protected-path reason comment to .omo/ci/trusted-controller-comment.md
+```
+stderr:
+```text
+(empty)
+```
+
+### protected-comment-post-blocked-no-pat
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-protected-comment.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected --status .omo/ci/trusted-controller-status.json --output .omo/ci/trusted-controller-comment.md --mode post --repo DongwonTTuna-Labs/rs-builder-relayer-client --pr-number 999`
+exit_code: 1
+stdout:
+```text
+(empty)
+```
+stderr:
+```text
+grimoire-protected-comment: GRIMOIRE_PAT or GH_TOKEN PAT is required for post mode
+```
+
+### protected-status-jq
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `jq -e (.status=="protected") and (.action=="halt") and (.read_only==true) and (.model_execution_allowed==false) and (.write_allowed==false) and (.commit_allowed==false) and (.push_allowed==false) and (.github_mutation_allowed==false) and (.push_attempts==0) and (.protected_comment_required==true) and (.trusted_protected_comment_path|contains("/base-controller/.github/scripts/grimoire-protected-comment.sh")) /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected/.omo/ci/trusted-controller-status.json`
+exit_code: 0
+stdout:
+```text
+true
+```
+stderr:
+```text
+(empty)
+```
+
+### protected-comment-section-assert
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `python3 -c import pathlib,sys; text=pathlib.Path(sys.argv[1]).read_text(); required=["## Summary","## Protected Paths","## Disabled Capabilities","## How To Proceed","## Source/Status Artifact","model_execution_allowed=false","write_allowed=false","commit_allowed=false","push_allowed=false","github_mutation_allowed=false","push_attempts=0"]; missing=[x for x in required if x not in text]; sys.exit(1 if missing else 0) /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected/.omo/ci/trusted-controller-comment.md`
+exit_code: 0
+stdout:
+```text
+(empty)
+```
+stderr:
+```text
+(empty)
+```
+
+### protected-cast-block
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-cast.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-protected --mode mock-noop --dry-run --trusted-status .omo/ci/trusted-controller-status.json`
+exit_code: 32
+stdout:
+```text
+(empty)
+```
+stderr:
+```text
+grimoire-cast: trusted-controller-blocked: protected path change requires trusted-controller halt/read-only: .github/workflows/grimoire.yml, .opencode/oh-my-openagent.jsonc, opencode.json, AGENTS.md, nested/AGENTS.md, docs/SECURITY.md, docs/REVIEW_CHECKLIST.md, docs/FORKED_RELAYER_CRATE.md, docs/PUBLISHING_DISABLED.md
+```
+
+OVERALL: PASS

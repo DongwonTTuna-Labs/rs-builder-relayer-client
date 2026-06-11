@@ -1,0 +1,69 @@
+# Task 11 fail-closed mock evidence
+
+RESULT: PASS
+
+Scope:
+- Script under test: `.github/scripts/grimoire-cast.sh`
+- Temp fixture: `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task11-evidence-fixture`
+- Fixture contents: copied `.github/scripts/grimoire-*.sh` and `.omo/plans/grimoire.md` only.
+- Every command below ran from the temp fixture cwd, never from the repo root.
+- No live GitHub mutation was run.
+- No secret values were printed or recorded.
+
+Fail-closed decision checks:
+
+1. mock-spec-insufficient
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-spec-insufficient --dry-run`
+- Exit: 20
+- Decision JSON asserted: `decision=spec-insufficient-halt`, `exit_code=20`.
+- Observed stderr: spec insufficient halt recorded after Task 7 render.
+
+2. mock-missing-verdict
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-missing-verdict --dry-run`
+- Exit: 16
+- Decision JSON asserted: `decision=missing-verdict`, `exit_code=16`.
+- Observed stderr: verdict JSON missing, then missing-verdict fail-closed decision.
+
+3. mock-reject liveness timeout
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-reject --dry-run --liveness-timeout-seconds 1 --heartbeat-seconds 1`
+- Exit: 18
+- Decision JSON asserted: `decision=liveness-timeout`, `exit_code=18`.
+- Observed stderr: repeated mock REJECT verdicts followed by persistent REJECT liveness timeout.
+
+4. mock-boulder-missing
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-boulder-missing --dry-run`
+- Exit: 19
+- Decision JSON asserted: `decision=boulder-validation-failed`, `exit_code=19`.
+- Observed stderr: boulder file missing.
+
+5. mock-boulder-malformed
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-boulder-malformed --dry-run`
+- Exit: 19
+- Decision JSON asserted: `decision=boulder-validation-failed`, `exit_code=19`.
+- Observed stderr: boulder file malformed JSON.
+
+6. mock-boulder-active
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-boulder-active --dry-run`
+- Exit: 19
+- Decision JSON asserted: `decision=boulder-validation-failed`, `exit_code=19`.
+- Observed stderr: boulder active work is not completed.
+
+7. mock-boulder-session-mismatch
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-boulder-session-mismatch --dry-run`
+- Exit: 19
+- Decision JSON asserted: `decision=boulder-validation-failed`, `exit_code=19`.
+- Observed stderr: boulder completed work does not include continued session id.
+
+Repo boulder isolation check:
+- Before mock verification: repo `.omo/boulder.json` active state was `grimoire-1e4ba548 active`.
+- After all fail-closed mock modes: repo `.omo/boulder.json` active state remained `grimoire-1e4ba548 active`.
+- After all fail-closed mock modes: `jq -e '.active_work_id=="grimoire-1e4ba548"' .omo/boulder.json` returned exit 0.
+- The fail-closed boulder mutations occurred only inside fixture `.omo/ci/grimoire-cast-mock-boulder.json`.
+
+Scoped mutation guard check:
+- Command: temp git repo with `.omo/ci/fix-status.json.changed_files=["declared.txt"]`, working tree changes `declared.txt` plus `extra.txt`, then invoke `commit_and_push_if_allowed fixed` with dummy PAT metadata.
+- Exit: 37
+- Decision JSON asserted: `decision=mutation-scope-blocked`, `exit_code=37`, `dry_run=false`.
+- Observed stderr: `working-tree changes outside Task 8 changed_files: extra.txt` before the fail-closed decision.
+- Commit count after probe: 0.
+- Result: unrelated working-tree changes fail closed before commit/push, and the driver stages only declared scoped paths with `git add -- "${scoped_paths[@]}"` rather than broad staging.

@@ -1,0 +1,53 @@
+# ORL Task 14 - rollback safety
+
+Date: 2026-06-11
+Scope: pilot repository only: /Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client
+Live GitHub operations: none
+
+## Changed workflow paths
+
+Task 14 changed workflow paths:
+- none
+
+Reason: the current pilot repo has only .github/workflows/grimoire.yml and .github/workflows/grimoire-attune.yml. The seven legacy Codex workflow files named in Task 14 are already absent, so there was no present workflow body to replace with a retired stub.
+
+## Task 14 artifact paths
+
+Task 14 creates or appends only pilot-repo evidence/notepad files:
+- .omo/evidence/orl-task-14-retire.txt
+- .omo/evidence/orl-task-14-rollback.txt
+- .omo/notepads/grimoire/learnings.md (append-only Task 14 note)
+- .omo/notepads/grimoire/issues.md (append-only Task 14 caveat note)
+
+Existing workflow changes already in the working tree were not authored by this Task 14 step and were not modified by it.
+
+## Pilot-only and shared-reusable safety
+
+- No home-server-infra checkout was read, edited, committed, pushed, or otherwise mutated.
+- No shared reusable workflow outside this pilot repository was touched.
+- No GitHub Actions dispatch, PR comment, label mutation, push, merge, secret read, or token-bearing operation was attempted.
+- .github/workflows/grimoire.yml remains the active pull_request review path and was not weakened by Task 14.
+
+## Reversibility
+
+No irreversible deletion was performed by this task.
+
+Current rollback options:
+- To roll back only Task 14 documentation/evidence, remove or restore the two Task 14 evidence files and remove the appended Task 14 notepad sections from this branch.
+- If a future operator intentionally needs to resurrect a legacy Codex workflow, restore the specific workflow file from an earlier git commit that contained it, then run actionlint and the same trigger assertions before use.
+- Restoring a legacy Codex workflow would deliberately reintroduce the retired Codex path, so it must be treated as an explicit rollback decision rather than an incidental revert.
+
+Suggested rollback command shape for an intentional legacy restore, not executed in this task:
+- GIT_MASTER=1 git restore --source=<legacy-commit> -- .github/workflows/codex-loop-review-adapter.yml
+
+## Deterministic rollback assertion
+
+Because Task 14 did not modify or delete workflow files, the retirement state is reversible through normal git history and artifact edits. The current diff remains pilot-only and contains no external repository path.
+
+## Local verification results
+
+- GIT_MASTER=1 git diff --check: PASS
+- GIT_MASTER=1 git diff --name-only listed only pilot-repo paths: .github/workflows/grimoire.yml, .omo/notepads/grimoire/issues.md, and .omo/notepads/grimoire/learnings.md.
+- .github/workflows/grimoire.yml was already modified in the working tree before this Task 14 step; Task 14 did not edit it.
+- GIT_MASTER=1 git ls-files for the two Task 14 evidence files printed no tracked path. The files exist on disk under .omo/evidence; if the committer needs them tracked in this repo configuration, they should be staged explicitly because .omo artifacts may be ignored by user/global git ignore rules.
+- No home-server-infra path or shared reusable workflow appears in the verification scope.

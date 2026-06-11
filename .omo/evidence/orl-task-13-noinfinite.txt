@@ -1,0 +1,156 @@
+# Task 13 No-Infinite Proof
+
+RESULT: PASS (LOCAL ONLY)
+
+LIVE SCOPE: BLOCKED/LOCAL ONLY - no live GitHub PR, workflow dispatch, comment, label, push, merge, or secret mutation was run.
+
+BOUNDARY: fixtures live only under /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode; repo-root mocks were not used.
+
+
+
+## Repeated Bot No-op A
+FIXTURE: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-a
+COMMAND: GRIMOIRE_EVENT_ACTION="synchronize" GRIMOIRE_HEAD_AUTHOR_EMAIL="grimoire-autofix@users.noreply.github.com" GRIMOIRE_HEAD_AUTHOR_NAME="grimoire-autofix[bot]" GRIMOIRE_HEAD_COMMIT_MESSAGE="chore(review): autofix [grimoire]" GRIMOIRE_HEAD_SHA="cycle2-bot-sha" bash "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-a/.github/scripts/grimoire-cast.sh" --repo-root "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-a" --mode mock-noop --dry-run
+EXIT_CODE: 0
+DECISION_SUMMARY:
+{
+  "bot_commit": true,
+  "bot_commit_re_reviewed": true,
+  "clear_noop_terminal": true,
+  "commit_attempted": false,
+  "decision": "noop-approved",
+  "empty_commit_allowed": false,
+  "fixed_push_nonterminal": false,
+  "loop_phase": "clear-noop-terminal-approved",
+  "push_attempted": false,
+  "re_review_required": false,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_expected": false,
+  "terminal": true
+}
+METADATA_SUMMARY:
+{
+  "bot_commit": true,
+  "empty_commit_allowed": false,
+  "event_action": "synchronize",
+  "re_review_bot_commits": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_event": true
+}
+ASSERTIONS:
+- PASS: repeated bot no-op 1 exits terminal with commit_attempted=false, push_attempted=false, skip_review_for_bot_commit=false
+- PASS: repeated bot no-op 2 exits terminal with commit_attempted=false, push_attempted=false, skip_review_for_bot_commit=false
+STDOUT_HEAD:
+grimoire-cast: no-op approved; no commit or push attempted
+
+## Repeated Bot No-op B
+FIXTURE: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-b
+COMMAND: GRIMOIRE_EVENT_ACTION="synchronize" GRIMOIRE_HEAD_AUTHOR_EMAIL="grimoire-autofix@users.noreply.github.com" GRIMOIRE_HEAD_AUTHOR_NAME="grimoire-autofix[bot]" GRIMOIRE_HEAD_COMMIT_MESSAGE="chore(review): autofix [grimoire]" GRIMOIRE_HEAD_SHA="cycle3-bot-sha" bash "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-b/.github/scripts/grimoire-cast.sh" --repo-root "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-b" --mode mock-noop --dry-run
+EXIT_CODE: 0
+DECISION_SUMMARY:
+{
+  "bot_commit": true,
+  "bot_commit_re_reviewed": true,
+  "clear_noop_terminal": true,
+  "commit_attempted": false,
+  "decision": "noop-approved",
+  "empty_commit_allowed": false,
+  "fixed_push_nonterminal": false,
+  "loop_phase": "clear-noop-terminal-approved",
+  "push_attempted": false,
+  "re_review_required": false,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_expected": false,
+  "terminal": true
+}
+METADATA_SUMMARY:
+{
+  "bot_commit": true,
+  "empty_commit_allowed": false,
+  "event_action": "synchronize",
+  "re_review_bot_commits": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_event": true
+}
+ASSERTIONS:
+- PASS: repeated bot no-op 1 exits terminal with commit_attempted=false, push_attempted=false, skip_review_for_bot_commit=false
+- PASS: repeated bot no-op 2 exits terminal with commit_attempted=false, push_attempted=false, skip_review_for_bot_commit=false
+STDOUT_HEAD:
+grimoire-cast: no-op approved; no commit or push attempted
+
+## Reject Liveness Guard
+FIXTURE: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/reject-liveness
+COMMAND: GRIMOIRE_EVENT_ACTION="synchronize" GRIMOIRE_HEAD_AUTHOR_EMAIL="grimoire-autofix@users.noreply.github.com" GRIMOIRE_HEAD_AUTHOR_NAME="grimoire-autofix[bot]" GRIMOIRE_HEAD_COMMIT_MESSAGE="chore(review): autofix [grimoire]" GRIMOIRE_HEAD_SHA="reject-bot-sha" bash "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/reject-liveness/.github/scripts/grimoire-cast.sh" --repo-root "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/reject-liveness" --mode mock-reject --liveness-timeout-seconds 1 --heartbeat-seconds 1
+EXIT_CODE: 18
+DECISION_SUMMARY:
+{
+  "bot_commit": true,
+  "bot_commit_re_reviewed": true,
+  "clear_noop_terminal": false,
+  "commit_attempted": false,
+  "decision": "liveness-timeout",
+  "empty_commit_allowed": false,
+  "fixed_push_nonterminal": false,
+  "loop_phase": "wall-clock-timeout",
+  "push_attempted": false,
+  "re_review_required": false,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_expected": false,
+  "terminal": false
+}
+METADATA_SUMMARY:
+{
+  "bot_commit": true,
+  "empty_commit_allowed": false,
+  "event_action": "synchronize",
+  "re_review_bot_commits": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_event": true
+}
+ASSERTIONS:
+STDOUT_HEAD:
+grimoire-cast: boulder completion validated
+STDERR_HEAD:
+grimoire-cast: liveness-timeout: persistent REJECT did not converge before wall-clock timeout
+
+## Source Guard Assertions
+
+COMMAND: python3 deterministic source guard assertions over .github/scripts/grimoire-cast.sh
+
+EXIT_CODE: 0
+
+- PASS: repeated bot no-op 1 exits terminal with commit_attempted=false, push_attempted=false, skip_review_for_bot_commit=false
+
+- PASS: repeated bot no-op 2 exits terminal with commit_attempted=false, push_attempted=false, skip_review_for_bot_commit=false
+
+- PASS: persistent non-approval fails by wall-clock liveness timeout, with semantic_iteration_cap=false and zero commit/push
+
+- PASS: source guard no_git_add_all=true
+
+- PASS: source guard scoped_git_add=true
+
+- PASS: source guard cached_diff_guard=true
+
+- PASS: source guard empty_commit_refused_decision=true
+
+- PASS: source guard clear_noop_zero_mutation_reason=true
+
+## JQ Decision Assertions
+
+- PASS: bot no-op A zero mutation terminal
+  COMMAND: jq -e '.decision=="noop-approved" and .terminal==true and .bot_commit==true and .skip_review_for_bot_commit==false and .commit_attempted==false and .push_attempted==false and .semantic_iteration_cap==false' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-a/.omo/ci/grimoire-cast-decision.json
+  EXIT_CODE: 0
+
+- PASS: bot no-op B zero mutation terminal
+  COMMAND: jq -e '.decision=="noop-approved" and .terminal==true and .bot_commit==true and .skip_review_for_bot_commit==false and .commit_attempted==false and .push_attempted==false and .semantic_iteration_cap==false' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/bot-noop-b/.omo/ci/grimoire-cast-decision.json
+  EXIT_CODE: 0
+
+- PASS: reject liveness is wall-clock not semantic cap
+  COMMAND: jq -e '.decision=="liveness-timeout" and .exit_code==18 and .terminal==false and .commit_attempted==false and .push_attempted==false and .semantic_iteration_cap==false and .liveness_guard=="wall-clock-timeout"' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-noinfinite-proof/reject-liveness/.omo/ci/grimoire-cast-decision.json
+  EXIT_CODE: 0

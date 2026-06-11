@@ -1,0 +1,70 @@
+# Task 11 shellcheck and happy-path mock evidence
+
+RESULT: PASS
+
+Scope:
+- Script under test: `.github/scripts/grimoire-cast.sh`
+- Repo root: `/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client`
+- Temp fixture: `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task11-evidence-fixture`
+- Fixture contents: copied `.github/scripts/grimoire-*.sh` and `.omo/plans/grimoire.md` only, then ran all mock modes from the fixture cwd.
+- No live GitHub mutation was run.
+- No secret values were printed or recorded.
+
+Repo boulder guard:
+- Before mock verification: `jq -r '.active_work_id + " " + .status' .omo/boulder.json` -> `grimoire-1e4ba548 active`.
+- After mock verification: `jq -r '.active_work_id + " " + .status' .omo/boulder.json` -> `grimoire-1e4ba548 active`.
+- After mock verification: `jq -e '.active_work_id=="grimoire-1e4ba548"' .omo/boulder.json` -> exit 0.
+- Mock runs wrote boulder state to fixture `.omo/ci/grimoire-cast-mock-boulder.json`, not repo `.omo/boulder.json`.
+
+Shellcheck:
+- Command: `shellcheck .github/scripts/grimoire-cast.sh`
+- Cwd: repo root
+- Exit: 0
+- Stdout/stderr: empty
+
+CLI option checks in temp fixture:
+- Command: `bash .github/scripts/grimoire-cast.sh --help`
+- Cwd: temp fixture
+- Exit: 0
+- Observed: usage text printed.
+- Command: `bash .github/scripts/grimoire-cast.sh --not-a-real-option`
+- Cwd: temp fixture
+- Exit: 2
+- Observed: fail-usage path printed usage text and did not run stages.
+
+Mock no-op decision check:
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-noop --dry-run`
+- Cwd: temp fixture
+- Exit: 0
+- Decision JSON: `.omo/ci/grimoire-cast-decision.json`
+- Asserted fields: `decision=noop-approved`, `exit_code=0`, `dry_run=true`.
+- Mock boulder artifact: `.omo/ci/grimoire-cast-mock-boulder.json`
+- Mock boulder asserted fields: `active_work_id=grimoire-task11-mock`, `status=completed`.
+- Observed stdout included review, design, spec-gap, fix, boulder validation, verify, and `no-op approved; no commit or push attempted`.
+
+Mock fixed decision check:
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-fixed --dry-run`
+- Cwd: temp fixture
+- Exit: 0
+- Decision JSON: `.omo/ci/grimoire-cast-decision.json`
+- Asserted fields: `decision=fixed-dry-run`, `exit_code=0`, `dry_run=true`.
+- Mock boulder artifact: `.omo/ci/grimoire-cast-mock-boulder.json`
+- Mock boulder asserted fields: `active_work_id=grimoire-task11-mock`, `status=completed`.
+- Observed stdout included review, design, spec-gap, fix, boulder validation, verify, and intended bot commit message `chore(review): autofix [grimoire]`.
+
+Plan safety:
+- `.omo/plans/grimoire.md` was copied into the fixture for mock runs.
+- Repo `.omo/plans/grimoire.md` was not modified by this evidence generation.
+
+Executable-bit repair verification (2026-06-11):
+- Initial metadata observed by repair task: `.github/scripts/grimoire-cast.sh` permissions were `644`.
+- Repair action: `chmod 755 .github/scripts/grimoire-cast.sh`.
+- Post-repair metadata: `stat -f "%OLp %N" .github/scripts/grimoire-cast.sh` -> `755 .github/scripts/grimoire-cast.sh`.
+- Direct repo-root execution: `./.github/scripts/grimoire-cast.sh --help` -> exit 0; first line `Usage: grimoire-cast.sh [options]`.
+- Shellcheck: `shellcheck .github/scripts/grimoire-cast.sh` -> exit 0; stdout/stderr empty.
+- Temp fixture: `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task11-mode-fixture`.
+- Copy command used permission preservation: `cp -p .github/scripts/grimoire-cast.sh .../.github/scripts/grimoire-cast.sh`.
+- Copied metadata: `stat -f "%OLp %N" .../.github/scripts/grimoire-cast.sh` -> `755 .../.github/scripts/grimoire-cast.sh`.
+- Copied direct execution: `.../.github/scripts/grimoire-cast.sh --help` -> exit 0; first line `Usage: grimoire-cast.sh [options]`.
+- Boulder guard after verification: `.omo/boulder.json` still had `active_work_id=grimoire-1e4ba548` and `status=active`.
+- No mock modes were run in repo root. No live GitHub mutation, workflow dispatch, PR comment, label, push, merge, or secret change was run.

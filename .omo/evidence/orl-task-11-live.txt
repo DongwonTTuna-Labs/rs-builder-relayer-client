@@ -1,0 +1,25 @@
+# Task 11 live-small evidence
+
+RESULT: BLOCKED
+
+Live status:
+- No live PR run URL exists for this Task 11 evidence creation step.
+- No live Actions log exists for this Task 11 evidence creation step.
+- No live F1-F4 verdict artifact exists for this Task 11 evidence creation step.
+- No live GitHub mutation was attempted: no `gh workflow run`, PR creation/edit, comments, labels, pushes, merges, or secret changes.
+- No secret values, runner env values, PAT values, or token-bearing URLs were printed or recorded.
+
+Blocker root cause:
+- who: GitHub Actions workflow availability and grimoire live prerequisites.
+- what: live-small Task 11 acceptance cannot be claimed because there is no live PR workflow run URL/log/verdict for `.github/scripts/grimoire-cast.sh`.
+- when: 2026-06-11 during Task 11 evidence repair.
+- why: the workflow/live E2E path remains blocked by default-branch workflow availability plus relay/PAT/readiness prerequisites unless a human-approved live PR/run is available; this repair task explicitly forbids live GitHub mutations.
+- how: recorded deterministic local temp-fixture evidence only, with live status clearly marked BLOCKED until a real run supplies URL, logs, and verdict artifacts.
+
+Local substitute evidence recorded separately:
+- `.omo/evidence/orl-task-11-shellcheck.txt` records shellcheck, CLI help/bad-option, mock no-op, mock fixed, and repo boulder before/after active checks.
+- `.omo/evidence/orl-task-11-failclosed.txt` records fail-closed mock modes and boulder isolation checks.
+
+Acceptance boundary:
+- This file does not claim live success.
+- Live success requires actual live run URL/log/verdict proof before changing `RESULT: BLOCKED`.

@@ -1,0 +1,135 @@
+# Task 12 normal unprotected PR pass-through and no protected-comment local proof
+Generated: 2026-06-11T02:44:35.722269Z
+Result: PASS
+Scope: deterministic local fixture only. No live PR run, comment, label, commit, or push was attempted.
+
+Fixture root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair
+Base controller: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller
+PR workspace: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal
+
+Unprotected changed files:
+- src/deposit_wallet/http/read.rs
+- docs/GRIMOIRE.md
+
+Assertions:
+- controller exit 0: PASS
+- status/action continue: ok / continue
+- protected_paths empty: True
+- protected_comment_required=false: True
+- model_execution_allowed=true: True
+- write_allowed=true: True
+- commit_allowed=true: True
+- push_allowed=true: True
+- github_mutation_allowed=true: True
+- protected halt comment artifact is an empty/noop file: True
+- mock no-op driver pass-through exit 0: PASS
+- driver decision noop-approved: noop-approved
+- jq status contract checks: PASS
+
+Controller reason: no protected paths touched; trusted base controller material is complete
+Driver stdout tail:
+```text
+grimoire-cast: trusted-controller allows startup: no protected paths touched; trusted base controller material is complete
+grimoire-cast: stage review start
+grimoire-review: wrote clean review artifact to .omo/ci/review-findings.json
+grimoire-cast: stage review complete
+grimoire-cast: stage design start
+grimoire-design: wrote sufficient spec artifact to .omo/ci/spec-sufficiency.json and plan to .omo/ci/design-plan.md
+grimoire-cast: stage design complete
+grimoire-cast: stage spec-gap start
+grimoire-spec-gap-comment: rendered status to .omo/ci/spec-gap-status.json and comment artifact to .omo/ci/spec-gap-comment.md
+grimoire-cast: stage spec-gap complete
+grimoire-cast: stage fix start
+grimoire-fix: mock no-op passed; status written to .omo/ci/fix-status.json and handoff prompt to .omo/ci/fix-handoff-prompt.md
+grimoire-cast: stage fix complete
+grimoire-cast: boulder completion validated
+grimoire-cast: stage verify start
+grimoire-verify: wrote mock APPROVE verdict to .omo/grimoire/verdict.json
+grimoire-cast: stage verify complete
+grimoire-cast: no-op approved; no commit or push attempted
+```
+
+Commands and exact exit codes:
+### normal-controller
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-trusted-controller.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal --base-controller /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller --changed-files /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal/changed-files.txt --output .omo/ci/trusted-controller-status.json --protected-action halt`
+exit_code: 0
+stdout:
+```text
+grimoire-trusted-controller: status=ok action=continue protected_paths=0 output=.omo/ci/trusted-controller-status.json
+```
+stderr:
+```text
+(empty)
+```
+
+### normal-comment-render-noop
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-protected-comment.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal --status .omo/ci/trusted-controller-status.json --output .omo/ci/trusted-controller-comment.md --mode render`
+exit_code: 0
+stdout:
+```text
+grimoire-protected-comment: no protected-path comment required; wrote noop artifact .omo/ci/trusted-controller-comment.md
+```
+stderr:
+```text
+(empty)
+```
+
+### normal-driver-mock-noop
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-cast.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal --mode mock-noop --dry-run --trusted-status .omo/ci/trusted-controller-status.json`
+exit_code: 0
+stdout:
+```text
+grimoire-cast: trusted-controller allows startup: no protected paths touched; trusted base controller material is complete
+grimoire-cast: stage review start
+grimoire-review: wrote clean review artifact to .omo/ci/review-findings.json
+grimoire-cast: stage review complete
+grimoire-cast: stage design start
+grimoire-design: wrote sufficient spec artifact to .omo/ci/spec-sufficiency.json and plan to .omo/ci/design-plan.md
+grimoire-cast: stage design complete
+grimoire-cast: stage spec-gap start
+grimoire-spec-gap-comment: rendered status to .omo/ci/spec-gap-status.json and comment artifact to .omo/ci/spec-gap-comment.md
+grimoire-cast: stage spec-gap complete
+grimoire-cast: stage fix start
+grimoire-fix: mock no-op passed; status written to .omo/ci/fix-status.json and handoff prompt to .omo/ci/fix-handoff-prompt.md
+grimoire-cast: stage fix complete
+grimoire-cast: boulder completion validated
+grimoire-cast: stage verify start
+grimoire-verify: wrote mock APPROVE verdict to .omo/grimoire/verdict.json
+grimoire-cast: stage verify complete
+grimoire-cast: no-op approved; no commit or push attempted
+```
+stderr:
+```text
+(empty)
+```
+
+### normal-status-jq
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal
+command: `jq -e (.status=="ok") and (.action=="continue") and ((.protected_paths|length)==0) and (.model_execution_allowed==true) and (.write_allowed==true) and (.commit_allowed==true) and (.push_allowed==true) and (.github_mutation_allowed==true) and (.protected_comment_required==false) /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal/.omo/ci/trusted-controller-status.json`
+exit_code: 0
+stdout:
+```text
+true
+```
+stderr:
+```text
+(empty)
+```
+
+### normal-comment-empty-assert
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal
+command: `python3 -c import pathlib,sys; p=pathlib.Path(sys.argv[1]); sys.exit(0 if p.exists() and p.read_text()=="" else 1) /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-normal/.omo/ci/trusted-controller-comment.md`
+exit_code: 0
+stdout:
+```text
+(empty)
+```
+stderr:
+```text
+(empty)
+```
+
+OVERALL: PASS

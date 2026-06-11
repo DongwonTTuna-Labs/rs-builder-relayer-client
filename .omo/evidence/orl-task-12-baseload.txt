@@ -1,0 +1,150 @@
+# Task 12 trusted base-controller comment/helper selection local proof
+Generated: 2026-06-11T02:44:35.722269Z
+Result: PASS
+Scope: deterministic local fixture only. No PR-head workflow/script execution with write/model/comment credentials and no GitHub mutation was run.
+
+Fixture root: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair
+Base controller: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller
+Tampered PR workspace: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+
+Tampered PR-head files present:
+- /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.github/scripts/grimoire-cast.sh exits 99 and prints: TAMPERED CAST EXECUTED
+- /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.github/scripts/grimoire-trusted-controller.sh exits 98 and prints: TAMPERED CONTROLLER EXECUTED
+- /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.github/scripts/grimoire-protected-comment.sh exits 97 and prints: TAMPERED COMMENT EXECUTED
+- /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/opencode.json
+- /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.opencode/oh-my-openagent.jsonc
+
+Selected trusted paths from status JSON:
+- base_controller_path: /private/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller
+- trusted_controller_path: /private/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-trusted-controller.sh
+- trusted_protected_comment_path: /private/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-protected-comment.sh
+- trusted_cast_path: /private/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-cast.sh
+- trusted_opencode_config_path: /private/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/opencode.json
+- trusted_omo_config_path: /private/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.opencode/oh-my-openagent.jsonc
+
+Assertions:
+- status written by base helper: PASS
+- protected comment artifact written by base helper: PASS
+- trusted controller/comment/cast/config paths all point under base-controller fixture: PASS
+- base cast --help exit 0 while PR-head tampered cast exits 99: PASS
+- comment artifact does not contain tampered marker: PASS
+- jq status contract checks: PASS
+
+Status/action: protected / halt
+Reason: protected path change requires trusted-controller halt/read-only: .github/workflows/grimoire.yml, .opencode/oh-my-openagent.jsonc, opencode.json, AGENTS.md, nested/AGENTS.md, docs/SECURITY.md, docs/REVIEW_CHECKLIST.md, docs/FORKED_RELAYER_CRATE.md, docs/PUBLISHING_DISABLED.md
+
+Commands and exact exit codes:
+### baseload-controller-from-base
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-trusted-controller.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload --base-controller /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller --changed-files /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/changed-files.txt --output .omo/ci/trusted-controller-status.json --protected-action halt`
+exit_code: 0
+stdout:
+```text
+grimoire-trusted-controller: status=protected action=halt protected_paths=9 output=.omo/ci/trusted-controller-status.json
+```
+stderr:
+```text
+(empty)
+```
+
+### baseload-comment-from-base
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-protected-comment.sh --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload --status .omo/ci/trusted-controller-status.json --output .omo/ci/trusted-controller-comment.md --mode dry-run`
+exit_code: 0
+stdout:
+```text
+grimoire-protected-comment: rendered protected-path reason comment to .omo/ci/trusted-controller-comment.md
+```
+stderr:
+```text
+(empty)
+```
+
+### baseload-base-cast-help
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/base-controller/.github/scripts/grimoire-cast.sh --help`
+exit_code: 0
+stdout:
+```text
+Usage: grimoire-cast.sh [options]
+
+Headless grimoire review-loop driver for Task 11. Reuses the existing stage
+contracts instead of replacing them:
+  review(5) -> design(6) -> spec-gap halt(7) -> fix(8)
+  -> Atlas/OMO boulder completion -> verify(9) -> jq all-APPROVE decision.
+
+Options:
+  --mode MODE        real, mock-noop, mock-fixed, mock-spec-insufficient,
+                     mock-stage-failure, mock-missing-verdict, mock-reject,
+                     mock-boulder-missing, mock-boulder-malformed,
+                     mock-boulder-active, or mock-boulder-session-mismatch.
+                     Default: real.
+  --dry-run          Do not commit or push; write intended mutation decision only.
+  --repo-root PATH   Repository root. Default: GITHUB_WORKSPACE or current dir.
+  --trusted-status PATH
+                     Trusted-controller status JSON. Default: .omo/ci/trusted-controller-status.json.
+  --liveness-timeout-seconds N
+                     Timeout for persistent non-approval/non-convergence.
+                     This is a wall-clock liveness guard, not a semantic
+                     iteration cap.
+  --heartbeat-seconds N
+                     Heartbeat interval while waiting/continuing.
+  --help             Show this help text.
+
+Real mode fail-closed prerequisites:
+  AI_RELAY_API_KEY, GRIMOIRE_PAT or CODEX_LOOP_PAT, GRIMOIRE_FIX_READY=1,
+  GRIMOIRE_BOULDER_READY=1, GRIMOIRE_VERIFY_READY=1, opencode CLI, and grounded
+  PR metadata: GRIMOIRE_PR_NUMBER, GRIMOIRE_HEAD_REPO, GRIMOIRE_HEAD_REF,
+  GRIMOIRE_HEAD_SHA, GRIMOIRE_BASE_REPO, and GRIMOIRE_BASE_REF.
+
+Mutation policy:
+  clear-noop with all F1-F4 APPROVE exits successfully without commit or push.
+  fixed with all F1-F4 APPROVE prepares one bot commit/push path using the
+  message "chore(review): autofix [grimoire]". Non-dry-run mutation requires
+  PAT-only auth and grounded PR metadata. No empty commit is ever allowed.
+```
+stderr:
+```text
+(empty)
+```
+
+### baseload-tampered-cast-direct
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+command: `bash /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.github/scripts/grimoire-cast.sh`
+exit_code: 99
+stdout:
+```text
+(empty)
+```
+stderr:
+```text
+TAMPERED CAST EXECUTED
+```
+
+### baseload-status-jq
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+command: `jq -e (.base_controller_path|contains("/base-controller")) and (.trusted_controller_path|contains("/base-controller/.github/scripts/grimoire-trusted-controller.sh")) and (.trusted_protected_comment_path|contains("/base-controller/.github/scripts/grimoire-protected-comment.sh")) and (.trusted_cast_path|contains("/base-controller/.github/scripts/grimoire-cast.sh")) and (.trusted_opencode_config_path|contains("/base-controller/opencode.json")) and (.trusted_omo_config_path|contains("/base-controller/.opencode/oh-my-openagent.jsonc")) /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.omo/ci/trusted-controller-status.json`
+exit_code: 0
+stdout:
+```text
+true
+```
+stderr:
+```text
+(empty)
+```
+
+### baseload-comment-section-assert
+cwd: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload
+command: `python3 -c import pathlib,sys; text=pathlib.Path(sys.argv[1]).read_text(); sys.exit(0 if "## Summary" in text and "TAMPERED" not in text else 1) /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task12-repair/pr-baseload/.omo/ci/trusted-controller-comment.md`
+exit_code: 0
+stdout:
+```text
+(empty)
+```
+stderr:
+```text
+(empty)
+```
+
+OVERALL: PASS

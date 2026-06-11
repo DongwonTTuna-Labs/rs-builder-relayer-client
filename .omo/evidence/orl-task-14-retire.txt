@@ -1,0 +1,73 @@
+# ORL Task 14 - retire legacy Codex adapters
+
+Date: 2026-06-11
+Scope: pilot repository only: /Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client
+Live GitHub operations: none
+
+## Workflow inventory
+
+Current .github/workflows filesystem inventory:
+- .github/workflows/grimoire-attune.yml
+- .github/workflows/grimoire.yml
+
+Tracked workflow inventory from git ls-files / HEAD:
+- .github/workflows/grimoire-attune.yml
+- .github/workflows/grimoire.yml
+
+## Retired Codex path inventory
+
+The Task 14 target Codex workflow entrypoints were checked by exact path in the pilot repo. Current status:
+- .github/workflows/codex-loop-review-adapter.yml: absent
+- .github/workflows/codex-loop-manual-adapter.yml: absent
+- .github/workflows/codex-loop-dispatch-adapter.yml: absent
+- .github/workflows/codex-review.yml: absent
+- .github/workflows/codex-design.yml: absent
+- .github/workflows/codex-fix.yml: absent
+- .github/workflows/codex-issue.yml: absent
+- .github/actions/setup-codex-review: absent
+- setup/codex-review: absent
+
+No Codex workflow file body was edited in this task because no Codex workflow file is present in the current checkout. This matches the refreshed plan note that the decommission work had already removed these legacy paths before Task 14.
+
+## Trigger assertions
+
+Deterministic local assertions for the current workflow tree:
+- Only .github/workflows/grimoire.yml has a top-level pull_request trigger.
+- .github/workflows/grimoire.yml still has pull_request types opened, ready_for_review, synchronize, and reopened.
+- No current workflow file has top-level pull_request_target, repository_dispatch, issue_comment, schedule, or push triggers.
+- .github/workflows/grimoire-attune.yml is workflow_dispatch only and is a manual healthcheck, not a PR review path.
+- No current .github/workflows basename starts with codex, and none of the seven target Codex workflow files exists.
+
+Conclusion: no Codex workflow can trigger on pull_request, pull_request_target, workflow_dispatch, repository_dispatch, issue_comment, schedule, push, or any other event from the current pilot repo workflow set. The sole active PR review path remains .github/workflows/grimoire.yml.
+
+## Grimoire active path assertion
+
+.github/workflows/grimoire.yml remains active for pull_request and was not weakened by this task. Its active PR trigger is:
+- on.pull_request.types: opened, ready_for_review, synchronize, reopened
+
+The workflow still has draft/off-switch/no-grimoire guards from Tasks 10-13. Task 14 did not edit grimoire.yml.
+
+## Static proof commands
+
+Commands used for verification in this local-only task:
+- rg --files ".github/workflows"
+- GIT_MASTER=1 git ls-files ".github/workflows"
+- GIT_MASTER=1 git ls-tree -r --name-only HEAD ".github/workflows"
+- actionlint .github/workflows/*.yml
+- shellcheck .github/scripts/grimoire-*.sh
+- GIT_MASTER=1 git diff --check
+- Python static assertion over .github/workflows/*.yml confirming Codex absence and grimoire pull_request presence.
+
+## Local verification results
+
+- actionlint .github/workflows/*.yml: PASS
+- shellcheck .github/scripts/grimoire-*.sh: PASS
+- GIT_MASTER=1 git diff --check: PASS
+- cargo fmt --all --check: PASS
+- cargo clippy --workspace --all-targets --all-features -- -D warnings: PASS
+- cargo test --workspace --all-features: PASS (118 tests + doctests observed passing)
+- Python static assertion: PASS
+  - workflow inventory: .github/workflows/grimoire-attune.yml, .github/workflows/grimoire.yml
+  - Codex targets absent: 9 checked paths
+  - top-level events: grimoire-attune.yml workflow_dispatch; grimoire.yml pull_request
+  - grimoire pull_request types: opened, ready_for_review, reopened, synchronize

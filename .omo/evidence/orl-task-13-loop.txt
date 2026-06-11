@@ -1,0 +1,151 @@
+# Task 13 Loop Proof
+
+RESULT: PASS (LOCAL ONLY)
+
+LIVE SCOPE: BLOCKED/LOCAL ONLY - no live GitHub PR, workflow dispatch, comment, label, push, merge, or secret mutation was run.
+
+LOOP: fixed -> synchronize -> fixed -> synchronize -> no-op terminal.
+
+
+
+## Cycle 1
+FIXTURE: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle1-fixed
+COMMAND: GRIMOIRE_EVENT_ACTION="opened" GRIMOIRE_HEAD_AUTHOR_EMAIL="human@example.invalid" GRIMOIRE_HEAD_AUTHOR_NAME="human-reviewer" GRIMOIRE_HEAD_COMMIT_MESSAGE="human defect commit" GRIMOIRE_HEAD_SHA="cycle1-human-sha" bash "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle1-fixed/.github/scripts/grimoire-cast.sh" --repo-root "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle1-fixed" --mode mock-fixed --dry-run
+EXIT_CODE: 0
+DECISION_SUMMARY:
+{
+  "bot_commit": false,
+  "bot_commit_re_reviewed": false,
+  "clear_noop_terminal": false,
+  "commit_attempted": false,
+  "decision": "fixed-dry-run",
+  "empty_commit_allowed": false,
+  "fixed_push_nonterminal": true,
+  "loop_phase": "fixed-nonterminal-dry-run",
+  "push_attempted": false,
+  "re_review_required": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_expected": true,
+  "terminal": false
+}
+METADATA_SUMMARY:
+{
+  "bot_commit": false,
+  "empty_commit_allowed": false,
+  "event_action": "opened",
+  "re_review_bot_commits": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_event": false
+}
+ASSERTIONS:
+- PASS: cycle 1 records semantic_iteration_cap=false, empty_commit_allowed=false, skip_review_for_bot_commit=false, review_required=true
+- PASS: cycle 1 fixed path is nonterminal, synchronize_expected=true, commit_attempted=false, push_attempted=false
+STDOUT_HEAD:
+grimoire-cast: fixed dry-run; intended bot commit message: chore(review): autofix [grimoire]
+
+## Cycle 2
+FIXTURE: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle2-fixed
+COMMAND: GRIMOIRE_EVENT_ACTION="synchronize" GRIMOIRE_HEAD_AUTHOR_EMAIL="grimoire-autofix@users.noreply.github.com" GRIMOIRE_HEAD_AUTHOR_NAME="grimoire-autofix[bot]" GRIMOIRE_HEAD_COMMIT_MESSAGE="chore(review): autofix [grimoire]" GRIMOIRE_HEAD_SHA="cycle2-bot-sha" bash "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle2-fixed/.github/scripts/grimoire-cast.sh" --repo-root "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle2-fixed" --mode mock-fixed --dry-run
+EXIT_CODE: 0
+DECISION_SUMMARY:
+{
+  "bot_commit": true,
+  "bot_commit_re_reviewed": true,
+  "clear_noop_terminal": false,
+  "commit_attempted": false,
+  "decision": "fixed-dry-run",
+  "empty_commit_allowed": false,
+  "fixed_push_nonterminal": true,
+  "loop_phase": "fixed-nonterminal-dry-run",
+  "push_attempted": false,
+  "re_review_required": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_expected": true,
+  "terminal": false
+}
+METADATA_SUMMARY:
+{
+  "bot_commit": true,
+  "empty_commit_allowed": false,
+  "event_action": "synchronize",
+  "re_review_bot_commits": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_event": true
+}
+ASSERTIONS:
+- PASS: cycle 2 records semantic_iteration_cap=false, empty_commit_allowed=false, skip_review_for_bot_commit=false, review_required=true
+- PASS: cycle 2 fixed path is nonterminal, synchronize_expected=true, commit_attempted=false, push_attempted=false
+- PASS: cycle 2 synchronize bot autofix commit is metadata-only and bot_commit_re_reviewed=true
+STDOUT_HEAD:
+grimoire-cast: fixed dry-run; intended bot commit message: chore(review): autofix [grimoire]
+
+## Cycle 3
+FIXTURE: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle3-noop
+COMMAND: GRIMOIRE_EVENT_ACTION="synchronize" GRIMOIRE_HEAD_AUTHOR_EMAIL="grimoire-autofix@users.noreply.github.com" GRIMOIRE_HEAD_AUTHOR_NAME="grimoire-autofix[bot]" GRIMOIRE_HEAD_COMMIT_MESSAGE="chore(review): autofix [grimoire]" GRIMOIRE_HEAD_SHA="cycle3-bot-sha" bash "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle3-noop/.github/scripts/grimoire-cast.sh" --repo-root "/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle3-noop" --mode mock-noop --dry-run
+EXIT_CODE: 0
+DECISION_SUMMARY:
+{
+  "bot_commit": true,
+  "bot_commit_re_reviewed": true,
+  "clear_noop_terminal": true,
+  "commit_attempted": false,
+  "decision": "noop-approved",
+  "empty_commit_allowed": false,
+  "fixed_push_nonterminal": false,
+  "loop_phase": "clear-noop-terminal-approved",
+  "push_attempted": false,
+  "re_review_required": false,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_expected": false,
+  "terminal": true
+}
+METADATA_SUMMARY:
+{
+  "bot_commit": true,
+  "empty_commit_allowed": false,
+  "event_action": "synchronize",
+  "re_review_bot_commits": true,
+  "semantic_iteration_cap": false,
+  "skip_review_for_bot_commit": false,
+  "synchronize_event": true
+}
+ASSERTIONS:
+- PASS: cycle 3 records semantic_iteration_cap=false, empty_commit_allowed=false, skip_review_for_bot_commit=false, review_required=true
+- PASS: cycle 3 is terminal only because clear-noop plus Task 9 all-APPROVE produced zero commit/push
+STDOUT_HEAD:
+grimoire-cast: no-op approved; no commit or push attempted
+
+## Aggregate Assertions
+
+- PASS: cycle 1 records semantic_iteration_cap=false, empty_commit_allowed=false, skip_review_for_bot_commit=false, review_required=true
+
+- PASS: cycle 2 records semantic_iteration_cap=false, empty_commit_allowed=false, skip_review_for_bot_commit=false, review_required=true
+
+- PASS: cycle 3 records semantic_iteration_cap=false, empty_commit_allowed=false, skip_review_for_bot_commit=false, review_required=true
+
+- PASS: cycle 1 fixed path is nonterminal, synchronize_expected=true, commit_attempted=false, push_attempted=false
+
+- PASS: cycle 2 fixed path is nonterminal, synchronize_expected=true, commit_attempted=false, push_attempted=false
+
+- PASS: cycle 2 synchronize bot autofix commit is metadata-only and bot_commit_re_reviewed=true
+
+- PASS: cycle 3 is terminal only because clear-noop plus Task 9 all-APPROVE produced zero commit/push
+
+## JQ Decision Assertions
+
+- PASS: cycle 1 fixed nonterminal
+  COMMAND: jq -e '.decision=="fixed-dry-run" and .terminal==false and .loop_phase=="fixed-nonterminal-dry-run" and .synchronize_expected==true and .commit_attempted==false and .push_attempted==false and .semantic_iteration_cap==false' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle1-fixed/.omo/ci/grimoire-cast-decision.json
+  EXIT_CODE: 0
+
+- PASS: cycle 2 bot fixed re-reviewed nonterminal
+  COMMAND: jq -e '.decision=="fixed-dry-run" and .terminal==false and .synchronize_expected==true and .bot_commit==true and .bot_commit_re_reviewed==true and .skip_review_for_bot_commit==false and .semantic_iteration_cap==false' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle2-fixed/.omo/ci/grimoire-cast-decision.json
+  EXIT_CODE: 0
+
+- PASS: cycle 3 bot noop terminal
+  COMMAND: jq -e '.decision=="noop-approved" and .terminal==true and .clear_noop_terminal==true and .synchronize_expected==false and .bot_commit==true and .bot_commit_re_reviewed==true and .commit_attempted==false and .push_attempted==false and .semantic_iteration_cap==false' /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task13-loop-proof/cycle3-noop/.omo/ci/grimoire-cast-decision.json
+  EXIT_CODE: 0
