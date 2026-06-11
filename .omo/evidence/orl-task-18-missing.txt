@@ -1,0 +1,21 @@
+# Task 18 negative doc-lint fixture evidence
+
+Command summary:
+
+- Created a temporary copy at `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task18/GRIMOIRE.missing-termination.md`.
+- Removed the required `## Termination` section from that copy only.
+- Ran the same inline `python3` doc-lint used for the real document.
+
+Result summary:
+
+```text
+NEGATIVE_DOC_LINT FAIL_EXPECTED
+NEGATIVE_ERROR H2 sections mismatch: ['Flow', 'Agent Mapping', 'Triggers', 'OpenSpec Binding', 'Security Model', 'Operations', 'Migration']
+NEGATIVE_ERROR missing phrase: jq-only
+NEGATIVE_ERROR missing phrase: Free-form approval text
+NEGATIVE_ERROR missing phrase: No empty commit
+NEGATIVE_ERROR missing phrase: fixed push is nonterminal
+NEGATIVE_ERROR missing phrase: fail closed
+```
+
+Conclusion: PASS. The completeness gate fails when a required section is absent.

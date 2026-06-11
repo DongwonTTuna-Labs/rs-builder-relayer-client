@@ -1,0 +1,18 @@
+# Task 18 documentation completeness evidence
+
+Command summary:
+
+- Ran an inline `python3` doc-lint from the repository root.
+- Checked `docs/GRIMOIRE.md` for exactly these H2 sections in order: Flow, Agent Mapping, Triggers, Termination, OpenSpec Binding, Security Model, Operations, Migration.
+- Checked required Task 18 content: current-state caveat, review/design/spec-gap/fix/boulder/F1-F4 flow, trigger guards, off-switch examples, jq-only termination, OpenSpec fail-closed behavior, PAT-only auth, trusted-controller protected paths, Task 20 dual-source relay key source labels, operations guidance, and Codex-to-opencode migration notes.
+- Checked for forbidden secret-shaped output without recording any secret values, token prefixes, key lengths, hashes, or fingerprints.
+
+Result summary:
+
+```text
+REAL_DOC_LINT PASS
+NEGATIVE_FIXTURE /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task18/GRIMOIRE.missing-termination.md
+NEGATIVE_DOC_LINT FAIL_EXPECTED
+```
+
+Conclusion: PASS. The real `docs/GRIMOIRE.md` satisfies the deterministic Task 18 completeness lint.
