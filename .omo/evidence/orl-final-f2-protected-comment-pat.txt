@@ -1,0 +1,20 @@
+Final Wave F2 protected-comment PAT-only evidence
+Generated: 2026-06-11T16:54:15Z
+Scope: .github/scripts/grimoire-protected-comment.sh post mode auth only
+
+PASS: bash -n .github/scripts/grimoire-protected-comment.sh
+PASS: shellcheck passed for .github/scripts/grimoire-protected-comment.sh
+PASS: fake gh no-PAT case failed before gh invocation
+PASS: fake gh GRIMOIRE_PAT case succeeded and preferred GRIMOIRE_PAT over CODEX_LOOP_PAT
+PASS: fake gh CODEX_LOOP_PAT-only case succeeded
+PASS: fake gh ambient GH_TOKEN-only case failed before gh invocation
+PASS: GitHub Actions mask command emitted for selected allowed PAT source; value intentionally omitted
+PASS: selected PAT reached only the gh pr comment subprocess as GH_TOKEN in fake-gh tests
+PASS: static scan found no ${GH_TOKEN:-} input fallback
+PASS: static scan found no GITHUB_TOKEN usage
+PASS: static scan confirmed usage names GRIMOIRE_PAT then CODEX_LOOP_PAT
+PASS: static scan confirmed GH_TOKEN is derived at the gh pr comment subprocess
+PASS: GIT_MASTER=1 git diff --check
+
+No live gh command was run. The PATH used a deterministic fake gh wrapper.
+No real secret values were printed, stored, hashed, measured, or fingerprinted.

@@ -30,9 +30,9 @@ Options:
   --help                Show this help text.
 
 Auth for post mode:
-  Uses GRIMOIRE_PAT first, then GH_TOKEN. Workflow must resolve any runner
-  fallback into GRIMOIRE_PAT/GH_TOKEN before use; this helper does not read the
-  default GitHub Actions token variable.
+  Uses GRIMOIRE_PAT first, then CODEX_LOOP_PAT. The helper derives GH_TOKEN
+  only for the gh pr comment subprocess after selecting one of those PAT
+  sources; it does not read ambient GH_TOKEN as an input credential.
 USAGE
 }
 
@@ -104,6 +104,24 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 cd "$repo_root"
+
+select_pat_source() {
+  if [ -n "${GRIMOIRE_PAT:-}" ]; then
+    printf 'GRIMOIRE_PAT\n'
+  elif [ -n "${CODEX_LOOP_PAT:-}" ]; then
+    printf 'CODEX_LOOP_PAT\n'
+  else
+    return 1
+  fi
+}
+
+pat_value_for_source() {
+  case "$1" in
+    GRIMOIRE_PAT) printf '%s\n' "${GRIMOIRE_PAT}" ;;
+    CODEX_LOOP_PAT) printf '%s\n' "${CODEX_LOOP_PAT}" ;;
+    *) return 1 ;;
+  esac
+}
 
 comment_required="$(python3 - "$status_path" "$output_path" "$mode" <<'PY'
 import json
@@ -263,13 +281,16 @@ if ! command -v gh >/dev/null 2>&1; then
   printf 'grimoire-protected-comment: gh is required for post mode\n' >&2
   exit 127
 fi
-selected_pat="${GRIMOIRE_PAT:-${GH_TOKEN:-}}"
-if [ -z "$selected_pat" ]; then
-  printf 'grimoire-protected-comment: GRIMOIRE_PAT or GH_TOKEN PAT is required for post mode\n' >&2
+if ! selected_pat_source="$(select_pat_source)"; then
+  printf 'grimoire-protected-comment: GRIMOIRE_PAT or CODEX_LOOP_PAT is required for post mode\n' >&2
+  exit 1
+fi
+if ! selected_pat="$(pat_value_for_source "$selected_pat_source")"; then
+  printf 'grimoire-protected-comment: internal error selecting post-mode PAT source\n' >&2
   exit 1
 fi
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
   printf '::add-mask::%s\n' "$selected_pat"
 fi
 GH_TOKEN="$selected_pat" gh pr comment "$pr_number" --repo "$repo" --body-file "$output_path"
-printf 'grimoire-protected-comment: posted protected-path reason comment to PR %s in %s\n' "$pr_number" "$repo"
+printf 'grimoire-protected-comment: posted protected-path reason comment to PR %s in %s using %s auth\n' "$pr_number" "$repo" "$selected_pat_source"
