@@ -1,23 +1,25 @@
-# orl-task-20-runner-env
+# Task 20 local simulation: runner-env-only
 
-Task: dual-source relay-key resolver simulation for attune
-Date: 2026-06-11
+RESULT: PASS
+Evidence type: local shell simulation only; no GitHub workflow dispatch, no live ai-relay call, no model invocation.
+Fixture directory: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task20/runner-env-only
 
-RESULT: LOCAL NON-SECRET RESOLVER SIMULATION PASS.
+Inputs:
+- AI_RELAY_API_KEY_SECRET: unset
+- runner env AI_RELAY_API_KEY: present as <redacted-test-key>
 
-Resolver order implemented in .github/workflows/grimoire-attune.yml:
-1. Secret-mapped env name AI_RELAY_API_KEY_SECRET.
-2. Runner-inherited env name AI_RELAY_API_KEY.
-3. Fail closed if both are empty.
+Observed resolver behavior:
+- resolver_exit: 0
+- selected_source: runner_env.AI_RELAY_API_KEY
+- expected_source: runner_env.AI_RELAY_API_KEY
+- add_mask_command_emitted_before_public_source_log: true
+- github_env_exported_AI_RELAY_API_KEY: true
+- github_env_exported_AI_RELAY_KEY_SOURCE: runner_env.AI_RELAY_API_KEY
+- child_command_received_exported_AI_RELAY_API_KEY: true
+- raw_value_logged_in_evidence: false
 
-Simulation cases used placeholder strings only; no real key values were printed or stored.
-
-Cases:
-- runner-env-only: selected source runner-env, PASS.
-- secret-only: selected source secret, PASS.
-- both-present precedence: selected source secret, PASS.
-
-Workflow export behavior:
-- The selected value is masked first.
-- The selected value is then exported through the Actions env file so opencode child processes inherit AI_RELAY_API_KEY.
-- The workflow never maps the secret directly onto AI_RELAY_API_KEY at step env level, avoiding empty-secret shadowing of a runner-provided key.
+Sanitized resolver log excerpt:
+```text
+::add-mask::<redacted-test-key>
+Resolved relay key source: runner_env.AI_RELAY_API_KEY
+```

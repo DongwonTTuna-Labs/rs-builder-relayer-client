@@ -1,0 +1,28 @@
+# Task 20 static validation
+
+RESULT: PASS
+Evidence type: local/static validation only; no GitHub workflow dispatch, no live ai-relay call, no PR mutation.
+
+Commands run:
+- `actionlint .github/workflows/*.yml` -> PASS, exit 0, no output.
+- `shellcheck .github/scripts/grimoire-*.sh` -> PASS, exit 0, no output.
+- `cargo fmt --all --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace --all-features` -> PASS, exit 0; cargo test reported 118 tests passed plus doc-tests 0 passed.
+- `GIT_MASTER=1 git diff --check` -> PASS, exit 0, no output.
+
+Workflow grep/static assertions:
+- no direct `AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}` shadow mapping: PASS
+- `.github/workflows/grimoire-attune.yml` uses `AI_RELAY_API_KEY_SECRET: ${{ secrets.AI_RELAY_API_KEY }}`: PASS
+- `.github/workflows/grimoire.yml` uses `AI_RELAY_API_KEY_SECRET: ${{ secrets.AI_RELAY_API_KEY }}`: PASS
+- attune secret source label is `secrets.AI_RELAY_API_KEY`: PASS
+- attune runner source label is `runner_env.AI_RELAY_API_KEY`: PASS
+- grimoire driver secret source label is `secrets.AI_RELAY_API_KEY`: PASS
+- grimoire driver runner source label is `runner_env.AI_RELAY_API_KEY`: PASS
+- attune exports selected key to `GITHUB_ENV` as `AI_RELAY_API_KEY`: PASS
+- grimoire driver exports selected key for child commands as `AI_RELAY_API_KEY`: PASS
+- `GITHUB_TOKEN` absent from active grimoire workflows: PASS
+- `pull_request_target` absent from active grimoire workflows: PASS
+- both active grimoire workflows keep `permissions: {}`: PASS
+
+Secret hygiene:
+- Static evidence records only command names, source labels, and PASS/FAIL status.
+- No raw relay key, PAT, runner env value, sentinel literal, length, prefix, hash, or key-derived fingerprint is recorded.

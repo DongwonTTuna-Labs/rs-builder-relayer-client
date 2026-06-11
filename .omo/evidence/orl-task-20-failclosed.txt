@@ -1,18 +1,22 @@
-# orl-task-20-failclosed
+# Task 20 local simulation: failclosed
 
-Task: neither-source fail-closed proof for attune relay-key resolver
-Date: 2026-06-11
+RESULT: PASS
+Evidence type: local shell simulation only; no GitHub workflow dispatch, no live ai-relay call, no model invocation.
+Fixture directory: /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task20/failclosed
 
-RESULT: LOCAL NON-SECRET RESOLVER SIMULATION PASS.
+Inputs:
+- AI_RELAY_API_KEY_SECRET: unset
+- runner env AI_RELAY_API_KEY: unset
 
-Neither-source simulation:
-- Secret-mapped env placeholder: unset.
-- Runner-inherited env placeholder: unset.
-- Resolver output class: missing.
-- Resolver exit: nonzero.
-- Expected workflow behavior: stop before any model smoke.
+Observed resolver behavior:
+- resolver_exit_nonzero: true
+- resolver_exit_code: 1
+- github_env_exported_AI_RELAY_API_KEY: false
+- opencode_or_model_invocation_attempted: false
+- add_mask_command_emitted: false
+- raw_value_logged_in_evidence: false
 
-Safety notes:
-- No real key values were used.
-- No model call was attempted for the missing-key case.
-- The workflow error message names the missing condition but does not include any secret value, runner env value, token-bearing URL, or environment dump.
+Sanitized resolver log excerpt:
+```text
+ai-relay key unavailable from both configured sources; refusing model smoke
+```
