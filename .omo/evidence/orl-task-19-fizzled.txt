@@ -1,0 +1,23 @@
+# Task 19 fizzled evidence
+
+Generated at: 2026-06-11T04:08:27.984675Z
+Scope: LOCAL ONLY - no gh, no workflow dispatch, no PR label mutation, no push, no merge.
+
+Direct fizzled transition cases
+- halt: initial=["human-review", "🔮 Casting…"], exit=0, final=["human-review", "💨 Fizzled"], operations=[{"action": "remove", "label": "🔮 Casting…", "reason": "fizzled transition removes running label"}, {"action": "add", "label": "💨 Fizzled", "reason": "fizzled transition adds Fizzled"}], command=`/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state fizzled --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled/halt.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled/halt.json`
+- spec-gap: initial=["human-review", "🔮 Casting…"], exit=0, final=["human-review", "💨 Fizzled"], operations=[{"action": "remove", "label": "🔮 Casting…", "reason": "fizzled transition removes running label"}, {"action": "add", "label": "💨 Fizzled", "reason": "fizzled transition adds Fizzled"}], command=`/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state fizzled --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled/spec-gap.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled/spec-gap.json`
+- protected-path: initial=["human-review", "🔮 Casting…", "✨ Cast"], exit=0, final=["human-review", "💨 Fizzled"], operations=[{"action": "remove", "label": "🔮 Casting…", "reason": "fizzled transition removes running label"}, {"action": "remove", "label": "✨ Cast", "reason": "fizzled transition removes success label"}, {"action": "add", "label": "💨 Fizzled", "reason": "fizzled transition adds Fizzled"}], command=`/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state fizzled --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled/protected-path.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/fizzled/protected-path.json`
+
+Driver spec-gap halt invokes fizzled
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-spec-insufficient --dry-run --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/driver-spec-insufficient`
+- Exit: 20
+- Decision: {"decision": "spec-insufficient-halt", "terminal": false, "terminal_success": false, "exit_code": 20}
+- Labels after spec-gap halt: ["💨 Fizzled"]
+
+Driver stage failure invokes fizzled
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-stage-failure --dry-run --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/driver-stage-failure`
+- Exit: 11
+- Decision: {"decision": "stage-failure", "terminal": false, "terminal_success": false, "exit_code": 11}
+- Labels after stage failure: ["💨 Fizzled"]
+
+Assertions: PASS - fizzled paths remove `🔮 Casting…`, remove `✨ Cast`, add `💨 Fizzled`, and never leave `✨ Cast` as terminal success.

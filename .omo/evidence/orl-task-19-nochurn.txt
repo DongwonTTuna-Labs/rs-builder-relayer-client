@@ -1,0 +1,23 @@
+# Task 19 no-churn evidence
+
+Generated at: 2026-06-11T04:08:27.545989Z
+Scope: LOCAL ONLY - no gh, no workflow dispatch, no PR label mutation, no push, no merge.
+
+Repeated running calls
+- Run 1: exit=0, operation_count=1, labels=["🔮 Casting…"], command=`/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state running --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn/labels.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn/running-1.json`
+- Run 2: exit=0, operation_count=0, labels=["🔮 Casting…"], command=`/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state running --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn/labels.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn/running-2.json`
+- Run 3: exit=0, operation_count=0, labels=["🔮 Casting…"], command=`/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state running --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn/labels.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/nochurn/running-3.json`
+
+Fixed-push branch stays nonterminal
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-fixed --dry-run --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/driver-fixed`
+- Exit: 0
+- Decision: {"decision": "fixed-dry-run", "terminal": false, "fixed_push_nonterminal": true, "synchronize_expected": true, "commit_attempted": false, "push_attempted": false}
+- Labels after fixed dry-run: ["🔮 Casting…"]
+
+Terminal no-op is the first Cast transition
+- Command: `bash .github/scripts/grimoire-cast.sh --mode mock-noop --dry-run --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/driver-noop`
+- Exit: 0
+- Decision: {"decision": "noop-approved", "terminal": true, "clear_noop_terminal": true, "commit_attempted": false, "push_attempted": false}
+- Labels after no-op terminal: ["✨ Cast"]
+
+Assertions: PASS - repeated running calls do not add/remove labels; fixed-push does not add `✨ Cast`; terminal no-op does.

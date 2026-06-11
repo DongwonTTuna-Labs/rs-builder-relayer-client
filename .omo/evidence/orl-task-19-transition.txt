@@ -1,0 +1,22 @@
+# Task 19 label transition evidence
+
+Generated at: 2026-06-11T04:08:26.805157Z
+Scope: LOCAL ONLY - deterministic local label state under /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode; no gh, no workflow dispatch, no PR label mutation, no push, no merge.
+
+Scenario: running -> done
+- Command: `/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state running --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition/labels.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition/running.json`
+- Exit: 0
+- Labels after running: ["human-review", "🔮 Casting…"]
+- Running operations: [{"action": "add", "label": "🔮 Casting…", "reason": "running transition adds Casting"}]
+- Command: `/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state done --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition/labels.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition/done.json`
+- Exit: 0
+- Labels after done: ["human-review", "✨ Cast"]
+- Done operations: [{"action": "remove", "label": "🔮 Casting…", "reason": "done transition removes running label"}, {"action": "add", "label": "✨ Cast", "reason": "done transition adds Cast"}]
+
+Scenario: done cleans stale grimoire labels while preserving human labels
+- Initial labels: ["human-review", "🔮 Casting…", "💨 Fizzled"]
+- Command: `/Users/dongwon/Documents/Programming/DongwonTTuna-Labs/rs-builder-relayer-client/.github/scripts/grimoire-labels.sh --mode local --state done --repo-root /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition --state-file /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition/cleanup-labels.txt --status-output /var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/grimoire-task19-labels/transition/cleanup-done.json`
+- Labels after cleanup done: ["human-review", "✨ Cast"]
+- Cleanup operations: [{"action": "remove", "label": "🔮 Casting…", "reason": "done transition removes running label"}, {"action": "remove", "label": "💨 Fizzled", "reason": "done transition removes halted label"}, {"action": "add", "label": "✨ Cast", "reason": "done transition adds Cast"}]
+
+Assertions: PASS - `🔮 Casting…` appears on running; terminal success removes old grimoire labels and leaves exactly `✨ Cast` plus unrelated labels.
