@@ -207,6 +207,11 @@
 - STILL OPEN: no live Prometheus/OpenSpec model design success is claimed for Task 6. Deterministic local evidence proves contract behavior only; live design remains gated by default-branch workflow availability, relay auth, opencode availability, and explicit readiness flags.
 - No secret values, token-bearing URLs, workflow dispatch, PR mutation, label mutation, push, merge, or GitHub API mutation was run or recorded for Task 6.
 
+## 2026-06-11 - grimoire task 11 evidence repair
+
+- RESOLVED: Previous Task 11 evidence was missing and a prior attempt wrote mock boulder state into real `.omo/boulder.json`. who=Task 11 local mock evidence generation; what=mock boulder state could replace the active repo boulder file; when=Task 11 repair verification; why=mock continuation used the real boulder path instead of an isolated mock path; how=current `.github/scripts/grimoire-cast.sh` keeps `REAL_BOULDER_JSON=.omo/boulder.json` and `MOCK_BOULDER_JSON=.omo/ci/grimoire-cast-mock-boulder.json`, all mock modes were rerun in a temp fixture, and repo `.omo/boulder.json` remained `active_work_id=grimoire-1e4ba548` before and after verification.
+- STILL OPEN: live-small Task 11 remains blocked because no live PR run URL, Actions log, or verdict artifact exists, and this repair task forbids live GitHub mutations. Local evidence is deterministic fixture evidence only.
+
 ## 2026-06-10T19:46:00Z - grimoire task 9 live verification readiness caveat
 
 - STILL OPEN: who=`.github/scripts/grimoire-verify.sh` real-mode readiness gate and current Task 9 environment; what=real mode writes a REJECT/blocked verdict before model calls when Task 7/8 prerequisite artifacts, relay auth, opencode, or readiness are absent; when=Task 9 implementation and local verification; why=the active tree currently has Task 5/6 stage scripts but no Task 7 `.omo/ci/spec-gap-status.json` or Task 8 `.omo/ci/fix-status.json` producer in scope, and live F1-F4 approval must not run before those machine contracts exist; how=keep local mock/validation evidence as contract proof now, set `GRIMOIRE_VERIFY_READY=1` only after Task 7/8 artifacts plus relay/opencode readiness are proven, then rerun real mode with sanitized evidence.
@@ -223,3 +228,56 @@
 - STILL OPEN: eligible ready PR runs are expected to fail closed until Task 11 adds executable `.github/scripts/grimoire-cast.sh`; the missing-driver failure is intentional and must not be interpreted as a successful review/autofix loop.
 - STILL OPEN: the workflow file is currently on the feature branch, not merged to the default branch. Any live PR-triggered proof still depends on the normal GitHub Actions availability path for workflow files and the external PAT/runner relay prerequisites.
 - STILL OPEN: checkout/comment/push/label paths require `GRIMOIRE_PAT` or runner `CODEX_LOOP_PAT` in CI. The workflow records only source selection and masks values; no secret value or token-bearing URL was printed or recorded locally.
+
+## 2026-06-11 - grimoire task 11 executable-bit repair
+
+- RESOLVED: Atlas temp-fixture verification failed with `permission denied` because `.github/scripts/grimoire-cast.sh` was mode `644`. who=Task 11 file metadata; what=cast driver lacked executable bits for direct `./.github/scripts/grimoire-cast.sh --help`; when=Task 11 mode repair verification; why=previous evidence used shell/bash execution paths but Atlas copies with `cp -p` and runs the script directly; how=restored mode `755`, verified repo-root direct help exit 0, `cp -p` temp-fixture direct help exit 0, `shellcheck` exit 0, and `.omo/boulder.json` remained `active_work_id=grimoire-1e4ba548` with `status=active`.
+
+## 2026-06-11 - grimoire task 11 mock boulder and staging repair
+
+- RESOLVED: Previous Task 11 mock modes wrote real `.omo/boulder.json`, contaminating active Atlas state with `active_work_id=grimoire-task11-mock`, and the previous repair session made no effective changes. who=Task 11 cast driver and prior repair attempt; what=mock boulder writes targeted the production boulder path and fixed mutation used broad worktree staging; when=verified during Task 11 defect repair after two failed sessions; why=`BOULDER_JSON` was hard-coded to `.omo/boulder.json` for both real and mock modes, and `git add --all` ignored Task 8 `changed_files`; how=`.github/scripts/grimoire-cast.sh` now selects `REAL_BOULDER_JSON=.omo/boulder.json` for real mode and `MOCK_BOULDER_JSON=.omo/ci/grimoire-cast-mock-boulder.json` for mock modes unless `GRIMOIRE_BOULDER_JSON` is explicitly set, restores `.omo/boulder.json` to active `grimoire-1e4ba548`, rejects undeclared working-tree changes with `mutation-scope-blocked`, and stages only declared scoped paths.
+
+## 2026-06-11 - grimoire task 12 trusted-controller implementation caveats
+
+- RESOLVED: the inherited trusted-controller draft failed local CLI smoke on macOS Bash 3.2 because empty arrays were expanded under `set -u`. who=`.github/scripts/grimoire-trusted-controller.sh` argument wrapper; what=`changed_list_paths[@]`/`changed_files[@]` expansion aborted with `unbound variable`; when=Task 12 protected fixture smoke; why=Bash 3.2 treats empty array expansion under nounset differently from newer Bash; how=guarded both loops with explicit length checks before expansion.
+- RESOLVED: executable-bit preservation mattered for base-controller loading. who=file metadata after edits; what=`grimoire-trusted-controller.sh` and `grimoire-cast.sh` could be copied as `644`, making base material fail `*_executable` checks; when=Task 12 smoke fixture copied scripts with `cp -pR`; why=content edits reset mode in this environment; how=restored both scripts to mode `755` and kept evidence fixtures copying executable bits.
+- STILL OPEN: no live protected-path PR or normal PR workflow run was executed for Task 12. The new evidence is deterministic local proof only; live run URL/log/comment/label/push observations remain downstream E2E scope after the workflow exists on the default branch and CI secrets/readiness are configured.
+- STILL OPEN: the workflow uses read-only GitHub pull-request files API through the selected PAT to collect changed paths. This is not a GitHub mutation, but live availability still depends on `GRIMOIRE_PAT` or runner `CODEX_LOOP_PAT` being configured and scoped correctly in CI.
+
+## 2026-06-11 - grimoire task 12 protected reason-comment repair
+
+- RESOLVED: Task 12 protected-path acceptance required a reason comment, but the first trusted-controller implementation only halted before model/driver execution. who=Task 12 trusted-controller workflow branch; what=protected status produced no reason-comment path; when=protected-path acceptance verification; why=workflow stopped after `status=protected` without rendering/posting a trusted-base comment artifact; how=added trusted-base `.github/scripts/grimoire-protected-comment.sh`, required it during base-controller load, invoked it only when controller outputs `status=protected`, and updated deterministic evidence to prove the five-section comment artifact, missing-token post block, and normal empty/noop artifact.
+- STILL OPEN: no live protected-path PR comment was posted during this repair. Local proof intentionally used dry-run/artifact and missing-token post-block assertions only; a live comment URL/run URL remains downstream E2E evidence scope.
+
+## 2026-06-11 - grimoire task 13 live synchronize caveats
+
+- STILL OPEN: live multi-cycle `pull_request.synchronize` evidence was not run. The current proof is deterministic local fixture evidence only; no live run URL, check status, bot commit SHA, PR history, or workflow log proves an actual GitHub re-review yet.
+- STILL OPEN: live Task 13 remains gated by default-branch workflow availability plus CI relay/PAT/readiness prerequisites (`AI_RELAY_API_KEY`, `GRIMOIRE_PAT` or `CODEX_LOOP_PAT`, `GRIMOIRE_FIX_READY=1`, `GRIMOIRE_BOULDER_READY=1`, `GRIMOIRE_VERIFY_READY=1`, and grounded PR metadata).
+- No live GitHub mutation was attempted for Task 13: no workflow dispatch, PR create/edit/comment/label, push, merge, secret change, or token-bearing output. The local proof uses `--dry-run` and temp fixtures under `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode` only.
+
+## 2026-06-11 - grimoire task 14 static-retirement caveats
+
+- STILL OPEN: no live PR-event retirement evidence was run for Task 14 because this task explicitly forbids workflow dispatch, live PR events, comments, labels, pushes, merges, and GitHub state mutation. Evidence is deterministic local/static proof only.
+- The detailed Task 14 checklist still names the seven legacy Codex workflow files, but current tree truth follows the plan refresh note: those paths are already absent from `.github/workflows`, so there was nothing present to convert into a retired stub.
+- `grimoire-attune.yml` remains `workflow_dispatch` for manual healthcheck, so the "sole active PR review path" assertion means only `grimoire.yml` has `pull_request`; it does not mean every non-PR maintenance workflow is disabled.
+- No home-server-infra checkout or shared reusable workflow was inspected or changed. If a future rollback restores any Codex workflow from git history, actionlint plus static trigger assertions must be rerun before enabling it.
+
+## 2026-06-11 - grimoire task 20 live caveats
+
+- STILL OPEN: no live `grimoire-attune.yml` workflow_dispatch or live `grimoire.yml` PR run was executed for Task 20. Evidence is local shell simulation and static workflow checks only; no live run URL, Actions log, model smoke, PR comment, label mutation, push, merge, or GitHub API mutation is claimed.
+- STILL OPEN: live runner-env relay proof still depends on the workflow being available on the default branch and the self-hosted runner injecting `AI_RELAY_API_KEY` at runtime. The local runner-env simulation proves the resolver contract only, not a live ai-relay response.
+- RESOLVED LOCALLY: the previous empty-secret shadowing root cause is removed in workflow code by using `AI_RELAY_API_KEY_SECRET` for the GitHub secret source and falling back to the inherited `AI_RELAY_API_KEY` environment variable. Local evidence records only source labels and redacted markers; no secret value, sentinel literal, length, prefix, hash, or fingerprint is stored.
+
+## 2026-06-11 - grimoire task 18 live and documentation caveats
+
+- STILL OPEN: Task 18 verification is deterministic local documentation linting only. It does not prove live grimoire PR execution, live attune, live model success, live comments, live labels, live push, or live synchronize re-review.
+- STILL OPEN: live proof still needs default-branch workflow availability, configured PAT path, runner relay env or GitHub relay secret, `GRIMOIRE_DESIGN_READY=1`, `GRIMOIRE_FIX_READY=1`, `GRIMOIRE_BOULDER_READY=1`, `GRIMOIRE_VERIFY_READY=1`, and grounded PR metadata.
+- CURRENT DOC SCOPE: the guide records Task 19 labels as outside current completed behavior because the current `.github/scripts` inventory has no `grimoire-labels.sh`; future label implementation must update the guide and evidence if labels become active.
+- No live `gh`, workflow dispatch, PR create/edit/comment, label mutation, push, merge, secret change, or GitHub API mutation was run for Task 18.
+
+## 2026-06-11 - grimoire task 19 local/live caveats
+
+- STILL OPEN: no live `gh label create`, `gh pr edit --add-label`, `gh pr edit --remove-label`, issue event timeline query, workflow dispatch, PR edit, push, merge, or secret change was run for Task 19. Evidence is deterministic local dry-run/local-state proof only.
+- STILL OPEN: live label mutation still depends on default-branch workflow availability, a configured PAT source (`GRIMOIRE_PAT` or `CODEX_LOOP_PAT`), grounded repo/PR metadata, and later E2E Tasks 15-17. Missing any of those must fail closed before `gh`.
+- RESOLVED LOCALLY: Task 18's doc caveat that no label helper exists is superseded by `.github/scripts/grimoire-labels.sh`, but only the local contract is proven in this task. Documentation now says live label mutation remains future E2E, not completed live behavior.
+- No secret values, PAT values, token-bearing URLs, label event API output, or fabricated live GitHub state were recorded.

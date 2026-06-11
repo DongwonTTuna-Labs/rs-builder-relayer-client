@@ -302,3 +302,62 @@
 - Checkout has two PAT-only paths: secret PAT uses pinned `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` with `token: ${{ secrets.GRIMOIRE_PAT }}`, while runner-env `CODEX_LOOP_PAT` uses a guarded manual `git` fallback with a masked PAT-derived auth header. No `@main`, `@master`, or `@latest` action refs are present.
 - Eligible ready PRs fail closed at `.github/scripts/grimoire-cast.sh` absence after guarded checkout. This is intentional Task 10 behavior and prevents claiming loop success before Task 11 creates the driver.
 - Local Task 10 verification passed actionlint, PyYAML parse, static draft/off-switch/no-grimoire guard checks, PAT-only/static hazard scans, LSP diagnostics for the new workflow, and the Rust/git diff validation gates. No live PR execution is claimed.
+
+## 2026-06-11 - grimoire task 11 driver evidence conventions
+
+- Task 11 mock driver evidence must run in a temporary fixture, not repo root. Copy `.github/scripts/grimoire-*.sh` and `.omo/plans/grimoire.md` into `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode/...`, then execute mock modes from that fixture cwd.
+- Mock boulder state belongs under `.omo/ci/grimoire-cast-mock-boulder.json`; repo `.omo/boulder.json` is the real Atlas state and must remain `active_work_id=grimoire-1e4ba548` during Task 11 evidence repair.
+- Driver evidence should validate decision JSON fields, not free-form stdout: `mock-noop` -> `noop-approved`, `mock-fixed` -> `fixed-dry-run`, spec-insufficient/missing-verdict/reject/boulder-negative modes -> expected fail-closed decisions and nonzero exit codes.
+- Live-small evidence must stay `RESULT: BLOCKED` unless a real PR run URL, log, and verdict artifact exist. Local mock proof cannot be reclassified as live success.
+
+## 2026-06-11 - grimoire task 12 trusted-controller guard implementation
+
+- Current tree truth for this run: Task 12 material was incomplete at handoff. `.github/scripts/grimoire-trusted-controller.sh` existed only as an untracked/non-executable draft, the workflow still needed a trusted base-controller path, and Task 12 evidence files were absent.
+- `.github/scripts/grimoire-trusted-controller.sh` now supports local fixture inputs with `--changed-file`, `--changed-files`, `--base-controller`, `--base-controller-path`, `--output`, and `--protected-action halt|read-only`; its status JSON includes `schema_version`, `stage`, `status`, `action`, `protected_paths`, `read_only`, `model_execution_allowed`, `write_allowed`, `commit_allowed`, `push_allowed`, `github_mutation_allowed`, `base_controller_path`, `reason`, and `push_attempts`.
+- `.github/workflows/grimoire.yml` now uses PAT-only auth to load a trusted base-controller checkout before PR-head driver execution, collects PR changed files through PAT-authenticated read-only GitHub files API, runs the trusted controller from the base path, skips relay/model/driver execution on protected halt, and invokes `grimoire-cast.sh` only from the trusted base-controller path for normal runs.
+- `.github/scripts/grimoire-cast.sh` now resolves stage scripts from `GRIMOIRE_BASE_CONTROLLER`/trusted root and validates `.omo/ci/trusted-controller-status.json` before real model/write/fix/verify/commit/push paths. Protected status fails closed with `trusted-controller-blocked` before relay/model prerequisites are needed.
+- Deterministic local evidence is split by scenario: `.omo/evidence/orl-task-12-protected.txt` proves halt/read-only protected semantics plus cast-driver exit 32, `.omo/evidence/orl-task-12-baseload.txt` proves tampered PR-head scripts/config are not selected, and `.omo/evidence/orl-task-12-normal.txt` proves unprotected files continue through mock no-op without touching repo `.omo/boulder.json`.
+
+## 2026-06-11 - grimoire task 12 protected reason-comment repair
+
+- `.github/scripts/grimoire-protected-comment.sh` is a trusted-base helper for the protected-path acceptance comment. It reads `.omo/ci/trusted-controller-status.json`, validates protected status plus disabled capabilities, writes `.omo/ci/trusted-controller-comment.md`, and posts only in explicit `--mode post` with PAT material already resolved into `GRIMOIRE_PAT` or `GH_TOKEN`.
+- `.github/workflows/grimoire.yml` invokes the protected-comment helper only after the trusted controller reports `status=protected`, and the helper path is required from `${GRIMOIRE_BASE_CONTROLLER}` before any PR-head model/driver path is used.
+- The local repair proof now checks both comment directions: protected fixtures render the five-section reason comment while missing-token post mode blocks before `gh`, and normal unprotected fixtures create only an empty/noop comment artifact.
+
+## 2026-06-11 - grimoire task 13 synchronize loop semantics
+
+- `.github/workflows/grimoire.yml` now has an explicit pre-secret `Record synchronize re-review policy` step: `pull_request.synchronize` events continue into trusted-controller, review, fix, and F1-F4 verification even when the head commit is a `grimoire-autofix[bot]` commit.
+- `.github/scripts/grimoire-cast.sh` writes `.omo/ci/grimoire-loop-metadata.json` before stage execution with `review_required=true`, `re_review_bot_commits=true`, `skip_review_for_bot_commit=false`, `empty_commit_allowed=false`, and `semantic_iteration_cap=false`.
+- `.omo/ci/grimoire-cast-decision.json` now records loop semantics directly: `terminal`, `loop_phase`, `synchronize_expected`, `bot_commit`, `commit_attempted`, `push_attempted`, `fixed_push_nonterminal`, `clear_noop_terminal`, and `semantic_iteration_cap=false`.
+- The fixed path is nonterminal by contract: `mock-fixed --dry-run` records `decision=fixed-dry-run`, `terminal=false`, and `synchronize_expected=true`; only `mock-noop` after Task 9 all-APPROVE records `decision=noop-approved`, `terminal=true`, and zero commit/push attempts.
+- Deterministic local evidence uses temp fixtures under `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode`: `.omo/evidence/orl-task-13-loop.txt` proves fixed -> synchronize -> fixed -> synchronize -> no-op terminal, and `.omo/evidence/orl-task-13-noinfinite.txt` proves repeated bot no-op zero-push behavior plus wall-clock liveness timeout without a semantic iteration cap.
+
+## 2026-06-11 - grimoire task 14 Codex retirement current proof
+
+- Current `.github/workflows` inventory contains only `grimoire.yml` and `grimoire-attune.yml`; tracked files and HEAD agree with the filesystem inventory.
+- The Task 14 Codex workflow targets are absent by exact path: `codex-loop-review-adapter.yml`, `codex-loop-manual-adapter.yml`, `codex-loop-dispatch-adapter.yml`, `codex-review.yml`, `codex-design.yml`, `codex-fix.yml`, and `codex-issue.yml`.
+- No workflow stub edit was needed in this checkout because there is no present Codex workflow body to retire; the reversible state is documented as already-decommissioned current truth rather than deleting anything now.
+- `grimoire.yml` remains the sole active `pull_request` review path with types `opened`, `ready_for_review`, `synchronize`, and `reopened`; `grimoire-attune.yml` remains manual healthcheck-only.
+- The Task 14 static proof is path/event based: Codex model-name strings inside attune provider metadata are not workflow entrypoints and do not create Codex triggers.
+
+## 2026-06-11 - grimoire task 20 relay key dual-source implementation
+
+- `.github/workflows/grimoire-attune.yml` now records exact relay source labels `secrets.AI_RELAY_API_KEY` and `runner_env.AI_RELAY_API_KEY` while keeping the secret mapped only to `AI_RELAY_API_KEY_SECRET`, so an empty secret expression does not shadow a runner-inherited `AI_RELAY_API_KEY`.
+- The attune resolver masks the selected relay key before writing `AI_RELAY_API_KEY` to `GITHUB_ENV`; the later opencode smoke step has an explicit inherited-env guard and fails closed before model invocation if that export is absent.
+- `.github/workflows/grimoire.yml` keeps PAT-only GitHub auth and trusted-controller gates unchanged, then resolves the relay key inside the trusted driver step, masks it, exports `AI_RELAY_API_KEY` for child opencode commands, and records only the same exact source labels.
+- `docs/GRIMOIRE.md` now documents the dual source, source labels, fail-closed missing-key behavior, and no raw value, length, prefix, hash, or fingerprint logging. Task 20 evidence is local/static only and does not claim live dispatch success.
+
+## 2026-06-11 - grimoire task 18 architecture and operations guide
+
+- `docs/GRIMOIRE.md` was expanded from the Task 3 secret/model stub into the full maintainer guide with exactly eight H2 areas: Flow, Agent Mapping, Triggers, Termination, OpenSpec Binding, Security Model, Operations, and Migration.
+- The guide preserves Task 20 dual-source relay key behavior, PAT-only GitHub auth, model tier mapping, rotation guidance, and least-privilege PAT scope notes while adding the workflow, trusted-controller, OpenSpec, boulder, and F1-F4 contracts.
+- Current tree truth is reflected: `.github/workflows` contains `grimoire.yml` and `grimoire-attune.yml`; Codex workflow entrypoints are absent; Task 19 labels are not documented as completed active behavior because the current script set has no label helper.
+- Deterministic doc-lint evidence now checks the required sections and operating claims, and a temp fixture with `## Termination` removed fails the same lint as expected.
+
+## 2026-06-11 - grimoire task 19 PR label lifecycle implementation
+
+- `.github/scripts/grimoire-labels.sh` now owns the display-only lifecycle for exactly `🔮 Casting…`, `✨ Cast`, and `💨 Fizzled`, with fixed colors/descriptions and JSON status output that records `labels_are_display_only=true` and `durable_loop_state_source=false`.
+- Live label mode is PAT-only: it derives per-command `GH_TOKEN` from `GRIMOIRE_PAT` first or `CODEX_LOOP_PAT` second, ensures the three label definitions before PR edits, and fails closed before `gh` when PAT, repo, or PR metadata is absent. The helper does not read the default Actions token as a fallback.
+- The transition rules are idempotent and check-before-change: repeated `running` calls do not churn `🔮 Casting…`, terminal labels block re-adding `🔮 Casting…`, `done` removes `🔮 Casting…`/`💨 Fizzled` before adding `✨ Cast`, and `fizzled` removes `🔮 Casting…`/`✨ Cast` before adding `💨 Fizzled`.
+- Workflow placement keeps the existing safe gates: draft/off-switch/no-grimoire still stop before secrets, `running` happens only after PAT auth and trusted base-controller helper verification, protected-path `fizzled` happens from trusted base material before model/write/fix/commit/push, and the driver keeps fixed-push nonterminal without `✨ Cast`.
+- Deterministic Task 19 proof is local-only under `/var/folders/vz/hx33c759727ftq88cxbgp8r40000gn/T/opencode` fixtures and required `.omo/evidence/orl-task-19-*.txt` files; no live GitHub label mutation or issue event timeline is claimed.
