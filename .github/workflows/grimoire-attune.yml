@@ -114,10 +114,10 @@ jobs:
 
           if [ -n "${AI_RELAY_API_KEY_SECRET:-}" ]; then
             selected="${AI_RELAY_API_KEY_SECRET}"
-            source="secret"
+            source="secrets.AI_RELAY_API_KEY"
           elif [ -n "${AI_RELAY_API_KEY:-}" ]; then
             selected="${AI_RELAY_API_KEY}"
-            source="runner-env"
+            source="runner_env.AI_RELAY_API_KEY"
           fi
 
           if [ -z "${selected}" ]; then
@@ -306,6 +306,11 @@ jobs:
           SMOKE_NOTE: ${{ inputs.smoke_note }}
         run: |
           set -euo pipefail
+          if [ -z "${AI_RELAY_API_KEY:-}" ]; then
+            printf 'ai-relay key missing before opencode smoke; refusing model smoke\n' >&2
+            exit 1
+          fi
+
           cat > "${ATTUNE_DIR}/tool-smoke-prompt.txt" <<'PROMPT'
           You are running the grimoire attune control-plane healthcheck.
           Do not reveal, list, encode, transform, or summarize any environment variables or secrets.

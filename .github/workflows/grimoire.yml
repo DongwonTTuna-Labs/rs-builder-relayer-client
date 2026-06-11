@@ -72,6 +72,20 @@ jobs:
           print("grimoire guard: ready PR passed draft/off-switch/label checks")
           PY
 
+      - name: Record synchronize re-review policy
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          GRIMOIRE_EVENT_ACTION: ${{ github.event.action }}
+          GRIMOIRE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${GRIMOIRE_EVENT_ACTION}" = "synchronize" ]; then
+            printf 'grimoire loop: synchronize event for head %s will run trusted-controller, review, fix, and F1-F4 verification even when the head commit is a grimoire bot autofix\n' "${GRIMOIRE_HEAD_SHA}"
+          else
+            printf 'grimoire loop: %s event starts the same review path; bot author markers are metadata only, not skip guards\n' "${GRIMOIRE_EVENT_ACTION}"
+          fi
+
       - name: Resolve PAT-only GitHub auth
         id: pat-auth
         if: ${{ steps.driver-guard.outputs.skip != 'true' }}
@@ -108,6 +122,165 @@ jobs:
           } >> "${GITHUB_ENV}"
           printf 'source=%s\n' "${source}" >> "${GITHUB_OUTPUT}"
           printf 'grimoire auth: selected PAT source %s\n' "${source}"
+
+      - name: Fetch trusted base controller with PAT
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          GRIMOIRE_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GRIMOIRE_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GRIMOIRE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_PAT:-}" ]; then
+            printf 'grimoire trusted-controller: PAT env missing after auth resolution\n' >&2
+            exit 1
+          fi
+          if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GRIMOIRE_BASE_REPO}" ] || [ -z "${GRIMOIRE_BASE_REF}" ] || [ -z "${GRIMOIRE_BASE_SHA}" ]; then
+            printf 'grimoire trusted-controller: base metadata is incomplete\n' >&2
+            exit 1
+          fi
+
+          base_dir="$(mktemp -d "${RUNNER_TEMP}/grimoire-base-controller.XXXXXX")"
+          auth_header="$(python3 - <<'PY'
+          import base64
+          import os
+
+          token = os.environ["GRIMOIRE_PAT"]
+          print(base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii"))
+          PY
+          )"
+          printf '::add-mask::%s\n' "${auth_header}"
+
+          git -C "${base_dir}" init
+          git -C "${base_dir}" remote add origin "https://github.com/${GRIMOIRE_BASE_REPO}.git"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth_header}"
+          git -C "${base_dir}" fetch --no-tags --prune --depth=50 origin "+refs/heads/${GRIMOIRE_BASE_REF}:refs/remotes/grimoire-base/base"
+          git -C "${base_dir}" checkout --force --detach "${GRIMOIRE_BASE_SHA}"
+          unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+
+          actual_sha="$(git -C "${base_dir}" rev-parse HEAD)"
+          if [ "${actual_sha}" != "${GRIMOIRE_BASE_SHA}" ]; then
+            printf 'grimoire trusted-controller: checked out %s, expected %s\n' "${actual_sha}" "${GRIMOIRE_BASE_SHA}" >&2
+            exit 1
+          fi
+          if [ ! -x "${base_dir}/.github/scripts/grimoire-trusted-controller.sh" ]; then
+            printf 'grimoire trusted-controller: trusted base helper missing or not executable\n' >&2
+            exit 1
+          fi
+          if [ ! -x "${base_dir}/.github/scripts/grimoire-protected-comment.sh" ]; then
+            printf 'grimoire trusted-controller: trusted base protected-comment helper missing or not executable\n' >&2
+            exit 1
+          fi
+          if [ ! -x "${base_dir}/.github/scripts/grimoire-cast.sh" ]; then
+            printf 'grimoire trusted-controller: trusted base cast driver missing or not executable\n' >&2
+            exit 1
+          fi
+          if [ ! -x "${base_dir}/.github/scripts/grimoire-labels.sh" ]; then
+            printf 'grimoire trusted-controller: trusted base label helper missing or not executable\n' >&2
+            exit 1
+          fi
+          if [ ! -s "${base_dir}/opencode.json" ]; then
+            printf 'grimoire trusted-controller: trusted base opencode.json missing\n' >&2
+            exit 1
+          fi
+          if [ ! -s "${base_dir}/.opencode/oh-my-openagent.jsonc" ]; then
+            printf 'grimoire trusted-controller: trusted base OMO config missing\n' >&2
+            exit 1
+          fi
+          cp -p "${base_dir}/.opencode/oh-my-openagent.jsonc" "${base_dir}/oh-my-openagent.jsonc"
+
+          {
+            printf 'GRIMOIRE_BASE_CONTROLLER=%s\n' "${base_dir}"
+            printf 'GRIMOIRE_BASE_CONTROLLER_PATH=%s\n' "${base_dir}"
+            printf 'OPENCODE_CONFIG_DIR=%s\n' "${base_dir}"
+          } >> "${GITHUB_ENV}"
+          printf 'grimoire trusted-controller: base controller checked out at expected SHA\n'
+
+      - name: Mark grimoire label running
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          GRIMOIRE_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GRIMOIRE_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_BASE_CONTROLLER:-}" ]; then
+            printf 'grimoire labels: base controller path missing before running transition\n' >&2
+            exit 1
+          fi
+          bash "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-labels.sh" \
+            --mode live \
+            --state running \
+            --repo-root "${RUNNER_TEMP}" \
+            --status-output "${RUNNER_TEMP}/grimoire-label-running-status.json" \
+            --repo "${GRIMOIRE_BASE_REPO}" \
+            --pr-number "${GRIMOIRE_PR_NUMBER}"
+
+      - name: Collect PR changed files with PAT
+        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          GRIMOIRE_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GRIMOIRE_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_PAT:-}" ]; then
+            printf 'grimoire changed-files: PAT env missing after auth resolution\n' >&2
+            exit 1
+          fi
+          changed_file_list="${RUNNER_TEMP}/grimoire-pr-changed-files.txt"
+          python3 - "${changed_file_list}" <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+          import urllib.error
+          import urllib.request
+
+          output = pathlib.Path(sys.argv[1])
+          repo = os.environ["GRIMOIRE_BASE_REPO"]
+          pr_number = os.environ["GRIMOIRE_PR_NUMBER"]
+          token = os.environ["GRIMOIRE_PAT"]
+          filenames = []
+          page = 1
+          while True:
+              url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files?per_page=100&page={page}"
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "grimoire-trusted-controller",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  print(f"GitHub files API failed with HTTP {exc.code}", file=sys.stderr)
+                  sys.exit(1)
+              if not isinstance(payload, list):
+                  print("GitHub files API returned non-list payload", file=sys.stderr)
+                  sys.exit(1)
+              if not payload:
+                  break
+              for item in payload:
+                  filename = item.get("filename") if isinstance(item, dict) else None
+                  if not isinstance(filename, str) or not filename:
+                      print("GitHub files API item missing filename", file=sys.stderr)
+                      sys.exit(1)
+                  filenames.append(filename)
+              if len(payload) < 100:
+                  break
+              page += 1
+          output.write_text("\n".join(filenames) + ("\n" if filenames else ""), encoding="utf-8")
+          print(f"grimoire changed-files: collected {len(filenames)} filenames")
+          PY
+          printf 'GRIMOIRE_CHANGED_FILES_FILE=%s\n' "${changed_file_list}" >> "${GITHUB_ENV}"
 
       - name: Checkout PR head with GRIMOIRE_PAT
         if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.pat-auth.outputs.source == 'secret' }}
@@ -165,23 +338,128 @@ jobs:
           fi
           printf 'grimoire checkout: PR head checked out at expected SHA\n'
 
-      - name: Require grimoire driver boundary
+      - name: Run trusted controller guard
+        id: trusted-controller
         if: ${{ steps.driver-guard.outputs.skip != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ ! -e ".github/scripts/grimoire-cast.sh" ]; then
-            printf 'grimoire driver missing: Task 11 must add .github/scripts/grimoire-cast.sh before ready PR execution can proceed\n' >&2
+          if [ -z "${GRIMOIRE_BASE_CONTROLLER:-}" ] || [ -z "${GRIMOIRE_CHANGED_FILES_FILE:-}" ]; then
+            printf 'grimoire trusted-controller: base path or changed-files list missing\n' >&2
             exit 1
           fi
-          if [ ! -x ".github/scripts/grimoire-cast.sh" ]; then
-            printf 'grimoire driver is present but not executable; refusing to continue\n' >&2
+          bash "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-trusted-controller.sh" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --base-controller "${GRIMOIRE_BASE_CONTROLLER}" \
+            --changed-files "${GRIMOIRE_CHANGED_FILES_FILE}" \
+            --output ".omo/ci/trusted-controller-status.json" \
+            --protected-action halt
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          path = pathlib.Path(".omo/ci/trusted-controller-status.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          status = str(payload.get("status", ""))
+          action = str(payload.get("action", ""))
+          reason = str(payload.get("reason", ""))
+          allowed = status == "ok" and action == "continue"
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"continue={'true' if allowed else 'false'}\n")
+              output.write(f"status={status}\n")
+              output.write(f"action={action}\n")
+          if status == "blocked":
+              print(f"grimoire trusted-controller blocked: {reason}", file=sys.stderr)
+              sys.exit(1)
+          if not allowed:
+              print(f"grimoire trusted-controller halted before model credentials: {reason}")
+          else:
+              print("grimoire trusted-controller allowed model/driver path")
+          PY
+
+      - name: Mark protected-path label fizzled
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.trusted-controller.outputs.status == 'protected' }}
+        shell: bash
+        env:
+          GRIMOIRE_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GRIMOIRE_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_BASE_CONTROLLER:-}" ]; then
+            printf 'grimoire labels: base controller path missing before protected fizzled transition\n' >&2
             exit 1
           fi
-          printf 'grimoire driver boundary present\n'
+          bash "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-labels.sh" \
+            --mode live \
+            --state fizzled \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --status-output ".omo/ci/grimoire-label-protected-status.json" \
+            --repo "${GRIMOIRE_BASE_REPO}" \
+            --pr-number "${GRIMOIRE_PR_NUMBER}"
+
+      - name: Post protected-path reason comment
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.trusted-controller.outputs.status == 'protected' }}
+        shell: bash
+        env:
+          GRIMOIRE_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          GRIMOIRE_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_BASE_CONTROLLER:-}" ]; then
+            printf 'grimoire trusted-controller: base controller path missing before protected comment\n' >&2
+            exit 1
+          fi
+          bash "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-protected-comment.sh" \
+            --repo-root "${GITHUB_WORKSPACE}" \
+            --status ".omo/ci/trusted-controller-status.json" \
+            --output ".omo/ci/trusted-controller-comment.md" \
+            --mode post \
+            --repo "${GRIMOIRE_BASE_REPO}" \
+            --pr-number "${GRIMOIRE_PR_NUMBER}"
+
+      - name: Install trusted opencode config into PR workspace
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.trusted-controller.outputs.continue == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GRIMOIRE_BASE_CONTROLLER:-}" ]; then
+            printf 'grimoire trusted-controller: base controller path missing before config install\n' >&2
+            exit 1
+          fi
+          install -m 0644 "${GRIMOIRE_BASE_CONTROLLER}/opencode.json" "${GITHUB_WORKSPACE}/opencode.json"
+          mkdir -p "${GITHUB_WORKSPACE}/.opencode"
+          install -m 0644 "${GRIMOIRE_BASE_CONTROLLER}/.opencode/oh-my-openagent.jsonc" "${GITHUB_WORKSPACE}/.opencode/oh-my-openagent.jsonc"
+          printf 'grimoire trusted-controller: trusted opencode config installed into workspace\n'
+
+      - name: Require trusted grimoire driver boundary
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.trusted-controller.outputs.continue == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-cast.sh" \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-labels.sh" \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-review.sh" \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-design.sh" \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-spec-gap-comment.sh" \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-fix.sh" \
+            "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-verify.sh"; do
+            if [ ! -x "${required}" ]; then
+              printf 'grimoire trusted driver missing or not executable: %s\n' "${required}" >&2
+              exit 1
+            fi
+          done
+          if [ ! -s "${GRIMOIRE_BASE_CONTROLLER}/opencode.json" ]; then
+            printf 'grimoire trusted opencode config missing\n' >&2
+            exit 1
+          fi
+          printf 'grimoire trusted driver boundary present\n'
 
       - name: Run grimoire driver
-        if: ${{ steps.driver-guard.outputs.skip != 'true' }}
+        if: ${{ steps.driver-guard.outputs.skip != 'true' && steps.trusted-controller.outputs.continue == 'true' }}
         shell: bash
         env:
           AI_RELAY_API_KEY_SECRET: ${{ secrets.AI_RELAY_API_KEY }}
@@ -199,10 +477,10 @@ jobs:
 
           if [ -n "${AI_RELAY_API_KEY_SECRET:-}" ]; then
             selected_relay="${AI_RELAY_API_KEY_SECRET}"
-            relay_source="secret"
+            relay_source="secrets.AI_RELAY_API_KEY"
           elif [ -n "${AI_RELAY_API_KEY:-}" ]; then
             selected_relay="${AI_RELAY_API_KEY}"
-            relay_source="runner-env"
+            relay_source="runner_env.AI_RELAY_API_KEY"
           fi
 
           if [ -z "${selected_relay}" ]; then
@@ -213,6 +491,18 @@ jobs:
           printf '::add-mask::%s\n' "${selected_relay}"
           export AI_RELAY_API_KEY="${selected_relay}"
           export GRIMOIRE_RELAY_KEY_SOURCE="${relay_source}"
+          export GRIMOIRE_BASE_CONTROLLER_PATH="${GRIMOIRE_BASE_CONTROLLER}"
+          export GRIMOIRE_TRUSTED_CONTROLLER_ROOT="${GRIMOIRE_BASE_CONTROLLER}"
+          export GRIMOIRE_TRUSTED_CONTROLLER_STATUS=".omo/ci/trusted-controller-status.json"
+          export OPENCODE_CONFIG_DIR="${GRIMOIRE_BASE_CONTROLLER}"
+          trusted_opencode_config="$(python3 - "${GRIMOIRE_BASE_CONTROLLER}/opencode.json" <<'PY'
+          import pathlib
+          import sys
+
+          print(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), end="")
+          PY
+          )"
+          export OPENCODE_CONFIG_CONTENT="${trusted_opencode_config}"
           printf 'grimoire driver: relay key source %s\n' "${relay_source}"
 
-          bash .github/scripts/grimoire-cast.sh
+          bash "${GRIMOIRE_BASE_CONTROLLER}/.github/scripts/grimoire-cast.sh" --repo-root "${GITHUB_WORKSPACE}"
