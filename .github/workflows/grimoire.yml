@@ -1,0 +1,21 @@
+name: Grimoire
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  grimoire:
+    if: ${{ github.event.pull_request.draft == false && !contains(github.event.pull_request.labels.*.name, 'LGTM') }}
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@main
+    with:
+      consumer_repository: ${{ github.repository }}
+      consumer_ref: ${{ github.event.pull_request.head.ref }}
+      pull_request_number: ${{ github.event.pull_request.number }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+      base_ref: ${{ github.event.pull_request.base.ref }}
+    secrets:
+      GRIMOIRE_PAT: ${{ secrets.GRIMOIRE_PAT }}
+      AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
