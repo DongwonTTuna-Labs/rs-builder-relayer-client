@@ -9,6 +9,8 @@ permissions: {}
 jobs:
   grimoire:
     if: ${{ github.event.pull_request.draft == false && !contains(github.event.pull_request.labels.*.name, 'LGTM') }}
+    permissions:
+      contents: read
     uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@main
     with:
       consumer_repository: ${{ github.repository }}
