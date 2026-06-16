@@ -306,13 +306,31 @@ fn relayer_key_auth_validates_redacts_and_marks_headers_sensitive() {
 #[test]
 fn relayer_url_enforces_production_boundary() {
     assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").is_ok());
-    assert!(DepositWalletRelayerUrl::parse("http://relayer-v2.polymarket.com").is_err());
-    assert!(DepositWalletRelayerUrl::parse("https://example.com").is_err());
-    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com/path").is_err());
-    assert!(DepositWalletRelayerUrl::parse("https://user@relayer-v2.polymarket.com").is_err());
-    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com:8443").is_err());
-    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com?x=1").is_err());
-    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com/#frag").is_err());
+    assert!(DepositWalletRelayerUrl::parse("https://relayer-v2-staging.polymarket.dev").is_ok());
+
+    for rejected in [
+        "http://relayer-v2.polymarket.com",
+        "http://relayer-v2-staging.polymarket.dev",
+        "https://example.com",
+        "https://relayer-v2-staging.polymarket.com",
+        "https://relayer-v2.polymarket.dev",
+        "https://relayer-v2.polymarket.com/path",
+        "https://relayer-v2-staging.polymarket.dev/path",
+        "https://user@relayer-v2.polymarket.com",
+        "https://user@relayer-v2-staging.polymarket.dev",
+        "https://relayer-v2.polymarket.com:8443",
+        "https://relayer-v2-staging.polymarket.dev:8443",
+        "https://relayer-v2.polymarket.com?x=1",
+        "https://relayer-v2-staging.polymarket.dev?x=1",
+        "https://relayer-v2.polymarket.com/#frag",
+        "https://relayer-v2-staging.polymarket.dev/#frag",
+    ] {
+        assert!(
+            DepositWalletRelayerUrl::parse(rejected).is_err(),
+            "{rejected} should be rejected"
+        );
+    }
+
     assert!(DepositWalletRelayerUrl::loopback("http://[::1]/").is_ok());
     assert!(DepositWalletRelayerUrl::loopback("http://user@127.0.0.1/").is_err());
     assert!(DepositWalletRelayerUrl::loopback("http://127.0.0.1/?x=1").is_err());
@@ -320,17 +338,23 @@ fn relayer_url_enforces_production_boundary() {
     assert!(DepositWalletRelayerUrl::loopback("http://127.0.0.1/path").is_err());
     assert!(DepositWalletRelayerUrl::loopback("http://192.0.2.1/").is_err());
 
-    let production = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
-    assert!(DepositWalletRelayerClient::new(
-        production.clone(),
-        relayer_auth(),
-        deposit_wallet_contract_config(137).unwrap()
-    )
-    .is_ok());
+    let polygon_url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+    let amoy_url =
+        DepositWalletRelayerUrl::parse("https://relayer-v2-staging.polymarket.dev").unwrap();
+    let polygon_config = deposit_wallet_contract_config(137).unwrap();
+    let amoy_config = deposit_wallet_contract_config(80002).unwrap();
 
-    let amoy = deposit_wallet_contract_config(80002).unwrap();
-    let error = DepositWalletRelayerClient::new(production, relayer_auth(), amoy).unwrap_err();
-    assert!(error.to_string().contains("Polygon deposit wallet contract config"));
+    assert!(DepositWalletRelayerClient::new(polygon_url.clone(), relayer_auth(), polygon_config)
+        .is_ok());
+    assert!(DepositWalletRelayerClient::new(amoy_url.clone(), relayer_auth(), amoy_config).is_ok());
+
+    let polygon_error =
+        DepositWalletRelayerClient::new(polygon_url, relayer_auth(), amoy_config).unwrap_err();
+    assert!(polygon_error.to_string().contains("chain 137"));
+
+    let amoy_error =
+        DepositWalletRelayerClient::new(amoy_url, relayer_auth(), polygon_config).unwrap_err();
+    assert!(amoy_error.to_string().contains("chain 80002"));
 }
 
 #[tokio::test]

@@ -21,13 +21,14 @@ use serde::{Deserialize, Deserializer};
 
 use crate::deposit_wallet::{
     deposit_wallet_contract_config, DepositWalletContractConfig, RelayerTransactionState,
-    POLYGON_CHAIN_ID,
+    AMOY_CHAIN_ID, POLYGON_CHAIN_ID,
 };
 #[cfg(test)]
 use crate::deposit_wallet::{build_wallet_nonce_request, RelayerSubmitResponse};
 use crate::error::{RelayerError, Result};
 
-const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
+const POLYGON_RELAYER_HOST: &str = "relayer-v2.polymarket.com";
+const AMOY_RELAYER_HOST: &str = "relayer-v2-staging.polymarket.dev";
 #[cfg(test)]
 const TRANSACTION_PATH: &str = "/transaction";
 #[cfg(test)]
