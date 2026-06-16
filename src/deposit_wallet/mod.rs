@@ -4,6 +4,8 @@
 //! not reuse the legacy Safe/Proxy execution path for WALLET-CREATE or WALLET
 //! request shapes.
 
+mod calldata;
+
 pub mod address;
 pub mod config;
 pub mod http;
@@ -14,6 +16,7 @@ pub mod transaction;
 pub mod types;
 
 pub use address::derive_deposit_wallet_address;
+pub use calldata::build_erc20_approve_call;
 pub use config::{
     deposit_wallet_contract_config, DepositWalletContractConfig, AMOY_CHAIN_ID,
     AMOY_DEPOSIT_WALLET_FACTORY, AMOY_DEPOSIT_WALLET_IMPLEMENTATION, POLYGON_CHAIN_ID,

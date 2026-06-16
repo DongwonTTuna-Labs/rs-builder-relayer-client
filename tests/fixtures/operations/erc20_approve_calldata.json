@@ -1,0 +1,50 @@
+{
+  "provenance": {
+    "signature": "approve(address,uint256)",
+    "selector": "0x095ea7b3",
+    "selector_verification": "keccak256('approve(address,uint256)') recomputed with pycryptodome 3.23.0; first 4 bytes = 0x095ea7b3; cross-checked against 4byte.directory entry id 149 and Polymarket builder-relayer-client examples",
+    "encoding_rule": "selector(4) ++ left-padded-32-byte(spender) ++ left-padded-32-byte(amount)",
+    "generator": "python3 3.13.12 manual ABI + pycryptodome 3.23.0 keccak selector check",
+    "abi_source": "ERC20 standard approve(address,uint256); cross-ref Polymarket/builder-relayer-client@9122f6fb1856f1ecfe4406685bfa19a2c5a7b290 src/abis/erc20Abi.ts approve ABI and examples using viem prepareEncodeFunctionData/encodeFunctionData",
+    "abi_hash": "sha256(canonical signature 'approve(address,uint256)')=9f0bb8a9deafa4881b85d434c1fccdb064584a4809dbcba57a86f5b4c559246b",
+    "retrieval_date": "2026-06-16",
+    "note": "token/spender are dummy INPUTS, not venue/production truth"
+  },
+  "vectors": [
+    {
+      "name": "basic_small_amount",
+      "token": "0x1111111111111111111111111111111111111111",
+      "spender": "0x3333333333333333333333333333333333333333",
+      "amount": "1",
+      "expected_calldata": "0x095ea7b300000000000000000000000033333333333333333333333333333333333333330000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "name": "zero_amount",
+      "token": "0x2222222222222222222222222222222222222222",
+      "spender": "0x4444444444444444444444444444444444444444",
+      "amount": "0",
+      "expected_calldata": "0x095ea7b300000000000000000000000044444444444444444444444444444444444444440000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "max_uint256",
+      "token": "0x5555555555555555555555555555555555555555",
+      "spender": "0x6666666666666666666666666666666666666666",
+      "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "expected_calldata": "0x095ea7b30000000000000000000000006666666666666666666666666666666666666666ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "name": "normal_nonzero_decimal",
+      "token": "0x7777777777777777777777777777777777777777",
+      "spender": "0x8888888888888888888888888888888888888888",
+      "amount": "1234567890123456789",
+      "expected_calldata": "0x095ea7b30000000000000000000000008888888888888888888888888888888888888888000000000000000000000000000000000000000000000000112210f47de98115"
+    },
+    {
+      "name": "uint128_max_amount",
+      "token": "0x9999999999999999999999999999999999999999",
+      "spender": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "amount": "340282366920938463463374607431768211455",
+      "expected_calldata": "0x095ea7b3000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00000000000000000000000000000000ffffffffffffffffffffffffffffffff"
+    }
+  ]
+}
