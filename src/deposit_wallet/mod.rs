@@ -11,6 +11,7 @@ pub mod config;
 pub mod http;
 pub mod nonce;
 pub mod requests;
+pub mod signer;
 pub mod signing;
 pub mod transaction;
 pub mod types;
@@ -29,6 +30,10 @@ pub use http::{
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]
 pub use requests::{build_wallet_create_request, try_build_wallet_batch_request_with_signature};
+pub use signer::{
+    DepositWalletAddress, DepositWalletFunderAddress, DepositWalletOwnerAddress,
+    DepositWalletOwnerSigner, POLYMARKET_OWNER_PRIVATE_KEY_ENV,
+};
 #[allow(deprecated)]
 pub use signing::{
     build_deposit_wallet_batch_request_from_signed, digest_deposit_wallet_batch,
