@@ -35,8 +35,6 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let _ = dotenvy::dotenv();
-
     let cli = match parse_cli()? {
         CliAction::Run(cli) => cli,
         CliAction::Help => return Ok(()),
@@ -49,6 +47,8 @@ async fn run() -> Result<()> {
     } else {
         println!("Dry-run safety: no POST /submit calls will be made.");
     }
+
+    let _ = dotenvy::dotenv();
 
     let relayer_url_raw = load_relayer_url();
     if cli.execute {

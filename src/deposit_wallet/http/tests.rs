@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::{Duration, UNIX_EPOCH};
 
 use ethers::types::Bytes;
@@ -8,8 +9,9 @@ use tokio::task::JoinHandle;
 
 use crate::deposit_wallet::{
     deposit_wallet_contract_config, derive_deposit_wallet_address,
-    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
-    SignedDepositWalletBatch, WALLET_TRANSACTION_TYPE,
+    validate_deposit_wallet_batch_signature, DepositWalletAddress, DepositWalletBatchToSign,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletFunderAddress,
+    DepositWalletOwnerAddress, SignedDepositWalletBatch, WALLET_TRANSACTION_TYPE,
 };
 
 use super::response::{parse_deployed_response, parse_transaction_response, validate_transaction_id};
@@ -21,7 +23,6 @@ const WALLET_OWNER: &str = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5";
 const OTHER_OWNER: &str = "0x0000000000000000000000000000000000000001";
 const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug)]
 struct CapturedRequest {
     method: String,
     path: String,
@@ -35,6 +36,39 @@ impl CapturedRequest {
             .iter()
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
+    }
+}
+
+impl fmt::Debug for CapturedRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let headers = self
+            .headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), debug_header_value(name, value)))
+            .collect::<Vec<_>>();
+        let body = if self.body.is_empty() {
+            "<empty>".to_string()
+        } else {
+            format!("<redacted:{} bytes>", self.body.len())
+        };
+
+        f.debug_struct("CapturedRequest")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("headers", &headers)
+            .field("body", &body)
+            .finish()
+    }
+}
+
+fn debug_header_value(name: &str, value: &str) -> String {
+    if name.eq_ignore_ascii_case("RELAYER_API_KEY")
+        || name.eq_ignore_ascii_case("RELAYER_API_KEY_ADDRESS")
+        || name.eq_ignore_ascii_case("AUTHORIZATION")
+    {
+        "<redacted>".to_string()
+    } else {
+        value.to_string()
     }
 }
 
@@ -350,23 +384,49 @@ async fn write_response(stream: &mut TcpStream, response: TestResponse) {
         .expect("response should write");
 }
 
+fn transaction_response_value_for_owner_with_config(
+    transaction_id: &str,
+    state: &str,
+    owner: Address,
+    config: DepositWalletContractConfig,
+) -> Value {
+    let deposit_wallet = derive_deposit_wallet_address(owner, config).unwrap();
+    json!({
+        "transactionID": transaction_id,
+        "type": WALLET_TRANSACTION_TYPE,
+        "from": to_checksum(&owner, None),
+        "to": to_checksum(&config.factory, None),
+        "proxyAddress": to_checksum(&deposit_wallet, None),
+        "state": state,
+        "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
+        "owner": to_checksum(&owner, None)
+    })
+}
+
 fn transaction_response_value_for_owner(
     transaction_id: &str,
     state: &str,
     owner: &str,
 ) -> Value {
-    let config = deposit_wallet_contract_config(137).unwrap();
-    let deposit_wallet = derive_deposit_wallet_address(address(owner), config).unwrap();
-    json!({
-        "transactionID": transaction_id,
-        "type": WALLET_TRANSACTION_TYPE,
-        "from": owner,
-        "to": to_checksum(&config.factory, None),
-        "proxyAddress": to_checksum(&deposit_wallet, None),
-        "state": state,
-        "transactionHash": "0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8",
-        "owner": owner
-    })
+    transaction_response_value_for_owner_with_config(
+        transaction_id,
+        state,
+        address(owner),
+        deposit_wallet_contract_config(137).unwrap(),
+    )
+}
+
+fn amoy_transaction_response_value_for_owner(
+    transaction_id: &str,
+    state: &str,
+    owner: Address,
+) -> Value {
+    transaction_response_value_for_owner_with_config(
+        transaction_id,
+        state,
+        owner,
+        deposit_wallet_contract_config(80002).unwrap(),
+    )
 }
 
 fn transaction_response_value(transaction_id: &str, state: &str) -> Value {
@@ -691,6 +751,239 @@ async fn submit_signed_wallet_batch_posts_exact_fixture_and_accepts_missing_hash
     assert_eq!(requests.len(), 1);
     assert_submit_request_headers(&requests[0]);
     assert_json_body_matches_fixture(&requests[0].body, "wallet_signed_submit_body_amoy.json");
+}
+
+#[tokio::test]
+async fn live_mock_relayer_flow_reads_nonce_submits_without_hash_and_polls_to_confirmed() {
+    let signed = signed_batch_fixture("wallet_batch_eip712_amoy.json");
+    let owner = signed.submit_from();
+    let wallet_transaction_id = "tx-wallet-batch-new";
+    let poll_body = |state| {
+        json!([amoy_transaction_response_value_for_owner(
+            wallet_transaction_id,
+            state,
+            owner,
+        )])
+        .to_string()
+    };
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", r#"{"nonce":"31"}"#),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID":"tx-wallet-create-new","state":"STATE_NEW"}).to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID":wallet_transaction_id,"state":"STATE_NEW"}).to_string(),
+        ),
+        TestResponse::json("200 OK", poll_body("STATE_NEW")),
+        TestResponse::json("200 OK", poll_body("STATE_MINED")),
+        TestResponse::json("200 OK", poll_body("STATE_EXECUTED")),
+        TestResponse::json("200 OK", poll_body("STATE_CONFIRMED")),
+    ])
+    .await;
+    let client = amoy_test_client(url);
+
+    let nonce = client.get_wallet_nonce(owner).await.unwrap();
+    let create_receipt = client.submit_wallet_create(owner).await.unwrap();
+    let wallet_receipt = client.submit_signed_wallet_batch(signed).await.unwrap();
+    let confirmed = client
+        .poll_transaction_for_owner_with_config(owner, wallet_transaction_id, short_polling_config())
+        .await
+        .unwrap();
+
+    assert_eq!(nonce, U256::from(31u64));
+    assert_eq!(create_receipt.transaction_id, "tx-wallet-create-new");
+    assert_eq!(create_receipt.transaction_hash, None);
+    assert_eq!(wallet_receipt.transaction_id, wallet_transaction_id);
+    assert_eq!(wallet_receipt.transaction_hash, None);
+    assert_eq!(confirmed.transaction_id, wallet_transaction_id);
+    assert_eq!(confirmed.state, RelayerTransactionState::Confirmed);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 7);
+    assert_eq!(
+        requests[0].path,
+        format!("/nonce?address={}&type=WALLET", to_checksum(&owner, None))
+    );
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, "/submit");
+    assert_eq!(requests[2].method, "POST");
+    assert_eq!(requests[2].path, "/submit");
+    assert_json_body_matches_fixture(&requests[2].body, "wallet_signed_submit_body_amoy.json");
+    for request in &requests[3..] {
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/transaction?id=tx-wallet-batch-new");
+    }
+}
+
+#[tokio::test]
+async fn live_mock_dry_run_prepares_signed_batch_without_submit_requests() {
+    let signed = signed_batch_fixture("wallet_batch_eip712_amoy.json");
+    let owner = signed.submit_from();
+    let deposit_wallet = signed.deposit_wallet();
+    let config = deposit_wallet_contract_config(80002).unwrap();
+    let deployed_body = json!({
+        "deployed": true,
+        "proxyAddress": to_checksum(&deposit_wallet, None)
+    });
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", deployed_body.to_string()),
+        TestResponse::json("200 OK", r#"{"nonce":"31"}"#),
+    ])
+    .await;
+    let client = amoy_test_client(url);
+
+    let deployment = client.discover_deposit_wallet(owner).await.unwrap();
+    let nonce = client.get_wallet_nonce(owner).await.unwrap();
+    let request = build_deposit_wallet_batch_request_from_signed(signed, config).unwrap();
+
+    assert_eq!(deployment.deposit_wallet(), deposit_wallet);
+    assert_eq!(nonce, U256::from(31u64));
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        fixture_value("wallet_signed_submit_body_amoy.json")
+    );
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|request| !(request.method == "POST" && request.path == "/submit")));
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0].path.starts_with("/deployed?address="));
+    assert_eq!(requests[1].method, "GET");
+    assert!(requests[1].path.starts_with("/nonce?address="));
+}
+
+#[tokio::test]
+async fn live_mock_failure_modes_cover_terminal_absent_timeout_and_429() {
+    let invalid = poll_transaction_state_error("tx-live-invalid", "STATE_INVALID").await;
+    assert!(matches!(invalid, RelayerError::TransactionInvalid(_)));
+
+    let failed = poll_transaction_state_error("tx-live-failed", "STATE_FAILED").await;
+    assert!(matches!(failed, RelayerError::TransactionFailed(_)));
+
+    let unknown = poll_transaction_state_error("tx-live-unknown", "STATE_REPLACED").await;
+    assert!(unknown.is_deposit_wallet_reconciliation_required());
+
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", "[]")]).await;
+    let client = test_client(url);
+    let empty = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            "tx-live-empty",
+            short_polling_config(),
+        )
+        .await
+        .unwrap_err();
+    assert!(empty.is_deposit_wallet_transaction_absent());
+    let _ = handle.await.unwrap();
+
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!([transaction_response_value("other-live-tx", "STATE_CONFIRMED")]).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    let absent = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            "tx-live-absent",
+            short_polling_config(),
+        )
+        .await
+        .unwrap_err();
+    assert!(absent.is_deposit_wallet_transaction_absent());
+    let _ = handle.await.unwrap();
+
+    let timeout_config = DepositWalletPollingConfig {
+        initial_backoff: Duration::from_millis(20),
+        max_backoff: Duration::from_millis(20),
+        timeout: Duration::from_millis(5),
+    };
+    let mut pending_response = transaction_response_value("tx-live-timeout", "STATE_MINED");
+    pending_response.as_object_mut().unwrap().remove("transactionHash");
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        pending_response.to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    let timeout = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            "tx-live-timeout",
+            timeout_config,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(timeout, RelayerError::Timeout));
+    let _ = handle.await.unwrap();
+
+    let (url, handle) = spawn_server(vec![TestResponse::json("429 Too Many Requests", "quota")
+        .with_header("retry-after", "7")])
+    .await;
+    let client = amoy_test_client(url);
+    let error = client
+        .submit_signed_wallet_batch(signed_batch_fixture("wallet_batch_eip712_amoy.json"))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        RelayerError::Api { status: 429, ref message }
+            if message.contains("retry after 7s")
+    ));
+    let _ = handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn live_mock_redacts_auth_signature_signed_body_and_asserts_identity_separation() {
+    let signed = signed_batch_fixture("wallet_batch_eip712_amoy.json");
+    let raw_signature = signed.signature().to_string();
+    let raw_signed_body = fixture_text("wallet_signed_submit_body_amoy.json");
+    let response_body = format!(
+        "api_key={API_KEY}; signature={raw_signature}; signed_body={raw_signed_body}"
+    );
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "429 Too Many Requests",
+        response_body,
+    )])
+    .await;
+    let client = amoy_test_client(url);
+
+    let error = client.submit_signed_wallet_batch(signed.clone()).await.unwrap_err();
+    let requests = handle.await.unwrap();
+    let request_debug = format!("{requests:?}");
+    let signed_debug = format!("{signed:?}");
+    let error_rendered = format!("{error:?}\n{error}");
+
+    assert_eq!(requests.len(), 1);
+    assert_submit_request_headers(&requests[0]);
+    assert_json_body_matches_fixture(&requests[0].body, "wallet_signed_submit_body_amoy.json");
+    for rendered in [&request_debug, &signed_debug, &error_rendered] {
+        assert!(!rendered.contains(API_KEY));
+        assert!(!rendered.contains(API_KEY_ADDRESS));
+        assert!(!rendered.contains(&raw_signature));
+        assert!(!rendered.contains(&raw_signed_body));
+        assert!(!rendered.contains("depositWalletParams"));
+    }
+    assert!(request_debug.contains("<redacted:"));
+    assert!(signed_debug.contains("signature: \"<redacted>\""));
+
+    let auth = relayer_auth();
+    let owner = DepositWalletOwnerAddress::new(signed.owner());
+    let deposit_wallet = DepositWalletAddress::new(signed.deposit_wallet());
+    let funder = DepositWalletFunderAddress::new(address("0x2222222222222222222222222222222222222222"));
+    let identities = [
+        auth.api_key_address(),
+        owner.address(),
+        deposit_wallet.address(),
+        funder.address(),
+    ];
+    for left in 0..identities.len() {
+        for right in left + 1..identities.len() {
+            assert_ne!(identities[left], identities[right]);
+        }
+    }
 }
 
 #[test]

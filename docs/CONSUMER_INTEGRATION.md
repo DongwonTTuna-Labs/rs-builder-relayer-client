@@ -95,28 +95,48 @@ strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
 crate-root API; request DTO fields stay crate-private so submit bodies are
 produced through validated builders.
 
-### HTTP client surface
+### HTTP client and live-capable surface
 
-The deposit-wallet HTTP client public surface in this PR exposes construction
-only:
+The deposit-wallet HTTP client public surface now includes the production
+building blocks needed by the Amoy live smoke:
 
 ```text
 DepositWalletRelayerUrl::parse
 DepositWalletRelayerClient::new
+DepositWalletRelayerClient::discover_deposit_wallet
+DepositWalletRelayerClient::get_wallet_nonce
+DepositWalletRelayerClient::submit_wallet_create
+DepositWalletRelayerClient::submit_signed_wallet_batch
+DepositWalletRelayerClient::get_transaction_for_owner
+DepositWalletRelayerClient::poll_transaction_for_owner
+DepositWalletRelayerClient::poll_transaction_for_owner_with_config
 ```
 
-Transaction and nonce read helpers remain crate-internal in this PR. The current
-official `GET /transaction` reference documents `SAFE`/`PROXY` transaction
-types, while the deposit-wallet docs describe `WALLET` submit/body construction
-without documenting the polling response shape. Until an official or recorded
-`WALLET` polling response fixture is reviewed, this crate must not claim
-production deposit-wallet transaction polling compatibility. Local loopback and
-recorded fixture tests preserve relayer wire evidence that the response is a
-`WALLET` transaction, that `owner` is present, that `from == owner`, and that
-`to` matches the configured deposit-wallet factory, and that `proxyAddress`
-matches the deposit wallet derived from `owner` and the configured factory.
-`WALLET-CREATE` responses are not treated as WALLET owner evidence by this parser because
-deployment identity and wallet mutation identity are reviewed separately.
+This is not a mainnet production readiness claim. Submit is hard-gated to the
+validated Amoy staging relayer host and chain `80002`; Polygon/mainnet submit is
+refused by the client. Consumers must keep the crate behind their relayer adapter
+boundary and must not expose these DTOs into domain, strategy, risk, or actor
+state.
+
+The included orchestrator example is dry-run by default:
+
+```bash
+cargo run --example deposit_wallet_live -- --network amoy
+```
+
+Dry-run may build, sign, and serialize a WALLET batch after read-only discovery
+and nonce lookup, but it must not call `POST /submit`. Live execution requires
+both the CLI flag and an operator shell env gate:
+
+```bash
+POLYMARKET_RELAYER_ALLOW_LIVE_AMOY=1 cargo run --example deposit_wallet_live -- --network amoy --execute
+```
+
+The live gate fails closed before dotenv secret loading, signer construction,
+relayer auth construction, or network requests when the env gate is absent. The
+example also refuses non-Amoy networks before dotenv secret loading. Operators
+must provide the env checklist documented in `docs/TESTING.md`; CI and consumer
+default tests must not provide real secrets.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -128,23 +148,14 @@ https://docs.polymarket.com/api-reference/relayer-api-keys/get-all-relayer-api-k
 
 Those docs name `RELAYER_API_KEY` and `RELAYER_API_KEY_ADDRESS` as the Relayer
 API key auth headers and define `RELAYER_API_KEY_ADDRESS` as the address that
-owns the key. This HTTP read client sends those headers on read requests as
-credential identity, while still treating transaction `owner`/`from` evidence
-as a separate owner-bound response contract. Consumers must not assume the
-relayer API key address, owner signer, deposit wallet, or funder are the same
-identity.
+owns the key. This HTTP client sends those headers as credential identity, while
+still treating transaction `owner`/`from`, owner signer, deposit wallet, and
+funder as separate identities. Consumers must not assume the relayer API key
+address, owner signer, deposit wallet, or funder are the same identity.
 
-WALLET nonce reads also remain crate-internal in this layer. Production URLs
-reject nonce reads until the mutation-state stack owns a nonce lease from nonce
-fetch through signing and submit. Consumers must not treat this PR as live
-nonce, submit, polling, or recovery capable.
-
-Migration path: consumer adapters may construct the client behind their adapter
-boundary, but must not expose transaction status or nonce reads until a later PR
-adds reviewed polling evidence and owner-scoped nonce lease semantics.
-Rollback path: stop importing the HTTP read client and keep the existing
-fixture/signing-only integration; no consumer domain type should depend on the
-new HTTP DTOs.
+Rollback path: remove the consumer adapter's live-submit wiring and keep the
+golden/signing/mock-test-only integration. Because the crate remains behind the
+adapter boundary, no consumer domain type should depend on the HTTP DTOs.
 
 Consumer adapter migration status for PR #8:
 
@@ -155,9 +166,9 @@ Consumer adapter migration status for PR #8:
   `build_wallet_batch_request_with_signature` to
   `try_build_wallet_batch_request_with_signature` in the same consumer-side
   integration change;
-- live submit enablement remains blocked by the enablement rule below, so a
-  consumer adapter that has not completed this migration must not treat this PR
-  as live-submit capable.
+- live submit enablement remains Amoy-testnet-only and operator-gated, so a
+  consumer adapter must default to dry-run unless Task 15 operator evidence is
+  present and reviewed.
 
 ## Enablement Rule
 
@@ -168,8 +179,11 @@ WALLET-CREATE fixture tests pass
 WALLET fixture tests pass
 EIP-712 fixture tests pass
 pUSD/CTF calldata fixture tests pass
-identity separation tests pass
+mock relayer happy/failure paths pass
+dry-run zero-submit and live-gate fail-closed tests pass
+redaction and identity separation tests pass
 transaction polling unknown-state tests pass
 dependency is pinned by commit SHA
 operator approval is recorded
+Task 15 Amoy live smoke evidence reaches STATE_CONFIRMED
 ```

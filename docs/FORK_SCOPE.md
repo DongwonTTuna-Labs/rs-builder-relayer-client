@@ -12,6 +12,7 @@ The consumer Rust workspace needs a relayer crate for Polymarket deposit-wallet 
 - Add deposit-wallet support in a separate module.
 - Avoid leaking fork-specific DTOs into consumer domain crates.
 - Keep all HTTP/auth/EIP-712 details inside this crate.
+- Keep live-capable deposit-wallet behavior narrowly scoped to Polygon Amoy testnet until operator evidence is recorded and reviewed.
 
 ## Documentation Index
 
@@ -34,11 +35,18 @@ The consumer Rust workspace needs a relayer crate for Polymarket deposit-wallet 
 - `WALLET` submit request serialization.
 - Transaction polling and terminal state mapping.
 - pUSD adapter approval, merge, and redeem calldata helpers.
+- Mock relayer happy/failure coverage, dry-run zero-submit proof, live-gate fail-closed proof, and redaction/identity tests.
+
+## Current Amoy-Only Expansion
+
+The fork now contains a dry-run-default `examples/deposit_wallet_live.rs` orchestrator and production HTTP primitives for the Amoy live smoke. This expansion exists only to satisfy the deposit-wallet AGENTS.md gate with automated mock/golden proof before Task 15. It is not a mainnet readiness statement, and it does not enable live split/merge/redeem or CLOB behavior.
 
 ## Non-Goals
 
 - No CLOB order client.
 - No trading strategy.
-- No live execution example until request signing and serialization fixtures are validated.
+- No mainnet deposit-wallet live execution in this round.
+- No live split/merge/redeem execution in this round; those calldata builders are golden-fixtured and dry-run only.
+- No live execution without dry-run default, `--execute`, `POLYMARKET_RELAYER_ALLOW_LIVE_AMOY=1`, Amoy chain `80002`, and the validated Amoy relayer URL.
 - No crates.io publishing unless explicitly re-approved.
 - No production import by branch name.
