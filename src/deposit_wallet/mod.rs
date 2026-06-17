@@ -17,7 +17,9 @@ pub mod transaction;
 pub mod types;
 
 pub use address::derive_deposit_wallet_address;
-pub use calldata::{build_ctf_split_position_call, build_erc20_approve_call};
+pub use calldata::{
+    build_ctf_merge_positions_call, build_ctf_split_position_call, build_erc20_approve_call,
+};
 pub use config::{
     deposit_wallet_contract_config, DepositWalletContractConfig, AMOY_CHAIN_ID,
     AMOY_DEPOSIT_WALLET_FACTORY, AMOY_DEPOSIT_WALLET_IMPLEMENTATION, POLYGON_CHAIN_ID,
