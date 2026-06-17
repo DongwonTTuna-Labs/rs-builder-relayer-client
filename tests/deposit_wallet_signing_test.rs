@@ -3,8 +3,9 @@ use ethers::utils::to_checksum;
 use polymarket_relayer::auth::AuthMethod;
 use polymarket_relayer::deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, digest_deposit_wallet_batch,
-    recover_deposit_wallet_batch_signer, try_build_deposit_wallet_batch_typed_data,
-    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign,
+    recover_deposit_wallet_batch_signer, sign_deposit_wallet_batch,
+    try_build_deposit_wallet_batch_typed_data, validate_deposit_wallet_batch_signature,
+    DepositWalletBatchToSign, DepositWalletOwnerSigner,
 };
 use polymarket_relayer::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
@@ -12,6 +13,11 @@ use polymarket_relayer::{
     DepositWalletCall, DepositWalletContractConfig, DepositWalletRequestContext, RelayerError,
 };
 use serde_json::Value;
+
+const PUBLIC_HARDHAT_ANVIL_TEST_PRIVATE_KEY: &str =
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const PUBLIC_HARDHAT_ANVIL_FOREIGN_TEST_PRIVATE_KEY: &str =
+    "0x59c6995e998f97a5a0044966f094538af2b1810d2ffb53b028b6531dd3639d6d";
 
 fn fixture(path: &str) -> Value {
     let full_path = format!("tests/fixtures/{path}");
@@ -113,6 +119,146 @@ fn wallet_batch_signature_recovery_accepts_owner() {
 
     assert_eq!(recovered, expected_signer);
     assert_eq!(signed.verified_signer(), expected_signer);
+}
+
+#[test]
+fn sign_batch_matches_official_python_vector() {
+    let data = fixture("deposit_wallet/wallet_batch_python_owner_signature.json");
+    let batch = batch_from_fixture(&data);
+    let signer = DepositWalletOwnerSigner::new(PUBLIC_HARDHAT_ANVIL_TEST_PRIVATE_KEY).unwrap();
+    let expected_digest: H256 = data["expectedDigest"].as_str().unwrap().parse().unwrap();
+    let expected_signature = data["ownerSignature"].as_str().unwrap();
+    let expected_owner: Address = data["ownerRecoveredSigner"].as_str().unwrap().parse().unwrap();
+    let config = deposit_wallet_contract_config(batch.chain_id).unwrap();
+
+    let typed_data = try_build_deposit_wallet_batch_typed_data(&batch).unwrap();
+    let signed = sign_deposit_wallet_batch(
+        &signer,
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        batch.calls.clone(),
+    )
+    .unwrap();
+    let method_signed = signer
+        .sign_deposit_wallet_batch(
+            batch.deposit_wallet,
+            batch.chain_id,
+            batch.nonce,
+            batch.deadline,
+            batch.calls.clone(),
+        )
+        .unwrap();
+    let recovered = recover_deposit_wallet_batch_signer(&batch, signed.signature()).unwrap();
+
+    assert_eq!(signer.owner_address(), expected_owner);
+    assert_eq!(typed_data, data["typedData"]);
+    assert_eq!(typed_data["primaryType"], "Batch");
+    assert_eq!(typed_data["domain"]["name"], "DepositWallet");
+    assert_eq!(typed_data["domain"]["version"], "1");
+    assert_eq!(typed_data["domain"]["chainId"], data["chainId"]);
+    assert_eq!(typed_data["domain"]["verifyingContract"], data["depositWallet"]);
+    assert_ne!(typed_data["domain"]["verifyingContract"], to_checksum(&config.factory, None));
+    assert_eq!(digest_deposit_wallet_batch(&batch).unwrap(), expected_digest);
+    assert_eq!(signed.digest(), expected_digest);
+    assert_eq!(signed.signature(), expected_signature);
+    assert_eq!(method_signed.signature(), expected_signature);
+    assert_eq!(signed.verified_signer(), expected_owner);
+    assert_eq!(recovered, expected_owner);
+}
+
+#[test]
+fn sign_batch_accepts_amoy_domain_and_validates_owner() {
+    let data = fixture("deposit_wallet/wallet_batch_eip712_amoy.json");
+    let fixture_batch = batch_from_fixture(&data);
+    let signer = DepositWalletOwnerSigner::new(PUBLIC_HARDHAT_ANVIL_TEST_PRIVATE_KEY).unwrap();
+    let batch = DepositWalletBatchToSign {
+        owner: signer.owner_address(),
+        nonce_owner: signer.owner_address(),
+        submit_from: signer.owner_address(),
+        deposit_wallet: fixture_batch.deposit_wallet,
+        chain_id: fixture_batch.chain_id,
+        nonce: fixture_batch.nonce,
+        deadline: fixture_batch.deadline,
+        calls: fixture_batch.calls.clone(),
+    };
+
+    let signed = sign_deposit_wallet_batch(
+        &signer,
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        batch.calls.clone(),
+    )
+    .unwrap();
+    let validated = validate_deposit_wallet_batch_signature(batch.clone(), signed.signature()).unwrap();
+
+    assert_eq!(batch.chain_id, 80002);
+    assert_eq!(signed.signature().len(), 132);
+    assert!(signed.signature().starts_with("0x"));
+    assert_eq!(signed.owner(), signer.owner_address());
+    assert_eq!(signed.verified_signer(), signer.owner_address());
+    assert_eq!(validated.signature(), signed.signature());
+}
+
+#[test]
+fn sign_batch_changes_on_payload_mutation_and_rejects_foreign_signer() {
+    let data = fixture("deposit_wallet/wallet_batch_python_owner_signature.json");
+    let batch = batch_from_fixture(&data);
+    let owner_signer = DepositWalletOwnerSigner::new(PUBLIC_HARDHAT_ANVIL_TEST_PRIVATE_KEY).unwrap();
+    let foreign_signer =
+        DepositWalletOwnerSigner::new(PUBLIC_HARDHAT_ANVIL_FOREIGN_TEST_PRIVATE_KEY).unwrap();
+
+    let signed = sign_deposit_wallet_batch(
+        &owner_signer,
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        batch.calls.clone(),
+    )
+    .unwrap();
+    let mut mutated_calls = batch.calls.clone();
+    let mut mutated_call_data = mutated_calls[0].data.as_ref().to_vec();
+    mutated_call_data.push(0);
+    mutated_calls[0].data = Bytes::from(mutated_call_data);
+    let mutated_signed = sign_deposit_wallet_batch(
+        &owner_signer,
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        mutated_calls.clone(),
+    )
+    .unwrap();
+    let foreign_signed = sign_deposit_wallet_batch(
+        &foreign_signer,
+        batch.deposit_wallet,
+        batch.chain_id,
+        batch.nonce,
+        batch.deadline,
+        batch.calls.clone(),
+    )
+    .unwrap();
+
+    assert_ne!(mutated_signed.signature(), signed.signature());
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(
+            DepositWalletBatchToSign {
+                calls: mutated_calls,
+                ..batch.clone()
+            },
+            signed.signature(),
+        ),
+        "signer must match owner",
+    );
+    assert_ne!(foreign_signed.verified_signer(), batch.owner);
+    assert_signing_error_contains(
+        validate_deposit_wallet_batch_signature(batch, foreign_signed.signature()),
+        "signer must match owner",
+    );
 }
 
 #[test]
