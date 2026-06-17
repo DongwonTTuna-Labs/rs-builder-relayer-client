@@ -29,7 +29,6 @@ impl DepositWalletRelayerUrl {
         Ok(Self { base: url, kind })
     }
 
-    #[cfg(test)]
     pub(super) fn endpoint(&self, path: &str) -> Url {
         let mut url = self.base.clone();
         url.set_path(path);

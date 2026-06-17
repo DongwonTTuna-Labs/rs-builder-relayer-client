@@ -384,6 +384,31 @@ async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
 }
 
 #[tokio::test]
+async fn get_wallet_nonce_fetches_fresh_nonce_on_each_call() {
+    let expected = fixture_value("wallet_nonce_http_request.json");
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", expected["response"].to_string()),
+        TestResponse::json("200 OK", r#"{"nonce":"32"}"#),
+    ])
+    .await;
+    let client = test_client(url);
+    let owner: Address = expected["address"].as_str().unwrap().parse().unwrap();
+
+    let first = client.get_wallet_nonce(owner).await.unwrap();
+    let second = client.get_wallet_nonce(owner).await.unwrap();
+
+    assert_eq!(first, U256::from(31u64));
+    assert_eq!(second, U256::from(32u64));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert_eq!(request.method, expected["method"].as_str().unwrap());
+        assert_eq!(request.path, expected["pathAndQuery"].as_str().unwrap());
+        assert!(request.body.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
     let (redirect_target, target_handle) =
         spawn_optional_redirect_target(TestResponse::json("200 OK", r#"{"nonce":31}"#)).await;
@@ -415,14 +440,18 @@ async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
     assert!(target_requests.is_empty());
 }
 
-#[tokio::test]
-async fn get_wallet_nonce_rejects_production_before_http() {
+#[test]
+fn get_wallet_nonce_production_client_reuses_url_guard_before_http() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
-    let client = test_client(url);
 
-    let error = client.get_wallet_nonce(address(WALLET_OWNER)).await.unwrap_err();
+    let error = DepositWalletRelayerClient::new(
+        url,
+        relayer_auth(),
+        deposit_wallet_contract_config(80002).unwrap(),
+    )
+    .unwrap_err();
 
-    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.to_string().contains("chain 137"));
 }
 
 #[test]

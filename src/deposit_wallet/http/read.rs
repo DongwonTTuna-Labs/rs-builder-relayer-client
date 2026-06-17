@@ -1,6 +1,9 @@
+#[cfg(test)]
 use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
+#[cfg(test)]
 use super::response::{parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt};
 use super::*;
+use serde::Deserialize;
 use serde_json::value::RawValue;
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
@@ -12,18 +15,8 @@ pub(super) struct WalletNonceResponse<'a> {
 }
 
 impl DepositWalletRelayerClient {
-    /// Fetches a WALLET nonce for diagnostics and local test-loopback flows.
-    ///
-    /// Production WALLET nonce reads remain disabled in this stack layer
-    /// because a later mutation-state PR must hold an owner-scoped nonce lease
-    /// through signing and submit.
-    pub(crate) async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
-        if self.base_url.is_production_host() {
-            return Err(RelayerError::mutation_blocked(
-                "production WALLET nonce reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
-                    .to_string(),
-            ));
-        }
+    /// Fetches a fresh WALLET nonce for the supplied deposit-wallet owner.
+    pub async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
         self.fetch_wallet_nonce(owner).await
     }
 
@@ -37,6 +30,7 @@ impl DepositWalletRelayerClient {
         parse_wallet_nonce_response(&response)
     }
 
+    #[cfg(test)]
     pub(crate) async fn get_transaction_for_owner(
         &self,
         owner: Address,
@@ -53,6 +47,7 @@ impl DepositWalletRelayerClient {
             .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
     }
 
+    #[cfg(test)]
     pub(super) async fn fetch_transaction(
         &self,
         transaction_id: &str,
@@ -74,6 +69,7 @@ impl DepositWalletRelayerClient {
     }
 }
 
+#[cfg(test)]
 fn validate_owner_transaction_receipt(
     expected_owner: Address,
     receipt: DepositWalletTransactionReceipt,
