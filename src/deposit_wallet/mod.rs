@@ -40,8 +40,9 @@ pub use signer::{
 #[allow(deprecated)]
 pub use signing::{
     build_deposit_wallet_batch_request_from_signed, digest_deposit_wallet_batch,
-    recover_deposit_wallet_batch_signer, try_build_deposit_wallet_batch_typed_data,
-    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, SignedDepositWalletBatch,
+    recover_deposit_wallet_batch_signer, sign_deposit_wallet_batch,
+    try_build_deposit_wallet_batch_typed_data, validate_deposit_wallet_batch_signature,
+    DepositWalletBatchToSign, SignedDepositWalletBatch,
 };
 pub use transaction::RelayerTransactionState;
 pub use types::{
