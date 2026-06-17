@@ -12,7 +12,7 @@ use crate::deposit_wallet::{
     SignedDepositWalletBatch, WALLET_TRANSACTION_TYPE,
 };
 
-use super::response::{parse_transaction_response, validate_transaction_id};
+use super::response::{parse_deployed_response, parse_transaction_response, validate_transaction_id};
 use super::*;
 
 const API_KEY: &str = "unit-test-relayer-api-key";
@@ -179,6 +179,14 @@ fn amoy_test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerCl
         relayer_auth(),
         deposit_wallet_contract_config(80002).unwrap(),
     )
+}
+
+fn short_polling_config() -> DepositWalletPollingConfig {
+    DepositWalletPollingConfig {
+        initial_backoff: Duration::from_millis(1),
+        max_backoff: Duration::from_millis(1),
+        timeout: Duration::from_secs(1),
+    }
 }
 
 fn assert_submit_request_headers(request: &CapturedRequest) {
@@ -547,6 +555,89 @@ fn get_wallet_nonce_production_client_reuses_url_guard_before_http() {
 }
 
 #[tokio::test]
+async fn discover_deposit_wallet_reads_deployed_address_or_create_needed() {
+    let fixture = fixture_value("wallet_deployed_response_cases.json");
+    let owner = address(fixture["owner"].as_str().unwrap());
+    let expected_wallet = derive_deposit_wallet_address(
+        owner,
+        deposit_wallet_contract_config(137).unwrap(),
+    )
+    .unwrap();
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", fixture["deployed"].to_string()),
+        TestResponse::json("200 OK", fixture["notDeployed"].to_string()),
+    ])
+    .await;
+    let client = test_client(url);
+
+    let deployed = client.discover_deposit_wallet(owner).await.unwrap();
+    let create_needed = client.discover_deposit_wallet(owner).await.unwrap();
+
+    assert_eq!(deployed.owner(), owner);
+    assert_eq!(deployed.deposit_wallet(), expected_wallet);
+    assert!(deployed.is_deployed());
+    assert!(!deployed.wallet_create_needed());
+    assert_eq!(create_needed.owner(), owner);
+    assert_eq!(create_needed.deposit_wallet(), expected_wallet);
+    assert!(!create_needed.is_deployed());
+    assert!(create_needed.wallet_create_needed());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let expected_path = format!(
+        "/deployed?address={}&type=WALLET",
+        to_checksum(&owner, None)
+    );
+    for request in requests {
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, expected_path);
+        assert_eq!(request.header("RELAYER_API_KEY"), Some(API_KEY));
+        assert_eq!(
+            request.header("RELAYER_API_KEY_ADDRESS"),
+            Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+        );
+        assert!(request.body.is_empty());
+    }
+}
+
+#[test]
+fn deployed_response_parser_rejects_ambiguous_or_mismatched_wallet_evidence() {
+    let owner = address(WALLET_OWNER);
+    let expected_wallet =
+        derive_deposit_wallet_address(owner, deposit_wallet_contract_config(137).unwrap()).unwrap();
+    for (label, response, expected_message) in [
+        (
+            "deployed true without address",
+            json!({"deployed": true}),
+            "did not include a wallet address",
+        ),
+        (
+            "not deployed with address",
+            json!({"deployed": false, "proxyAddress": to_checksum(&expected_wallet, None)}),
+            "not deployed but also included",
+        ),
+        (
+            "mismatched address",
+            json!({"deployed": true, "proxyAddress": OTHER_OWNER}),
+            "did not match derived deposit wallet",
+        ),
+        (
+            "malformed address",
+            json!({"deployed": true, "proxyAddress": "0x1234"}),
+            "wallet address was malformed",
+        ),
+    ] {
+        let error = parse_deployed_response(owner, expected_wallet, response.to_string().as_bytes())
+            .unwrap_err();
+        assert!(error.is_deposit_wallet_reconciliation_required(), "{label}: {error}");
+        assert!(
+            error.to_string().contains(expected_message),
+            "{label} produced unexpected error: {error}"
+        );
+        assert!(!error.to_string().contains(OTHER_OWNER));
+    }
+}
+
+#[tokio::test]
 async fn submit_wallet_create_posts_exact_fixture_and_accepts_missing_hash() {
     let response = json!({
         "transactionID": "tx-wallet-create-new",
@@ -791,17 +882,47 @@ fn transaction_response_receipt_debug_redacts_owner_wallet_hash_and_id() {
 }
 
 #[tokio::test]
-async fn get_transaction_for_owner_rejects_production_until_wallet_polling_evidence_is_recorded() {
-    let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
+async fn poll_transaction_for_owner_waits_until_confirmed_before_success() {
+    let transaction_id = "tx-poll-confirmed";
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_NEW").to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_MINED").to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_EXECUTED").to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+        ),
+    ])
+    .await;
     let client = test_client(url);
 
-    let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-production")
+    let receipt = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            transaction_id,
+            short_polling_config(),
+        )
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert!(error.is_deposit_wallet_read_blocked());
-    assert!(error.to_string().contains("WALLET polling response fixture"));
+    assert_eq!(receipt.transaction_id, transaction_id);
+    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 4);
+    for request in requests {
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/transaction?id=tx-poll-confirmed");
+        assert!(request.body.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -956,6 +1077,107 @@ async fn get_transaction_for_owner_rejects_terminal_failure_and_unknown_states()
     let unknown = transaction_state_error("tx-unknown", "STATE_FUTURE").await;
     assert!(unknown.is_deposit_wallet_reconciliation_required());
     assert!(!unknown.to_string().contains("STATE_FUTURE"));
+}
+
+async fn poll_transaction_state_error(transaction_id: &str, state: &str) -> RelayerError {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, state).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+
+    let error = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            transaction_id,
+            short_polling_config(),
+        )
+        .await
+        .unwrap_err();
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    error
+}
+
+#[tokio::test]
+async fn poll_transaction_for_owner_rejects_failed_invalid_and_unknown_states() {
+    let invalid = poll_transaction_state_error("tx-poll-invalid", "STATE_INVALID").await;
+    assert!(matches!(invalid, RelayerError::TransactionInvalid(_)));
+
+    let failed = poll_transaction_state_error("tx-poll-failed", "STATE_FAILED").await;
+    assert!(matches!(failed, RelayerError::TransactionFailed(_)));
+
+    let unknown = poll_transaction_state_error("tx-poll-unknown", "STATE_FUTURE").await;
+    assert!(unknown.is_deposit_wallet_reconciliation_required());
+    assert!(!unknown.to_string().contains("STATE_FUTURE"));
+}
+
+#[tokio::test]
+async fn poll_transaction_for_owner_returns_non_success_errors_for_bad_or_pending_responses() {
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", "[]")]).await;
+    let client = test_client(url);
+    let empty = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            "tx-empty-array",
+            short_polling_config(),
+        )
+        .await
+        .unwrap_err();
+    assert!(empty.is_deposit_wallet_transaction_absent());
+    let _ = handle.await.unwrap();
+
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!([transaction_response_value("other-tx", "STATE_CONFIRMED")]).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    let absent = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            "tx-absent-id",
+            short_polling_config(),
+        )
+        .await
+        .unwrap_err();
+    assert!(absent.is_deposit_wallet_transaction_absent());
+    let _ = handle.await.unwrap();
+
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", "not-json")]).await;
+    let client = test_client(url);
+    let malformed = client
+        .poll_transaction_for_owner_with_config(
+            address(WALLET_OWNER),
+            "tx-malformed",
+            short_polling_config(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(malformed, RelayerError::Other(ref message) if message.contains("could not parse transaction response")));
+    let _ = handle.await.unwrap();
+
+    let timeout_config = DepositWalletPollingConfig {
+        initial_backoff: Duration::from_millis(20),
+        max_backoff: Duration::from_millis(20),
+        timeout: Duration::from_millis(5),
+    };
+    let mut pending_response = transaction_response_value("tx-timeout", "STATE_MINED");
+    pending_response.as_object_mut().unwrap().remove("transactionHash");
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        pending_response.to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    let timeout = client
+        .poll_transaction_for_owner_with_config(address(WALLET_OWNER), "tx-timeout", timeout_config)
+        .await
+        .unwrap_err();
+    assert!(matches!(timeout, RelayerError::Timeout));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
 }
 
 #[tokio::test]
@@ -1254,6 +1476,20 @@ fn transaction_response_normalizes_valid_transaction_hashes() {
 }
 
 #[test]
+fn transaction_response_accepts_wallet_create_type_for_deploy_polling() {
+    let transaction_id = "tx-wallet-create-poll";
+    let config = deposit_wallet_contract_config(137).unwrap();
+    let mut response = transaction_response_value(transaction_id, "STATE_CONFIRMED");
+    response["type"] = json!(crate::deposit_wallet::WALLET_CREATE_TRANSACTION_TYPE);
+
+    let parsed = parse_transaction_response(transaction_id, config, response.to_string().as_bytes())
+        .unwrap();
+
+    assert_eq!(parsed.receipt.transaction_id, transaction_id);
+    assert_eq!(parsed.receipt.state, RelayerTransactionState::Confirmed);
+}
+
+#[test]
 fn transaction_response_rejects_malformed_address_evidence() {
     let config = deposit_wallet_contract_config(137).unwrap();
     for (label, field, value) in [
@@ -1325,8 +1561,6 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
     let other_address = to_checksum(&address(OTHER_OWNER), None);
     let mut missing_type = transaction_response_value(target, "STATE_CONFIRMED");
     missing_type.as_object_mut().unwrap().remove("type");
-    let mut wallet_create_type = transaction_response_value(target, "STATE_CONFIRMED");
-    wallet_create_type["type"] = json!(crate::deposit_wallet::WALLET_CREATE_TRANSACTION_TYPE);
     let mut wrong_type = transaction_response_value(target, "STATE_CONFIRMED");
     wrong_type["type"] = json!("SAFE");
     let mut missing_owner = transaction_response_value(target, "STATE_CONFIRMED");
@@ -1352,8 +1586,11 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
             missing_type,
             "did not include deposit-wallet transaction type",
         ),
-        ("WALLET-CREATE type", wallet_create_type, "type was not WALLET"),
-        ("wrong type", wrong_type, "type was not WALLET"),
+        (
+            "wrong type",
+            wrong_type,
+            "type was not WALLET or WALLET-CREATE",
+        ),
         (
             "missing owner",
             missing_owner,

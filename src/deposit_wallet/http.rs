@@ -8,39 +8,31 @@ use ethers::utils::{keccak256, to_checksum};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Client, Method, StatusCode};
 use secrecy::{ExposeSecret, SecretString};
-#[cfg(test)]
-use serde::de::{self, SeqAccess, Visitor};
-#[cfg(test)]
-use serde::{Deserialize, Deserializer};
 
 use crate::deposit_wallet::{
     build_deposit_wallet_batch_request_from_signed, build_wallet_create_request,
     build_wallet_nonce_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
     DepositWalletContractConfig, RelayerSubmitResponse, RelayerTransactionState,
-    SignedDepositWalletBatch, AMOY_CHAIN_ID, POLYGON_CHAIN_ID,
+    SignedDepositWalletBatch, AMOY_CHAIN_ID, POLYGON_CHAIN_ID, WALLET_TRANSACTION_TYPE,
 };
 use crate::error::{RelayerError, Result};
 
 const POLYGON_RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const AMOY_RELAYER_HOST: &str = "relayer-v2-staging.polymarket.dev";
-#[cfg(test)]
+const DEPLOYED_PATH: &str = "/deployed";
 const TRANSACTION_PATH: &str = "/transaction";
 const SUBMIT_PATH: &str = "/submit";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
-#[cfg(test)]
+const MAX_DEPLOYED_SUCCESS_BODY_BYTES: usize = 64 * 1024;
 const MAX_TRANSACTION_SUCCESS_BODY_BYTES: usize = 256 * 1024;
 const MAX_ERROR_BODY_DRAIN_BYTES: usize = 8 * 1024;
 const ERROR_BODY_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_BACKGROUND_ERROR_BODY_DRAINS: usize = 64;
 const RESPONSE_BODY_TOO_LARGE_MESSAGE: &str = "relayer response body exceeded maximum size";
 const MAX_TRANSACTION_ID_LEN: usize = 128;
-#[cfg(test)]
 const MAX_TRANSACTION_RESPONSE_ITEMS: usize = 32;
-#[cfg(test)]
 const TRANSACTION_RESPONSE_ITEM_LIMIT_ERROR: &str = "transaction response item limit exceeded";
-#[cfg(test)]
 const TRANSACTION_RESPONSE_DUPLICATE_ID_ERROR: &str = "transaction response duplicate id";
-#[cfg(test)]
 const TRANSACTION_RESPONSE_MISSING_ID_ERROR: &str = "transaction response missing requested id";
 
 mod auth;
@@ -51,7 +43,8 @@ mod transport;
 mod url;
 
 pub use auth::RelayerKeyAuth;
-pub use response::DepositWalletTransactionReceipt;
+pub use read::DepositWalletPollingConfig;
+pub use response::{DepositWalletDeployment, DepositWalletTransactionReceipt};
 pub use url::DepositWalletRelayerUrl;
 
 use transport::ErrorBodyDrainLimiter;
@@ -147,7 +140,7 @@ fn serialize_submit_request<T: serde::Serialize>(request: &T) -> Result<String> 
 }
 
 fn mutation_blocked(message: impl Into<String>) -> RelayerError {
-    RelayerError::Other(format!("Deposit-wallet mutation blocked: {}", message.into()))
+    RelayerError::mutation_blocked(message)
 }
 
 impl fmt::Debug for DepositWalletRelayerClient {

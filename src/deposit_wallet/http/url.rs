@@ -36,15 +36,6 @@ impl DepositWalletRelayerUrl {
         url
     }
 
-    #[cfg(test)]
-    pub(super) fn is_production_host(&self) -> bool {
-        matches!(
-            self.kind,
-            DepositWalletRelayerUrlKind::PolygonProduction
-                | DepositWalletRelayerUrlKind::AmoyProduction
-        )
-    }
-
     pub(super) fn required_chain_id(&self) -> Option<u64> {
         match self.kind {
             DepositWalletRelayerUrlKind::PolygonProduction => Some(POLYGON_CHAIN_ID),

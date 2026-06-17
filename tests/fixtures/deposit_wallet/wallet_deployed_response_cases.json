@@ -1,0 +1,10 @@
+{
+  "owner": "0x6e0c80c90ea6c15917308f820eac91ce2724b5b5",
+  "deployed": {
+    "deployed": true,
+    "proxyAddress": "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De"
+  },
+  "notDeployed": {
+    "deployed": false
+  }
+}

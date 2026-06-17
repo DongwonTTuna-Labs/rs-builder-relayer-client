@@ -1,12 +1,60 @@
-#[cfg(test)]
 use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
-#[cfg(test)]
-use super::response::{parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt};
+use super::response::{
+    parse_deployed_response, parse_transaction_response, validate_transaction_id,
+    ParsedTransactionReceipt,
+};
 use super::*;
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use tokio::time::{sleep_until, Instant};
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
+const DEFAULT_TRANSACTION_POLL_INITIAL_BACKOFF: Duration = Duration::from_millis(500);
+const DEFAULT_TRANSACTION_POLL_MAX_BACKOFF: Duration = Duration::from_secs(5);
+const DEFAULT_TRANSACTION_POLL_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepositWalletPollingConfig {
+    pub initial_backoff: Duration,
+    pub max_backoff: Duration,
+    pub timeout: Duration,
+}
+
+impl Default for DepositWalletPollingConfig {
+    fn default() -> Self {
+        Self {
+            initial_backoff: DEFAULT_TRANSACTION_POLL_INITIAL_BACKOFF,
+            max_backoff: DEFAULT_TRANSACTION_POLL_MAX_BACKOFF,
+            timeout: DEFAULT_TRANSACTION_POLL_TIMEOUT,
+        }
+    }
+}
+
+impl DepositWalletPollingConfig {
+    fn validate(self) -> Result<Self> {
+        if self.initial_backoff.is_zero() {
+            return Err(RelayerError::Other(
+                "transaction poll initial backoff must be greater than zero".to_string(),
+            ));
+        }
+        if self.max_backoff.is_zero() {
+            return Err(RelayerError::Other(
+                "transaction poll max backoff must be greater than zero".to_string(),
+            ));
+        }
+        if self.timeout.is_zero() {
+            return Err(RelayerError::Other(
+                "transaction poll timeout must be greater than zero".to_string(),
+            ));
+        }
+        if self.initial_backoff > self.max_backoff {
+            return Err(RelayerError::Other(
+                "transaction poll initial backoff must not exceed max backoff".to_string(),
+            ));
+        }
+        Ok(self)
+    }
+}
 
 #[derive(Deserialize)]
 pub(super) struct WalletNonceResponse<'a> {
@@ -20,6 +68,68 @@ impl DepositWalletRelayerClient {
         self.fetch_wallet_nonce(owner).await
     }
 
+    pub async fn discover_deposit_wallet(
+        &self,
+        owner: Address,
+    ) -> Result<DepositWalletDeployment> {
+        self.fetch_deployed_wallet(owner).await
+    }
+
+    pub async fn get_transaction_for_owner(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        self.fetch_transaction(transaction_id)
+            .await
+            .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
+    }
+
+    pub async fn poll_transaction_for_owner(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        self.poll_transaction_for_owner_with_config(
+            owner,
+            transaction_id,
+            DepositWalletPollingConfig::default(),
+        )
+        .await
+    }
+
+    pub async fn poll_transaction_for_owner_with_config(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+        config: DepositWalletPollingConfig,
+    ) -> Result<DepositWalletTransactionReceipt> {
+        let config = config.validate()?;
+        let transaction_id = validate_transaction_id(transaction_id)?;
+        let deadline = Instant::now() + config.timeout;
+        let mut backoff = config.initial_backoff;
+
+        loop {
+            let receipt = self.get_transaction_for_owner(owner, &transaction_id).await?;
+            if matches!(receipt.state, RelayerTransactionState::Confirmed) {
+                return Ok(receipt);
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(RelayerError::Timeout);
+            }
+            let remaining = deadline - now;
+            let sleep_for = backoff.min(config.max_backoff).min(remaining);
+            let reaches_deadline = sleep_for == remaining;
+            sleep_until(now + sleep_for).await;
+            if reaches_deadline {
+                return Err(RelayerError::Timeout);
+            }
+            backoff = next_poll_backoff(backoff, config.max_backoff);
+        }
+    }
+
     pub(super) async fn fetch_wallet_nonce(&self, owner: Address) -> Result<U256> {
         let request = build_wallet_nonce_request(owner);
         let mut url = self.base_url.endpoint(request.path());
@@ -30,24 +140,21 @@ impl DepositWalletRelayerClient {
         parse_wallet_nonce_response(&response)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn get_transaction_for_owner(
+    pub(super) async fn fetch_deployed_wallet(
         &self,
         owner: Address,
-        transaction_id: &str,
-    ) -> Result<DepositWalletTransactionReceipt> {
-        if self.base_url.is_production_host() {
-            return Err(RelayerError::read_blocked(
-                "production WALLET transaction reads are disabled in this PR until an official or recorded WALLET polling response fixture is reviewed"
-                    .to_string(),
-            ));
-        }
-        self.fetch_transaction(transaction_id)
-            .await
-            .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
+    ) -> Result<DepositWalletDeployment> {
+        let expected_deposit_wallet = derive_deposit_wallet_address(owner, self.config)?;
+        let mut url = self.base_url.endpoint(DEPLOYED_PATH);
+        url.query_pairs_mut()
+            .append_pair("address", &to_checksum(&owner, None))
+            .append_pair("type", WALLET_TRANSACTION_TYPE);
+        let response = self
+            .send_with_success_limit(Method::GET, url, None, MAX_DEPLOYED_SUCCESS_BODY_BYTES)
+            .await?;
+        parse_deployed_response(owner, expected_deposit_wallet, &response)
     }
 
-    #[cfg(test)]
     pub(super) async fn fetch_transaction(
         &self,
         transaction_id: &str,
@@ -69,7 +176,10 @@ impl DepositWalletRelayerClient {
     }
 }
 
-#[cfg(test)]
+fn next_poll_backoff(current: Duration, max: Duration) -> Duration {
+    current.checked_mul(2).unwrap_or(max).min(max)
+}
+
 fn validate_owner_transaction_receipt(
     expected_owner: Address,
     receipt: DepositWalletTransactionReceipt,
