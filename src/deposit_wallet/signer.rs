@@ -1,10 +1,12 @@
 use std::{env, fmt, sync::Arc};
 
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::Address;
+use ethers::types::{Address, H256, Signature, U256};
 use ethers::utils::to_checksum;
 use secrecy::{ExposeSecret, SecretString};
 
+use crate::deposit_wallet::signing::SignedDepositWalletBatch;
+use crate::deposit_wallet::types::DepositWalletCall;
 use crate::error::{RelayerError, Result};
 
 pub const POLYMARKET_OWNER_PRIVATE_KEY_ENV: &str = "POLYMARKET_OWNER_PRIVATE_KEY";
@@ -40,6 +42,32 @@ impl DepositWalletOwnerSigner {
 
     pub fn owner_address(&self) -> Address {
         self.owner.address()
+    }
+
+    pub fn sign_deposit_wallet_batch(
+        &self,
+        deposit_wallet: Address,
+        chain_id: u64,
+        nonce: U256,
+        deadline: U256,
+        calls: Vec<DepositWalletCall>,
+    ) -> Result<SignedDepositWalletBatch> {
+        crate::deposit_wallet::signing::sign_deposit_wallet_batch(
+            self,
+            deposit_wallet,
+            chain_id,
+            nonce,
+            deadline,
+            calls,
+        )
+    }
+
+    pub(crate) fn sign_deposit_wallet_batch_digest(&self, digest: H256) -> Result<String> {
+        let wallet = parse_owner_wallet(self.private_key.expose_secret())?;
+        let signature = wallet
+            .sign_hash(digest)
+            .map_err(|e| RelayerError::Signing(format!("could not sign deposit wallet batch: {e}")))?;
+        signature_to_hex(signature)
     }
 }
 
@@ -142,6 +170,24 @@ fn parse_owner_wallet(private_key: &str) -> Result<LocalWallet> {
     private_key.parse::<LocalWallet>().map_err(|_| {
         RelayerError::Signing("invalid deposit wallet owner private key".to_string())
     })
+}
+
+fn signature_to_hex(signature: Signature) -> Result<String> {
+    let mut signature_bytes = Vec::with_capacity(65);
+    let mut r_bytes = [0u8; 32];
+    signature.r.to_big_endian(&mut r_bytes);
+    signature_bytes.extend_from_slice(&r_bytes);
+
+    let mut s_bytes = [0u8; 32];
+    signature.s.to_big_endian(&mut s_bytes);
+    signature_bytes.extend_from_slice(&s_bytes);
+
+    let v = u8::try_from(signature.v).map_err(|_| {
+        RelayerError::Signing("invalid deposit wallet signature recovery id".to_string())
+    })?;
+    signature_bytes.push(v);
+
+    Ok(format!("0x{}", hex::encode(signature_bytes)))
 }
 
 fn redacted_address(address: Address) -> String {
