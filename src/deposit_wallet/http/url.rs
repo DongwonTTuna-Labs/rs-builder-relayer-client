@@ -54,6 +54,15 @@ impl DepositWalletRelayerUrl {
         }
     }
 
+    pub(super) fn allows_amoy_submit(&self) -> bool {
+        match self.kind {
+            DepositWalletRelayerUrlKind::AmoyProduction => true,
+            DepositWalletRelayerUrlKind::PolygonProduction => false,
+            #[cfg(test)]
+            DepositWalletRelayerUrlKind::MockLoopback => true,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn loopback(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)

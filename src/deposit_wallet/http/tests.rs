@@ -1,12 +1,15 @@
 use std::time::{Duration, UNIX_EPOCH};
 
+use ethers::types::Bytes;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use crate::deposit_wallet::{
-    deposit_wallet_contract_config, derive_deposit_wallet_address, WALLET_TRANSACTION_TYPE,
+    deposit_wallet_contract_config, derive_deposit_wallet_address,
+    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
+    SignedDepositWalletBatch, WALLET_TRANSACTION_TYPE,
 };
 
 use super::response::{parse_transaction_response, validate_transaction_id};
@@ -84,6 +87,70 @@ fn fixture_value(name: &str) -> Value {
     serde_json::from_str(&fixture_text(name)).expect("fixture should be valid JSON")
 }
 
+fn fixture_address(data: &Value, key: &str) -> Address {
+    data[key]
+        .as_str()
+        .expect("fixture address should be a string")
+        .parse()
+        .expect("fixture address should parse")
+}
+
+fn fixture_u256(data: &Value, key: &str) -> U256 {
+    U256::from_dec_str(data[key].as_str().expect("fixture U256 should be a string"))
+        .expect("fixture U256 should parse")
+}
+
+fn fixture_call(value: &Value) -> DepositWalletCall {
+    DepositWalletCall {
+        target: value["target"]
+            .as_str()
+            .expect("fixture call target should be a string")
+            .parse()
+            .expect("fixture call target should parse"),
+        value: U256::from_dec_str(
+            value["value"]
+                .as_str()
+                .expect("fixture call value should be a string"),
+        )
+        .expect("fixture call value should parse"),
+        data: Bytes::from(
+            hex::decode(
+                value["data"]
+                    .as_str()
+                    .expect("fixture call data should be a string")
+                    .trim_start_matches("0x"),
+            )
+            .expect("fixture call data should parse"),
+        ),
+    }
+}
+
+fn signed_batch_fixture(name: &str) -> SignedDepositWalletBatch {
+    let data = fixture_value(name);
+    let batch = DepositWalletBatchToSign {
+        owner: fixture_address(&data, "owner"),
+        nonce_owner: fixture_address(&data, "nonceOwner"),
+        submit_from: fixture_address(&data, "submitFrom"),
+        deposit_wallet: fixture_address(&data, "depositWallet"),
+        chain_id: data["chainId"].as_u64().expect("chainId should be u64"),
+        nonce: fixture_u256(&data, "nonce"),
+        deadline: fixture_u256(&data, "deadline"),
+        calls: data["calls"]
+            .as_array()
+            .expect("calls should be an array")
+            .iter()
+            .map(fixture_call)
+            .collect(),
+    };
+    validate_deposit_wallet_batch_signature(
+        batch,
+        data["ownerSignature"]
+            .as_str()
+            .expect("ownerSignature should be a string"),
+    )
+    .expect("fixture signature should validate")
+}
+
 fn relayer_auth() -> RelayerKeyAuth {
     RelayerKeyAuth::new(API_KEY, address(API_KEY_ADDRESS)).unwrap()
 }
@@ -103,6 +170,31 @@ fn test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient 
         relayer_auth(),
         deposit_wallet_contract_config(137).unwrap(),
     )
+}
+
+fn amoy_test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient {
+    DepositWalletRelayerClient::from_parts(
+        reqwest_client(Duration::from_secs(2)),
+        base_url,
+        relayer_auth(),
+        deposit_wallet_contract_config(80002).unwrap(),
+    )
+}
+
+fn assert_submit_request_headers(request: &CapturedRequest) {
+    assert_eq!(request.method, "POST");
+    assert_eq!(request.path, "/submit");
+    assert_eq!(request.header("content-type"), Some("application/json"));
+    assert_eq!(request.header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        request.header("RELAYER_API_KEY_ADDRESS"),
+        Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+    );
+}
+
+fn assert_json_body_matches_fixture(body: &str, fixture_name: &str) {
+    let posted_body = serde_json::from_str::<Value>(body).expect("posted body should be JSON");
+    assert_eq!(posted_body, fixture_value(fixture_name));
 }
 
 async fn spawn_server(
@@ -452,6 +544,148 @@ fn get_wallet_nonce_production_client_reuses_url_guard_before_http() {
     .unwrap_err();
 
     assert!(error.to_string().contains("chain 137"));
+}
+
+#[tokio::test]
+async fn submit_wallet_create_posts_exact_fixture_and_accepts_missing_hash() {
+    let response = json!({
+        "transactionID": "tx-wallet-create-new",
+        "state": "STATE_NEW"
+    });
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", response.to_string())]).await;
+    let client = amoy_test_client(url);
+
+    let receipt = client.submit_wallet_create(address(WALLET_OWNER)).await.unwrap();
+
+    assert_eq!(receipt.transaction_id, "tx-wallet-create-new");
+    assert_eq!(receipt.state, RelayerTransactionState::New);
+    assert_eq!(receipt.transaction_hash, None);
+    assert_eq!(receipt.owner, Some(address(WALLET_OWNER)));
+    assert_eq!(
+        receipt.deposit_wallet,
+        Some(
+            derive_deposit_wallet_address(
+                address(WALLET_OWNER),
+                deposit_wallet_contract_config(80002).unwrap()
+            )
+            .unwrap()
+        )
+    );
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_submit_request_headers(&requests[0]);
+    assert_json_body_matches_fixture(&requests[0].body, "wallet_create_submit_body.json");
+}
+
+#[tokio::test]
+async fn submit_signed_wallet_batch_posts_exact_fixture_and_accepts_missing_hash() {
+    let response = json!({
+        "transactionID": "tx-wallet-batch-new",
+        "state": "STATE_NEW"
+    });
+    let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", response.to_string())]).await;
+    let client = amoy_test_client(url);
+    let signed = signed_batch_fixture("wallet_batch_eip712_amoy.json");
+    let expected_owner = signed.submit_from();
+    let expected_wallet = signed.deposit_wallet();
+
+    let receipt = client.submit_signed_wallet_batch(signed).await.unwrap();
+
+    assert_eq!(receipt.transaction_id, "tx-wallet-batch-new");
+    assert_eq!(receipt.state, RelayerTransactionState::New);
+    assert_eq!(receipt.transaction_hash, None);
+    assert_eq!(receipt.owner, Some(expected_owner));
+    assert_eq!(receipt.deposit_wallet, Some(expected_wallet));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_submit_request_headers(&requests[0]);
+    assert_json_body_matches_fixture(&requests[0].body, "wallet_signed_submit_body_amoy.json");
+}
+
+#[test]
+fn submit_response_parser_accepts_optional_transaction_hash() {
+    let response = br#"{
+        "transactionID":"tx-submit-with-hash",
+        "state":"STATE_MINED",
+        "transactionHash":"0X38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8"
+    }"#;
+
+    let receipt = super::response::parse_submit_response(response, None, None).unwrap();
+
+    assert_eq!(receipt.transaction_id, "tx-submit-with-hash");
+    assert_eq!(receipt.state, RelayerTransactionState::Mined);
+    assert_eq!(
+        receipt.transaction_hash.as_deref(),
+        Some("0x38cbfbeae8fffa4e2b187ee5978d3ee9cafc53af0363ed90a35b7ea9016535d8")
+    );
+}
+
+#[tokio::test]
+async fn submit_refuses_non_amoy_targets_before_network() {
+    let (url, handle) = spawn_server(Vec::new()).await;
+    let mock_mismatch_client = test_client(url);
+
+    let mock_error = mock_mismatch_client
+        .submit_wallet_create(address(WALLET_OWNER))
+        .await
+        .unwrap_err();
+
+    assert!(mock_error.is_deposit_wallet_mutation_blocked());
+    assert!(mock_error.to_string().contains("chain 80002"));
+    let requests = handle.await.unwrap();
+    assert!(requests.is_empty());
+
+    let polygon_client = DepositWalletRelayerClient::new(
+        DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap(),
+        relayer_auth(),
+        deposit_wallet_contract_config(137).unwrap(),
+    )
+    .unwrap();
+    let polygon_error = polygon_client
+        .submit_wallet_create(address(WALLET_OWNER))
+        .await
+        .unwrap_err();
+    assert!(polygon_error.is_deposit_wallet_mutation_blocked());
+    assert!(polygon_error.to_string().contains("Amoy relayer host"));
+
+    let amoy_url = DepositWalletRelayerUrl::parse("https://relayer-v2-staging.polymarket.dev")
+        .unwrap();
+    let bad_config_error =
+        DepositWalletRelayerClient::new(amoy_url, relayer_auth(), deposit_wallet_contract_config(137).unwrap())
+            .unwrap_err();
+    assert!(bad_config_error.to_string().contains("chain 80002"));
+}
+
+#[tokio::test]
+async fn submit_429_preserves_retry_after_without_body_or_secret_leak() {
+    let response_body = r#"{"error":"leaky-response-body","detail":"depositWalletParams"}"#;
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("429 Too Many Requests", response_body).with_header("retry-after", "7"),
+    ])
+    .await;
+    let client = amoy_test_client(url);
+    let signed = signed_batch_fixture("wallet_batch_eip712_amoy.json");
+    let raw_signature = signed.signature().to_string();
+
+    let error = client.submit_signed_wallet_batch(signed).await.unwrap_err();
+
+    assert!(matches!(
+        error,
+        RelayerError::Api { status: 429, ref message }
+            if message.contains("retry after 7s")
+    ));
+    let error_display = error.to_string();
+    let error_debug = format!("{error:?}");
+    for rendered in [&error_display, &error_debug] {
+        assert!(!rendered.contains("leaky-response-body"));
+        assert!(!rendered.contains("depositWalletParams"));
+        assert!(!rendered.contains(API_KEY));
+        assert!(!rendered.contains(&raw_signature));
+    }
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_submit_request_headers(&requests[0]);
+    assert_json_body_matches_fixture(&requests[0].body, "wallet_signed_submit_body_amoy.json");
 }
 
 #[test]

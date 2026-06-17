@@ -170,9 +170,9 @@ fn parse_verified_transaction_response(
         ));
     }
     let deposit_wallet = validate_transaction_wire_evidence(&response, config, owner)?;
-    let parsed = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
+    let receipt = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
         .map_err(TransactionParseError::new)?;
-    Ok(parsed)
+    Ok(ParsedTransactionReceipt { receipt, owner })
 }
 
 #[cfg(test)]
@@ -405,12 +405,29 @@ fn validate_optional_address_evidence_value(
     }
 }
 
-#[cfg(test)]
+pub(super) fn parse_submit_response(
+    bytes: &[u8],
+    owner: Option<Address>,
+    deposit_wallet: Option<Address>,
+) -> Result<DepositWalletTransactionReceipt> {
+    let response = serde_json::from_slice::<RelayerSubmitResponse>(bytes).map_err(|_| {
+        RelayerError::Other("could not parse submit response object".to_string())
+    })?;
+    let receipt = receipt_from_submit_response(response, owner, deposit_wallet)?;
+    if let RelayerTransactionState::Unknown(raw) = &receipt.state {
+        return Err(reconciliation_required(format!(
+            "submit response reached unknown state {}; manual reconciliation required",
+            unknown_state_error_summary(raw)
+        )));
+    }
+    Ok(receipt)
+}
+
 fn receipt_from_submit_response(
     response: RelayerSubmitResponse,
     owner: Option<Address>,
     deposit_wallet: Option<Address>,
-) -> Result<ParsedTransactionReceipt> {
+) -> Result<DepositWalletTransactionReceipt> {
     if response.transaction_id.trim().is_empty() {
         return Err(RelayerError::Other(
             "relayer response transactionID must not be empty".to_string(),
@@ -427,19 +444,15 @@ fn receipt_from_submit_response(
         .map(validate_transaction_hash)
         .transpose()?;
 
-    Ok(ParsedTransactionReceipt {
-        receipt: DepositWalletTransactionReceipt {
-            transaction_id,
-            state: response.state,
-            transaction_hash,
-            owner,
-            deposit_wallet,
-        },
+    Ok(DepositWalletTransactionReceipt {
+        transaction_id,
+        state: response.state,
+        transaction_hash,
         owner,
+        deposit_wallet,
     })
 }
 
-#[cfg(test)]
 pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     if transaction_id.is_empty()
         || transaction_id.len() > MAX_TRANSACTION_ID_LEN
@@ -455,7 +468,6 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     Ok(transaction_id.to_string())
 }
 
-#[cfg(test)]
 fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
     if transaction_hash.len() == 66 {
         if let Some(hex) = transaction_hash
@@ -468,8 +480,15 @@ fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
         }
     }
 
-    Err(RelayerError::reconciliation_required(
+    Err(reconciliation_required(
         "relayer response transactionHash was invalid".to_string(),
+    ))
+}
+
+fn reconciliation_required(message: impl Into<String>) -> RelayerError {
+    RelayerError::Other(format!(
+        "Deposit-wallet reconciliation required: {}",
+        message.into()
     ))
 }
 
