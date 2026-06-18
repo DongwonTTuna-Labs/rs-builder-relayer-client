@@ -1,7 +1,15 @@
 use super::redaction::{redacted_address, sanitized_external_token, unknown_state_error_summary};
-use super::response::{parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt};
+use super::response::{
+    parse_transaction_response, validate_transaction_id, ParsedTransactionReceipt,
+};
+use super::state::OwnerNonceReadReservation;
 use super::*;
+use crate::deposit_wallet::{
+    validate_deposit_wallet_batch_signature, DepositWalletBatchToSign, DepositWalletCall,
+};
 use serde_json::value::RawValue;
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 const MAX_WALLET_NONCE_DECIMAL_DIGITS: usize = 78;
 
@@ -11,20 +19,316 @@ pub(super) struct WalletNonceResponse<'a> {
     nonce: &'a RawValue,
 }
 
-impl DepositWalletRelayerClient {
-    /// Fetches a WALLET nonce for diagnostics and local test-loopback flows.
+pub struct DepositWalletNonceLease {
+    owner: Address,
+    nonce: U256,
+    expires_at_unix_seconds: u64,
+    reservation: Option<OwnerNonceReadReservation>,
+    _not_send_sync: PhantomData<Rc<()>>,
+}
+
+pub struct DepositWalletNonceLeaseSigningContext {
+    owner: Address,
+    nonce: U256,
+    nonce_owner: Address,
+    submit_from: Address,
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce_lease_binding: H256,
+    _not_send_sync: PhantomData<Rc<()>>,
+}
+
+impl DepositWalletNonceLease {
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub(super) fn into_unexpired_reservation(
+        mut self,
+        now_unix_seconds: u64,
+    ) -> Result<OwnerNonceReadReservation> {
+        if self.expires_at_unix_seconds <= now_unix_seconds {
+            return Err(RelayerError::mutation_blocked(
+                "WALLET nonce lease expired before submit; fetch a fresh leased nonce".to_string(),
+            ));
+        }
+        self.reservation.take().ok_or_else(|| {
+            RelayerError::reconciliation_required(
+                "WALLET nonce lease was already consumed; owner-scoped reconciliation required"
+                    .to_string(),
+            )
+        })
+    }
+
+    pub(super) fn signing_binding(
+        &self,
+        deposit_wallet: Address,
+        chain_id: u64,
+    ) -> Result<H256> {
+        let reservation = self.reservation.as_ref().ok_or_else(|| {
+            RelayerError::reconciliation_required(
+                "WALLET nonce lease was already consumed; owner-scoped reconciliation required"
+                    .to_string(),
+            )
+        })?;
+        Ok(nonce_lease_signing_binding(
+            self.owner,
+            self.nonce,
+            deposit_wallet,
+            chain_id,
+            reservation.id(),
+            reservation.created_at_unix_seconds(),
+        ))
+    }
+}
+
+impl DepositWalletNonceLeaseSigningContext {
+    pub(super) fn new(
+        owner: Address,
+        nonce: U256,
+        deposit_wallet: Address,
+        chain_id: u64,
+        nonce_lease_binding: H256,
+    ) -> Self {
+        Self {
+            owner,
+            nonce,
+            nonce_owner: owner,
+            submit_from: owner,
+            deposit_wallet,
+            chain_id,
+            nonce_lease_binding,
+            _not_send_sync: PhantomData,
+        }
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
+    pub fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
+    pub fn nonce_owner(&self) -> Address {
+        self.nonce_owner
+    }
+
+    pub fn submit_from(&self) -> Address {
+        self.submit_from
+    }
+
+    pub fn deposit_wallet(&self) -> Address {
+        self.deposit_wallet
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    /// Builds and validates a signed WALLET batch for this nonce lease.
     ///
-    /// Production WALLET nonce reads remain disabled in this stack layer
-    /// because a later mutation-state PR must hold an owner-scoped nonce lease
+    /// The owner, nonce owner, submit-from address, derived deposit wallet,
+    /// chain id, and nonce are taken from this context. Only deadline, calls,
+    /// and the raw owner signature are caller inputs.
+    pub fn validate_batch_signature(
+        &self,
+        deadline: U256,
+        calls: Vec<DepositWalletCall>,
+        signature: &str,
+    ) -> Result<SignedDepositWalletBatch> {
+        let batch = DepositWalletBatchToSign {
+            owner: self.owner,
+            nonce_owner: self.nonce_owner,
+            submit_from: self.submit_from,
+            deposit_wallet: self.deposit_wallet,
+            chain_id: self.chain_id,
+            nonce: self.nonce,
+            deadline,
+            calls,
+        };
+
+        validate_deposit_wallet_batch_signature(batch, signature)?
+            .try_with_nonce_lease_binding(self.nonce_lease_binding)
+    }
+
+    /// Validates that a signed WALLET batch already carries this nonce lease binding.
+    ///
+    /// This compatibility guard no longer grants a binding to arbitrary signed
+    /// batches. Call [`Self::validate_batch_signature`] with the raw signature
+    /// to build a batch from the current lease fields and bind it to this
+    /// context.
+    pub fn validate_signed_batch(
+        &self,
+        signed: SignedDepositWalletBatch,
+    ) -> Result<SignedDepositWalletBatch> {
+        self.validate_signed_batch_fields(&signed)?;
+        if signed.nonce_lease_binding() != Some(self.nonce_lease_binding) {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch was not produced by the current WALLET nonce lease signing context"
+                    .to_string(),
+            ));
+        }
+        Ok(signed)
+    }
+
+    fn validate_signed_batch_fields(&self, signed: &SignedDepositWalletBatch) -> Result<()> {
+        if signed.owner() != self.owner {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch owner does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        if signed.nonce_owner() != self.nonce_owner {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce owner does not match WALLET nonce lease"
+                    .to_string(),
+            ));
+        }
+        if signed.submit_from() != self.submit_from {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch submit from does not match WALLET nonce lease"
+                    .to_string(),
+            ));
+        }
+        if signed.deposit_wallet() != self.deposit_wallet {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch wallet does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        if signed.chain_id() != self.chain_id {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch chain id does not match WALLET nonce lease"
+                    .to_string(),
+            ));
+        }
+        if signed.nonce() != self.nonce {
+            return Err(RelayerError::Signing(
+                "signed deposit wallet batch nonce does not match WALLET nonce lease".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn nonce_lease_signing_binding(
+    owner: Address,
+    nonce: U256,
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce_read_id: u64,
+    created_at_unix_seconds: u64,
+) -> H256 {
+    let mut input = Vec::with_capacity(144);
+    input.extend_from_slice(b"deposit-wallet nonce lease signing context v1");
+    input.extend_from_slice(owner.as_bytes());
+    let mut nonce_bytes = [0u8; 32];
+    nonce.to_big_endian(&mut nonce_bytes);
+    input.extend_from_slice(&nonce_bytes);
+    input.extend_from_slice(deposit_wallet.as_bytes());
+    input.extend_from_slice(&chain_id.to_be_bytes());
+    input.extend_from_slice(&nonce_read_id.to_be_bytes());
+    input.extend_from_slice(&created_at_unix_seconds.to_be_bytes());
+    H256::from(keccak256(input))
+}
+
+impl fmt::Debug for DepositWalletNonceLease {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletNonceLease")
+            .field("owner", &super::redaction::redacted_address(self.owner))
+            .field("nonce", &self.nonce)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for DepositWalletNonceLeaseSigningContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DepositWalletNonceLeaseSigningContext")
+            .field("owner", &super::redaction::redacted_address(self.owner))
+            .field("nonce", &self.nonce)
+            .field("deposit_wallet", &super::redaction::redacted_address(self.deposit_wallet))
+            .field("chain_id", &self.chain_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DepositWalletRelayerClient {
+    /// Fetches a WALLET nonce without returning an owner-scoped lease.
+    ///
+    /// This compatibility API is limited to test-loopback and non-production
+    /// diagnostics. Production signing is not enabled in this PR; a later
+    /// crate-owned nonce lease capability must keep the owner reservation alive
     /// through signing and submit.
-    pub(crate) async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
+    #[cfg(test)]
+    pub(super) async fn get_wallet_nonce(
+        &self,
+        owner: Address,
+        gate: DepositWalletMutationGate,
+    ) -> Result<U256> {
+        self.ensure_permitted_for_action(
+            &gate,
+            owner,
+            DepositWalletMutationAction::WalletNonceRead,
+        )?;
         if self.base_url.is_production_host() {
             return Err(RelayerError::mutation_blocked(
                 "production WALLET nonce reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
                     .to_string(),
             ));
         }
+        let _reservation = self.reserve_owner_nonce_read(owner)?;
         self.fetch_wallet_nonce(owner).await
+    }
+
+    /// Fetches a WALLET nonce and returns the owner-scoped lease that must be
+    /// consumed by [`Self::sign_and_submit_wallet_batch_with_nonce_lease`].
+    ///
+    /// This is a non-live test-loopback surface in this PR: production permit
+    /// construction is intentionally unavailable. Production signing needs a
+    /// later crate-owned capability so consumers do not replace the owner lease
+    /// with an out-of-band nonce reader.
+    pub async fn get_wallet_nonce_with_lease(
+        &self,
+        owner: Address,
+        gate: DepositWalletMutationGate,
+    ) -> Result<DepositWalletNonceLease> {
+        self.ensure_permitted_for_action(
+            &gate,
+            owner,
+            DepositWalletMutationAction::WalletNonceRead,
+        )?;
+        if self.base_url.is_production_host() {
+            return Err(RelayerError::mutation_blocked(
+                "production WALLET nonce lease reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
+                    .to_string(),
+            ));
+        }
+        let expires_at_unix_seconds = match &gate {
+            DepositWalletMutationGate::Permit(permit) => permit.expires_at_unix_seconds(),
+            DepositWalletMutationGate::Deny => {
+                return Err(RelayerError::mutation_blocked(
+                    "explicit deposit-wallet mutation permit required".to_string(),
+                ))
+            }
+        };
+        let reservation = self.reserve_owner_nonce_read(owner)?;
+        let nonce = match self.fetch_wallet_nonce(owner).await {
+            Ok(nonce) => nonce,
+            Err(error) => {
+                drop(reservation);
+                return Err(error);
+            }
+        };
+        Ok(DepositWalletNonceLease {
+            owner,
+            nonce,
+            expires_at_unix_seconds,
+            reservation: Some(reservation),
+            _not_send_sync: PhantomData,
+        })
     }
 
     pub(super) async fn fetch_wallet_nonce(&self, owner: Address) -> Result<U256> {
@@ -37,7 +341,7 @@ impl DepositWalletRelayerClient {
         parse_wallet_nonce_response(&response)
     }
 
-    pub(crate) async fn get_transaction_for_owner(
+    pub async fn get_transaction_for_owner(
         &self,
         owner: Address,
         transaction_id: &str,
@@ -48,9 +352,39 @@ impl DepositWalletRelayerClient {
                     .to_string(),
             ));
         }
-        self.fetch_transaction(transaction_id)
-            .await
-            .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
+        let parsed = match self.fetch_transaction(transaction_id).await {
+            Ok(parsed) => parsed,
+            Err(error) if error.is_deposit_wallet_reconciliation_required() => {
+                self.transition_inflight_transaction_to_ambiguous_if_current(
+                    owner,
+                    transaction_id,
+                )?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        let transaction_type = parsed.transaction_type;
+        let receipt = match validate_owner_transaction_evidence(owner, parsed.receipt) {
+            Ok(receipt) => receipt,
+            Err(error) if error.is_deposit_wallet_reconciliation_required() => {
+                self.transition_inflight_transaction_to_ambiguous_if_current(
+                    owner,
+                    transaction_id,
+                )?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+        self.record_terminal_observation_from_receipt(owner, &receipt, transaction_type)?;
+        if matches!(receipt.state, RelayerTransactionState::Confirmed)
+            && self.ambiguous_submit_block(owner).is_some()
+        {
+            return Err(RelayerError::reconciliation_required(format!(
+                "confirmed deposit wallet transaction {} still requires owner-scoped manual reconciliation before success can be returned",
+                sanitized_external_token(&receipt.transaction_id)
+            )));
+        }
+        classify_owner_transaction_receipt(receipt)
     }
 
     pub(super) async fn fetch_transaction(
@@ -74,7 +408,7 @@ impl DepositWalletRelayerClient {
     }
 }
 
-fn validate_owner_transaction_receipt(
+fn validate_owner_transaction_evidence(
     expected_owner: Address,
     receipt: DepositWalletTransactionReceipt,
 ) -> Result<DepositWalletTransactionReceipt> {
@@ -91,7 +425,13 @@ fn validate_owner_transaction_receipt(
             redacted_address(expected_owner)
         )));
     }
+    Ok(receipt)
+}
 
+fn classify_owner_transaction_receipt(
+    receipt: DepositWalletTransactionReceipt,
+) -> Result<DepositWalletTransactionReceipt> {
+    let transaction_id = sanitized_external_token(&receipt.transaction_id);
     match &receipt.state {
         RelayerTransactionState::Confirmed => {
             if receipt.transaction_hash.is_none() {
@@ -118,7 +458,11 @@ fn validate_owner_transaction_receipt(
         }
         RelayerTransactionState::New
         | RelayerTransactionState::Executed
-        | RelayerTransactionState::Mined => {}
+        | RelayerTransactionState::Mined => {
+            return Err(RelayerError::transaction_absent(format!(
+                "deposit wallet transaction {transaction_id} is not terminal yet"
+            )));
+        }
     }
     Ok(receipt)
 }
@@ -152,6 +496,7 @@ fn parse_wallet_nonce_decimal(raw: &str) -> Result<U256> {
             "invalid WALLET nonce: expected 1-78 ASCII decimal digits".to_string(),
         ));
     }
-    U256::from_dec_str(raw)
-        .map_err(|_| RelayerError::Other("invalid WALLET nonce: outside U256 range".to_string()))
+    U256::from_dec_str(raw).map_err(|_| {
+        RelayerError::Other("invalid WALLET nonce: outside U256 range".to_string())
+    })
 }

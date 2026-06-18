@@ -17,8 +17,13 @@ pub use deposit_wallet::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
     derive_deposit_wallet_address, try_build_wallet_batch_request_with_signature,
     DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
-    DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletRequestContext,
-    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerSubmitResponse,
+    DepositWalletIdlessSubmitReconciliationEvidence, DepositWalletMutationAction,
+    DepositWalletMutationEnvironment, DepositWalletMutationGate, DepositWalletMutationPermit,
+    DepositWalletMutationScope, DepositWalletNonceLease, DepositWalletNonceLeaseSigningContext,
+    DepositWalletOwnerSerializationEvidence, DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletRequestContext, DepositWalletSubmitReconciliationEvidence,
+    DepositWalletSubmitReconciliationObservation, DepositWalletTransactionReceipt, RelayerKeyAuth,
+    RelayerSubmitResponse,
     RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};

@@ -130,7 +130,7 @@ impl fmt::Debug for DepositWalletBatchRequest {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayerSubmitResponse {
-    #[serde(rename = "transactionID", alias = "transactionId")]
+    #[serde(rename = "transactionID")]
     pub transaction_id: String,
     pub state: crate::deposit_wallet::RelayerTransactionState,
     #[serde(default, rename = "transactionHash")]
