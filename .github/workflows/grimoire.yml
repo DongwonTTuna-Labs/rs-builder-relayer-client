@@ -14,6 +14,8 @@ jobs:
         !contains(github.event.pull_request.labels.*.name, 'grimoire:disabled') &&
         (github.event.action != 'unlabeled' || github.event.label.name == '📋 Spec Needed')
       }}
+    permissions:
+      contents: read
     uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@main
     with:
       consumer_repository: ${{ github.repository }}
