@@ -2,15 +2,18 @@ name: Grimoire
 
 on:
   pull_request:
-    types: [opened, ready_for_review, synchronize, reopened]
+    types: [opened, ready_for_review, synchronize, reopened, unlabeled]
 
 permissions: {}
 
 jobs:
   grimoire:
-    if: ${{ github.event.pull_request.draft == false && !contains(github.event.pull_request.labels.*.name, 'grimoire:disabled') }}
-    permissions:
-      contents: read
+    if: >-
+      ${{
+        github.event.pull_request.draft == false &&
+        !contains(github.event.pull_request.labels.*.name, 'grimoire:disabled') &&
+        (github.event.action != 'unlabeled' || github.event.label.name == '📋 Spec Needed')
+      }}
     uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@main
     with:
       consumer_repository: ${{ github.repository }}
@@ -18,8 +21,9 @@ jobs:
       pull_request_number: ${{ github.event.pull_request.number }}
       head_sha: ${{ github.event.pull_request.head.sha }}
       base_ref: ${{ github.event.pull_request.base.ref }}
+      grimoire_app_client_id: Iv23liFL1dDHmU06FLSF
     secrets:
-      GRIMOIRE_PAT: ${{ secrets.GRIMOIRE_PAT }}
+      GRIMOIRE_APP_PRIVATE_KEY: ${{ secrets.GRIMOIRE_APP_PRIVATE_KEY }}
       AI_RELAY_API_KEY: ${{ secrets.AI_RELAY_API_KEY }}
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
