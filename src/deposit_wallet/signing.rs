@@ -5,11 +5,11 @@ use ethers::types::{Address, H256, Signature, U256};
 use ethers::utils::{keccak256, to_checksum};
 use serde_json::{json, Value};
 
+use crate::deposit_wallet::requests::build_wallet_batch_request_unchecked;
 use crate::deposit_wallet::{
     deposit_wallet_contract_config, derive_deposit_wallet_address, DepositWalletBatchRequest,
-    DepositWalletCall, DepositWalletContractConfig,
+    DepositWalletCall, DepositWalletContractConfig, DepositWalletOwnerSigner,
 };
-use crate::deposit_wallet::requests::build_wallet_batch_request_unchecked;
 use crate::error::{RelayerError, Result};
 
 const DEPOSIT_WALLET_DOMAIN_NAME: &str = "DepositWallet";
@@ -133,6 +133,10 @@ impl SignedDepositWalletBatch {
         self.digest
     }
 
+    pub fn signature(&self) -> &str {
+        &self.signature
+    }
+
     pub fn verified_signer(&self) -> Address {
         self.verified_signer
     }
@@ -208,6 +212,46 @@ fn build_deposit_wallet_batch_typed_data_parts(
 pub fn digest_deposit_wallet_batch(batch: &DepositWalletBatchToSign) -> Result<H256> {
     validate_batch_resource_limits(batch)?;
     digest_deposit_wallet_batch_unchecked(batch)
+}
+
+pub fn sign_deposit_wallet_batch(
+    owner_signer: &DepositWalletOwnerSigner,
+    deposit_wallet: Address,
+    chain_id: u64,
+    nonce: U256,
+    deadline: U256,
+    calls: Vec<DepositWalletCall>,
+) -> Result<SignedDepositWalletBatch> {
+    let owner = owner_signer.owner_address();
+    let batch = DepositWalletBatchToSign {
+        owner,
+        nonce_owner: owner,
+        submit_from: owner,
+        deposit_wallet,
+        chain_id,
+        nonce,
+        deadline,
+        calls,
+    };
+
+    sign_deposit_wallet_batch_to_sign(owner_signer, batch)
+}
+
+pub(crate) fn sign_deposit_wallet_batch_to_sign(
+    owner_signer: &DepositWalletOwnerSigner,
+    batch: DepositWalletBatchToSign,
+) -> Result<SignedDepositWalletBatch> {
+    validate_batch_resource_limits(&batch)?;
+    validate_batch_identity(&batch)?;
+    if owner_signer.owner_address() != batch.owner {
+        return Err(RelayerError::Signing(
+            "deposit wallet owner signer address must match batch owner".to_string(),
+        ));
+    }
+
+    let digest = digest_deposit_wallet_batch_unchecked(&batch)?;
+    let signature = owner_signer.sign_deposit_wallet_batch_digest(digest)?;
+    validate_deposit_wallet_batch_signature_with_validated_resources(batch, &signature)
 }
 
 fn digest_deposit_wallet_batch_unchecked(batch: &DepositWalletBatchToSign) -> Result<H256> {

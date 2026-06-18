@@ -1,19 +1,23 @@
-use super::redaction::{
-    redacted_address, sanitized_external_token, unknown_state_error_summary,
-};
+use super::redaction::{external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary};
 use super::*;
-#[cfg(test)]
-use super::redaction::external_token_hash;
-#[cfg(test)]
 use crate::deposit_wallet::{
-    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
+    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_CREATE_TRANSACTION_TYPE,
+    WALLET_TRANSACTION_TYPE,
 };
-#[cfg(test)]
+use serde::de::{self, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-#[cfg(test)]
 const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
     "Deposit-wallet reconciliation required: ";
+const DEPLOYED_ADDRESS_FIELDS: &[&str] = &[
+    "proxyAddress",
+    "depositWalletAddress",
+    "depositWallet",
+    "walletAddress",
+    "wallet",
+    "address",
+];
 
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -43,6 +47,71 @@ impl fmt::Debug for DepositWalletTransactionReceipt {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DepositWalletDeployment {
+    Deployed {
+        owner: Address,
+        deposit_wallet: Address,
+    },
+    CreateNeeded {
+        owner: Address,
+        expected_deposit_wallet: Address,
+    },
+}
+
+impl DepositWalletDeployment {
+    pub fn owner(&self) -> Address {
+        match self {
+            Self::Deployed { owner, .. } | Self::CreateNeeded { owner, .. } => *owner,
+        }
+    }
+
+    pub fn deposit_wallet(&self) -> Address {
+        match self {
+            Self::Deployed { deposit_wallet, .. } => *deposit_wallet,
+            Self::CreateNeeded {
+                expected_deposit_wallet,
+                ..
+            } => *expected_deposit_wallet,
+        }
+    }
+
+    pub fn is_deployed(&self) -> bool {
+        matches!(self, Self::Deployed { .. })
+    }
+
+    pub fn wallet_create_needed(&self) -> bool {
+        matches!(self, Self::CreateNeeded { .. })
+    }
+}
+
+impl fmt::Debug for DepositWalletDeployment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Deployed {
+                owner,
+                deposit_wallet,
+            } => f
+                .debug_struct("DepositWalletDeployment::Deployed")
+                .field("owner", &redacted_address(*owner))
+                .field("deposit_wallet", &redacted_address(*deposit_wallet))
+                .finish(),
+            Self::CreateNeeded {
+                owner,
+                expected_deposit_wallet,
+            } => f
+                .debug_struct("DepositWalletDeployment::CreateNeeded")
+                .field("owner", &redacted_address(*owner))
+                .field(
+                    "expected_deposit_wallet",
+                    &redacted_address(*expected_deposit_wallet),
+                )
+                .finish(),
+        }
+    }
+}
+
 struct ReceiptStateDebug<'a>(&'a RelayerTransactionState);
 
 impl fmt::Debug for ReceiptStateDebug<'_> {
@@ -62,20 +131,17 @@ impl fmt::Debug for ReceiptStateDebug<'_> {
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ParsedTransactionReceipt {
     pub(super) receipt: DepositWalletTransactionReceipt,
     pub(super) owner: Option<Address>,
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct TransactionParseError {
     pub(super) error: RelayerError,
 }
 
-#[cfg(test)]
 impl TransactionParseError {
     pub(super) fn new(error: RelayerError) -> Self {
         Self { error }
@@ -86,7 +152,6 @@ impl TransactionParseError {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RelayerTransactionResponseWithOwner {
@@ -108,7 +173,6 @@ pub(super) struct RelayerTransactionResponseWithOwner {
     proxy_address: Option<Address>,
 }
 
-#[cfg(test)]
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
     config: DepositWalletContractConfig,
@@ -147,7 +211,6 @@ pub(super) fn parse_transaction_response(
     parse_verified_transaction_response(expected_transaction_id, config, response)
 }
 
-#[cfg(test)]
 fn parse_verified_transaction_response(
     expected_transaction_id: &str,
     config: DepositWalletContractConfig,
@@ -170,12 +233,11 @@ fn parse_verified_transaction_response(
         ));
     }
     let deposit_wallet = validate_transaction_wire_evidence(&response, config, owner)?;
-    let parsed = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
+    let receipt = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
         .map_err(TransactionParseError::new)?;
-    Ok(parsed)
+    Ok(ParsedTransactionReceipt { receipt, owner })
 }
 
-#[cfg(test)]
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
     config: DepositWalletContractConfig,
@@ -187,10 +249,10 @@ fn validate_transaction_wire_evidence(
                 .to_string(),
         ))
     })?;
-    if tx_type != WALLET_TRANSACTION_TYPE {
+    if !matches!(tx_type, WALLET_TRANSACTION_TYPE | WALLET_CREATE_TRANSACTION_TYPE) {
         return Err(TransactionParseError::new(
             RelayerError::reconciliation_required(
-                "transaction response type was not WALLET; manual reconciliation required"
+                "transaction response type was not WALLET or WALLET-CREATE; manual reconciliation required"
                     .to_string(),
             ),
         ));
@@ -254,7 +316,6 @@ fn validate_transaction_wire_evidence(
     Ok(proxy_address)
 }
 
-#[cfg(test)]
 fn select_transaction_response_from_array(
     expected_transaction_id: &str,
     bytes: &[u8],
@@ -353,19 +414,16 @@ fn select_transaction_response_from_array(
     Ok(response)
 }
 
-#[cfg(test)]
 fn transaction_id_from_value(value: &Value) -> Option<&str> {
     value.as_object()?.get("transactionID")?.as_str()
 }
 
-#[cfg(test)]
 fn reconciliation_reason_from_deserializer_error(message: &str) -> Option<String> {
     let start = message.find(DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX)?
         + DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX.len();
     Some(message[start..].to_string())
 }
 
-#[cfg(test)]
 fn validate_transaction_address_evidence_shape(
     value: &Value,
 ) -> std::result::Result<(), TransactionParseError> {
@@ -380,7 +438,6 @@ fn validate_transaction_address_evidence_shape(
     Ok(())
 }
 
-#[cfg(test)]
 fn validate_optional_address_evidence_value(
     object: &serde_json::Map<String, Value>,
     field: &str,
@@ -405,12 +462,204 @@ fn validate_optional_address_evidence_value(
     }
 }
 
-#[cfg(test)]
+pub(super) fn parse_deployed_response(
+    owner: Address,
+    expected_deposit_wallet: Address,
+    bytes: &[u8],
+) -> Result<DepositWalletDeployment> {
+    let value = serde_json::from_slice::<Value>(bytes)
+        .map_err(|_| RelayerError::Other("could not parse deployed response".to_string()))?;
+    parse_deployed_value(owner, expected_deposit_wallet, &value)
+}
+
+fn parse_deployed_value(
+    owner: Address,
+    expected_deposit_wallet: Address,
+    value: &Value,
+) -> Result<DepositWalletDeployment> {
+    match value {
+        Value::Bool(false) => Ok(create_needed_deployment(owner, expected_deposit_wallet)),
+        Value::Bool(true) => Err(deployed_without_address_error()),
+        Value::String(raw) => parse_deployed_string(owner, expected_deposit_wallet, raw),
+        Value::Object(object) => parse_deployed_object(owner, expected_deposit_wallet, object),
+        _ => Err(RelayerError::Other(
+            "could not parse deployed response: expected bool, address string, or object".to_string(),
+        )),
+    }
+}
+
+fn parse_deployed_string(
+    owner: Address,
+    expected_deposit_wallet: Address,
+    raw: &str,
+) -> Result<DepositWalletDeployment> {
+    match raw.trim() {
+        "false" | "FALSE" => Ok(create_needed_deployment(owner, expected_deposit_wallet)),
+        "true" | "TRUE" => Err(deployed_without_address_error()),
+        candidate if is_official_address_wire_format(candidate) => {
+            deployed_from_wire_address(owner, expected_deposit_wallet, candidate)
+        }
+        _ => Err(RelayerError::reconciliation_required(
+            "deployed response string was neither a not-deployed marker nor a wallet address; manual reconciliation required",
+        )),
+    }
+}
+
+fn parse_deployed_object(
+    owner: Address,
+    expected_deposit_wallet: Address,
+    object: &serde_json::Map<String, Value>,
+) -> Result<DepositWalletDeployment> {
+    let deployed = parse_optional_deployed_flag(object)?;
+    let address = deployed_address_from_object(object)?;
+    match (deployed, address) {
+        (Some(false), None) => Ok(create_needed_deployment(owner, expected_deposit_wallet)),
+        (Some(false), Some(_)) => Err(RelayerError::reconciliation_required(
+            "deployed response marked wallet as not deployed but also included a wallet address; manual reconciliation required",
+        )),
+        (Some(true), Some(address)) | (None, Some(address)) => {
+            deployed_from_address(owner, expected_deposit_wallet, address)
+        }
+        (Some(true), None) => Err(deployed_without_address_error()),
+        (None, None) if object_has_null_wallet_address(object) => {
+            Ok(create_needed_deployment(owner, expected_deposit_wallet))
+        }
+        (None, None) => Err(RelayerError::reconciliation_required(
+            "deployed response did not include deployed status or wallet address; manual reconciliation required",
+        )),
+    }
+}
+
+fn parse_optional_deployed_flag(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Option<bool>> {
+    let Some(value) = object.get("deployed") else {
+        return Ok(None);
+    };
+    match value {
+        Value::Bool(value) => Ok(Some(*value)),
+        Value::String(raw) if raw == "true" || raw == "TRUE" => Ok(Some(true)),
+        Value::String(raw) if raw == "false" || raw == "FALSE" => Ok(Some(false)),
+        _ => Err(RelayerError::reconciliation_required(
+            "deployed response status was malformed; manual reconciliation required",
+        )),
+    }
+}
+
+fn deployed_address_from_object(object: &serde_json::Map<String, Value>) -> Result<Option<Address>> {
+    let mut address = None;
+    for field in DEPLOYED_ADDRESS_FIELDS {
+        let Some(value) = object.get(*field) else {
+            continue;
+        };
+        let Some(candidate) = deployed_address_from_value(field, value)? else {
+            continue;
+        };
+        if let Some(existing) = address {
+            if existing != candidate {
+                return Err(RelayerError::reconciliation_required(
+                    "deployed response included conflicting wallet addresses; manual reconciliation required",
+                ));
+            }
+        } else {
+            address = Some(candidate);
+        }
+    }
+    Ok(address)
+}
+
+fn deployed_address_from_value(field: &str, value: &Value) -> Result<Option<Address>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(raw) if is_official_address_wire_format(raw) => raw
+            .parse()
+            .map(Some)
+            .map_err(|_| RelayerError::reconciliation_required("deployed response wallet address was malformed; manual reconciliation required")),
+        Value::String(_) => Err(RelayerError::reconciliation_required(format!(
+            "deployed response {field} wallet address was malformed; manual reconciliation required"
+        ))),
+        _ => Err(RelayerError::reconciliation_required(format!(
+            "deployed response {field} wallet address was not a string; manual reconciliation required"
+        ))),
+    }
+}
+
+fn object_has_null_wallet_address(object: &serde_json::Map<String, Value>) -> bool {
+    DEPLOYED_ADDRESS_FIELDS
+        .iter()
+        .any(|field| matches!(object.get(*field), Some(Value::Null)))
+}
+
+fn deployed_from_wire_address(
+    owner: Address,
+    expected_deposit_wallet: Address,
+    raw: &str,
+) -> Result<DepositWalletDeployment> {
+    let address = raw.parse().map_err(|_| {
+        RelayerError::reconciliation_required(
+            "deployed response wallet address was malformed; manual reconciliation required",
+        )
+    })?;
+    deployed_from_address(owner, expected_deposit_wallet, address)
+}
+
+fn deployed_from_address(
+    owner: Address,
+    expected_deposit_wallet: Address,
+    deposit_wallet: Address,
+) -> Result<DepositWalletDeployment> {
+    if deposit_wallet != expected_deposit_wallet {
+        return Err(RelayerError::reconciliation_required(format!(
+            "deployed response wallet address {} did not match derived deposit wallet {}; manual reconciliation required",
+            redacted_address(deposit_wallet),
+            redacted_address(expected_deposit_wallet)
+        )));
+    }
+    Ok(DepositWalletDeployment::Deployed {
+        owner,
+        deposit_wallet,
+    })
+}
+
+fn create_needed_deployment(
+    owner: Address,
+    expected_deposit_wallet: Address,
+) -> DepositWalletDeployment {
+    DepositWalletDeployment::CreateNeeded {
+        owner,
+        expected_deposit_wallet,
+    }
+}
+
+fn deployed_without_address_error() -> RelayerError {
+    RelayerError::reconciliation_required(
+        "deployed response indicated wallet is deployed but did not include a wallet address; manual reconciliation required",
+    )
+}
+
+pub(super) fn parse_submit_response(
+    bytes: &[u8],
+    owner: Option<Address>,
+    deposit_wallet: Option<Address>,
+) -> Result<DepositWalletTransactionReceipt> {
+    let response = serde_json::from_slice::<RelayerSubmitResponse>(bytes).map_err(|_| {
+        RelayerError::Other("could not parse submit response object".to_string())
+    })?;
+    let receipt = receipt_from_submit_response(response, owner, deposit_wallet)?;
+    if let RelayerTransactionState::Unknown(raw) = &receipt.state {
+        return Err(reconciliation_required(format!(
+            "submit response reached unknown state {}; manual reconciliation required",
+            unknown_state_error_summary(raw)
+        )));
+    }
+    Ok(receipt)
+}
+
 fn receipt_from_submit_response(
     response: RelayerSubmitResponse,
     owner: Option<Address>,
     deposit_wallet: Option<Address>,
-) -> Result<ParsedTransactionReceipt> {
+) -> Result<DepositWalletTransactionReceipt> {
     if response.transaction_id.trim().is_empty() {
         return Err(RelayerError::Other(
             "relayer response transactionID must not be empty".to_string(),
@@ -427,19 +676,15 @@ fn receipt_from_submit_response(
         .map(validate_transaction_hash)
         .transpose()?;
 
-    Ok(ParsedTransactionReceipt {
-        receipt: DepositWalletTransactionReceipt {
-            transaction_id,
-            state: response.state,
-            transaction_hash,
-            owner,
-            deposit_wallet,
-        },
+    Ok(DepositWalletTransactionReceipt {
+        transaction_id,
+        state: response.state,
+        transaction_hash,
         owner,
+        deposit_wallet,
     })
 }
 
-#[cfg(test)]
 pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     if transaction_id.is_empty()
         || transaction_id.len() > MAX_TRANSACTION_ID_LEN
@@ -455,7 +700,6 @@ pub(super) fn validate_transaction_id(transaction_id: &str) -> Result<String> {
     Ok(transaction_id.to_string())
 }
 
-#[cfg(test)]
 fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
     if transaction_hash.len() == 66 {
         if let Some(hex) = transaction_hash
@@ -468,19 +712,24 @@ fn validate_transaction_hash(transaction_hash: &str) -> Result<String> {
         }
     }
 
-    Err(RelayerError::reconciliation_required(
+    Err(reconciliation_required(
         "relayer response transactionHash was invalid".to_string(),
     ))
 }
 
-#[cfg(test)]
+fn reconciliation_required(message: impl Into<String>) -> RelayerError {
+    RelayerError::Other(format!(
+        "Deposit-wallet reconciliation required: {}",
+        message.into()
+    ))
+}
+
 fn is_official_address_wire_format(raw: &str) -> bool {
     raw.len() == 42
         && raw.starts_with("0x")
         && raw[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-#[cfg(test)]
 fn deserialize_optional_address<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<Address>, D::Error>

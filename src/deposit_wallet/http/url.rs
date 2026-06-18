@@ -8,7 +8,8 @@ pub struct DepositWalletRelayerUrl {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DepositWalletRelayerUrlKind {
-    Production,
+    PolygonProduction,
+    AmoyProduction,
     #[cfg(test)]
     MockLoopback,
 }
@@ -24,14 +25,10 @@ impl DepositWalletRelayerUrl {
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)
             .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
-        validate_rel_url(&url)?;
-        Ok(Self {
-            base: url,
-            kind: DepositWalletRelayerUrlKind::Production,
-        })
+        let kind = validate_rel_url(&url)?;
+        Ok(Self { base: url, kind })
     }
 
-    #[cfg(test)]
     pub(super) fn endpoint(&self, path: &str) -> Url {
         let mut url = self.base.clone();
         url.set_path(path);
@@ -39,8 +36,22 @@ impl DepositWalletRelayerUrl {
         url
     }
 
-    pub(super) fn is_production_host(&self) -> bool {
-        self.kind == DepositWalletRelayerUrlKind::Production
+    pub(super) fn required_chain_id(&self) -> Option<u64> {
+        match self.kind {
+            DepositWalletRelayerUrlKind::PolygonProduction => Some(POLYGON_CHAIN_ID),
+            DepositWalletRelayerUrlKind::AmoyProduction => Some(AMOY_CHAIN_ID),
+            #[cfg(test)]
+            DepositWalletRelayerUrlKind::MockLoopback => None,
+        }
+    }
+
+    pub(super) fn allows_amoy_submit(&self) -> bool {
+        match self.kind {
+            DepositWalletRelayerUrlKind::AmoyProduction => true,
+            DepositWalletRelayerUrlKind::PolygonProduction => false,
+            #[cfg(test)]
+            DepositWalletRelayerUrlKind::MockLoopback => true,
+        }
     }
 
     #[cfg(test)]
@@ -63,7 +74,7 @@ impl fmt::Debug for DepositWalletRelayerUrl {
     }
 }
 
-pub(super) fn validate_rel_url(url: &Url) -> Result<()> {
+pub(super) fn validate_rel_url(url: &Url) -> Result<DepositWalletRelayerUrlKind> {
     if url.scheme() != "https" {
         return Err(RelayerError::invalid_relayer_url(
             "relayer URL must use https".to_string(),
@@ -74,11 +85,15 @@ pub(super) fn validate_rel_url(url: &Url) -> Result<()> {
             "relayer URL must not include userinfo".to_string(),
         ));
     }
-    if url.host_str() != Some(RELAYER_HOST) {
-        return Err(RelayerError::invalid_relayer_url(
-            "relayer URL host is not allowlisted".to_string(),
-        ));
-    }
+    let kind = match url.host_str() {
+        Some(POLYGON_RELAYER_HOST) => DepositWalletRelayerUrlKind::PolygonProduction,
+        Some(AMOY_RELAYER_HOST) => DepositWalletRelayerUrlKind::AmoyProduction,
+        _ => {
+            return Err(RelayerError::invalid_relayer_url(
+                "relayer URL host is not allowlisted".to_string(),
+            ));
+        }
+    };
     if !matches!(url.port(), None | Some(443)) {
         return Err(RelayerError::invalid_relayer_url(
             "relayer URL must use the default HTTPS port".to_string(),
@@ -94,7 +109,7 @@ pub(super) fn validate_rel_url(url: &Url) -> Result<()> {
             "relayer URL must not include a path".to_string(),
         ));
     }
-    Ok(())
+    Ok(kind)
 }
 
 #[cfg(test)]
@@ -134,14 +149,14 @@ pub(super) fn validate_relayer_contract_config(
     base_url: &DepositWalletRelayerUrl,
     config: DepositWalletContractConfig,
 ) -> Result<()> {
-    if !base_url.is_production_host() {
+    let Some(chain_id) = base_url.required_chain_id() else {
         return Ok(());
-    }
-    if config != deposit_wallet_contract_config(POLYGON_CHAIN_ID)? {
-        return Err(RelayerError::invalid_relayer_url(
-            "production deposit wallet relayer URL requires Polygon deposit wallet contract config"
-                .to_string(),
-        ));
+    };
+
+    if config != deposit_wallet_contract_config(chain_id)? {
+        return Err(RelayerError::invalid_relayer_url(format!(
+            "production deposit wallet relayer URL requires chain {chain_id} deposit wallet contract config"
+        )));
     }
     Ok(())
 }

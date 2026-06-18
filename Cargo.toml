@@ -58,6 +58,10 @@ name = "redeem_magic"
 path = "examples/redeem_magic.rs"
 
 [[example]]
+name = "deposit_wallet_live"
+path = "examples/deposit_wallet_live.rs"
+
+[[example]]
 name = "diagnose_gs026"
 path = "examples/diagnose_gs026.rs"
 

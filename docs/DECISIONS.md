@@ -124,3 +124,42 @@ Rollback:
 - if a consumer needs raw non-live serialization, add a deliberately named
   test-only or internal API with documented owner, risk, and removal condition
   in the consumer integration PR.
+
+## ADR-0007: Amoy Live Surface Requires Mock Gate Evidence First
+
+Decision:
+
+```text
+Allow this fork to expose Amoy-testnet-only deposit-wallet live primitives and a
+dry-run-default orchestrator only after mock/golden tests prove nonce, submit,
+polling, dry-run zero-submit, fail-closed live gates, redaction, and identity
+separation. Mainnet and live split/merge/redeem remain out of scope.
+```
+
+Reason:
+
+- AGENTS.md requires `WALLET-CREATE`, `WALLET`, EIP-712 Batch, nonce, polling,
+  and pUSD/CTF adapter calldata proof before claiming deposit-wallet live
+  execution capability;
+- Task 14 satisfies the automated gate with raw TCP mock relayer coverage rather
+  than a live network dependency or new mock-server crate;
+- the only remaining live claim is the narrow Task 15 operator-gated Amoy smoke,
+  which must still end at `STATE_CONFIRMED` before any consumer treats the path
+  as operational.
+
+Consequences:
+
+- CI runs mock/golden tests only and must not require real secrets;
+- `examples/deposit_wallet_live.rs` defaults to dry-run and requires both
+  `--execute` and `POLYMARKET_RELAYER_ALLOW_LIVE_AMOY=1` for live mode;
+- the live gate and off-Amoy refusal must run before dotenv secret loading,
+  signer/auth construction, or network requests;
+- docs and release notes must describe the verdict as Amoy-testnet-only, not
+  production/mainnet readiness.
+
+Rollback:
+
+- remove or stop invoking the consumer adapter live path and return to
+  golden/signing/mock-only use;
+- retain the mock suite as regression coverage for any later mainnet proposal;
+- do not reuse this ADR as approval for mainnet or live split/merge/redeem.
