@@ -69,22 +69,10 @@ The integration contract is:
 
 This builder doesn't sign, fetch nonce, submit HTTP requests, poll transactions, or pick venue addresses. It only produces one call object that a later batch flow may include after that flow performs its own validation and signing.
 
-### Allowed write paths
+### Implementation and Grimoire write scope
 
-For Grimoire, the allowed write path is exactly the body of `build_erc20_approve_call` in `src/deposit_wallet/calldata.rs`. The signature, module boundaries, fixtures, tests, OpenSpec files, docs, and policy files are outside Grimoire's write authority for this experiment unless a later human-authored task changes the contract.
+Grimoire's autonomous implementation authority is exactly the body of `build_erc20_approve_call` in `src/deposit_wallet/calldata.rs`. Grimoire must not autonomously change the signature, module boundaries, fixtures, tests, OpenSpec files, docs, policy files, Cargo metadata, auth/signing/nonce/http/submit modules, legacy operations, or request builders outside that function body.
 
-Forbidden paths for Grimoire include:
+That Grimoire authority limit is not a repository-wide PR file list. Human-authored OpenSpec, policy, fixture, frozen-test, Cargo, and documentation changes may be included when they define, authorize, or verify this capability before or alongside implementation. Those supporting human-authored changes expand the allowed PR scope only for this OpenSpec change; they do not expand Grimoire's autonomous write authority.
 
-1. `.github/**`.
-2. `.omo/**`.
-3. `AGENTS.md`.
-4. `Cargo.toml`.
-5. `Cargo.lock`.
-6. `src/operations/**`.
-7. Auth, signing, nonce, HTTP, and submit modules, including `src/auth.rs`, `src/deposit_wallet/signing.rs`, nonce request code, relayer client HTTP code, submit code, and request builders outside the approved function body.
-8. Policy docs, including `docs/SECURITY.md`, `docs/TESTING.md`, `docs/FORKED_RELAYER_CRATE.md`, and `docs/DEPOSIT_WALLET_RELAYER_DESIGN.md`.
-9. The OpenSpec change dir `openspec/changes/add-deposit-wallet-erc20-approve-calldata/**`.
-10. The ERC20 approve fixture.
-11. The frozen ERC20 approve test.
-
-Any change outside that single builder body invalidates the experiment verdict instead of expanding the scope. The verdict may only state whether Grimoire followed the pinned OpenSpec inside the bounded path. It must not state production safety, live readiness, or broad Grimoire capability.
+Any Grimoire-authored change outside the single approved builder body invalidates the Grimoire experiment verdict. The verdict may only state whether Grimoire followed the pinned OpenSpec inside the bounded path. It must not state production safety, live readiness, or broad Grimoire capability.
