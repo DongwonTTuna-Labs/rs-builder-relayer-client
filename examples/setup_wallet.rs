@@ -1,56 +1,37 @@
-//! Deploy a Safe wallet and set up all standard token approvals.
-//!
-//! Usage:
-//!   export PRIVATE_KEY="your_hex_private_key"
-//!   export POLY_RELAYER_API_KEY="your_relayer_key"
-//!   export POLY_RELAYER_ADDRESS="your_eoa_address"
-//!   cargo run --example setup_wallet
+use polymarket_relayer::{
+    approve_ctf_for_ctf_exchange, approve_ctf_for_neg_risk_adapter,
+    approve_ctf_for_neg_risk_exchange, approve_usdc_for_ctf_exchange,
+    approve_usdc_for_neg_risk_exchange, Transaction,
+};
 
-use ethers::signers::LocalWallet;
-use polymarket_relayer::{AuthMethod, RelayClient, RelayerTxType};
-use std::env;
+fn main() {
+    let plan = [
+        ("USDC -> CTF Exchange", approve_usdc_for_ctf_exchange()),
+        ("USDC -> Neg Risk Exchange", approve_usdc_for_neg_risk_exchange()),
+        ("CTF -> CTF Exchange", approve_ctf_for_ctf_exchange()),
+        ("CTF -> Neg Risk Exchange", approve_ctf_for_neg_risk_exchange()),
+        ("CTF -> Neg Risk Adapter", approve_ctf_for_neg_risk_adapter()),
+    ];
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // ── 1. Load credentials from env ──
-    let private_key = env::var("PRIVATE_KEY").expect("PRIVATE_KEY env var required");
-    let api_key = env::var("POLY_RELAYER_API_KEY").expect("POLY_RELAYER_API_KEY env var required");
-    let address = env::var("POLY_RELAYER_ADDRESS").expect("POLY_RELAYER_ADDRESS env var required");
+    println!("Offline Safe setup approval plan");
+    println!("No wallet deployment or approval submission is performed.\n");
 
-    // ── 2. Build the client ──
-    let wallet: LocalWallet = private_key.parse()?;
-    let auth = AuthMethod::relayer_key(&api_key, &address);
+    for (label, tx) in plan {
+        print_transaction(label, &tx);
+    }
+}
 
-    let client = RelayClient::new(137, wallet, auth, RelayerTxType::Safe).await?;
+fn print_transaction(label: &str, tx: &Transaction) {
+    println!("{label}");
+    println!("  to:    {}", tx.to);
+    println!("  value: {}", tx.value);
+    println!("  data:  {}", preview(&tx.data));
+}
 
-    let safe_addr = client.wallet_address()?;
-    println!("EOA:  {:?}", client.signer_address());
-    println!("Safe: {:?}", safe_addr);
-
-    // ── 3. Deploy Safe if needed ──
-    match client.deploy().await {
-        Ok(result) => {
-            println!(
-                "✅ Safe deployed! tx: {}",
-                result.tx_hash.unwrap_or_default()
-            );
-        }
-        Err(polymarket_relayer::RelayerError::WalletAlreadyDeployed(addr)) => {
-            println!("ℹ️  Safe already deployed at {}", addr);
-        }
-        Err(e) => return Err(e.into()),
+fn preview(value: &str) -> String {
+    if value.len() <= 74 {
+        return value.to_owned();
     }
 
-    // ── 4. Set up all approvals in one batch ──
-    println!("\nSetting up approvals (USDC + CTF for all exchanges)...");
-    let handle = client.setup_approvals().await?;
-    println!("Submitted tx: {}", handle.id());
-
-    let result = handle.wait().await?;
-    println!(
-        "✅ Approvals confirmed! tx: {}",
-        result.tx_hash.unwrap_or_default()
-    );
-
-    Ok(())
+    format!("{}...{}", &value[..42], &value[value.len() - 16..])
 }

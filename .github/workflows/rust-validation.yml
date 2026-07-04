@@ -1,0 +1,36 @@
+name: Rust validation
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  rust-validation:
+    name: fmt, clippy, tests, all targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Rust toolchain
+        run: rustup show
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+      - name: Build all targets
+        run: cargo build --workspace --all-targets --all-features
