@@ -87,3 +87,13 @@ Relayer SDK support is official for TypeScript/Python. Rust relayer functionalit
     deposit-wallet `WALLET` polling compatibility.
 - Third-party reference only: `https://github.com/OrderBookTrade/rs-builder-relayer-client`
   - can be read/forked as reference; do not import directly for production deposit-wallet flow.
+
+
+## Canonical source matrix
+
+- Deposit wallet source matrix: `docs/DEPOSIT_WALLET_SOURCE_MATRIX.json`
+  - Pinned retrieval date: `2026-07-04`
+  - TypeScript relayer SDK commit: `9122f6fb1856f1ecfe4406685bfa19a2c5a7b290`
+  - Python relayer SDK commit: `267a36d84d7839b6e4ac134297d9230fc224cf8f`
+  - Rust CLOB SDK commit: `3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb`
+  - Downstream tasks must cite matrix row IDs for WALLET-CREATE, WALLET, nonce, polling, deployed-wallet checks, relayer auth headers, DepositWallet EIP-712, pUSD/CTF addresses, adapter routes, and POLY_1271 funder rules.

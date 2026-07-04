@@ -36,7 +36,7 @@ CLOB orders:
   official CLOB SDK with funder = deposit_wallet and signature_type = POLY_1271 / 3
 ```
 
-Therefore the fork must add deposit-wallet-specific modules rather than only wrapping the existing Safe/Proxy execute flow.
+Therefore the fork must add deposit-wallet-specific modules rather than only wrapping the existing Safe/Proxy execute flow. The authoritative source baseline for these flows is `docs/DEPOSIT_WALLET_SOURCE_MATRIX.json`.
 
 ## Fork name policy
 
@@ -244,7 +244,7 @@ The nonce must be fetched fresh immediately before signing. A stale nonce is a l
 ### Transaction polling
 
 ```text
-GET /transaction?transactionID=<id>
+GET /transaction?id=<transactionID>
 ```
 
 The submit response may not contain the on-chain transaction hash immediately. The fork must track `transactionID` and poll to a terminal state.

@@ -82,3 +82,8 @@ ambiguous submit timeout does not duplicate transaction
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only
 after `STATE_CONFIRMED`.
+
+
+## PBRSDK-2 Fixture Provenance Baseline
+
+Deposit-wallet fixture provenance is machine-reviewed by `tests/source_matrix_test.rs` against `docs/DEPOSIT_WALLET_SOURCE_MATRIX.json`. If a fixture is added, removed, regenerated, or reclassified, update the matrix `fixtureProvenance` entry in the same change and keep the fixture README aligned.

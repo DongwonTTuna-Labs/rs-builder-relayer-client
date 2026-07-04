@@ -2,6 +2,10 @@
 
 This is the canonical design for deposit-wallet relayer support in this fork.
 
+## Canonical source matrix
+
+PBRSDK-2 pins the machine-reviewable source matrix in `docs/DEPOSIT_WALLET_SOURCE_MATRIX.json`. When this design document, local fixtures, public docs, and official SDK source disagree, downstream work must cite the matrix row and use its recorded fallback decision instead of re-deriving venue-facing behavior.
+
 ## Scope
 
 CLOB order signing/posting is handled through the official Rust CLOB SDK adapter. Deposit-wallet deployment and wallet batches are handled through one of these paths:
@@ -125,7 +129,7 @@ Used for approvals, transfers, and pUSD-native CTF operations.
 ### Transaction polling
 
 ```text
-GET /transaction?transactionID=<id>
+GET /transaction?id=<transactionID>
 ```
 
 `POST /submit` returns a `transactionID`. The on-chain transaction hash may be unavailable until polling succeeds.
@@ -286,7 +290,7 @@ merge positions
 redeem positions
 ```
 
-Each builder requires golden tests against official TS/Python/reference payloads before live use.
+Each builder requires golden tests against official TS/Python/reference payloads before live use. See `docs/DEPOSIT_WALLET_SOURCE_MATRIX.json` rows `pusd_ctf_addresses` and `adapter_route` before implementing calldata builders.
 
 ## Retry and idempotency
 
