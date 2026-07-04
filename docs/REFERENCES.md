@@ -4,6 +4,10 @@
 
 ## Polymarket
 
+- Canonical deposit-wallet source matrix: `docs/DEPOSIT_WALLET_SOURCE_MATRIX.md`
+  - PBRSDK-2 refreshed official docs/SDK commits, mismatch decisions, live-gate
+    status, and fixture provenance links. Use its `SM-*` row ids before making
+    venue-facing deposit-wallet changes.
 - Clients & SDKs: `https://docs.polymarket.com/api-reference/clients-sdks`
   - TypeScript, Python, Rust official client와 CLOB API 지원 범위를 확인한다.
 - Deposit Wallets: `https://docs.polymarket.com/trading/deposit-wallets`

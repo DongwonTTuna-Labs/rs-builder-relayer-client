@@ -1,0 +1,52 @@
+# Deposit Wallet Fixture Provenance
+
+PBRSDK-2 fixture provenance ledger. This file is the associated provenance
+record for every JSON fixture under `tests/fixtures/deposit_wallet/`.
+
+Retrieval date for this ledger: 2026-07-04
+
+No production private key, API credential, auth header, production signature, funded account, or replayable live submit body is authoritative fixture material.
+
+## Source Pins
+
+| Source | Version / commit | Retrieved | Role |
+| --- | --- | --- | --- |
+| TypeScript relayer SDK current check | `@polymarket/builder-relayer-client` `0.0.10`, commit `9122f6fb1856f1ecfe4406685bfa19a2c5a7b290` | 2026-07-04 | Current official SDK shape check for `WALLET-CREATE`, `WALLET`, EIP-712 Batch, nonce, deployed check, transaction polling. |
+| Python relayer SDK current check | `py-builder-relayer-client` `0.0.2`, commit `267a36d84d7839b6e4ac134297d9230fc224cf8f` | 2026-07-04 | Current official SDK mirror check for deposit-wallet request builders and client calls. |
+| TypeScript relayer SDK fixture generation pin | commit `72886a57116debcbcbf8df43d7f1a53a0f73a771`, package `0.0.9` | 2026-05-21 | Existing deterministic EIP-712 and multicall fixture generation source. |
+| Python relayer SDK fixture generation pin | commit `6589f36740a2a98736f5b0499f29d2d234c583bc`, package `0.0.2rc1` | 2026-05-21 | Existing derive-wallet comparison and cross-check source. |
+| Polymarket docs | `https://docs.polymarket.com/trading/deposit-wallets` and relayer API pages | 2026-07-04 | Current public documentation boundary and mismatch source for nonce enum. |
+
+## Fixture Ledger
+
+| Fixture | Authority status | Source / provenance | Sanitizer status | Live/replay decision | Related source matrix rows |
+| --- | --- | --- | --- | --- | --- |
+| `derive_address.json` | authoritative for offline derive-address regression only | Python fixture generation pin `6589f36740a2a98736f5b0499f29d2d234c583bc`; checked against current SDK boundary on 2026-07-04 | sanitized address-only deterministic data; no credentials | not a live submit body; keep offline only | SM-WALLET-CREATE, SM-DEPLOYED-WALLET-CHECK |
+| `transaction_array_response_cases.json` | local-synthetic-only | Local parser boundary cases for transaction array matching and malformed ids | sanitized synthetic ids | not official API evidence; not replayable | SM-TRANSACTION-POLLING |
+| `wallet_batch_eip712.json` | authoritative for offline EIP-712 canonical single-call regression | Existing metadata pins docs plus TS commit `72886a57116debcbcbf8df43d7f1a53a0f73a771` and Python commit `6589f36740a2a98736f5b0499f29d2d234c583bc`; shape rechecked against current TS/Python SDK source on 2026-07-04 | sanitized; synthetic signatures from label-derived public test signers; private keys absent | not production signing evidence; regenerate before live if current SDK behavior diverges | SM-WALLET-BATCH, SM-EIP712-BATCH, SM-WALLET-NONCE |
+| `wallet_batch_eip712_amoy.json` | local-synthetic-only | Locally generated Amoy/unsupported-environment regression fixture | sanitized synthetic signer; no private key recorded | not official SDK authority; not live evidence | SM-EIP712-BATCH |
+| `wallet_batch_eip712_multicall.json` | authoritative for offline TS SDK multicall shape regression | Existing metadata pins TS commit `72886a57116debcbcbf8df43d7f1a53a0f73a771` and `buildDepositWalletBatchRequest`; shape rechecked against current TS SDK source on 2026-07-04 | sanitized; ephemeral synthetic test signer; private key absent | not production signing evidence; regenerate before live if current SDK behavior diverges | SM-WALLET-BATCH, SM-EIP712-BATCH |
+| `wallet_batch_unsupported_chain_eip712.json` | local-synthetic-only | Locally generated unsupported-chain negative fixture | sanitized synthetic signer; no private key recorded | negative regression only; not live evidence | SM-EIP712-BATCH |
+| `wallet_batch_wrong_wallet_eip712.json` | local-synthetic-only | Locally generated wrong-wallet negative fixture | sanitized synthetic signer; no private key recorded | negative regression only; not live evidence | SM-EIP712-BATCH |
+| `wallet_create_submit_body.json` | authoritative for offline WALLET-CREATE request shape | Current docs and current TS/Python builders confirm `type`, `from`, and factory `to`; associated provenance supplied by this ledger | sanitized placeholder owner/factory data; no signature or auth | not replayable without auth and operator gate; docs-fixtures-only | SM-WALLET-CREATE |
+| `wallet_nonce_http_request.json` | authoritative for offline WALLET nonce HTTP request shape | Current TS/Python clients call `TransactionType.WALLET`; public nonce endpoint page lists only `PROXY` and `SAFE`, so this is a documented doc-SDK mismatch | sanitized placeholder owner and response nonce | no live change from public docs alone; offline regression only | SM-WALLET-NONCE |
+| `wallet_nonce_request.json` | authoritative for offline WALLET nonce request builder shape | Same as `wallet_nonce_http_request.json`; associated provenance supplied by this ledger | sanitized placeholder owner; no auth | no live change from public docs alone; offline regression only | SM-WALLET-NONCE |
+| `wallet_nonce_response_cases.json` | local-synthetic-only | Local parser boundary cases for nonce response rejection | sanitized synthetic raw values | parser regression only; not official API evidence | SM-WALLET-NONCE |
+| `wallet_signed_submit_body.json` | authoritative for offline signed WALLET submit body shape, not signature authority | Derived from `wallet_batch_eip712.json` fixture and current TS/Python builder shape; signature is synthetic | sanitized synthetic signature; no private key recorded | not replayable; not production signing evidence | SM-WALLET-BATCH, SM-EIP712-BATCH |
+| `wallet_signed_submit_body_amoy.json` | local-synthetic-only | Locally generated Amoy signed submit body regression fixture | sanitized synthetic signature; no private key recorded | not official SDK authority; not live evidence | SM-WALLET-BATCH, SM-EIP712-BATCH |
+| `wallet_signed_submit_body_multicall.json` | authoritative for offline multicall signed submit body shape, not signature authority | Existing README pins TS commit `72886a57116debcbcbf8df43d7f1a53a0f73a771`; shape rechecked against current TS builder source on 2026-07-04 | sanitized synthetic signature; private key absent | not replayable; regenerate before live if current SDK behavior diverges | SM-WALLET-BATCH, SM-EIP712-BATCH |
+| `wallet_submit_body.json` | authoritative for offline unsigned/synthetic WALLET body layout only | Local fixture body follows current docs plus TS/Python `WALLET` submit shape; signature is explicitly synthetic placeholder material | sanitized synthetic signature string; no private key recorded | not replayable; not production signing evidence | SM-WALLET-BATCH |
+| `wallet_transaction_response.json` | authoritative for offline transaction parser shape only | Sanitized recorded-style transaction response aligned with current relayer transaction docs | sanitized response fixture; contains no credential or submit authorization | read-only parser evidence; not replayable submit body | SM-TRANSACTION-POLLING |
+
+## Stale And Local Fixture Policy
+
+- Fixtures pinned to 2026-05-21 SDK commits remain valid only as offline
+  regression fixtures. They are not authority for new live behavior.
+- Synthetic negative fixtures are `local-synthetic-only`; they protect local
+  parser/signature boundaries and must not be cited as official wire evidence.
+- If current official SDK or docs behavior diverges from any fixture, mark the
+  fixture non-authoritative or regenerate it from the pinned current source in a
+  separate reviewable change.
+- Real credentials, auth headers, funded wallets, production private keys,
+  production signatures, and replayable live submit bodies are forbidden fixture
+  material.

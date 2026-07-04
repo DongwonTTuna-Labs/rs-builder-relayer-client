@@ -15,10 +15,16 @@ relayer work. Each file is scoped as one reviewable PR.
   <https://github.com/Polymarket/builder-relayer-client>
 - Official Python builder relayer SDK:
   <https://github.com/Polymarket/py-builder-relayer-client>
+- PBRSDK-2 deposit-wallet source matrix:
+  `../DEPOSIT_WALLET_SOURCE_MATRIX.md`
 
 The canonical policy documents remain `docs/FORKED_RELAYER_CRATE.md`,
-`docs/DEPOSIT_WALLET_RELAYER_DESIGN.md`, and `AGENTS.md`. These plan files
-decompose that policy into implementation slices.
+`docs/DEPOSIT_WALLET_RELAYER_DESIGN.md`,
+`docs/DEPOSIT_WALLET_SOURCE_MATRIX.md`, and `AGENTS.md`. These plan files
+decompose that policy into implementation slices. Downstream PRs must cite the
+applicable `SM-*` row ids for endpoint bodies, parser/status mapping, signer
+and EIP-712 rules, calldata/address sources, and fallback decisions instead of
+re-deriving source authority from scratch.
 
 ## Roadmap
 
