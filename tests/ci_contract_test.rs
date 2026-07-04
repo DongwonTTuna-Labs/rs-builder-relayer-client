@@ -43,6 +43,10 @@ fn cargo_target_audit_records_current_target_graph() {
         audit.contains("No stale declared Cargo target was found"),
         "audit must record stale-target decision"
     );
+    assert!(
+        audit.contains("offline-safe body verified"),
+        "audit must record offline-safe example evidence"
+    );
 }
 
 #[test]
@@ -67,6 +71,44 @@ fn rust_validation_workflow_enforces_required_pr_gates_without_secrets() {
         !workflow.contains("secrets."),
         "rust validation workflow must not reference GitHub secrets"
     );
+}
+
+#[test]
+fn examples_remain_offline_safe() {
+    let manifest = fs::read_to_string("Cargo.toml").expect("Cargo.toml is readable");
+
+    for path in declared_example_paths(&manifest) {
+        let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!("example {path} must be readable: {error}");
+        });
+
+        for needle in [
+            "dotenvy",
+            "env::var",
+            "LocalWallet",
+            "Provider",
+            "RelayClient",
+            "DirectExecutor",
+            "DataClient",
+            ".execute(",
+            ".execute_batch(",
+            ".execute_sequential(",
+            ".wait()",
+            ".deploy()",
+            ".setup_approvals()",
+            "PRIVATE_KEY",
+            "BUILDER_SECRET",
+            "BUILDER_PASSPHRASE",
+            "POLY_RELAYER_API_KEY",
+            "POLYGON_RPC_URL",
+            "POLYMARKET_PRIVATE_KEY",
+        ] {
+            assert!(
+                !source.contains(needle),
+                "example {path} must remain offline-safe and avoid {needle}"
+            );
+        }
+    }
 }
 
 fn declared_example_paths(manifest: &str) -> Vec<String> {

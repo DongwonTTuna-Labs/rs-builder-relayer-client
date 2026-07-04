@@ -10,28 +10,37 @@ submit bodies.
 
 ## Cargo Target Audit
 
-| Target kind | Name | Declared path | Tracked file status | Resolution |
-|---|---|---|---|---|
-| lib | `polymarket_relayer` | `src/lib.rs` | tracked | keep |
-| example | `setup_wallet` | `examples/setup_wallet.rs` | tracked | keep offline example |
-| example | `redeem_single` | `examples/redeem_single.rs` | tracked | keep offline example |
-| example | `redeem_all` | `examples/redeem_all.rs` | tracked | keep offline example |
-| example | `split_merge` | `examples/split_merge.rs` | tracked | keep offline example |
-| example | `redeem_magic` | `examples/redeem_magic.rs` | tracked | keep offline example |
-| example | `diagnose_gs026` | `examples/diagnose_gs026.rs` | tracked | keep offline example |
-| example | `diagnose_nonce` | `examples/diagnose_nonce.rs` | tracked | keep offline example |
-| integration test | `auth_test` | `tests/auth_test.rs` | tracked | keep |
-| integration test | `builder_test` | `tests/builder_test.rs` | tracked | keep |
-| integration test | `client_test` | `tests/client_test.rs` | tracked | keep |
-| integration test | `deposit_wallet_signing_test` | `tests/deposit_wallet_signing_test.rs` | tracked | keep |
-| integration test | `deposit_wallet_test` | `tests/deposit_wallet_test.rs` | tracked | keep |
-| integration test | `integration_test` | `tests/integration_test.rs` | tracked | keep |
-| integration test | `operations_test` | `tests/operations_test.rs` | tracked | keep |
-| integration test | `source_matrix_test` | `tests/source_matrix_test.rs` | tracked | keep |
+| Target kind | Name | Declared path | Tracked file status | Runtime/live risk | Resolution |
+|---|---|---|---|---|---|
+| lib | `polymarket_relayer` | `src/lib.rs` | tracked | library only | keep |
+| example | `setup_wallet` | `examples/setup_wallet.rs` | tracked | none in normal run; offline-safe body verified | keep offline approval-plan example |
+| example | `redeem_single` | `examples/redeem_single.rs` | tracked | none in normal run; offline-safe body verified | keep offline calldata example |
+| example | `redeem_all` | `examples/redeem_all.rs` | tracked | none in normal run; offline-safe body verified | keep synthetic-position dry-run |
+| example | `split_merge` | `examples/split_merge.rs` | tracked | none in normal run; offline-safe body verified | keep offline calldata example |
+| example | `redeem_magic` | `examples/redeem_magic.rs` | tracked | none in normal run; offline-safe body verified | keep offline proxy-mode dry-run |
+| example | `diagnose_gs026` | `examples/diagnose_gs026.rs` | tracked | none in normal run; offline-safe body verified | keep fixture diagnostic |
+| example | `diagnose_nonce` | `examples/diagnose_nonce.rs` | tracked | none in normal run; offline-safe body verified | keep fixture hash diagnostic |
+| integration test | `auth_test` | `tests/auth_test.rs` | tracked | offline test | keep |
+| integration test | `builder_test` | `tests/builder_test.rs` | tracked | offline test | keep |
+| integration test | `client_test` | `tests/client_test.rs` | tracked | offline test | keep |
+| integration test | `deposit_wallet_signing_test` | `tests/deposit_wallet_signing_test.rs` | tracked | offline fixture test | keep |
+| integration test | `deposit_wallet_test` | `tests/deposit_wallet_test.rs` | tracked | offline fixture test | keep |
+| integration test | `integration_test` | `tests/integration_test.rs` | tracked | offline calldata test | keep |
+| integration test | `operations_test` | `tests/operations_test.rs` | tracked | offline calldata test | keep |
+| integration test | `source_matrix_test` | `tests/source_matrix_test.rs` | tracked | offline provenance test | keep |
 
 No stale declared Cargo target was found in the current baseline. If a future
 target is added, it must map to a tracked file or document a restore, removal,
 or feature-gate decision before the task can be considered complete.
+
+The previous live-oriented example bodies were remediated in place. The current
+Cargo examples use synthetic condition IDs, deterministic fixture addresses, and
+local calldata builders only. They do not read `.env`, environment credentials,
+private keys, relayer credentials, RPC URLs, or live wallet addresses; they do
+not instantiate relayer clients, RPC providers, data clients, direct executors,
+or wallets; and they do not call deploy, approval setup, execute, wait,
+position-fetch, or fallback paths. `tests/ci_contract_test.rs` enforces this
+offline-safe example contract.
 
 ## CI Gate
 
