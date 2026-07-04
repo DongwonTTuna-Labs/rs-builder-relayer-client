@@ -1,0 +1,861 @@
+{
+  "schemaVersion": "paca.pbrsdk.deposit_wallet_source_matrix.v1",
+  "task": {
+    "projectId": "855aa92c-1b8a-4b99-ba07-7dd32e31c6d6",
+    "key": "PBRSDK-2",
+    "id": "36db5cc4-1d83-4cf1-9513-6fd03e7d3f72",
+    "title": "공식 출처 매트릭스 갱신과 fixture provenance 고정",
+    "acceptanceArchitectureArtifact": "paca://project/855aa92c-1b8a-4b99-ba07-7dd32e31c6d6/task/36db5cc4-1d83-4cf1-9513-6fd03e7d3f72/description?activity=f173db94-bad0-48fb-bbc0-6611bb7100df&conversation=c1aaf9e5-99ec-4060-86bb-54d0791524dd",
+    "qaScenarioDesignArtifact": "paca://project/855aa92c-1b8a-4b99-ba07-7dd32e31c6d6/conversation/07000c33-9244-4e16-8ede-d4c5806959d3/message/93f99e8f-3d3a-4714-bad0-e5b32221bf96"
+  },
+  "retrievalDate": "2026-07-04",
+  "matrixSchema": {
+    "requiredRowFields": [
+      "id",
+      "behavior",
+      "wireApiSurface",
+      "canonicalSource",
+      "sourceUrlOrRepoPath",
+      "sdkLanguage",
+      "sdkPins",
+      "retrievalDate",
+      "relatedLocalPath",
+      "mismatchStatus",
+      "fallbackDecision",
+      "liveChangeGateStatus"
+    ],
+    "reviewRule": "Every mismatch must name the disagreement and a safe fallback. SDK evidence must be pinned to exact commits, not latest/main."
+  },
+  "officialSourcePins": {
+    "retrievalDate": "2026-07-04",
+    "docs": [
+      {
+        "url": "https://docs.polymarket.com/api-reference/clients-sdks.md",
+        "purpose": "official SDK list"
+      },
+      {
+        "url": "https://docs.polymarket.com/trading/deposit-wallets.md",
+        "purpose": "deposit-wallet WALLET-CREATE/WALLET/nonce/EIP-712/POLY_1271 guide"
+      },
+      {
+        "url": "https://docs.polymarket.com/trading/gasless.md",
+        "purpose": "relayer auth and pUSD/CTF operation examples"
+      },
+      {
+        "url": "https://docs.polymarket.com/api-reference/relayer/submit-a-transaction.md",
+        "purpose": "POST /submit auth and response shape"
+      },
+      {
+        "url": "https://docs.polymarket.com/api-reference/relayer/get-current-nonce-for-a-user.md",
+        "purpose": "nonce PROXY/SAFE discrepancy evidence"
+      },
+      {
+        "url": "https://docs.polymarket.com/api-reference/relayer/get-a-transaction-by-id.md",
+        "purpose": "GET /transaction id query and response shape"
+      },
+      {
+        "url": "https://docs.polymarket.com/api-reference/relayer/check-if-a-wallet-is-deployed.md",
+        "purpose": "GET /deployed type=WALLET check"
+      },
+      {
+        "url": "https://docs.polymarket.com/resources/contracts.md",
+        "purpose": "pUSD/CTF/adapter/exchange addresses"
+      },
+      {
+        "url": "https://docs.polymarket.com/v2-migration.md",
+        "purpose": "pUSD and CLOB V2 constraints"
+      }
+    ],
+    "sdk": [
+      {
+        "language": "TypeScript",
+        "repo": "https://github.com/Polymarket/builder-relayer-client",
+        "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "packageVersion": "0.0.10",
+        "paths": [
+          {
+            "path": "package.json",
+            "url": "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/package.json"
+          },
+          {
+            "path": "src/client.ts",
+            "url": "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/client.ts"
+          },
+          {
+            "path": "src/builder/deposit-wallet.ts",
+            "url": "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/builder/deposit-wallet.ts"
+          },
+          {
+            "path": "src/types.ts",
+            "url": "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/types.ts"
+          },
+          {
+            "path": "src/config/index.ts",
+            "url": "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/config/index.ts"
+          },
+          {
+            "path": "src/constants/index.ts",
+            "url": "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/constants/index.ts"
+          }
+        ]
+      },
+      {
+        "language": "Python",
+        "repo": "https://github.com/Polymarket/py-builder-relayer-client",
+        "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "packageVersion": "0.0.2",
+        "paths": [
+          {
+            "path": "setup.py",
+            "url": "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/setup.py"
+          },
+          {
+            "path": "py_builder_relayer_client/client.py",
+            "url": "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/client.py"
+          },
+          {
+            "path": "py_builder_relayer_client/builder/deposit_wallet.py",
+            "url": "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/builder/deposit_wallet.py"
+          },
+          {
+            "path": "py_builder_relayer_client/models.py",
+            "url": "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/models.py"
+          },
+          {
+            "path": "py_builder_relayer_client/config.py",
+            "url": "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/config.py"
+          },
+          {
+            "path": "py_builder_relayer_client/endpoints.py",
+            "url": "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/endpoints.py"
+          }
+        ]
+      },
+      {
+        "language": "Rust CLOB",
+        "repo": "https://github.com/Polymarket/rs-clob-client-v2",
+        "commit": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb",
+        "packageVersion": "0.6.0",
+        "paths": [
+          {
+            "path": "Cargo.toml",
+            "url": "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/Cargo.toml"
+          },
+          {
+            "path": "src/clob/types/mod.rs",
+            "url": "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/types/mod.rs"
+          },
+          {
+            "path": "src/clob/client.rs",
+            "url": "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/client.rs"
+          },
+          {
+            "path": "src/clob/order_builder.rs",
+            "url": "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/order_builder.rs"
+          },
+          {
+            "path": "examples/clob/orders/gtc_limit_buy_deposit_wallet.rs",
+            "url": "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/examples/clob/orders/gtc_limit_buy_deposit_wallet.rs"
+          }
+        ]
+      }
+    ],
+    "sourceComparison": [
+      {
+        "repo": "https://github.com/Polymarket/builder-relayer-client",
+        "oldFixtureCommit": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "selectedCommit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "comparedPaths": [
+          "src/builder/deposit-wallet.ts",
+          "src/types.ts",
+          "src/config/index.ts",
+          "src/constants/index.ts"
+        ],
+        "result": "relevant deposit-wallet wire/type/config content unchanged; config diff is newline-only"
+      },
+      {
+        "repo": "https://github.com/Polymarket/py-builder-relayer-client",
+        "oldFixtureCommit": "6589f36740a2a98736f5b0499f29d2d234c583bc",
+        "selectedCommit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "comparedPaths": [
+          "py_builder_relayer_client/builder/deposit_wallet.py",
+          "py_builder_relayer_client/models.py",
+          "py_builder_relayer_client/config.py",
+          "py_builder_relayer_client/constants/constants.py"
+        ],
+        "result": "relevant deposit-wallet wire/type/config content unchanged"
+      }
+    ]
+  },
+  "requiredBehaviors": [
+    {
+      "id": "wallet_create_submit_body",
+      "behavior": "WALLET-CREATE submit body",
+      "wireApiSurface": "POST /submit with type WALLET-CREATE, from owner address, to deposit-wallet factory, and no user signature field",
+      "canonicalSource": "official_docs_and_official_relayer_sdk_commits_agree",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/trading/deposit-wallets.md#deploy-a-deposit-wallet",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/builder/deposit-wallet.ts",
+        "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/builder/deposit_wallet.py"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md",
+        "tests/fixtures/deposit_wallet/wallet_create_submit_body.json"
+      ],
+      "mismatchStatus": "none_known_for_required_fields",
+      "fallbackDecision": "documentation_and_official_sdk_commit_are_authoritative",
+      "liveChangeGateStatus": "offline_reference_only; live relayer mutation remains disabled until follow-up implementation and manual live gate evidence"
+    },
+    {
+      "id": "wallet_submit_body",
+      "behavior": "WALLET submit body",
+      "wireApiSurface": "POST /submit with type WALLET, from owner, to deposit-wallet factory, nonce, EIP-712 signature, and depositWalletParams",
+      "canonicalSource": "official_docs_and_official_relayer_sdk_commits_agree",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/trading/deposit-wallets.md#submit-a-deposit-wallet-batch",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/builder/deposit-wallet.ts",
+        "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/models.py"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "tests/fixtures/deposit_wallet/wallet_submit_body.json",
+        "tests/fixtures/deposit_wallet/wallet_signed_submit_body.json"
+      ],
+      "mismatchStatus": "none_for_wire_shape; local signatures are synthetic offline values, not production signatures",
+      "fallbackDecision": "documentation_and_official_sdk_commit_are_authoritative_for_shape; sanitized_fixture_values_authoritative_for_offline_golden_tests_only",
+      "liveChangeGateStatus": "offline_reference_only; live relayer mutation remains disabled until follow-up implementation and manual live gate evidence"
+    },
+    {
+      "id": "nonce_request",
+      "behavior": "Nonce request for DepositWallet WALLET batches",
+      "wireApiSurface": "GET /nonce?address=<owner>&type=WALLET immediately before signing a WALLET batch",
+      "canonicalSource": "official_deposit_wallet_guide_and_TypeScript_SDK_commit_override_narrow_nonce_reference",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/trading/deposit-wallets.md#submit-a-deposit-wallet-batch",
+        "https://docs.polymarket.com/api-reference/relayer/get-current-nonce-for-a-user.md",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/client.ts",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/types.ts"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "tests/fixtures/deposit_wallet/wallet_nonce_request.json",
+        "tests/fixtures/deposit_wallet/wallet_nonce_http_request.json"
+      ],
+      "mismatchStatus": "public nonce API reference enumerates PROXY/SAFE only, while the deposit-wallet guide requires WALLET and the official TypeScript SDK calls getNonce(from, TransactionType.WALLET); Python models include TransactionType.WALLET but execute_deposit_wallet_batch accepts caller-supplied nonce",
+      "fallbackDecision": "official_sdk_commit_authoritative_for_WALLET_nonce; public_nonce_reference_recorded_as_outdated_or_incomplete_for_deposit_wallet_flow; no inference beyond pinned SDK/docs evidence",
+      "liveChangeGateStatus": "offline_request_fixture_current; live WALLET signing/submission remains gated until follow-up implementation verifies fresh nonce behavior without live secrets"
+    },
+    {
+      "id": "transaction_polling",
+      "behavior": "Relayer transaction polling after submit",
+      "wireApiSurface": "GET /transaction?id=<transactionID>; POST /submit returns transactionID and STATE_NEW before transactionHash is necessarily available",
+      "canonicalSource": "official_relayer_api_docs_and_official_SDK_client_commit",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/api-reference/relayer/submit-a-transaction.md",
+        "https://docs.polymarket.com/api-reference/relayer/get-a-transaction-by-id.md",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/client.ts",
+        "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/endpoints.py"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md",
+        "tests/fixtures/deposit_wallet/wallet_transaction_response.json",
+        "tests/fixtures/deposit_wallet/transaction_array_response_cases.json",
+        "tests/fixtures/relayer/transaction_states.json"
+      ],
+      "mismatchStatus": "older local docs used transactionID as query parameter name; official API docs and SDK clients use id. Official API transaction type enum remains SAFE/PROXY-only while deposit-wallet guide instructs polling WALLET submissions; local WALLET response fixture is sanitized and parser-only, not live authority",
+      "fallbackDecision": "documentation_and_official_sdk_commit_are_authoritative_for_endpoint_and_id_parameter; sanitized_local_fixture_is_authoritative_only_for_parser_boundaries; live WALLET polling remains disabled pending reviewed WALLET response evidence or human decision",
+      "liveChangeGateStatus": "blocked_for_live_wallet_polling_until_recorded_official_or_sanitized_WALLET_response_is_reviewed"
+    },
+    {
+      "id": "deployed_wallet_check",
+      "behavior": "Check whether a wallet address is deployed",
+      "wireApiSurface": "GET /deployed?address=<depositWallet>&type=WALLET returns deployed boolean; omitted type defaults SAFE",
+      "canonicalSource": "official_relayer_api_docs_and_official_SDK_client_commit",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/api-reference/relayer/check-if-a-wallet-is-deployed.md",
+        "https://docs.polymarket.com/trading/deposit-wallets.md#deploy-a-deposit-wallet",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/client.ts"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md"
+      ],
+      "mismatchStatus": "none_for_type_WALLET_support; deployed=true must not replace STATE_CONFIRMED readiness after WALLET-CREATE",
+      "fallbackDecision": "documentation_authoritative_for_endpoint; deposit-wallet guide authoritative that STATE_CONFIRMED is required before wallet effects are considered ready",
+      "liveChangeGateStatus": "read_only_check_only; no live mutation and no readiness claim without confirmed transaction evidence"
+    },
+    {
+      "id": "relayer_auth_header",
+      "behavior": "Relayer authentication header rules",
+      "wireApiSurface": "POST /submit accepts Builder API Key headers or Relayer API Key headers; RELAYER_API_KEY_ADDRESS is key owner identity and distinct from wallet owner/funder",
+      "canonicalSource": "official_relayer_api_docs_for_header_names; official_SDK_source_for_builder_header_generation_path",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/api-reference/relayer/submit-a-transaction.md",
+        "https://docs.polymarket.com/trading/gasless.md#authentication",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/client.ts",
+        "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/client.py"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "AGENTS.md",
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md",
+        "docs/SECURITY.md"
+      ],
+      "mismatchStatus": "official docs list both Builder and Relayer API key auth; current official SDK files reviewed here generate builder headers and no live secret values; local policy requires relayer auth identity separation",
+      "fallbackDecision": "documentation_authoritative_for_direct_header_names; official_SDK_commit_authoritative_for_builder_header_generation; no test or fixture may contain actual auth values",
+      "liveChangeGateStatus": "blocked_for_live_auth_until_secretless_redaction_and_identity_split_tests_exist; no credentials requested_or_recorded"
+    },
+    {
+      "id": "deposit_wallet_eip712_typed_data",
+      "behavior": "DepositWallet EIP-712 typed data for WALLET batch signatures",
+      "wireApiSurface": "Domain name DepositWallet, version 1, current chain ID, verifyingContract deposit wallet; primary type Batch(wallet, nonce, deadline, calls) with Call(target,value,data)",
+      "canonicalSource": "official_deposit_wallet_guide_and_official_relayer_sdk_commits_agree",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/trading/deposit-wallets.md#submit-a-deposit-wallet-batch",
+        "https://github.com/Polymarket/builder-relayer-client/blob/9122f6fb1856f1ecfe4406685bfa19a2c5a7b290/src/builder/deposit-wallet.ts",
+        "https://github.com/Polymarket/py-builder-relayer-client/blob/267a36d84d7839b6e4ac134297d9230fc224cf8f/py_builder_relayer_client/builder/deposit_wallet.py"
+      ],
+      "sdkLanguage": [
+        "TypeScript",
+        "Python"
+      ],
+      "sdkPins": [
+        {
+          "language": "TypeScript",
+          "commit": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+          "packageVersion": "0.0.10"
+        },
+        {
+          "language": "Python",
+          "commit": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+          "packageVersion": "0.0.2"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "tests/fixtures/deposit_wallet/wallet_batch_eip712.json",
+        "tests/fixtures/deposit_wallet/wallet_batch_eip712_multicall.json",
+        "tests/deposit_wallet_signing_test.rs"
+      ],
+      "mismatchStatus": "none_for_schema; local signatures are synthetic fixture signatures and not production signatures",
+      "fallbackDecision": "official_sdk_commit_authoritative_for_typed_data_schema; sanitized_fixture_values_authoritative_for_offline_digest_recovery_tests_only",
+      "liveChangeGateStatus": "offline_reference_only; live relayer mutation remains disabled until follow-up implementation and manual live gate evidence"
+    },
+    {
+      "id": "pusd_ctf_addresses",
+      "behavior": "pUSD and CTF address baseline",
+      "wireApiSurface": "Polygon pUSD collateral token 0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB and Conditional Tokens Framework 0x4D97DCd97eC945f40cF65F87097ACe5EA0476045 for approval/redeem examples",
+      "canonicalSource": "official_contracts_page_and_gasless_docs",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/resources/contracts.md",
+        "https://docs.polymarket.com/trading/gasless.md#token-approval",
+        "https://docs.polymarket.com/v2-migration.md#collateral-token-usdce--pusd"
+      ],
+      "sdkLanguage": null,
+      "sdkPins": [],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md",
+        "docs/plans/03-deposit-wallet-calldata-builders.md"
+      ],
+      "mismatchStatus": "no local calldata fixtures are present for pUSD/CTF adapter builders in this task; address evidence is documentation-only for Polygon mainnet and does not authorize live calls",
+      "fallbackDecision": "documentation_authoritative_for_address_baseline; live calldata builders remain blocked pending PBRSDK-17 fixtures",
+      "liveChangeGateStatus": "blocked_for_live_calldata_until_verified_calldata_config_and_allowlist_task_completes"
+    },
+    {
+      "id": "adapter_route",
+      "behavior": "Adapter route baseline for pUSD-native CTF operations",
+      "wireApiSurface": "Use pUSD-native collateral/CTF adapter addresses from official contracts when building split/merge/redeem calldata; do not infer legacy USDC.e or direct helper routes for live behavior",
+      "canonicalSource": "official_contracts_page_for_adapter_addresses; gasless_docs_for_CTF_operation_categories",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/resources/contracts.md",
+        "https://docs.polymarket.com/trading/gasless.md#what-is-covered",
+        "https://docs.polymarket.com/trading/gasless.md#redeem-positions",
+        "https://docs.polymarket.com/v2-migration.md#collateral-token-usdce--pusd"
+      ],
+      "sdkLanguage": null,
+      "sdkPins": [],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md",
+        "docs/plans/03-deposit-wallet-calldata-builders.md"
+      ],
+      "mismatchStatus": "official gasless examples show CTF redeem/approval examples while local docs require adapter-route review; no local calldata fixtures exist yet, so route selection is a blocked baseline rather than implementation authority",
+      "fallbackDecision": "documentation_authoritative_for_current_contract_addresses; live adapter route/calldata disabled pending human-reviewed PBRSDK-17 fixture evidence",
+      "liveChangeGateStatus": "blocked_for_live_calldata_until_verified_calldata_config_and_allowlist_task_completes"
+    },
+    {
+      "id": "poly_1271_clob_funder_rule",
+      "behavior": "POLY_1271 CLOB funder rule for deposit-wallet orders",
+      "wireApiSurface": "CLOB order path uses signatureType/signature_type 3 (POLY_1271/Poly1271) with deposit wallet as funder; order maker and signer are deposit wallet address for V2 orders only",
+      "canonicalSource": "official_deposit_wallet_guide_and_official_Rust_CLOB_SDK_commit",
+      "sourceUrlOrRepoPath": [
+        "https://docs.polymarket.com/trading/deposit-wallets.md#place-clob-orders",
+        "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/types/mod.rs",
+        "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/client.rs",
+        "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/order_builder.rs"
+      ],
+      "sdkLanguage": [
+        "Rust"
+      ],
+      "sdkPins": [
+        {
+          "language": "Rust",
+          "commit": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb",
+          "packageVersion": "0.6.0"
+        }
+      ],
+      "retrievalDate": "2026-07-04",
+      "relatedLocalPath": [
+        "docs/DEPOSIT_WALLET_RELAYER_DESIGN.md",
+        "docs/FORKED_RELAYER_CRATE.md",
+        "docs/CONSUMER_INTEGRATION.md"
+      ],
+      "mismatchStatus": "none_for_funder/signature_type_rule; CLOB order signing/posting remains out of scope for this relayer crate and must stay in the official CLOB SDK adapter",
+      "fallbackDecision": "official_Rust_CLOB_SDK_commit_authoritative_for_funder_and_Poly1271_rule; this task does not implement CLOB behavior",
+      "liveChangeGateStatus": "not_implemented_here; consumer CLOB adapter must provide separate evidence before live order behavior"
+    }
+  ],
+  "fixturePathAudit": {
+    "path": "tests/fixtures/deposit_wallet/",
+    "exists": true,
+    "decision": "fixture path exists; every JSON fixture is inventoried; no fixture file content regeneration was required because selected current official SDK source files were unchanged for relevant wire, typed-data, and config shapes",
+    "absentPathHandling": "not_applicable_path_present"
+  },
+  "fixtureProvenance": [
+    {
+      "path": "tests/fixtures/deposit_wallet/derive_address.json",
+      "exists": true,
+      "sha256": "5fd4691f617083821df010686ead35b51772e0f2a07488a2363573da5ec522af",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "official_sdk_commit_authoritative",
+      "decision": "current",
+      "notes": "derive/config fixture; old and selected current SDK derive/config files were compared and relevant content is unchanged"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/transaction_array_response_cases.json",
+      "exists": true,
+      "sha256": "6a1b5900634086288314361e3b8afdb07187650832c9465a0a79ffca11accaf3",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_parser_boundaries_only",
+      "decision": "current",
+      "notes": "synthetic array-selection and rejection cases; not live response evidence"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_batch_eip712.json",
+      "exists": true,
+      "sha256": "37497b43950db4009dd562861c29fc55e9d03319539fdd547eb6248ea781667f",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_fixture_authoritative_for_offline_eip712_digest_and_recovery_tests",
+      "decision": "current",
+      "notes": "generated from official SDK shape; selected current SDK typed-data files are unchanged from fixture commit"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_batch_eip712_amoy.json",
+      "exists": true,
+      "sha256": "b9194c2b7563af944db38c43742d7f2b54df5ed5bb5ac032e583f4b848dbc99a",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_Amoy_config_edge_test_only",
+      "decision": "current",
+      "notes": "synthetic one-off signer; not live authority"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_batch_eip712_multicall.json",
+      "exists": true,
+      "sha256": "958f540213c8dbe313a64266ebba6d311eedd8e78787c5d0becc91ada66a63e1",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_fixture_authoritative_for_offline_multicall_eip712_tests",
+      "decision": "current",
+      "notes": "generated from official TypeScript SDK shape; selected current SDK typed-data files are unchanged from fixture commit"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_batch_unsupported_chain_eip712.json",
+      "exists": true,
+      "sha256": "236722a52d7da78c02101ccb53643e4a079a15afd6ca285a0b12e39dd0800837",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_negative_validation_only",
+      "decision": "current",
+      "notes": "synthetic unsupported-chain validation fixture; not live authority"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_batch_wrong_wallet_eip712.json",
+      "exists": true,
+      "sha256": "dc40303178e5929865a0f608874b609ca829ddadba958d583bca0a0de5620605",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_negative_validation_only",
+      "decision": "current",
+      "notes": "synthetic wrong-wallet validation fixture; not live authority"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_create_submit_body.json",
+      "exists": true,
+      "sha256": "c7840709b8d5226f4a2df33c0dcc5635a0adce33e8b377f41271485d03eb3f44",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "official_sdk_commit_authoritative",
+      "decision": "current",
+      "notes": "WALLET-CREATE serialization shape agrees with official docs and SDK"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_nonce_http_request.json",
+      "exists": true,
+      "sha256": "d1c090f2aee032831c67e492996aca5008511326d84944afedf7e1e0c0df5de2",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "official_sdk_commit_authoritative_for_WALLET_nonce_request",
+      "decision": "current",
+      "notes": "documents GET /nonce request path/query and parser response shape offline"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_nonce_request.json",
+      "exists": true,
+      "sha256": "b0ca9c6d759242938075ad8c99d93c934998e450615f7097ba0bd8dd9c1a48da",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "official_sdk_commit_authoritative_for_WALLET_nonce_request",
+      "decision": "current",
+      "notes": "documents owner address and type=WALLET request fixture"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_nonce_response_cases.json",
+      "exists": true,
+      "sha256": "dcf05a233dca9009df7877ce3357dd0759d0b865445a3baee02242fefaceddae",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_parser_boundaries_only",
+      "decision": "current",
+      "notes": "negative/invalid nonce parser cases; not live success evidence"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_signed_submit_body.json",
+      "exists": true,
+      "sha256": "d4d5ad4e49720ab35d0ecfbb39b5bab4d26b4c7aec20db0b51d77fb3b20426f7",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_fixture_authoritative_for_offline_submit_serialization_only",
+      "decision": "current",
+      "notes": "synthetic signature; official SDK wire shape unchanged"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_signed_submit_body_amoy.json",
+      "exists": true,
+      "sha256": "df8cb18b43d99249c45d8c688e2d846077137264a272bf72b4ab5260d8ccc020",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_Amoy_submit_edge_test_only",
+      "decision": "current",
+      "notes": "synthetic signature and Amoy config fixture; not live authority"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_signed_submit_body_multicall.json",
+      "exists": true,
+      "sha256": "6c60a796886193f24f54425186fa7d116fd4f637556dfd7ecc46119b4ad8a90e",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_fixture_authoritative_for_offline_multicall_submit_serialization_only",
+      "decision": "current",
+      "notes": "synthetic signature; official SDK wire shape unchanged"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_submit_body.json",
+      "exists": true,
+      "sha256": "9df9e19fbca9e8cca89b2ad5d9d8fe89cf782a27f02c840055da656a6a44a170",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_fixture_authoritative_for_offline_submit_serialization_only",
+      "decision": "current",
+      "notes": "legacy synthetic signature fixture retained for serialization guard; not live authority"
+    },
+    {
+      "path": "tests/fixtures/deposit_wallet/wallet_transaction_response.json",
+      "exists": true,
+      "sha256": "0ea9740ddd24f06bf93eeb2c0e01bf7a0f72bb5bd82f6b70d01374bb190b5eb4",
+      "provenanceSource": "official SDK/source comparison or sanitized local fixture as classified in authorityStatus",
+      "selectedSdkPins": {
+        "typescriptRelayer": "9122f6fb1856f1ecfe4406685bfa19a2c5a7b290",
+        "pythonRelayer": "267a36d84d7839b6e4ac134297d9230fc224cf8f",
+        "rustClob": "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb"
+      },
+      "originalFixtureSdkPins": {
+        "typescriptRelayer": "72886a57116debcbcbf8df43d7f1a53a0f73a771",
+        "pythonRelayer": "6589f36740a2a98736f5b0499f29d2d234c583bc"
+      },
+      "retrievalOrGenerationDate": "2026-07-04",
+      "sanitizerStatus": "sanitized_no_private_keys_api_credentials_auth_headers_or_production_signatures",
+      "authorityStatus": "sanitized_local_fixture_authoritative_for_parser_shape_only",
+      "decision": "current_non_authoritative_for_live",
+      "notes": "sanitized WALLET-shaped transaction response fixture; official API enum still lists SAFE/PROXY only, so live WALLET polling remains blocked"
+    }
+  ],
+  "downstreamReferenceDecision": "PBRSDK-3, PBRSDK-4, PBRSDK-17 and later live-capable tasks must cite requiredBehaviors row IDs instead of re-deriving endpoint/body/parser/status/signer/calldata/address/funder decisions.",
+  "safetyReview": {
+    "noSecretsPrinted": true,
+    "noLiveMutation": true,
+    "noProductionSignaturesOrReplayableSubmitBodiesAdded": true,
+    "notes": "Changed files contain source URLs, commit pins, fixture hashes, and sanitized synthetic fixture classifications only."
+  }
+}
