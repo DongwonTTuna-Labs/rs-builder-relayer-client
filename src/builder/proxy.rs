@@ -10,7 +10,7 @@ use crate::types::{ProxySignatureParams, RelayPayload, Transaction};
 /// Encode transactions for the proxy contract.
 ///
 /// proxy(calls: (uint8, address, uint256, bytes)[])
-/// Selector: keccak256("proxy((uint8,address,uint256,bytes)[])")[:4]
+/// Selector: `keccak256("proxy((uint8,address,uint256,bytes)[])")[:4]`
 pub fn encode_proxy_calls(txs: &[Transaction]) -> Result<Vec<u8>> {
     let selector = &keccak256(b"proxy((uint8,address,uint256,bytes)[])")[..4];
 

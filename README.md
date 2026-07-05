@@ -3,10 +3,28 @@
 Internal fork of `OrderBookTrade/rs-builder-relayer-client` for the
 `DongwonTTuna/polymarket-liquidity-farming-rs` migration.
 
-This fork is not an official Polymarket SDK. At setup time it still preserves
-the upstream Safe/Proxy implementation. Deposit-wallet support for
-`WALLET-CREATE`, `WALLET`, fresh `type=WALLET` nonce lookup, and EIP-712
-DepositWallet Batch signing will be added in focused PRs.
+This fork is not an official Polymarket SDK. It preserves the upstream
+Safe/Proxy implementation as legacy reference code while the reviewed
+deposit-wallet relayer surface is added in focused, audited PRs.
+
+## Reviewed 0.2.0 Public API Boundary
+
+The crate root is the consumer-facing integration surface. For deposit-wallet
+work, use the reviewed fallible APIs such as
+`try_build_wallet_batch_request_with_signature`,
+`DepositWalletRelayerClient`, `DepositWalletRelayerUrl`,
+`DepositWalletRequestContext`, `DepositWalletCall`, `RelayerKeyAuth`, and the
+documented request/response types re-exported from `polymarket_relayer`.
+
+Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
+order/sign/cancel/post behavior remains out of this crate and belongs in the
+official Polymarket Rust CLOB SDK plus the consumer CLOB adapter.
+
+The removed infallible `build_wallet_batch_request_with_signature` helper is
+not part of the public integration surface. Consumers must migrate to the
+fallible `try_` API or the validated signed-batch flow and keep raw
+deposit-wallet submit DTO construction out of domain, strategy, risk, and actor
+layers.
 
 Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/gasless). Redeem positions, approve tokens, split/merge — zero gas.
 

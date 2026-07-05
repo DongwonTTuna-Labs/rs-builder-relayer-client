@@ -60,3 +60,15 @@
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
+
+## Public API Boundary
+
+- [ ] `tests/public_api_boundary_test.rs` passes.
+- [ ] `cargo doc --workspace --all-features --no-deps` succeeds and rustdoc shows the reviewed `0.2.0` crate-root/deposit-wallet boundary.
+- [ ] Crate-root and `deposit_wallet` public exports are explicit; no wildcard public re-export is introduced.
+- [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.
+- [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.
+- [ ] Legacy Safe/Proxy APIs stay reference/compatibility surface and are not reused for deposit-wallet `WALLET-CREATE` or `WALLET` flows without wire-level proof.
+- [ ] CLOB order/sign/cancel/post behavior remains out of this crate; no CLOB module, example, public import, or order-posting API is added here.
+- [ ] Boundary grep audit is attached to the PR evidence:
+  `grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_request_with_signature\\|DepositWalletBatchRequest" -n src tests docs README.md`

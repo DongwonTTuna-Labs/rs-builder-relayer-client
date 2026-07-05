@@ -124,3 +124,52 @@ Rollback:
 - if a consumer needs raw non-live serialization, add a deliberately named
   test-only or internal API with documented owner, risk, and removal condition
   in the consumer integration PR.
+
+## ADR-0007: PBRSDK-4 Public API Boundary Audit
+
+Decision:
+
+```text
+Freeze the reviewed 0.2.0 public integration surface at the crate root,
+document the `deposit_wallet` module as a validated-builder boundary, and keep
+CLOB order/sign/cancel/post behavior out of this relayer crate.
+```
+
+Consequences:
+
+- crate-root deposit-wallet exports remain explicit; wildcard re-exports are
+  not allowed;
+- `build_wallet_batch_request_with_signature` must not return to crate-root or
+  `deposit_wallet` public exports;
+- `DepositWalletBatchRequest` is a validated output type, not a public
+  construction API; submit-body fields stay crate-private;
+- legacy Safe/Proxy APIs remain reference compatibility surface and are not the
+  deposit-wallet `WALLET-CREATE` or `WALLET` path;
+- CLOB order/sign/cancel/post behavior remains out of this crate and remains
+  owned by the official Rust CLOB SDK adapter;
+- `tests/public_api_boundary_test.rs` enforces the source, docs, and manifest
+  boundary so future PRs fail before rustdoc or consumer imports drift.
+
+Review evidence:
+
+```bash
+cargo test --test public_api_boundary_test
+cargo doc --workspace --all-features --no-deps
+grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_request_with_signature\\|DepositWalletBatchRequest" -n src tests docs README.md
+```
+
+Migration:
+
+- consumers importing the removed infallible helper must move to
+  `try_build_wallet_batch_request_with_signature` or the validated
+  `SignedDepositWalletBatch` flow;
+- consumer domain, strategy, risk, and actor crates must depend on their local
+  port types rather than this crate's DTOs;
+- CLOB trading integrations must stay in the official Rust CLOB SDK adapter.
+
+Rollback:
+
+- revert this documentation/test boundary only if a new ADR records the exact
+  public API replacement, consumer migration path, and CLOB ownership impact;
+- do not roll back by restoring unchecked raw submit construction or adding CLOB
+  modules to this crate.
