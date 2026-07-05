@@ -64,7 +64,9 @@ rs-builder-relayer-client = { git = "ssh://git@github.com/OrderBookTrade/rs-buil
 
 The consumer app should expose internal domain/application types through `RelayerPort`.
 
-This crate may expose:
+### Reviewed 0.2.0 public integration surface
+
+The reviewed crate-root integration surface is intentionally narrow:
 
 ```text
 DepositWalletRelayerClient
@@ -72,13 +74,34 @@ DepositWalletRelayerUrl
 DepositWalletCall
 RelayerKeyAuth
 DepositWalletRequestContext
+DepositWalletCreateRequest
+WalletNonceRequest
+RelayerTransactionState
 SignedDepositWalletBatch
 RelayerSubmitResponse
-RelayerTransactionStatus
 DepositWalletTransactionReceipt
+derive_deposit_wallet_address
+deposit_wallet_contract_config
+build_wallet_create_request
+build_wallet_nonce_request
+try_build_wallet_batch_request_with_signature
 ```
 
-The consumer app must map these into its own port types and must not leak this crate's DTOs into strategy, risk, actor state, or domain types.
+The consumer app must map these into its own port types and must not leak this
+crate's DTOs into strategy, risk, actor state, or domain types.
+
+`DepositWalletBatchRequest` is a validated submit-body output type, not a public
+construction surface. It is intentionally not re-exported from the crate root;
+its submit-body fields remain crate-private. Consumers that need to submit a
+WALLET batch must obtain it from
+`try_build_wallet_batch_request_with_signature` or from the validated
+`SignedDepositWalletBatch` flow inside the relayer adapter boundary.
+
+Legacy Safe/Proxy APIs such as `RelayClient`, `AuthMethod`, `DirectExecutor`,
+and `operations::*` remain available as upstream compatibility/reference
+surface. They are not the deposit-wallet `WALLET-CREATE` or `WALLET`
+implementation path and must not be reused implicitly for deposit-wallet
+production flows.
 
 WALLET submit request construction must use the fallible
 `try_build_wallet_batch_request_with_signature` API or the validated
@@ -94,6 +117,19 @@ keep the error handling inside the relayer adapter rather than domain or
 strategy layers. Raw `DepositWalletBatchRequest` construction is not a public
 crate-root API; request DTO fields stay crate-private so submit bodies are
 produced through validated builders.
+
+CLOB order/sign/cancel/post behavior remains out of this crate. Consumers must
+keep CLOB trading, cancellation, balance/orderbook reads, and order-posting
+logic in the official Polymarket Rust CLOB SDK adapter rather than importing or
+adding CLOB modules, examples, or order APIs here.
+
+Boundary audit evidence for PBRSDK-4:
+
+```bash
+cargo test --test public_api_boundary_test
+cargo doc --workspace --all-features --no-deps
+grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_request_with_signature\\|DepositWalletBatchRequest" -n src tests docs README.md
+```
 
 ### HTTP client surface
 

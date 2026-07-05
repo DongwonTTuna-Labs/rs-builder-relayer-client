@@ -2,7 +2,8 @@
 //!
 //! This module contains deposit-wallet-specific building blocks only. It does
 //! not reuse the legacy Safe/Proxy execution path for WALLET-CREATE or WALLET
-//! request shapes.
+//! request shapes. WALLET submit request DTOs are returned by validated
+//! builders, with raw submit fields kept private to the crate.
 
 pub mod address;
 pub mod config;

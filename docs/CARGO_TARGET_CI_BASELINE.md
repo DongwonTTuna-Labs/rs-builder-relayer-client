@@ -28,6 +28,7 @@ submit bodies.
 | integration test | `integration_test` | `tests/integration_test.rs` | tracked | offline calldata test | keep |
 | integration test | `operations_test` | `tests/operations_test.rs` | tracked | offline calldata test | keep |
 | integration test | `source_matrix_test` | `tests/source_matrix_test.rs` | tracked | offline provenance test | keep |
+| integration test | `public_api_boundary_test` | `tests/public_api_boundary_test.rs` | tracked | offline public API and docs boundary audit | keep |
 
 No stale declared Cargo target was found in the current baseline. If a future
 target is added, it must map to a tracked file or document a restore, removal,
@@ -60,14 +61,30 @@ The existing Grimoire workflow remains separate. Rust validation does not
 depend on Grimoire secrets, live relayer credentials, private endpoints,
 production wallets, signing keys, or trading credentials.
 
+## PBRSDK-4 Public API Boundary Audit
+
+`tests/public_api_boundary_test.rs` records the PBRSDK-4 public boundary gate.
+It keeps crate-root and `deposit_wallet` exports explicit, prevents the removed
+infallible WALLET batch helper from returning as public API, keeps raw WALLET
+submit DTO fields crate-private, blocks CLOB order/sign/cancel/post SDK modules
+or examples in this relayer crate, and requires semver/migration/grep audit
+evidence in the docs.
+
+This audit is offline only. It does not authorize live relayer mutation, CLOB
+trading, wallet deployment, order placement, production credentials, private
+endpoints, funded-wallet data, or replayable submit bodies.
+
 ## Evidence Requirements
 
 Implementation and review packets should include:
 
 - this target audit,
+- `tests/public_api_boundary_test.rs` output,
 - final local command output or equivalent CI evidence,
 - PR workflow diff evidence,
 - `git diff --check` output,
+- `cargo doc --workspace --all-features --no-deps` output,
+- CLOB absence and public re-export grep/import audit output,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,

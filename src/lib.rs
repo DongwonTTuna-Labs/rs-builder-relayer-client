@@ -1,3 +1,15 @@
+//! Controlled Polymarket builder-relayer fork.
+//!
+//! The crate root exposes the reviewed `0.2.0` integration surface for
+//! deposit-wallet relayer work and keeps legacy Safe/Proxy helpers available as
+//! reference compatibility APIs. WALLET submit callers must use the fallible
+//! `try_build_wallet_batch_request_with_signature` API or the validated signed
+//! batch flow; unchecked submit DTO fields remain crate-private.
+//!
+//! This crate is not a CLOB order/sign/cancel/post SDK. CLOB trading behavior
+//! belongs in the official Polymarket Rust CLOB SDK and the consumer CLOB
+//! adapter, not in this relayer crate.
+//!
 pub mod auth;
 pub mod builder;
 pub mod client;
