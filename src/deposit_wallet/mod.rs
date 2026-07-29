@@ -25,7 +25,7 @@ pub use http::{
     DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletSubmitReceipt, DepositWalletTransactionReceipt, DryRunCallSummary, RelayerKeyAuth,
     RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerReadPermit,
-    RelayerSubmitOutcome,
+    RelayerPollOutcome, RelayerPollPolicy, RelayerSubmitOutcome,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

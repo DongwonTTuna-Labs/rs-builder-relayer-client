@@ -30,6 +30,8 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "RelayerMutationMode",
         "RelayerMutationOperation",
         "RelayerMutationPermit",
+        "RelayerPollOutcome",
+        "RelayerPollPolicy",
         "RelayerReadPermit",
         "RelayerSubmitOutcome",
         "RelayerSubmitResponse",
@@ -59,6 +61,8 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         .expect("deployment lifecycle source is readable");
     let mutation = fs::read_to_string("src/deposit_wallet/http/mutation.rs")
         .expect("mutation capability source is readable");
+    let polling = fs::read_to_string("src/deposit_wallet/http/polling.rs")
+        .expect("polling source is readable");
     let submit = fs::read_to_string("src/deposit_wallet/http/submit.rs")
         .expect("submit source is readable");
     let read_surface = format!("{read}\n{deployed}");
@@ -80,6 +84,14 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     assert!(
         http.contains("mod execute;"),
         "HTTP module must include the reviewed WALLET batch execution path"
+    );
+    assert!(
+        http.contains("mod polling;"),
+        "HTTP module must include the reviewed bounded polling path"
+    );
+    assert!(
+        http.contains("pub use polling::{RelayerPollOutcome, RelayerPollPolicy};"),
+        "HTTP module must explicitly re-export the reviewed polling types"
     );
     assert!(!http.contains("pub use clock"), "clock must remain internal");
 
@@ -176,6 +188,72 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             .contains("Default")
             && !lifecycle.contains("impl Default for DepositWalletDeploymentPolicy"),
         "deployment policy must be chosen explicitly and must not implement Default"
+    );
+
+    for required in [
+        "pub struct RelayerPollPolicy",
+        "pub fn try_new",
+        "pub fn max_attempts",
+        "pub fn initial_interval",
+        "pub fn max_interval",
+        "pub enum RelayerPollOutcome",
+    ] {
+        assert!(
+            polling.contains(required),
+            "polling surface is missing {required}"
+        );
+    }
+    assert!(
+        polling.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq)]\npub struct RelayerPollPolicy"),
+        "poll policy must keep its reviewed value semantics"
+    );
+    assert!(
+        !derive_attributes_for_struct(&polling, "RelayerPollPolicy").contains("Default")
+            && !polling.contains("impl Default for RelayerPollPolicy"),
+        "poll policy must be constructed through validated try_new"
+    );
+    let poll_policy = struct_block(&polling, "RelayerPollPolicy");
+    for field in ["max_attempts", "initial_interval", "max_interval"] {
+        assert!(
+            poll_policy.contains(&format!("    {field}:")),
+            "RelayerPollPolicy::{field} must exist"
+        );
+        assert!(
+            !poll_policy.contains(&format!("pub {field}:")),
+            "RelayerPollPolicy::{field} must remain private"
+        );
+    }
+    assert_eq!(
+        polling.matches("pub async fn poll_").count(),
+        2,
+        "the HTTP client must expose exactly the two reviewed polling methods"
+    );
+    for method in [
+        "poll_wallet_transaction",
+        "poll_deposit_wallet_deployment",
+    ] {
+        let signatures = function_signatures(&polling, &format!("pub async fn {method}"));
+        assert_eq!(signatures.len(), 1, "{method} must exist exactly once");
+        for required in [
+            "owner: Address",
+            "transaction_id: &str",
+            "policy: RelayerPollPolicy",
+            "read_permit: &RelayerReadPermit",
+            "cancel: impl Future<Output = ()> + Send",
+            "Result<RelayerPollOutcome>",
+        ] {
+            assert!(
+                signatures[0].contains(required),
+                "{method} signature is missing {required:?}"
+            );
+        }
+    }
+    assert!(
+        !polling.contains("pub async fn submit_")
+            && !polling.contains("submit_wallet_create(")
+            && !polling.contains("submit_signed_wallet_batch(")
+            && !polling.contains("get_wallet_nonce("),
+        "polling must remain read-only and must not submit or fetch a nonce"
     );
 
     let execute_signature = function_signatures(&execute, "pub async fn execute_wallet_batch");
@@ -312,6 +390,8 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "RelayerMutationMode",
         "RelayerMutationOperation",
         "RelayerMutationPermit",
+        "RelayerPollOutcome",
+        "RelayerPollPolicy",
         "RelayerReadPermit",
         "RelayerSubmitOutcome",
     ] {
