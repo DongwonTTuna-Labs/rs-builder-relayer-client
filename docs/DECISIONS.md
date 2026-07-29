@@ -218,3 +218,62 @@ Consequences:
   submit method is added by this decision;
 - production-host happy paths are not called in CI because tests use only local
   loopback servers and synthetic credentials.
+
+## ADR-0009: PBRSDK-7 Explicit Mutation Permit and Dry-Run Gate
+
+Decision:
+
+```text
+Expose WALLET-CREATE and signed WALLET submit only behind an explicit,
+single-operation RelayerMutationPermit and a separate default-deny client
+mutation latch. DryRun produces review evidence without HTTP; Live requires
+both a matching, unexpired Live permit and an explicitly enabled client.
+```
+
+`RelayerMutationPermit::try_new` binds the permit to a mode (`DryRun` or
+`Live`), operation (`WalletCreate` or `WalletBatch`), owner, chain id, Unix
+expiry, evidence reference, and operator-approval reference. Expiry must be
+non-zero. Both references are trimmed and must be non-empty, at most 256 bytes,
+and free of control characters. At use time, operation, owner, chain, and
+expiry are checked before HTTP; `now >= expires_at_unix` is expired. A signed
+batch additionally fails before HTTP when `now >= deadline`. A permit for one
+mode, operation, owner, or chain is not authority for another. For a `DryRun`,
+the operator-approval reference may identify the pending review record; a
+fresh `Live` permit must reference the completed approval record.
+
+`DepositWalletRelayerClient::new` is default-deny for live mutation.
+`new_with_mutation_enabled` creates an explicitly live-enabled client, but does
+not replace the required `Live` permit. The gate is an `Arc<AtomicBool>` shared
+by every clone. `disable_mutation` changes it one way to disabled; there is no
+reactivation method for that client or any clone. This is the operator rollback
+mechanism. Read-permit-bound reads and valid `DryRun` submissions remain
+available after rollback.
+
+`DryRun` intentionally does not consult the live mutation latch. This permits
+the default-deny client to create review evidence before approval and permits
+the same non-mutating inspection after rollback. It is not a bypass: permit
+scope, expiry, request validation, and batch deadline checks still run, and no
+HTTP request is sent. Evidence includes the operation, endpoint path, scoped
+identities, payload hash, nonce/deadline and bounded call summaries as
+applicable, while omitting auth headers, signatures, full calldata, and the
+full replayable submit body.
+
+After a live request may have been dispatched, an invalid or partial success
+response, malformed or missing transaction id/state evidence, transport
+failure, or oversized 2xx response is classified as reconciliation-required.
+The caller must persist the available request-intent and error evidence and
+must not resubmit on that result. A valid submit receipt is acceptance evidence
+only; an unknown returned state is preserved as non-success.
+
+Consequences:
+
+- the reviewed public mutation surface consists of the scoped permit/evidence/
+  outcome types, `new_with_mutation_enabled`, `disable_mutation`,
+  `submit_wallet_create`, and `submit_signed_wallet_batch`;
+- operator workflow is `DryRun` evidence, review, then a freshly created scoped
+  `Live` permit used with an explicitly enabled client;
+- transaction polling, recent-transaction lookup, persistent intent and
+  idempotency records, duplicate-submit recovery, and complete live readiness
+  remain deferred to later reconciliation work;
+- this decision does not relax the `STATE_CONFIRMED`, fixture, consumer, or
+  operator enablement gates.

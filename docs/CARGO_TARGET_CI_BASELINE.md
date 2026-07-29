@@ -72,7 +72,13 @@ evidence in the docs.
 
 PBRSDK-6 expands that audited boundary with `RelayerReadPermit` and exactly
 three production read methods; the boundary test now records those additions
-while continuing to reject wildcard exports and production submit surface.
+and, at that boundary, continued to reject wildcard exports and a production
+submit surface.
+
+PBRSDK-7 expands the surface audit with the explicit mutation permit/evidence/
+outcome types, the default-deny and one-way client gate, and exactly two
+permit-bound submit methods. This is a public-surface audit only; it does not
+claim transaction polling, idempotent recovery, or end-to-end live readiness.
 
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private

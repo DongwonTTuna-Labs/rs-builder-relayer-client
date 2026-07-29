@@ -21,8 +21,10 @@ pub use config::{
     POLYGON_DEPOSIT_WALLET_FACTORY, POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
 };
 pub use http::{
-    DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletTransactionReceipt,
-    RelayerKeyAuth, RelayerReadPermit,
+    DepositWalletDryRunEvidence, DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletSubmitReceipt, DepositWalletTransactionReceipt, DryRunCallSummary, RelayerKeyAuth,
+    RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerReadPermit,
+    RelayerSubmitOutcome,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

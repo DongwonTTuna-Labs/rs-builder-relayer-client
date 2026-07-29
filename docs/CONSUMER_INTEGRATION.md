@@ -72,6 +72,13 @@ The reviewed crate-root integration surface is intentionally narrow:
 DepositWalletRelayerClient
 DepositWalletRelayerUrl
 RelayerReadPermit
+RelayerMutationPermit
+RelayerMutationMode
+RelayerMutationOperation
+RelayerSubmitOutcome
+DepositWalletDryRunEvidence
+DepositWalletSubmitReceipt
+DryRunCallSummary
 DepositWalletCall
 RelayerKeyAuth
 DepositWalletRequestContext
@@ -134,15 +141,19 @@ grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_requ
 
 ### HTTP client surface
 
-The deposit-wallet HTTP client exposes construction plus exactly three reviewed
-production reads:
+The deposit-wallet HTTP client exposes construction, exactly three reviewed
+production reads, and exactly two permit-gated mutation methods:
 
 ```text
 DepositWalletRelayerUrl::parse
 DepositWalletRelayerClient::new
+DepositWalletRelayerClient::new_with_mutation_enabled
+DepositWalletRelayerClient::disable_mutation
 DepositWalletRelayerClient::is_deposit_wallet_deployed
 DepositWalletRelayerClient::get_wallet_nonce
 DepositWalletRelayerClient::get_transaction_for_owner
+DepositWalletRelayerClient::submit_wallet_create
+DepositWalletRelayerClient::submit_signed_wallet_batch
 ```
 
 Each read requires a `RelayerReadPermit` whose owner equals the requested owner
@@ -165,9 +176,9 @@ let transaction = client
 
 The read permit intentionally has no expiry because it grants only idempotent
 reads. It does not grant submit authority, reserve the nonce for signing, or
-replace the future mutation permit. `POST /submit` remains unavailable on this
-production HTTP client, and `GET /transactions` remains deferred to PBRSDK-13
-reconciliation work.
+replace `RelayerMutationPermit`. `POST /submit` is reachable only through the
+two mutation methods with a matching mutation permit, and `GET /transactions`
+remains deferred to PBRSDK-13 reconciliation work.
 
 Transaction reads preserve the recorded PBRSDK-2 evidence contract: the
 response must be a `WALLET` transaction, `owner` must be present, `from` must
@@ -205,6 +216,54 @@ leak the permit or HTTP receipt DTO into domain, strategy, risk, or actor state.
 Rollback path: stop calling the three read methods and retain the existing
 fixture/signing-only integration; no consumer domain type should depend on the
 HTTP DTOs or permit.
+
+### Explicit mutation workflow and rollback
+
+`DepositWalletRelayerClient::new` is the normal default-deny constructor. Its
+three reads and valid `DryRun` submissions work, but every `Live` submission is
+blocked. `new_with_mutation_enabled` explicitly starts the live latch enabled;
+that constructor is necessary but not sufficient because each submit still
+requires a matching, unexpired `Live` permit.
+
+The consumer adapter must keep this order:
+
+```text
+create an operation/owner/chain/expiry-scoped DryRun permit
+  -> call the matching submit method and retain redacted DryRun evidence
+  -> operator reviews that exact evidence and records approval
+  -> create a fresh Live permit for the reviewed operation/owner/chain with a
+     fresh expiry and the reviewed evidence/completed-approval references
+  -> use an explicitly enabled client for the one reviewed live submit
+```
+
+A `DryRun` permit is not upgraded or reused as live authority. Dry-run request
+validation, scope/expiry checks, and batch deadline checks still apply, but it
+does not consult the live latch and sends no HTTP request. The evidence is safe
+for operator review because it contains a payload hash and bounded summaries
+while omitting auth headers, signatures, full calldata, and the full replayable
+submit body. The initial permit's operator-approval reference may point to the
+pending review record; the fresh `Live` permit must point to the completed
+approval record. Both references must be non-secret identifiers: dry-run
+evidence getters, JSON serialization, and Debug output intentionally retain
+their original trimmed values even though permit Debug prints only their
+lengths.
+
+For rollback, call `disable_mutation` on the enabled client and stop issuing
+new live permits. The one-way latch is shared by that client and all clones, so
+all later live submissions through them fail. Owner-scoped reads and valid
+`DryRun` evidence generation continue after the latch. There is no re-enable
+method; resuming live work requires a newly constructed enabled client, a new
+operator review decision, and a freshly created `Live` permit. Preserve any
+submit receipt, payload hash, or reconciliation-required error before dropping
+the old client. The latch does not cancel a live submit that already passed the
+gate or recall an in-flight POST; reconcile any such request before taking
+further mutation action.
+
+Invalid or partial success responses, transport failures, and oversized 2xx
+responses require reconciliation before any new submit. The D7 submit receipt
+is not `STATE_CONFIRMED`, and PBRSDK-7 does not provide the complete polling,
+persistent idempotency, recent-transaction lookup, or duplicate-submit recovery
+needed to claim end-to-end live readiness.
 
 Consumer adapter migration status for PR #8:
 

@@ -26,6 +26,15 @@ is_deposit_wallet_deployed_returns_typed_api_error_for_5xx
 get_transaction_for_owner_rejects_missing_owner_evidence
 read_methods_reject_owner_mismatched_permit_before_input_or_http
 read_methods_reject_chain_mismatched_permit_before_input_or_http
+mutation_is_default_deny_for_wallet_create_and_wallet_batch_before_http
+mutation_permit_validates_references_expiry_and_scoped_getters
+mutation_permit_scope_and_expiry_fail_before_http
+wallet_batch_deadline_guard_treats_equal_clock_as_expired_before_http
+dry_run_builds_redacted_create_and_batch_evidence_without_http
+dry_run_and_permit_debug_redact_replayable_and_authorization_material
+rollback_latch_disables_all_clones_while_reads_and_dry_run_continue
+submit_response_anomalies_require_reconciliation_without_resubmission
+submit_transport_and_oversized_success_responses_require_reconciliation
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -72,6 +81,19 @@ Golden tests should prove:
   with a boolean `deployed` field;
 - owner- or chain-mismatched read permits fail before input validation, URL
   construction, or HTTP I/O;
+- `DepositWalletRelayerClient::new` denies both live mutation operations before
+  HTTP, even when a valid `Live` permit is supplied;
+- mutation permit mode, operation, owner, chain, expiry, evidence reference,
+  and operator-approval reference are validated, and scope mismatch or
+  `now >= expiry` fails before HTTP;
+- a signed batch with `now >= deadline` fails before HTTP;
+- `DryRun` works independently of the live latch, sends no HTTP, and emits only
+  redacted evidence: no auth headers, signature, full calldata, or full submit
+  body may appear in serialized or debug output;
+- `disable_mutation` blocks live submits through the client and every clone
+  while reads and valid `DryRun` submissions continue;
+- invalid/partial submit responses, post-dispatch transport failures, and
+  oversized 2xx responses require reconciliation rather than resubmission;
 - unknown transaction states force non-mutating behavior.
 
 ## Production Read Transport Gate
@@ -99,6 +121,12 @@ POLY_1271 order path accepts maker/funder shape in consumer app
 merge/redeem calldata follows current pUSD adapter path
 ambiguous submit timeout does not duplicate transaction
 ```
+
+For the PBRSDK-7 gate, first record a scoped `DryRun` outcome and operator
+review, then create a fresh scoped `Live` permit and use it only with an
+explicitly enabled client. These checks prove default denial, review evidence,
+and one-way rollback; they do not replace the later polling, persistent
+idempotency, reconciliation, or duplicate-submit recovery gate.
 
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only
