@@ -36,6 +36,10 @@
 - [ ] `POST /submit` request body has exact `type = "WALLET"` or `type = "WALLET-CREATE"` shape.
 - [ ] Transaction polling handles New/Executed/Mined/Confirmed/Invalid/Failed/Unknown.
 - [ ] Unknown/ambiguous state does not trigger duplicate submit.
+- [ ] Deployment lifecycle checks `/deployed` before any mutation, short-circuits when already deployed, and defaults operationally to the explicit `Predeployed` policy.
+- [ ] Missing deployment is blocked without an explicit matching mutation permit, and a closed live latch produces no submit HTTP request.
+- [ ] WALLET-CREATE readiness is single-shot: Confirmed alone is `Ready`; New/Executed/Mined are pending; Failed/Invalid/Unknown/ambiguous evidence is never success or resubmit authority.
+- [ ] Pending owners are not passed through deployment entry again; transaction id and payload hash are retained for PBRSDK-10/11 reconciliation.
 
 ## Identity And Security
 
@@ -61,6 +65,9 @@
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
 - [ ] Production reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; mutation is limited to the two reviewed permit-bound `POST /submit` methods, and `GET /transactions` remains deferred.
+- [ ] The deployment policy is chosen explicitly at every call; `Predeployed` is the normal consumer choice and `DepositWalletDeploymentPolicy` has no `Default` implementation.
+- [ ] Lifecycle validation delegates to the existing deployed-read and permit-gated submit paths without duplicating or weakening owner/factory/chain/source checks.
+- [ ] Public WALLET transaction reads reject WALLET-CREATE responses, and deployment readiness rejects WALLET responses.
 - [ ] Every production read takes an owner- and chain-scoped `RelayerReadPermit` and rejects mismatch before input validation, URL construction, or HTTP I/O.
 - [ ] A successful deployed read is not treated as submit readiness; readiness still requires `STATE_CONFIRMED` and the mutation/operator gates.
 - [ ] `DepositWalletRelayerClient::new` is default-deny for live mutation; only `new_with_mutation_enabled` starts enabled, and the constructor never replaces a scoped `Live` permit.
@@ -78,6 +85,8 @@
 - [ ] `cargo doc --workspace --all-features --no-deps` succeeds and rustdoc shows the reviewed `0.2.0` crate-root/deposit-wallet boundary.
 - [ ] Crate-root and `deposit_wallet` public exports are explicit; no wildcard public re-export is introduced.
 - [ ] `RelayerReadPermit` and the three reviewed HTTP read methods are present in the audited public surface.
+- [ ] `DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`, `DepositWalletReadiness`, and both lifecycle methods are present in the audited public surface.
+- [ ] The read audit covers three public methods plus one crate-internal expected-type helper, all permit-bound, while the complete production source still exposes exactly two public `submit_*` methods.
 - [ ] Mutation permit/evidence/outcome types, `new_with_mutation_enabled`, `disable_mutation`, `submit_wallet_create`, and `submit_signed_wallet_batch` are present in the audited public surface.
 - [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.
 - [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.

@@ -40,6 +40,7 @@ mod auth;
 mod capability;
 mod clock;
 mod deployed;
+mod lifecycle;
 mod mutation;
 mod read;
 mod redaction;
@@ -50,6 +51,9 @@ mod url;
 
 pub use auth::RelayerKeyAuth;
 pub use capability::RelayerReadPermit;
+pub use lifecycle::{
+    DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletReadiness,
+};
 pub use mutation::{
     DepositWalletDryRunEvidence, DepositWalletSubmitReceipt, DryRunCallSummary,
     RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerSubmitOutcome,

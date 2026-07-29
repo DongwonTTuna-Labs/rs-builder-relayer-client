@@ -18,6 +18,9 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
     for required in [
         "DepositWalletRelayerClient",
         "DepositWalletRelayerUrl",
+        "DepositWalletDeploymentPolicy",
+        "DepositWalletDeploymentStatus",
+        "DepositWalletReadiness",
         "DepositWalletRequestContext",
         "DepositWalletCall",
         "DepositWalletDryRunEvidence",
@@ -50,6 +53,8 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         fs::read_to_string("src/deposit_wallet/http/read.rs").expect("read source is readable");
     let deployed = fs::read_to_string("src/deposit_wallet/http/deployed.rs")
         .expect("deployed read source is readable");
+    let lifecycle = fs::read_to_string("src/deposit_wallet/http/lifecycle.rs")
+        .expect("deployment lifecycle source is readable");
     let mutation = fs::read_to_string("src/deposit_wallet/http/mutation.rs")
         .expect("mutation capability source is readable");
     let submit = fs::read_to_string("src/deposit_wallet/http/submit.rs")
@@ -66,10 +71,17 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         http.contains("pub use mutation::{"),
         "HTTP module must explicitly re-export reviewed mutation types"
     );
+    assert!(
+        http.contains("pub use lifecycle::{"),
+        "HTTP module must explicitly re-export reviewed deployment lifecycle types"
+    );
     assert!(!http.contains("pub use clock"), "clock must remain internal");
 
     for required in [
+        "DepositWalletDeploymentPolicy",
+        "DepositWalletDeploymentStatus",
         "DepositWalletDryRunEvidence",
+        "DepositWalletReadiness",
         "DepositWalletSubmitReceipt",
         "DryRunCallSummary",
         "RelayerMutationMode",
@@ -107,12 +119,57 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     }
     assert_eq!(
         read_surface.matches("permit: &RelayerReadPermit").count(),
-        3,
-        "every reviewed production read method must require RelayerReadPermit"
+        4,
+        "3 public read methods plus 1 crate-internal expected-type helper must all require RelayerReadPermit"
     );
     assert!(
         !read_surface.contains("pub async fn submit"),
         "read and deployed modules must not expose mutation submit methods"
+    );
+
+    for required in [
+        "pub enum DepositWalletDeploymentPolicy",
+        "pub enum DepositWalletDeploymentStatus",
+        "pub enum DepositWalletReadiness",
+        "pub async fn ensure_deposit_wallet_deployment(",
+        "pub async fn check_deposit_wallet_deployment_readiness(",
+    ] {
+        assert!(
+            lifecycle.contains(required),
+            "deployment lifecycle surface is missing {required}"
+        );
+    }
+    assert_eq!(
+        lifecycle.matches("pub async fn ").count(),
+        2,
+        "the deployment lifecycle module must expose exactly the two reviewed methods"
+    );
+    let ensure_signature = function_signatures(
+        &lifecycle,
+        "pub async fn ensure_deposit_wallet_deployment",
+    );
+    assert_eq!(ensure_signature.len(), 1);
+    assert!(
+        ensure_signature[0].contains("policy: DepositWalletDeploymentPolicy")
+            && ensure_signature[0].contains("read_permit: &RelayerReadPermit")
+            && ensure_signature[0]
+                .contains("mutation_permit: Option<&RelayerMutationPermit>"),
+        "deployment entry must require an explicit policy and read permit, with optional scoped mutation authority"
+    );
+    let readiness_signature = function_signatures(
+        &lifecycle,
+        "pub async fn check_deposit_wallet_deployment_readiness",
+    );
+    assert_eq!(readiness_signature.len(), 1);
+    assert!(
+        readiness_signature[0].contains("read_permit: &RelayerReadPermit"),
+        "deployment readiness must remain read-permit-bound"
+    );
+    assert!(
+        !derive_attributes_for_enum(&lifecycle, "DepositWalletDeploymentPolicy")
+            .contains("Default")
+            && !lifecycle.contains("impl Default for DepositWalletDeploymentPolicy"),
+        "deployment policy must be chosen explicitly and must not implement Default"
     );
 
     for method in ["new_with_mutation_enabled", "disable_mutation"] {
@@ -218,7 +275,10 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "deposit_wallet surface must advertise the fallible WALLET batch helper"
     );
     for required in [
+        "DepositWalletDeploymentPolicy",
+        "DepositWalletDeploymentStatus",
         "DepositWalletDryRunEvidence",
+        "DepositWalletReadiness",
         "DepositWalletSubmitReceipt",
         "DryRunCallSummary",
         "RelayerMutationMode",
@@ -519,4 +579,16 @@ fn derive_attributes_for_struct<'a>(source: &'a str, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{name} should have derive attributes"));
 
     &source[attributes_start..struct_start]
+}
+
+fn derive_attributes_for_enum<'a>(source: &'a str, name: &str) -> &'a str {
+    let needle = format!("pub enum {name}");
+    let enum_start = source
+        .find(&needle)
+        .unwrap_or_else(|| panic!("{name} enum should exist"));
+    let attributes_start = source[..enum_start]
+        .rfind("#[derive(")
+        .unwrap_or_else(|| panic!("{name} should have derive attributes"));
+
+    &source[attributes_start..enum_start]
 }

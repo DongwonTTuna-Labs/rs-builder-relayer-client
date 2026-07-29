@@ -80,6 +80,13 @@ outcome types, the default-deny and one-way client gate, and exactly two
 permit-bound submit methods. This is a public-surface audit only; it does not
 claim transaction polling, idempotent recovery, or end-to-end live readiness.
 
+PBRSDK-8 adds three explicit deployment-lifecycle types and two lifecycle
+methods while auditing three public reads plus one permit-bound internal
+expected-type helper; the combined production surface still contains exactly
+two public `submit_*` methods. Its fixture and loopback audit proves only
+single-shot confirmed readiness, not polling, persistence, duplicate-submit
+recovery, or live enablement.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.

@@ -35,6 +35,15 @@ dry_run_and_permit_debug_redact_replayable_and_authorization_material
 rollback_latch_disables_all_clones_while_reads_and_dry_run_continue
 submit_response_anomalies_require_reconciliation_without_resubmission
 submit_transport_and_oversized_success_responses_require_reconciliation
+deployment_lifecycle_short_circuits_when_wallet_is_already_deployed
+deployment_lifecycle_predeployed_policy_blocks_missing_wallet
+deployment_lifecycle_requires_explicit_mutation_permit
+deployment_lifecycle_live_create_preserves_fixture_body_and_receipt
+deployment_lifecycle_dry_run_preserves_evidence_without_submit_http
+deployment_lifecycle_propagates_closed_mutation_gate_after_preflight
+deployment_readiness_maps_confirmed_pending_and_error_states
+deployment_readiness_keeps_wallet_and_wallet_create_types_isolated
+deployment_lifecycle_methods_reject_mismatched_read_permits_before_http
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -56,6 +65,7 @@ tests/fixtures/
   deposit_wallet/
     derive_address.json
     wallet_create_submit_body.json
+    wallet_create_transaction_response.json
     wallet_nonce_request.json
     wallet_deployed_http_request.json
     wallet_deployed_response_cases.json
@@ -94,6 +104,20 @@ Golden tests should prove:
   while reads and valid `DryRun` submissions continue;
 - invalid/partial submit responses, post-dispatch transport failures, and
   oversized 2xx responses require reconciliation rather than resubmission;
+- the deployment lifecycle always checks `/deployed` first, short-circuits on
+  `true`, and blocks a missing wallet under `Predeployed`, absent mutation
+  authority, or a closed live latch without sending a submit request;
+- the live create lifecycle POST is JSON-equivalent to
+  `wallet_create_submit_body.json`, contains no `signature` key, and preserves
+  both transaction id and payload hash in its receipt;
+- dry-run deployment preserves redacted evidence and performs only the
+  deployed read, never a submit request;
+- WALLET-CREATE readiness maps only Confirmed to `Ready`, maps New/Executed/
+  Mined to `Pending`, and propagates Failed, Invalid, Unknown, malformed, and
+  ambiguous evidence as errors requiring stop or reconciliation;
+- public WALLET reads reject WALLET-CREATE responses, deployment readiness
+  rejects WALLET responses, and both lifecycle methods reject mismatched read
+  permits before HTTP;
 - unknown transaction states force non-mutating behavior.
 
 ## Production Read Transport Gate
@@ -104,6 +128,10 @@ shape, auth header presence and sensitivity, redirects, 4xx/5xx and 429
 classification, Retry-After, bounded bodies, malformed response evidence, and
 permit rejection before HTTP. CI must not call the production host or require a
 live relayer credential.
+
+PBRSDK-8 lifecycle tests are single-shot and use only the same deterministic
+loopback transport plus injected clock. They must not add polling loops, sleep,
+retry, cancellation, recent-transaction lookup, or live host calls.
 
 ## Manual Live Gate
 
@@ -127,6 +155,12 @@ review, then create a fresh scoped `Live` permit and use it only with an
 explicitly enabled client. These checks prove default denial, review evidence,
 and one-way rollback; they do not replace the later polling, persistent
 idempotency, reconciliation, or duplicate-submit recovery gate.
+
+For PBRSDK-8, retain the submitted WALLET-CREATE transaction id and payload
+hash, then record `STATE_CONFIRMED` through the expected-type readiness path.
+Pending or error results forbid lifecycle re-entry for that owner until the
+deferred polling and owner-scoped intent controls reconcile the original
+submission.
 
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only

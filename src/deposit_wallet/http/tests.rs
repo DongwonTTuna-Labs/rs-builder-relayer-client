@@ -473,6 +473,36 @@ fn transaction_response_value(transaction_id: &str, state: &str) -> Value {
     transaction_response_value_for_owner(transaction_id, state, WALLET_OWNER)
 }
 
+fn wallet_create_transaction_response_value(transaction_id: &str, state: &str) -> Value {
+    let fixture = fixture_value("wallet_create_transaction_response.json");
+    let mut response = fixture
+        .as_array()
+        .and_then(|items| items.first())
+        .cloned()
+        .expect("WALLET-CREATE transaction fixture should contain one response");
+    response["transactionID"] = json!(transaction_id);
+    response["state"] = json!(state);
+    if state != "STATE_CONFIRMED" {
+        response
+            .as_object_mut()
+            .unwrap()
+            .remove("transactionHash");
+    }
+    response
+}
+
+fn assert_deployed_request(request: &CapturedRequest) {
+    let fixture = fixture_value("wallet_deployed_http_request.json");
+    assert_eq!(request.method, fixture["method"].as_str().unwrap());
+    assert_eq!(request.path, fixture["pathAndQuery"].as_str().unwrap());
+    assert_eq!(request.header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        request.header("RELAYER_API_KEY_ADDRESS"),
+        Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+    );
+    assert!(request.body.is_empty());
+}
+
 #[test]
 fn relayer_key_auth_validates_redacts_and_marks_headers_sensitive() {
     assert!(RelayerKeyAuth::new("", address(API_KEY_ADDRESS)).is_err());
@@ -852,6 +882,7 @@ fn transaction_response_fixture_preserves_proxy_address_evidence() {
 
     let parsed = parse_transaction_response(
         transaction_id,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         fixture.as_bytes(),
     )
@@ -873,6 +904,7 @@ fn transaction_response_receipt_debug_redacts_owner_wallet_hash_and_id() {
 
     let parsed = parse_transaction_response(
         transaction_id,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         response.to_string().as_bytes(),
     )
@@ -1220,6 +1252,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 
     let parsed = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         matching.as_bytes(),
     )
@@ -1236,6 +1269,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     .to_string();
     let parsed = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         body.as_bytes(),
     )
@@ -1251,6 +1285,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     .to_string();
     let parsed = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         body.as_bytes(),
     )
@@ -1259,6 +1294,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
 
     let error = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         missing.as_bytes(),
     )
@@ -1270,6 +1306,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     let trailing = format!("{matching} {{}}");
     let error = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         trailing.as_bytes(),
     )
@@ -1283,6 +1320,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     let object_mismatch = transaction_response_value("other-object-id", "STATE_CONFIRMED");
     let error = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         object_mismatch.to_string().as_bytes(),
     )
@@ -1299,6 +1337,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
         let body = body_from_ids(&fixture[fixture_key]);
         let error = parse_transaction_response(
             target,
+            WALLET_TRANSACTION_TYPE,
             deposit_wallet_contract_config(137).unwrap(),
             body.as_bytes(),
         )
@@ -1314,6 +1353,7 @@ fn transaction_array_parser_uses_fixture_for_selection_and_negative_cases() {
     let body = body_from_ids(&fixture["invalidIds"]);
     let error = parse_transaction_response(
         target,
+        WALLET_TRANSACTION_TYPE,
         deposit_wallet_contract_config(137).unwrap(),
         body.as_bytes(),
     )
@@ -1343,6 +1383,7 @@ fn transaction_response_rejects_malformed_transaction_hashes() {
 
         let error = parse_transaction_response(
             &transaction_id,
+            WALLET_TRANSACTION_TYPE,
             config,
             response.to_string().as_bytes(),
         )
@@ -1383,9 +1424,14 @@ fn transaction_response_rejects_partial_required_fields() {
         ("missing state", missing_state),
         ("non-string state", non_string_state),
     ] {
-        let object_error = parse_transaction_response(target, config, response.to_string().as_bytes())
-            .unwrap_err()
-            .error;
+        let object_error = parse_transaction_response(
+            target,
+            WALLET_TRANSACTION_TYPE,
+            config,
+            response.to_string().as_bytes(),
+        )
+        .unwrap_err()
+        .error;
         assert!(
             matches!(object_error, RelayerError::Other(ref message) if message.contains("could not parse transaction response object")),
             "{label}: {object_error}"
@@ -1393,6 +1439,7 @@ fn transaction_response_rejects_partial_required_fields() {
 
         let array_error = parse_transaction_response(
             target,
+            WALLET_TRANSACTION_TYPE,
             config,
             json!([response]).to_string().as_bytes(),
         )
@@ -1421,9 +1468,13 @@ fn transaction_response_normalizes_valid_transaction_hashes() {
     response["transactionHash"] =
         json!("0X38CBFBEAE8FFFA4E2B187EE5978D3EE9CAFC53AF0363ED90A35B7EA9016535D8");
 
-    let parsed =
-        parse_transaction_response(transaction_id, config, response.to_string().as_bytes())
-            .unwrap();
+    let parsed = parse_transaction_response(
+        transaction_id,
+        WALLET_TRANSACTION_TYPE,
+        config,
+        response.to_string().as_bytes(),
+    )
+    .unwrap();
 
     assert_eq!(
         parsed.receipt.transaction_hash.as_deref(),
@@ -1461,6 +1512,7 @@ fn transaction_response_rejects_malformed_address_evidence() {
 
         let object_error = parse_transaction_response(
             &transaction_id,
+            WALLET_TRANSACTION_TYPE,
             config,
             response.to_string().as_bytes(),
         )
@@ -1478,6 +1530,7 @@ fn transaction_response_rejects_malformed_address_evidence() {
 
         let array_error = parse_transaction_response(
             &transaction_id,
+            WALLET_TRANSACTION_TYPE,
             config,
             json!([transaction_response_value("other-tx", "STATE_CONFIRMED"), response])
                 .to_string()
@@ -1557,10 +1610,14 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
             "did not match derived deposit wallet",
         ),
     ] {
-        let error =
-            parse_transaction_response(target, config, response.to_string().as_bytes())
-                .unwrap_err()
-                .error;
+        let error = parse_transaction_response(
+            target,
+            WALLET_TRANSACTION_TYPE,
+            config,
+            response.to_string().as_bytes(),
+        )
+        .unwrap_err()
+        .error;
         assert!(
             error.is_deposit_wallet_reconciliation_required(),
             "{label}: {error}"
@@ -1572,6 +1629,7 @@ fn transaction_response_rejects_unproven_wire_evidence_boundaries() {
 
         let array_error = parse_transaction_response(
             target,
+            WALLET_TRANSACTION_TYPE,
             config,
             json!([transaction_response_value("other-tx", "STATE_CONFIRMED"), response])
                 .to_string()
@@ -2576,4 +2634,391 @@ fn mutation_permit_debug_redacts_owner_and_reference_contents() {
     assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
     assert!(!debug.contains("evidence-reference-secret-looking"));
     assert!(!debug.contains("operator-approval-secret-looking"));
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_short_circuits_when_wallet_is_already_deployed() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"deployed": true}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let owner = address(WALLET_OWNER);
+    let read_permit = read_permit(owner);
+    let live_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let status = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit,
+            Some(&live_permit),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(status, DepositWalletDeploymentStatus::AlreadyDeployed);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_deployed_request(&requests[0]);
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_predeployed_policy_blocks_missing_wallet() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"deployed": false}).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+
+    let error = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::Predeployed,
+            &read_permit(owner),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error
+        .to_string()
+        .contains("predeployed policy forbids WALLET-CREATE"));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_deployed_request(&requests[0]);
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_requires_explicit_mutation_permit() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"deployed": false}).to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+
+    let error = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error
+        .to_string()
+        .contains("deployment requires an explicit mutation permit"));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_deployed_request(&requests[0]);
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_live_create_preserves_fixture_body_and_receipt() {
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-lifecycle-create", "state": "STATE_NEW"})
+                .to_string(),
+        ),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let owner = address(WALLET_OWNER);
+    let config = deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap();
+    let expected_hash = expected_payload_keccak256(&build_wallet_create_request(owner, config));
+    let live_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let status = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&live_permit),
+        )
+        .await
+        .unwrap();
+    let receipt = match status {
+        DepositWalletDeploymentStatus::CreateSubmitted(receipt) => receipt,
+        other => panic!("expected create submission, got {other:?}"),
+    };
+
+    assert_eq!(receipt.transaction_id(), "tx-lifecycle-create");
+    assert_eq!(receipt.state(), &RelayerTransactionState::New);
+    assert_eq!(receipt.payload_keccak256(), expected_hash);
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_deployed_request(&requests[0]);
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, SUBMIT_PATH);
+    let submit_body = serde_json::from_str::<Value>(&requests[1].body).unwrap();
+    assert_eq!(submit_body, fixture_value("wallet_create_submit_body.json"));
+    assert!(submit_body.get("signature").is_none());
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_dry_run_preserves_evidence_without_submit_http() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"deployed": false}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let owner = address(WALLET_OWNER);
+    let config = deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap();
+    let expected_wallet = derive_deposit_wallet_address(owner, config).unwrap();
+    let expected_hash = expected_payload_keccak256(&build_wallet_create_request(owner, config));
+    let dry_run_permit = mutation_permit(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let status = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&dry_run_permit),
+        )
+        .await
+        .unwrap();
+    let evidence = match status {
+        DepositWalletDeploymentStatus::CreateDryRun(evidence) => evidence,
+        other => panic!("expected create dry-run, got {other:?}"),
+    };
+
+    assert_eq!(evidence.operation(), WALLET_CREATE_TRANSACTION_TYPE);
+    assert_eq!(evidence.endpoint_path(), SUBMIT_PATH);
+    assert_eq!(evidence.chain_id(), POLYGON_CHAIN_ID);
+    assert_eq!(
+        evidence.owner(),
+        super::redaction::redacted_address(owner)
+    );
+    assert_eq!(
+        evidence.deposit_wallet(),
+        super::redaction::redacted_address(expected_wallet)
+    );
+    assert_eq!(evidence.to(), to_checksum(&config.factory, None));
+    assert_eq!(evidence.payload_keccak256(), expected_hash);
+    assert_eq!(evidence.nonce(), None);
+    assert_eq!(evidence.deadline(), None);
+    assert!(evidence.calls().is_empty());
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_deployed_request(&requests[0]);
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_propagates_closed_mutation_gate_after_preflight() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"deployed": false}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let owner = address(WALLET_OWNER);
+    let live_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let error = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&live_permit),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error
+        .to_string()
+        .contains("relayer mutation is disabled for this client"));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_deployed_request(&requests[0]);
+}
+
+#[tokio::test]
+async fn deployment_readiness_maps_confirmed_pending_and_error_states() {
+    let cases = [
+        ("tx-create-confirmed", "STATE_CONFIRMED"),
+        ("tx-create-new", "STATE_NEW"),
+        ("tx-create-executed", "STATE_EXECUTED"),
+        ("tx-create-mined", "STATE_MINED"),
+        ("tx-create-failed", "STATE_FAILED"),
+        ("tx-create-invalid", "STATE_INVALID"),
+        ("tx-create-unknown", "STATE_FUTURE"),
+    ];
+    let responses = cases
+        .iter()
+        .map(|(transaction_id, state)| {
+            TestResponse::json(
+                "200 OK",
+                json!([wallet_create_transaction_response_value(
+                    transaction_id,
+                    state
+                )])
+                .to_string(),
+            )
+        })
+        .collect();
+    let (url, handle) = spawn_server(responses).await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+    let permit = read_permit(owner);
+
+    assert_eq!(
+        client
+            .check_deposit_wallet_deployment_readiness(owner, cases[0].0, &permit)
+            .await
+            .unwrap(),
+        DepositWalletReadiness::Ready
+    );
+    for ((transaction_id, _), expected_state) in cases[1..4].iter().zip([
+        RelayerTransactionState::New,
+        RelayerTransactionState::Executed,
+        RelayerTransactionState::Mined,
+    ]) {
+        assert_eq!(
+            client
+                .check_deposit_wallet_deployment_readiness(owner, transaction_id, &permit)
+                .await
+                .unwrap(),
+            DepositWalletReadiness::Pending(expected_state)
+        );
+    }
+
+    let failed = client
+        .check_deposit_wallet_deployment_readiness(owner, cases[4].0, &permit)
+        .await
+        .unwrap_err();
+    assert!(matches!(failed, RelayerError::TransactionFailed(_)));
+    let invalid = client
+        .check_deposit_wallet_deployment_readiness(owner, cases[5].0, &permit)
+        .await
+        .unwrap_err();
+    assert!(matches!(invalid, RelayerError::TransactionInvalid(_)));
+    let unknown = client
+        .check_deposit_wallet_deployment_readiness(owner, cases[6].0, &permit)
+        .await
+        .unwrap_err();
+    assert!(unknown.is_deposit_wallet_reconciliation_required());
+    assert!(!unknown.to_string().contains("STATE_FUTURE"));
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), cases.len());
+    for (request, (transaction_id, _)) in requests.iter().zip(cases) {
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, format!("/transaction?id={transaction_id}"));
+        assert!(request.body.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn deployment_readiness_keeps_wallet_and_wallet_create_types_isolated() {
+    let responses = vec![
+        TestResponse::json(
+            "200 OK",
+            json!([transaction_response_value(
+                "tx-wallet-on-create-path",
+                "STATE_CONFIRMED"
+            )])
+            .to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            json!([wallet_create_transaction_response_value(
+                "tx-create-on-wallet-path",
+                "STATE_CONFIRMED"
+            )])
+            .to_string(),
+        ),
+    ];
+    let (url, handle) = spawn_server(responses).await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+    let permit = read_permit(owner);
+
+    let create_path_error = client
+        .check_deposit_wallet_deployment_readiness(
+            owner,
+            "tx-wallet-on-create-path",
+            &permit,
+        )
+        .await
+        .unwrap_err();
+    assert!(create_path_error.is_deposit_wallet_reconciliation_required());
+    assert!(create_path_error
+        .to_string()
+        .contains("type was not WALLET-CREATE"));
+
+    let wallet_path_error = client
+        .get_transaction_for_owner(owner, "tx-create-on-wallet-path", &permit)
+        .await
+        .unwrap_err();
+    assert!(wallet_path_error.is_deposit_wallet_reconciliation_required());
+    assert!(wallet_path_error
+        .to_string()
+        .contains("type was not WALLET"));
+
+    assert_eq!(handle.await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn deployment_lifecycle_methods_reject_mismatched_read_permits_before_http() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+    let mismatched_permit = read_permit(address(OTHER_OWNER));
+
+    let ensure_error = client
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::Predeployed,
+            &mismatched_permit,
+            None,
+        )
+        .await
+        .unwrap_err();
+    let readiness_error = client
+        .check_deposit_wallet_deployment_readiness(owner, "", &mismatched_permit)
+        .await
+        .unwrap_err();
+
+    assert!(ensure_error.is_deposit_wallet_read_blocked());
+    assert!(readiness_error.is_deposit_wallet_read_blocked());
+    assert!(handle.await.unwrap().is_empty());
 }
