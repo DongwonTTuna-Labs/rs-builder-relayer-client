@@ -55,6 +55,7 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     let submit = fs::read_to_string("src/deposit_wallet/http/submit.rs")
         .expect("submit source is readable");
     let read_surface = format!("{read}\n{deployed}");
+    let production_http_surface = production_http_surface(&http);
 
     assert_no_wildcard_reexports("src/deposit_wallet/http.rs", &http);
     assert!(
@@ -109,6 +110,10 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         3,
         "every reviewed production read method must require RelayerReadPermit"
     );
+    assert!(
+        !read_surface.contains("pub async fn submit"),
+        "read and deployed modules must not expose mutation submit methods"
+    );
 
     for method in ["new_with_mutation_enabled", "disable_mutation"] {
         assert!(
@@ -136,6 +141,27 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         !http.contains("pub fn enable_mutation"),
         "the one-way mutation latch must not expose a reactivation method"
     );
+
+    let production_submit_signatures =
+        function_signatures(&production_http_surface, "pub async fn submit_");
+    assert_eq!(
+        production_submit_signatures.len(),
+        2,
+        "the complete production HTTP implementation must expose exactly two public submit methods"
+    );
+    for signature in production_submit_signatures {
+        assert!(
+            signature.contains("permit: &RelayerMutationPermit"),
+            "every public submit method in the complete production HTTP implementation must require RelayerMutationPermit: {signature}"
+        );
+    }
+    for forbidden in ["pub fn enable_mutation", "pub async fn enable_mutation"] {
+        assert_eq!(
+            production_http_surface.matches(forbidden).count(),
+            0,
+            "the complete production HTTP implementation must not expose mutation reactivation: {forbidden}"
+        );
+    }
 
     for required in [
         "pub struct RelayerMutationPermit",
@@ -438,6 +464,49 @@ fn function_block<'a>(source: &'a str, signature: &str) -> &'a str {
         .unwrap_or_else(|| panic!("function {signature:?} should have a closing brace"));
 
     &rest[..end]
+}
+
+fn production_http_surface(http_module: &str) -> String {
+    let mut surface = http_module.to_string();
+    append_production_rust_sources(Path::new("src/deposit_wallet/http"), &mut surface);
+    surface
+}
+
+fn append_production_rust_sources(directory: &Path, surface: &mut String) {
+    for entry in fs::read_dir(directory).expect("production HTTP source directory is readable") {
+        let path = entry.expect("production HTTP source entry is readable").path();
+        if path.is_dir() {
+            append_production_rust_sources(&path, surface);
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs")
+            || path.file_name().and_then(|name| name.to_str()) == Some("tests.rs")
+        {
+            continue;
+        }
+
+        surface.push('\n');
+        surface.push_str(
+            &fs::read_to_string(&path).unwrap_or_else(|_| {
+                panic!("production HTTP source is readable: {}", path.display())
+            }),
+        );
+    }
+}
+
+fn function_signatures<'a>(source: &'a str, needle: &str) -> Vec<&'a str> {
+    let mut signatures = Vec::new();
+    let mut search_start = 0;
+    while let Some(relative_start) = source[search_start..].find(needle) {
+        let signature_start = search_start + relative_start;
+        let rest = &source[signature_start..];
+        let signature_end = rest.find('{').unwrap_or_else(|| {
+            panic!("function signature beginning with {needle:?} must have an opening brace")
+        });
+        signatures.push(&rest[..signature_end]);
+        search_start = signature_start + signature_end + 1;
+    }
+    signatures
 }
 
 fn derive_attributes_for_struct<'a>(source: &'a str, name: &str) -> &'a str {
