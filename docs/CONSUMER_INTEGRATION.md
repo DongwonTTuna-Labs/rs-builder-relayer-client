@@ -158,6 +158,7 @@ DepositWalletRelayerClient::get_wallet_nonce
 DepositWalletRelayerClient::get_transaction_for_owner
 DepositWalletRelayerClient::ensure_deposit_wallet_deployment
 DepositWalletRelayerClient::check_deposit_wallet_deployment_readiness
+DepositWalletRelayerClient::execute_wallet_batch
 DepositWalletRelayerClient::submit_wallet_create
 DepositWalletRelayerClient::submit_signed_wallet_batch
 ```
@@ -199,6 +200,56 @@ and sends that derived address to `GET /deployed?address=...&type=WALLET`. A
 `true` response records deployment fact only. It is not submit readiness and
 must not bypass the separate `STATE_CONFIRMED`, mutation capability, recovery,
 or operator gates.
+
+### Fresh-nonce WALLET batch execution
+
+Prefer `execute_wallet_batch` when connecting an owner signer to the reviewed
+WALLET batch flow. The signer is a method argument, not client state, so
+relayer auth identity remains independent from the owner signer and the
+derived deposit wallet/funder:
+
+```rust
+use ethers::signers::{LocalWallet, Signer};
+use ethers::types::U256;
+use polymarket_relayer::{
+    derive_deposit_wallet_address, DepositWalletRequestContext,
+};
+
+// Documentation-only synthetic throwaway key; never use it for real assets,
+// production credentials, or a funded wallet.
+let signer = LocalWallet::from_bytes(&[0x42u8; 32])?.with_chain_id(137u64);
+let owner = signer.address();
+let ctx = DepositWalletRequestContext {
+    owner_address: owner,
+    deposit_wallet_address: derive_deposit_wallet_address(owner, config)?,
+};
+
+let outcome = client
+    .execute_wallet_batch(
+        ctx,
+        calls,
+        U256::from(deadline_unix),
+        &signer,
+        &read_permit,
+        &mutation_permit,
+    )
+    .await?;
+```
+
+The read and mutation permits must both target `owner` and the configured
+chain; the mutation permit operation must be `WalletBatch`. The method rejects
+an expired deadline, mismatched signer, wrong derived wallet, or oversized
+batch before nonce I/O. It then performs `GET /nonce?address=<owner>&type=WALLET`
+immediately before local EIP-712 signing, revalidates signer recovery and all
+request identities, and delegates to `submit_signed_wallet_batch`.
+
+DryRun follows the same path through the fresh nonce read and local signature,
+then returns redacted evidence without a submit HTTP request. A closed live
+latch blocks the POST but intentionally does not retroactively block the nonce
+read. Preserve a submitted transaction id and payload hash, and never retry an
+ambiguous submission. Until PBRSDK-11/12 adds the owner-scoped nonce lease and
+intent contract, the consumer adapter must serialize execution per owner and
+must not call this method concurrently for the same owner.
 
 ### Deployment lifecycle workflow
 
@@ -340,6 +391,7 @@ pUSD/CTF calldata fixture tests pass
 identity separation tests pass
 transaction polling unknown-state tests pass
 deployment lifecycle short-circuit, policy, permit, and type-isolation tests pass
+fresh-nonce WALLET execute ordering, identity, redaction, and failure-boundary tests pass
 dependency is pinned by commit SHA
 operator approval is recorded
 ```

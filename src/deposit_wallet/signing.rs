@@ -1,6 +1,7 @@
 use std::fmt;
 
 use ethers::abi::{encode, Token};
+use ethers::types::transaction::eip712::{Eip712, EIP712Domain};
 use ethers::types::{Address, H256, Signature, U256};
 use ethers::utils::{keccak256, to_checksum};
 use serde_json::{json, Value};
@@ -54,6 +55,38 @@ impl fmt::Debug for DepositWalletBatchToSign {
             .field("deadline", &self.deadline)
             .field("calls_count", &self.calls.len())
             .finish()
+    }
+}
+
+impl Eip712 for DepositWalletBatchToSign {
+    type Error = RelayerError;
+
+    fn domain(&self) -> Result<EIP712Domain> {
+        Ok(EIP712Domain {
+            name: Some(DEPOSIT_WALLET_DOMAIN_NAME.to_string()),
+            version: Some(DEPOSIT_WALLET_DOMAIN_VERSION.to_string()),
+            chain_id: Some(U256::from(self.chain_id)),
+            verifying_contract: Some(self.deposit_wallet),
+            salt: None,
+        })
+    }
+
+    fn type_hash() -> Result<[u8; 32]> {
+        Ok(keccak256(DEPOSIT_WALLET_BATCH_TYPE.as_bytes()))
+    }
+
+    /// Returns the canonical Batch struct hash without validating resource limits.
+    ///
+    /// Signing callers must run the separate resource preflight before invoking
+    /// `Signer::sign_typed_data`.
+    fn struct_hash(&self) -> Result<[u8; 32]> {
+        Ok(hash_deposit_wallet_batch_struct(
+            self.deposit_wallet,
+            self.nonce,
+            self.deadline,
+            &self.calls,
+        )
+        .0)
     }
 }
 
@@ -234,20 +267,30 @@ fn digest_deposit_wallet_batch_parts(
         Token::Uint(U256::from(chain_id)),
         Token::Address(deposit_wallet),
     ]);
-    let calls_hash = hash_call_array(calls);
-    let batch_hash = hash_abi(&[
-        type_hash_token(DEPOSIT_WALLET_BATCH_TYPE),
-        Token::Address(deposit_wallet),
-        Token::Uint(nonce),
-        Token::Uint(deadline),
-        fixed_hash_token(calls_hash),
-    ]);
+    let batch_hash =
+        hash_deposit_wallet_batch_struct(deposit_wallet, nonce, deadline, calls);
 
     let mut digest_input = Vec::with_capacity(66);
     digest_input.extend_from_slice(b"\x19\x01");
     digest_input.extend_from_slice(domain_separator.as_bytes());
     digest_input.extend_from_slice(batch_hash.as_bytes());
     H256::from(keccak256(digest_input))
+}
+
+fn hash_deposit_wallet_batch_struct(
+    deposit_wallet: Address,
+    nonce: U256,
+    deadline: U256,
+    calls: &[DepositWalletCall],
+) -> H256 {
+    let calls_hash = hash_call_array(calls);
+    hash_abi(&[
+        type_hash_token(DEPOSIT_WALLET_BATCH_TYPE),
+        Token::Address(deposit_wallet),
+        Token::Uint(nonce),
+        Token::Uint(deadline),
+        fixed_hash_token(calls_hash),
+    ])
 }
 
 fn hash_call_array(calls: &[DepositWalletCall]) -> H256 {

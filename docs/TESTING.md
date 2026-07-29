@@ -18,6 +18,7 @@ derive_deposit_wallet_address_matches_reference
 wallet_create_submit_body_matches_fixture
 wallet_nonce_uses_type_wallet
 wallet_batch_signature_matches_reference_digest
+wallet_batch_eip712_impl_matches_all_canonical_digests
 wallet_batch_submit_body_matches_fixture
 transaction_state_unknown_blocks_live_retry
 is_deposit_wallet_deployed_matches_request_and_response_fixtures
@@ -44,6 +45,17 @@ deployment_lifecycle_propagates_closed_mutation_gate_after_preflight
 deployment_readiness_maps_confirmed_pending_and_error_states
 deployment_readiness_keeps_wallet_and_wallet_create_types_isolated
 deployment_lifecycle_methods_reject_mismatched_read_permits_before_http
+execute_wallet_batch_fetches_fresh_nonce_then_submits_verified_live_body
+execute_wallet_batch_dry_run_reads_nonce_and_preserves_it_in_evidence
+execute_wallet_batch_rejects_signer_identity_before_nonce_read
+execute_wallet_batch_prevalidates_mutation_and_read_permits_before_http
+execute_wallet_batch_rejects_expired_deadline_before_nonce_read
+execute_wallet_batch_rejects_wrong_wallet_before_nonce_read
+execute_wallet_batch_rejects_oversized_batch_before_nonce_read
+execute_wallet_batch_preserves_submit_api_error_without_duplicate_post
+execute_wallet_batch_classifies_submit_disconnect_for_reconciliation
+execute_wallet_batch_closed_latch_allows_nonce_read_but_blocks_post
+execute_wallet_batch_discards_signer_error_and_source_material
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -118,6 +130,15 @@ Golden tests should prove:
 - public WALLET reads reject WALLET-CREATE responses, deployment readiness
   rejects WALLET responses, and both lifecycle methods reject mismatched read
   permits before HTTP;
+- ethers `Eip712::encode_eip712`, the canonical deposit-wallet digest, and all
+  three single-call, Amoy, and multicall expected digests are byte-identical;
+- fresh-nonce execution prevalidates both permits, deadline, signer identity,
+  resource limits, and the derived wallet before `GET /nonce`, then performs
+  no other HTTP await before signing and at most one reviewed submit;
+- live execution preserves the submitted transaction id and redacted payload
+  hash, while DryRun preserves the fetched nonce and sends no POST;
+- a closed live latch may observe the nonce read but blocks the POST, and
+  signer backend error text and source chains are discarded before returning;
 - unknown transaction states force non-mutating behavior.
 
 ## Production Read Transport Gate
@@ -132,6 +153,12 @@ live relayer credential.
 PBRSDK-8 lifecycle tests are single-shot and use only the same deterministic
 loopback transport plus injected clock. They must not add polling loops, sleep,
 retry, cancellation, recent-transaction lookup, or live host calls.
+
+PBRSDK-9 execute tests use the same deterministic loopback transport, injected
+clock, and `[0x42u8; 32]` synthetic throwaway signer key. That constant is
+never a real credential and must not be replaced with a funded or production
+key. These tests prove call ordering and local validation only; they do not
+introduce a nonce lease, retry, polling, or live host call.
 
 ## Manual Live Gate
 

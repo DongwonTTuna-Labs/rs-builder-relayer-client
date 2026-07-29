@@ -40,6 +40,7 @@ mod auth;
 mod capability;
 mod clock;
 mod deployed;
+mod execute;
 mod lifecycle;
 mod mutation;
 mod read;

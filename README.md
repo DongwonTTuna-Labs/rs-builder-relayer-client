@@ -23,8 +23,9 @@ work, use the reviewed fallible APIs such as
 re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
-two deployment-lifecycle methods, and exactly two explicitly gated public
-`submit_*` methods. `RelayerReadPermit` is required for
+two deployment-lifecycle methods, one fresh-nonce WALLET batch execution
+method, and exactly two explicitly gated public `submit_*` methods.
+`RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, as well as both lifecycle methods.
 `ensure_deposit_wallet_deployment` checks deployed fact first and requires an
@@ -40,14 +41,25 @@ is a shared one-way rollback latch across all clones. Valid `DryRun` permits
 produce redacted evidence without HTTP and remain usable after that latch is
 disabled.
 
+`execute_wallet_batch` accepts the owner signer as a generic method argument;
+the client never stores it. The method validates both permits, deadline,
+signer identity, resource limits, and the owner/config-derived wallet before
+fetching `GET /nonce?type=WALLET`. It then signs immediately, rebuilds the
+request through the existing signature-recovery checks, and delegates to the
+permit-gated submit path. Dry-run execution still reads the fresh nonce and
+signs locally, but sends no submit request.
+
 This mutation surface is a permit and transport gate, not a claim of complete
 deposit-wallet live readiness. A successful deployed read records deployment
 fact only, and a submit receipt records relayer acceptance evidence rather than
-`STATE_CONFIRMED`. PBRSDK-8 adds confirmed-only single-shot readiness, but
-bounded polling, owner-scoped pending-intent enforcement, persistent
+`STATE_CONFIRMED`. PBRSDK-8 adds confirmed-only single-shot readiness and
+PBRSDK-9 adds fresh-nonce batch execution, but bounded polling, owner-scoped
+nonce leases and pending-intent enforcement, persistent
 idempotency/reconciliation, recent-transaction recovery, and the remaining
 operator gates are later work. Preserve each submitted transaction id and
-payload hash, and never re-enter deployment for an owner with a pending create.
+payload hash, never re-enter deployment for an owner with a pending create,
+and do not execute concurrent batches for the same owner until the later lease
+contract is implemented.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the

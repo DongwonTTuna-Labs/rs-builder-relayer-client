@@ -83,7 +83,7 @@ impl DepositWalletRelayerClient {
         }
     }
 
-    fn validate_mutation_permit(
+    pub(super) fn validate_mutation_permit(
         &self,
         permit: &RelayerMutationPermit,
         expected_operation: RelayerMutationOperation,
