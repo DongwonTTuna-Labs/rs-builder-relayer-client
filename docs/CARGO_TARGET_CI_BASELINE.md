@@ -87,6 +87,19 @@ two public `submit_*` methods. Its fixture and loopback audit proves only
 single-shot confirmed readiness, not polling, persistence, duplicate-submit
 recovery, or live enablement.
 
+PBRSDK-9 adds exactly one inherent public `execute_wallet_batch` method with a
+generic owner signer and explicit read/mutation permits, plus the required
+additive `Eip712` trait implementation on the existing batch type. The
+boundary audit fixes the execute signature, keeps the signer out of client
+state, and confirms the combined
+production surface still exposes exactly two public `submit_*` methods and the
+same read-permit count. Three canonical fixtures prove ethers EIP-712 digest
+parity; injected-clock loopback tests prove nonce-before-sign-before-submit,
+identity separation, pre-I/O rejection, DryRun/latch behavior, submit failure
+classification, and signer-error redaction. The audit uses only a documented
+synthetic throwaway signer and does not authorize live execution or concurrent
+same-owner batches before the deferred lease contract.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.

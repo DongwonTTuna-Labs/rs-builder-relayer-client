@@ -348,3 +348,68 @@ Consequences:
   recorded WALLET response shape plus the official type enum. No live-recorded
   WALLET-CREATE response is available yet, so live shape parity remains an
   explicit residual risk and this decision does not authorize live deployment.
+
+## ADR-0011: PBRSDK-9 Fresh-Nonce WALLET Batch Execution
+
+Decision:
+
+```text
+Keep the owner signer outside DepositWalletRelayerClient. Accept it as a
+generic execute_wallet_batch method argument, validate both scoped permits and
+all batch identities before I/O, fetch the WALLET nonce immediately before
+signing, then reuse the validated signed-request and permit-gated submit paths.
+```
+
+The relayer API key identity, owner signer, and deposit wallet/funder remain
+separate API values. The client stores only relayer auth and contract config;
+it does not store a signer or private key. `execute_wallet_batch` requires
+`S: ethers::signers::Signer`, checks `signer.address()` against the requested
+owner, and discards the signer's original error, Debug text, and source chain
+on failure. This supports local, KMS, HSM, and other signer implementations
+without allowing backend diagnostics to leak credential or intermediate
+signature material through `RelayerError`.
+
+`DepositWalletBatchToSign` implements ethers 2.0.14 `Eip712`. Its domain is
+the existing DepositWallet name/version, configured chain id, and deposit
+wallet verifying contract. Its struct hash reuses the same extracted private
+Batch-hash helper as the canonical fixture-backed digest; it does not duplicate
+the type hash or calls hash. `struct_hash` intentionally does not apply resource
+limits because the execution path validates those limits before signing.
+Parity tests require ethers `encode_eip712`, the existing canonical digest,
+and each expected digest in `wallet_batch_eip712.json`,
+`wallet_batch_eip712_amoy.json`, and
+`wallet_batch_eip712_multicall.json` to be byte-identical. Existing digest
+behavior and fixtures remain the source of truth.
+
+Execution order is fixed: validate the WALLET-batch mutation permit and read
+permit; reuse the returned chain and clock; reject an expired deadline; verify
+signer identity, resource limits, and the owner/config-derived wallet; fetch
+the fresh WALLET nonce; sign without another HTTP await between nonce and
+signing; validate signature recovery, identities, chain, wallet, and limits
+again through `try_build_wallet_batch_request_with_signature`; then call
+`submit_signed_wallet_batch`. The submit path retains DryRun versus Live,
+one-way latch, deadline, payload-hash, transaction-id, and ambiguous-result
+classification behavior. DryRun intentionally performs the nonce read and
+local signature so its redacted evidence contains the actual fetched nonce.
+
+Freshness is constructive only within this single execution. The method does
+not add polling, retry, sleep, nonce persistence, or an owner-scoped lease.
+Consumers must forbid concurrent execution for the same owner. The
+owner-scoped lease and intent contract remains PBRSDK-11/12 work; any
+post-dispatch uncertainty still requires reconciliation and never authorizes a
+duplicate submit.
+
+Consequences:
+
+- the only new inherent public method is `execute_wallet_batch`; the required
+  public `Eip712` trait implementation is additive, while no new public type,
+  re-export, or `submit_*` method is introduced;
+- combined production source still exposes exactly two permit-bound public
+  `submit_*` methods and the three low-level reads remain unchanged;
+- deterministic loopback tests prove nonce-before-sign-before-submit ordering,
+  auth/owner separation, exact rebuilt body, DryRun nonce evidence, pre-I/O
+  rejection, latch behavior, 5xx/transport propagation, no duplicate POST, and
+  signer-error redaction;
+- no live host, production credential, real private key, polling, retry, or
+  lease is introduced, so this decision alone does not authorize complete live
+  operation.

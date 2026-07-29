@@ -1,3 +1,4 @@
+use ethers::types::transaction::eip712::Eip712;
 use ethers::types::{Address, Bytes, H256, U256};
 use ethers::utils::to_checksum;
 use polymarket_relayer::auth::AuthMethod;
@@ -93,6 +94,25 @@ fn wallet_batch_digest_matches_official_sdk_fixture() {
     let digest = digest_deposit_wallet_batch(&batch).unwrap();
 
     assert_eq!(digest, expected_digest);
+}
+
+#[test]
+fn wallet_batch_eip712_impl_matches_all_canonical_digests() {
+    for path in [
+        "deposit_wallet/wallet_batch_eip712.json",
+        "deposit_wallet/wallet_batch_eip712_amoy.json",
+        "deposit_wallet/wallet_batch_eip712_multicall.json",
+    ] {
+        let data = fixture(path);
+        let batch = batch_from_fixture(&data);
+        let expected_digest: H256 = data["expectedDigest"].as_str().unwrap().parse().unwrap();
+
+        let ethers_digest = H256::from(batch.encode_eip712().unwrap());
+        let canonical_digest = digest_deposit_wallet_batch(&batch).unwrap();
+
+        assert_eq!(ethers_digest, canonical_digest, "Eip712 parity failed for {path}");
+        assert_eq!(ethers_digest, expected_digest, "fixture digest failed for {path}");
+    }
 }
 
 #[test]

@@ -40,12 +40,17 @@
 - [ ] Missing deployment is blocked without an explicit matching mutation permit, and a closed live latch produces no submit HTTP request.
 - [ ] WALLET-CREATE readiness is single-shot: Confirmed alone is `Ready`; New/Executed/Mined are pending; Failed/Invalid/Unknown/ambiguous evidence is never success or resubmit authority.
 - [ ] Pending owners are not passed through deployment entry again; transaction id and payload hash are retained for PBRSDK-10/11 reconciliation.
+- [ ] `execute_wallet_batch` validates mutation permit, read permit, deadline, signer, resource limits, and derived wallet before fetching the WALLET nonce.
+- [ ] Fresh nonce fetch is immediately followed by local EIP-712 signing with no intervening HTTP await, then the existing validated request builder and permit-gated submit path are reused.
+- [ ] DryRun still fetches and records the fresh nonce but sends no POST; a closed Live latch may allow that read but blocks the POST.
+- [ ] Same-owner concurrent execute calls remain forbidden until the PBRSDK-11/12 owner-scoped lease and intent contract exists.
 
 ## Identity And Security
 
 - [ ] Relayer API key owner, wallet owner signer, and deposit wallet/funder are separate config/API fields.
 - [ ] Tests prove relayer auth identity may differ from owner signer identity.
 - [ ] Secret-bearing types do not leak through `Debug`, logs, errors, snapshots, or fixtures.
+- [ ] Signer backend Display, Debug, and source-chain material is discarded on signing failure; only the fixed redacted signing error is returned.
 - [ ] Production dependency instructions use pinned git `rev`, not branch.
 - [ ] Dependency changes review public API, transitive crypto/signing crates, and HTTP/TLS impact where applicable.
 
@@ -73,6 +78,7 @@
 - [ ] `DepositWalletRelayerClient::new` is default-deny for live mutation; only `new_with_mutation_enabled` starts enabled, and the constructor never replaces a scoped `Live` permit.
 - [ ] Every submit requires a permit scoped to mode, operation, owner, chain, and unexpired Unix time with bounded evidence and operator-approval references; mismatch or expiry fails before HTTP.
 - [ ] A signed batch whose deadline is equal to or earlier than the current time fails before HTTP.
+- [ ] `execute_wallet_batch` takes the signer by generic method argument; the client stores no signer or private key, and relayer auth identity remains independent.
 - [ ] `DryRun` sends no HTTP, remains independent of the live latch, and exposes redacted review evidence without auth headers, signatures, full calldata, or a full replayable submit body.
 - [ ] Operator review of `DryRun` evidence is followed by a freshly created scoped `Live` permit; dry-run authority is not reused as live authority.
 - [ ] `disable_mutation` is a shared one-way latch across all client clones, exposes no re-enable method, blocks later live submits, and leaves reads and valid `DryRun` submissions available.
@@ -88,6 +94,7 @@
 - [ ] `DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`, `DepositWalletReadiness`, and both lifecycle methods are present in the audited public surface.
 - [ ] The read audit covers three public methods plus one crate-internal expected-type helper, all permit-bound, while the complete production source still exposes exactly two public `submit_*` methods.
 - [ ] Mutation permit/evidence/outcome types, `new_with_mutation_enabled`, `disable_mutation`, `submit_wallet_create`, and `submit_signed_wallet_batch` are present in the audited public surface.
+- [ ] Exactly one `execute_wallet_batch` method has the reviewed generic signer plus read/mutation permit signature, without adding another public `submit_*` method or public type.
 - [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.
 - [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.
 - [ ] Legacy Safe/Proxy APIs stay reference/compatibility surface and are not reused for deposit-wallet `WALLET-CREATE` or `WALLET` flows without wire-level proof.

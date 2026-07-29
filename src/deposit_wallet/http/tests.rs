@@ -1,7 +1,12 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
-use ethers::types::Bytes;
+use ethers::signers::{LocalWallet, Signer};
+use ethers::types::transaction::eip2718::TypedTransaction;
+use ethers::types::transaction::eip712::Eip712;
+use ethers::types::{Bytes, Signature};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -9,7 +14,8 @@ use tokio::task::JoinHandle;
 
 use crate::deposit_wallet::{
     build_wallet_create_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
-    DepositWalletBatchRequest, DepositWalletCall, DepositWalletRequestContext, AMOY_CHAIN_ID,
+    try_build_wallet_batch_request_with_signature, DepositWalletBatchRequest,
+    DepositWalletBatchToSign, DepositWalletCall, DepositWalletRequestContext, AMOY_CHAIN_ID,
     WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
 };
 use crate::deposit_wallet::requests::build_wallet_batch_request_unchecked;
@@ -24,8 +30,12 @@ const WALLET_OWNER: &str = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5";
 const OTHER_OWNER: &str = "0x0000000000000000000000000000000000000001";
 const FIXED_NOW_UNIX: u64 = 1_700_000_000;
 const FIXED_PERMIT_EXPIRY_UNIX: u64 = 2_000_000_000;
+const EXECUTE_DEADLINE_UNIX: u64 = 1_760_000_000;
 const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 const NO_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Synthetic throwaway key, never a real credential.
+const SYNTHETIC_EXECUTE_SIGNER_KEY: [u8; 32] = [0x42u8; 32];
 
 struct FixedClock {
     now_unix: u64,
@@ -160,6 +170,202 @@ fn mutation_permit(
         "approval/test",
     )
     .unwrap()
+}
+
+fn execute_signer() -> LocalWallet {
+    LocalWallet::from_bytes(&SYNTHETIC_EXECUTE_SIGNER_KEY)
+        .expect("synthetic signer key should be valid")
+        .with_chain_id(POLYGON_CHAIN_ID)
+}
+
+fn execute_context(owner: Address) -> DepositWalletRequestContext {
+    let config = deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap();
+    DepositWalletRequestContext {
+        owner_address: owner,
+        deposit_wallet_address: derive_deposit_wallet_address(owner, config).unwrap(),
+    }
+}
+
+fn execute_calls() -> Vec<DepositWalletCall> {
+    vec![DepositWalletCall {
+        target: address("0x0000000000000000000000000000000000000042"),
+        value: U256::zero(),
+        data: Bytes::from(vec![0x12, 0x34, 0x56, 0x78]),
+    }]
+}
+
+fn execute_permit(mode: RelayerMutationMode, owner: Address) -> RelayerMutationPermit {
+    mutation_permit(
+        mode,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    )
+}
+
+async fn expected_execute_request(
+    signer: &LocalWallet,
+    ctx: DepositWalletRequestContext,
+    calls: Vec<DepositWalletCall>,
+    nonce: U256,
+    deadline: U256,
+) -> DepositWalletBatchRequest {
+    let batch = DepositWalletBatchToSign {
+        owner: ctx.owner_address,
+        nonce_owner: ctx.owner_address,
+        submit_from: ctx.owner_address,
+        deposit_wallet: ctx.deposit_wallet_address,
+        chain_id: POLYGON_CHAIN_ID,
+        nonce,
+        deadline,
+        calls: calls.clone(),
+    };
+    let signature = signer.sign_typed_data(&batch).await.unwrap();
+
+    try_build_wallet_batch_request_with_signature(
+        ctx,
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        nonce,
+        deadline,
+        calls,
+        format!("0x{signature}"),
+    )
+    .unwrap()
+}
+
+fn assert_execute_auth_headers(request: &CapturedRequest) {
+    let expected_api_key_address = to_checksum(&address(API_KEY_ADDRESS), None);
+    assert_eq!(request.header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        request.header("RELAYER_API_KEY_ADDRESS"),
+        Some(expected_api_key_address.as_str())
+    );
+}
+
+const SIGNER_ERROR_SENTINEL: &str = "SECRET-SENTINEL-0xDEADBEEF";
+
+#[derive(Debug)]
+struct SecretSignerErrorSource;
+
+impl std::fmt::Display for SecretSignerErrorSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(SIGNER_ERROR_SENTINEL)
+    }
+}
+
+impl std::error::Error for SecretSignerErrorSource {}
+
+#[derive(Debug)]
+struct FailingSignerError {
+    source: SecretSignerErrorSource,
+}
+
+impl FailingSignerError {
+    fn synthetic() -> Self {
+        Self {
+            source: SecretSignerErrorSource,
+        }
+    }
+}
+
+impl std::fmt::Display for FailingSignerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "synthetic signer failure: {SIGNER_ERROR_SENTINEL}")
+    }
+}
+
+impl std::error::Error for FailingSignerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[derive(Debug)]
+struct FailingSigner {
+    address: Address,
+    chain_id: u64,
+}
+
+impl FailingSigner {
+    fn new(address: Address) -> Self {
+        Self {
+            address,
+            chain_id: POLYGON_CHAIN_ID,
+        }
+    }
+}
+
+impl Signer for FailingSigner {
+    type Error = FailingSignerError;
+
+    fn sign_message<'life0, 'async_trait, S>(
+        &'life0 self,
+        _message: S,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = std::result::Result<Signature, Self::Error>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        S: 'async_trait + Send + Sync + AsRef<[u8]>,
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async { Err(FailingSignerError::synthetic()) })
+    }
+
+    fn sign_transaction<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _message: &'life1 TypedTransaction,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = std::result::Result<Signature, Self::Error>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async { Err(FailingSignerError::synthetic()) })
+    }
+
+    fn sign_typed_data<'life0, 'life1, 'async_trait, T>(
+        &'life0 self,
+        _payload: &'life1 T,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = std::result::Result<Signature, Self::Error>>
+                + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        T: Eip712 + Send + Sync + 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(async { Err(FailingSignerError::synthetic()) })
+    }
+
+    fn address(&self) -> Address {
+        self.address
+    }
+
+    fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    fn with_chain_id<T: Into<u64>>(mut self, chain_id: T) -> Self {
+        self.chain_id = chain_id.into();
+        self
+    }
 }
 
 fn wallet_batch_request() -> DepositWalletBatchRequest {
@@ -309,6 +515,49 @@ async fn spawn_reset_server() -> (DepositWalletRelayerUrl, JoinHandle<Vec<Captur
         let request = read_request(&mut stream).await;
         drop(stream);
         vec![request]
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+    )
+}
+
+async fn spawn_nonce_then_reset_server(
+    nonce_response: TestResponse,
+) -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut nonce_stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+            .await
+            .expect("nonce accept should not hang")
+            .expect("nonce connection should accept");
+        let nonce_request = read_request(&mut nonce_stream).await;
+        write_response(&mut nonce_stream, nonce_response).await;
+        drop(nonce_stream);
+
+        let (mut submit_stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+            .await
+            .expect("submit accept should not hang")
+            .expect("submit connection should accept");
+        let submit_request = read_request(&mut submit_stream).await;
+        drop(submit_stream);
+
+        let mut requests = vec![nonce_request, submit_request];
+        if let Ok(Ok((mut retry_stream, _))) =
+            tokio::time::timeout(NO_REQUEST_TIMEOUT, listener.accept()).await
+        {
+            requests.push(read_request(&mut retry_stream).await);
+            write_response(
+                &mut retry_stream,
+                TestResponse::json("500 Internal Server Error", "{}"),
+            )
+            .await;
+        }
+        requests
     });
 
     (
@@ -3021,4 +3270,422 @@ async fn deployment_lifecycle_methods_reject_mismatched_read_permits_before_http
     assert!(ensure_error.is_deposit_wallet_read_blocked());
     assert!(readiness_error.is_deposit_wallet_read_blocked());
     assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_fetches_fresh_nonce_then_submits_verified_live_body() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let ctx = execute_context(owner);
+    let calls = execute_calls();
+    let deadline = U256::from(EXECUTE_DEADLINE_UNIX);
+    let expected_request = expected_execute_request(
+        &signer,
+        ctx.clone(),
+        calls.clone(),
+        U256::from(31u64),
+        deadline,
+    )
+    .await;
+    let expected_hash = expected_payload_keccak256(&expected_request);
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-batch-1", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+    let read_permit = read_permit(owner);
+
+    assert_ne!(relayer_auth().api_key_address(), owner);
+    let receipt = expect_submitted(
+        client
+            .execute_wallet_batch(
+                ctx,
+                calls,
+                deadline,
+                &signer,
+                &read_permit,
+                &permit,
+            )
+            .await
+            .unwrap(),
+    );
+
+    assert_eq!(receipt.transaction_id(), "tx-batch-1");
+    assert_eq!(receipt.state(), &RelayerTransactionState::New);
+    assert_eq!(receipt.payload_keccak256(), expected_hash);
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[0].path,
+        format!(
+            "/nonce?address={}&type=WALLET",
+            to_checksum(&owner, None)
+        )
+    );
+    assert!(requests[0].body.is_empty());
+    assert_execute_auth_headers(&requests[0]);
+
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, SUBMIT_PATH);
+    assert_execute_auth_headers(&requests[1]);
+    let submitted_body: Value = serde_json::from_str(&requests[1].body).unwrap();
+    assert_eq!(submitted_body, serde_json::to_value(expected_request).unwrap());
+    assert_eq!(submitted_body["nonce"], json!("31"));
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_dry_run_reads_nonce_and_preserves_it_in_evidence() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let ctx = execute_context(owner);
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let permit = execute_permit(RelayerMutationMode::DryRun, owner);
+
+    let evidence = expect_dry_run(
+        client
+            .execute_wallet_batch(
+                ctx,
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &signer,
+                &read_permit(owner),
+                &permit,
+            )
+            .await
+            .unwrap(),
+    );
+
+    assert_eq!(evidence.nonce(), Some("31"));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0].path.starts_with("/nonce?"));
+    assert_execute_auth_headers(&requests[0]);
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_rejects_signer_identity_before_nonce_read() {
+    let signer = execute_signer();
+    let owner = address(OTHER_OWNER);
+    let ctx = execute_context(owner);
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            ctx,
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(error
+        .to_string()
+        .contains("batch signer address did not match deposit wallet owner"));
+    assert!(!error.is_deposit_wallet_mutation_blocked());
+    assert!(!error.is_deposit_wallet_read_blocked());
+    assert!(!error.is_deposit_wallet_reconciliation_required());
+    assert!(!error.is_deposit_wallet_transaction_absent());
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_prevalidates_mutation_and_read_permits_before_http() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let ctx = execute_context(owner);
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let wrong_operation = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let valid_mutation = execute_permit(RelayerMutationMode::Live, owner);
+    let wrong_chain = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        AMOY_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let operation_error = client
+        .execute_wallet_batch(
+            ctx.clone(),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &wrong_operation,
+        )
+        .await
+        .unwrap_err();
+    assert!(operation_error.is_deposit_wallet_mutation_blocked());
+
+    let read_error = client
+        .execute_wallet_batch(
+            ctx.clone(),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(address(OTHER_OWNER)),
+            &valid_mutation,
+        )
+        .await
+        .unwrap_err();
+    assert!(read_error.is_deposit_wallet_read_blocked());
+
+    let chain_error = client
+        .execute_wallet_batch(
+            ctx,
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &wrong_chain,
+        )
+        .await
+        .unwrap_err();
+    assert!(chain_error.is_deposit_wallet_mutation_blocked());
+
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_rejects_expired_deadline_before_nonce_read() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(FIXED_NOW_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error
+        .to_string()
+        .contains("batch deadline expired before signing"));
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_rejects_wrong_wallet_before_nonce_read() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let mut ctx = execute_context(owner);
+    ctx.deposit_wallet_address = address("0x0000000000000000000000000000000000000001");
+    assert_ne!(ctx.deposit_wallet_address, execute_context(owner).deposit_wallet_address);
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            ctx,
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(error.to_string().contains(
+        "deposit wallet request context wallet does not match owner/config derived wallet"
+    ));
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_rejects_oversized_batch_before_nonce_read() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let oversized_calls = vec![execute_calls()[0].clone(); 257];
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            oversized_calls,
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(error.to_string().contains("call count exceeds maximum"));
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_preserves_submit_api_error_without_duplicate_post() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json("503 Service Unavailable", "{}"),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Api { status: 503, .. }));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[1].method, "POST");
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_classifies_submit_disconnect_for_reconciliation() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_nonce_then_reset_server(TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    ))
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[1].method, "POST");
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_closed_latch_allows_nonce_read_but_blocks_post() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.to_string().contains("relayer mutation is disabled"));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0].path.starts_with("/nonce?"));
+}
+
+#[tokio::test]
+async fn execute_wallet_batch_discards_signer_error_and_source_material() {
+    let owner = execute_signer().address();
+    let signer = FailingSigner::new(owner);
+    let synthetic_backend_error = FailingSignerError::synthetic();
+    assert!(synthetic_backend_error
+        .to_string()
+        .contains(SIGNER_ERROR_SENTINEL));
+    assert!(std::error::Error::source(&synthetic_backend_error)
+        .unwrap()
+        .to_string()
+        .contains(SIGNER_ERROR_SENTINEL));
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert_eq!(error.to_string(), "Signing error: batch signing failed");
+    assert!(!format!("{error}").contains(SIGNER_ERROR_SENTINEL));
+    assert!(!format!("{error:?}").contains(SIGNER_ERROR_SENTINEL));
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
 }

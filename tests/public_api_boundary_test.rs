@@ -53,6 +53,8 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         fs::read_to_string("src/deposit_wallet/http/read.rs").expect("read source is readable");
     let deployed = fs::read_to_string("src/deposit_wallet/http/deployed.rs")
         .expect("deployed read source is readable");
+    let execute = fs::read_to_string("src/deposit_wallet/http/execute.rs")
+        .expect("WALLET batch execution source is readable");
     let lifecycle = fs::read_to_string("src/deposit_wallet/http/lifecycle.rs")
         .expect("deployment lifecycle source is readable");
     let mutation = fs::read_to_string("src/deposit_wallet/http/mutation.rs")
@@ -74,6 +76,10 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     assert!(
         http.contains("pub use lifecycle::{"),
         "HTTP module must explicitly re-export reviewed deployment lifecycle types"
+    );
+    assert!(
+        http.contains("mod execute;"),
+        "HTTP module must include the reviewed WALLET batch execution path"
     );
     assert!(!http.contains("pub use clock"), "clock must remain internal");
 
@@ -171,6 +177,28 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             && !lifecycle.contains("impl Default for DepositWalletDeploymentPolicy"),
         "deployment policy must be chosen explicitly and must not implement Default"
     );
+
+    let execute_signature = function_signatures(&execute, "pub async fn execute_wallet_batch");
+    assert_eq!(
+        execute_signature.len(),
+        1,
+        "the HTTP client must expose exactly one reviewed execute_wallet_batch method"
+    );
+    for required in [
+        "ctx: DepositWalletRequestContext",
+        "calls: Vec<DepositWalletCall>",
+        "deadline: U256",
+        "signer: &S",
+        "read_permit: &RelayerReadPermit",
+        "mutation_permit: &RelayerMutationPermit",
+        "Result<RelayerSubmitOutcome>",
+        "S: Signer",
+    ] {
+        assert!(
+            execute_signature[0].contains(required),
+            "execute_wallet_batch signature is missing {required:?}"
+        );
+    }
 
     for method in ["new_with_mutation_enabled", "disable_mutation"] {
         assert!(
