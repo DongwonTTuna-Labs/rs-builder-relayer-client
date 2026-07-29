@@ -22,7 +22,7 @@ pub use config::{
 };
 pub use http::{
     DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletTransactionReceipt,
-    RelayerKeyAuth,
+    RelayerKeyAuth, RelayerReadPermit,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

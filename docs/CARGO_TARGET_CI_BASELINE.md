@@ -70,6 +70,10 @@ submit DTO fields crate-private, blocks CLOB order/sign/cancel/post SDK modules
 or examples in this relayer crate, and requires semver/migration/grep audit
 evidence in the docs.
 
+PBRSDK-6 expands that audited boundary with `RelayerReadPermit` and exactly
+three production read methods; the boundary test now records those additions
+while continuing to reject wildcard exports and production submit surface.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.

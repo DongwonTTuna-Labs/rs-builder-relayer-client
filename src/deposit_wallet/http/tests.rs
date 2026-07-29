@@ -6,7 +6,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use crate::deposit_wallet::{
-    deposit_wallet_contract_config, derive_deposit_wallet_address, WALLET_TRANSACTION_TYPE,
+    deposit_wallet_contract_config, derive_deposit_wallet_address, AMOY_CHAIN_ID,
+    WALLET_TRANSACTION_TYPE,
 };
 
 use super::response::{parse_transaction_response, validate_transaction_id};
@@ -17,6 +18,7 @@ const API_KEY_ADDRESS: &str = "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B";
 const WALLET_OWNER: &str = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5";
 const OTHER_OWNER: &str = "0x0000000000000000000000000000000000000001";
 const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
+const NO_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 struct CapturedRequest {
@@ -88,6 +90,10 @@ fn relayer_auth() -> RelayerKeyAuth {
     RelayerKeyAuth::new(API_KEY, address(API_KEY_ADDRESS)).unwrap()
 }
 
+fn read_permit(owner: Address) -> RelayerReadPermit {
+    RelayerReadPermit::for_owner(owner, POLYGON_CHAIN_ID)
+}
+
 fn reqwest_client(timeout: Duration) -> Client {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -151,6 +157,32 @@ async fn spawn_optional_redirect_target(
     });
 
     (format!("http://{addr}/redirect-target"), handle)
+}
+
+async fn spawn_optional_request_server(
+) -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let Ok(accepted) = tokio::time::timeout(NO_REQUEST_TIMEOUT, listener.accept()).await else {
+            return Vec::new();
+        };
+        let (mut stream, _) = accepted.expect("server should accept");
+        let request = read_request(&mut stream).await;
+        write_response(
+            &mut stream,
+            TestResponse::json("500 Internal Server Error", "{}"),
+        )
+        .await;
+        vec![request]
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+    )
 }
 
 async fn spawn_reset_server() -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
@@ -333,6 +365,199 @@ fn relayer_url_enforces_production_boundary() {
     assert!(error.to_string().contains("Polygon deposit wallet contract config"));
 }
 
+#[test]
+fn relayer_read_permit_is_owner_chain_scoped_and_redacts_debug_owner() {
+    let owner = address(WALLET_OWNER);
+    let permit = read_permit(owner);
+    let debug = format!("{permit:?}");
+    let owner_checksum = to_checksum(&owner, None);
+    let redacted_owner = super::redaction::redacted_address(owner);
+
+    assert_eq!(permit.owner(), owner);
+    assert_eq!(permit.chain_id(), POLYGON_CHAIN_ID);
+    assert!(debug.contains(&redacted_owner));
+    assert!(debug.contains("chain_id: 137"));
+    assert!(!debug.contains(&owner_checksum));
+    assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
+}
+
+#[tokio::test]
+async fn is_deposit_wallet_deployed_matches_request_and_response_fixtures() {
+    let request_fixture = fixture_value("wallet_deployed_http_request.json");
+    let response_fixture = fixture_value("wallet_deployed_response_cases.json");
+    let accepted = response_fixture["accepted"].as_array().unwrap();
+    let responses = accepted
+        .iter()
+        .map(|case| {
+            TestResponse::json("200 OK", case["raw"].as_str().expect("raw response string"))
+        })
+        .collect();
+    let (url, handle) = spawn_server(responses).await;
+    let client = test_client(url);
+    let owner = address(request_fixture["owner"].as_str().unwrap());
+    let permit = read_permit(owner);
+    let derived_wallet = derive_deposit_wallet_address(
+        owner,
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        to_checksum(&derived_wallet, None),
+        request_fixture["address"].as_str().unwrap()
+    );
+    for case in accepted {
+        let deployed = client
+            .is_deposit_wallet_deployed(owner, &permit)
+            .await
+            .unwrap();
+        assert_eq!(
+            deployed,
+            case["expected"].as_bool().unwrap(),
+            "{}",
+            case["label"].as_str().unwrap()
+        );
+    }
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), accepted.len());
+    for request in requests {
+        assert_eq!(request.method, request_fixture["method"].as_str().unwrap());
+        assert_eq!(
+            request.path,
+            request_fixture["pathAndQuery"].as_str().unwrap()
+        );
+        assert!(request.header("RELAYER_API_KEY").is_some());
+        assert!(request.header("RELAYER_API_KEY_ADDRESS").is_some());
+        assert!(request.body.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn is_deposit_wallet_deployed_rejects_malformed_fixture_responses() {
+    let fixture = fixture_value("wallet_deployed_response_cases.json");
+    let rejected = fixture["rejected"].as_array().unwrap();
+    let responses = rejected
+        .iter()
+        .map(|case| {
+            TestResponse::json("200 OK", case["raw"].as_str().expect("raw response string"))
+        })
+        .collect();
+    let (url, handle) = spawn_server(responses).await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+    let permit = read_permit(owner);
+
+    for case in rejected {
+        let error = client
+            .is_deposit_wallet_deployed(owner, &permit)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, RelayerError::Other(ref message) if message == "could not parse deployed response"),
+            "{}: {error}",
+            case["label"].as_str().unwrap()
+        );
+    }
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), rejected.len());
+}
+
+#[tokio::test]
+async fn is_deposit_wallet_deployed_rejects_oversized_response() {
+    let oversized_body = "x".repeat(MAX_SUCCESS_BODY_BYTES + 1);
+    let (url, handle) = spawn_server(vec![TestResponse::json_without_content_length(
+        "200 OK",
+        oversized_body,
+    )])
+    .await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+
+    let error = client
+        .is_deposit_wallet_deployed(owner, &read_permit(owner))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        RelayerError::Other(ref message) if message == RESPONSE_BODY_TOO_LARGE_MESSAGE
+    ));
+    assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn is_deposit_wallet_deployed_returns_typed_api_error_for_5xx() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "503 Service Unavailable",
+        "{}",
+    )])
+    .await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+
+    let error = client
+        .is_deposit_wallet_deployed(owner, &read_permit(owner))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Api { status: 503, .. }));
+    assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn read_methods_reject_owner_mismatched_permit_before_input_or_http() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+    let permit = read_permit(address(OTHER_OWNER));
+
+    let deployed_error = client
+        .is_deposit_wallet_deployed(owner, &permit)
+        .await
+        .unwrap_err();
+    let nonce_error = client
+        .get_wallet_nonce(owner, &permit)
+        .await
+        .unwrap_err();
+    let transaction_error = client
+        .get_transaction_for_owner(owner, "", &permit)
+        .await
+        .unwrap_err();
+
+    for error in [deployed_error, nonce_error, transaction_error] {
+        assert!(error.is_deposit_wallet_read_blocked(), "{error}");
+    }
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn read_methods_reject_chain_mismatched_permit_before_input_or_http() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = test_client(url);
+    let owner = address(WALLET_OWNER);
+    let permit = RelayerReadPermit::for_owner(owner, AMOY_CHAIN_ID);
+
+    let deployed_error = client
+        .is_deposit_wallet_deployed(owner, &permit)
+        .await
+        .unwrap_err();
+    let nonce_error = client
+        .get_wallet_nonce(owner, &permit)
+        .await
+        .unwrap_err();
+    let transaction_error = client
+        .get_transaction_for_owner(owner, "", &permit)
+        .await
+        .unwrap_err();
+
+    for error in [deployed_error, nonce_error, transaction_error] {
+        assert!(error.is_deposit_wallet_read_blocked(), "{error}");
+    }
+    assert!(handle.await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
     let expected = fixture_value("wallet_nonce_http_request.json");
@@ -344,7 +569,10 @@ async fn get_wallet_nonce_sends_exact_path_and_parses_decimal_nonce() {
     let client = test_client(url);
     let owner: Address = expected["address"].as_str().unwrap().parse().unwrap();
 
-    let nonce = client.get_wallet_nonce(owner).await.unwrap();
+    let nonce = client
+        .get_wallet_nonce(owner, &read_permit(owner))
+        .await
+        .unwrap();
 
     assert_eq!(nonce, U256::from(31u64));
     let requests = handle.await.unwrap();
@@ -377,7 +605,11 @@ async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
     )
     .unwrap();
 
-    let error = client.get_wallet_nonce(address(WALLET_OWNER)).await.unwrap_err();
+    let owner = address(WALLET_OWNER);
+    let error = client
+        .get_wallet_nonce(owner, &read_permit(owner))
+        .await
+        .unwrap_err();
 
     assert!(matches!(error, RelayerError::Api { status: 302, .. }));
     let redirect_requests = redirect_handle.await.unwrap();
@@ -392,13 +624,17 @@ async fn relayer_client_does_not_follow_redirects_with_auth_headers() {
 }
 
 #[tokio::test]
-async fn get_wallet_nonce_rejects_production_before_http() {
+async fn get_wallet_nonce_rejects_mismatched_permit_on_production_before_http() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let client = test_client(url);
+    let permit = read_permit(address(OTHER_OWNER));
 
-    let error = client.get_wallet_nonce(address(WALLET_OWNER)).await.unwrap_err();
+    let error = client
+        .get_wallet_nonce(address(WALLET_OWNER), &permit)
+        .await
+        .unwrap_err();
 
-    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.is_deposit_wallet_read_blocked());
 }
 
 #[test]
@@ -504,17 +740,17 @@ fn transaction_response_receipt_debug_redacts_owner_wallet_hash_and_id() {
 }
 
 #[tokio::test]
-async fn get_transaction_for_owner_rejects_production_until_wallet_polling_evidence_is_recorded() {
+async fn get_transaction_for_owner_rejects_mismatched_permit_on_production_before_http() {
     let url = DepositWalletRelayerUrl::parse("https://relayer-v2.polymarket.com").unwrap();
     let client = test_client(url);
+    let permit = read_permit(address(OTHER_OWNER));
 
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-production")
+        .get_transaction_for_owner(address(WALLET_OWNER), "tx-production", &permit)
         .await
         .unwrap_err();
 
     assert!(error.is_deposit_wallet_read_blocked());
-    assert!(error.to_string().contains("WALLET polling response fixture"));
 }
 
 #[tokio::test]
@@ -524,7 +760,11 @@ async fn get_transaction_for_owner_rejects_invalid_transaction_id_before_http() 
 
     for transaction_id in ["", " tx-leading-space", "tx-trailing-space ", "tx\nnewline"] {
         let error = client
-            .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
+            .get_transaction_for_owner(
+                address(WALLET_OWNER),
+                transaction_id,
+                &read_permit(address(WALLET_OWNER)),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -573,7 +813,11 @@ async fn get_transaction_for_owner_accepts_requested_owner() {
     let client = test_client(url);
 
     let receipt = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-owner")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-owner",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap();
 
@@ -609,7 +853,11 @@ async fn get_transaction_for_owner_rejects_confirmed_without_hash() {
     let client = test_client(url);
 
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-confirmed-no-hash")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-confirmed-no-hash",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
 
@@ -632,7 +880,11 @@ async fn get_transaction_for_owner_accepts_non_terminal_states_without_hash() {
         let client = test_client(url);
 
         let receipt = client
-            .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
+            .get_transaction_for_owner(
+                address(WALLET_OWNER),
+                transaction_id,
+                &read_permit(address(WALLET_OWNER)),
+            )
             .await
             .unwrap();
 
@@ -651,7 +903,11 @@ async fn transaction_state_error(transaction_id: &str, state: &str) -> RelayerEr
     let client = test_client(url);
 
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), transaction_id)
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            transaction_id,
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     let _ = handle.await.unwrap();
@@ -682,7 +938,11 @@ async fn get_transaction_for_owner_rejects_mismatched_owner() {
     let client = test_client(url);
 
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-owner")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-owner",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
 
@@ -693,12 +953,41 @@ async fn get_transaction_for_owner_rejects_mismatched_owner() {
 }
 
 #[tokio::test]
+async fn get_transaction_for_owner_rejects_missing_owner_evidence() {
+    let mut response = transaction_response_value("tx-missing-owner", "STATE_CONFIRMED");
+    response.as_object_mut().unwrap().remove("owner");
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        response.to_string(),
+    )])
+    .await;
+    let client = test_client(url);
+
+    let error = client
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-missing-owner",
+            &read_permit(address(WALLET_OWNER)),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(error.to_string().contains("did not include owner evidence"));
+    assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors() {
     let (url, handle) = spawn_server(vec![TestResponse::json("404 Not Found", "{}")]).await;
     let client = test_client(url);
 
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-missing-http")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-missing-http",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     assert!(matches!(error, RelayerError::Api { status: 404, .. }));
@@ -713,7 +1002,11 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
     let client = test_client(url);
 
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-missing-array")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-missing-array",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     assert!(error.is_deposit_wallet_transaction_absent());
@@ -723,7 +1016,11 @@ async fn get_transaction_for_owner_covers_404_missing_array_and_transient_errors
     let (url, handle) = spawn_reset_server().await;
     let client = test_client(url);
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-reset")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-reset",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     assert!(matches!(error, RelayerError::Http(_)));
@@ -1163,7 +1460,10 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
     .await;
     let client = test_client(url);
     let error = client
-        .get_wallet_nonce(address(WALLET_OWNER))
+        .get_wallet_nonce(
+            address(WALLET_OWNER),
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1181,7 +1481,10 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
     let (url, handle) = spawn_server(vec![content_length_too_large]).await;
     let client = test_client(url);
     let error = client
-        .get_wallet_nonce(address(WALLET_OWNER))
+        .get_wallet_nonce(
+            address(WALLET_OWNER),
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1199,7 +1502,10 @@ async fn transport_preserves_429_retry_after_and_caps_success_bodies() {
     .await;
     let client = test_client(url);
     let error = client
-        .get_wallet_nonce(address(WALLET_OWNER))
+        .get_wallet_nonce(
+            address(WALLET_OWNER),
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
     assert!(matches!(
@@ -1220,7 +1526,11 @@ async fn transaction_read_uses_transaction_body_limit() {
     let client = test_client(url);
 
     let receipt = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-large-response")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-large-response",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap();
 
@@ -1236,7 +1546,11 @@ async fn transaction_read_uses_transaction_body_limit() {
     let (url, handle) = spawn_server(vec![content_length_too_large]).await;
     let client = test_client(url);
     let error = client
-        .get_transaction_for_owner(address(WALLET_OWNER), "tx-too-large-response")
+        .get_transaction_for_owner(
+            address(WALLET_OWNER),
+            "tx-too-large-response",
+            &read_permit(address(WALLET_OWNER)),
+        )
         .await
         .unwrap_err();
 

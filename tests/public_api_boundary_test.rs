@@ -21,6 +21,7 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "DepositWalletRequestContext",
         "DepositWalletCall",
         "RelayerKeyAuth",
+        "RelayerReadPermit",
         "RelayerSubmitResponse",
         "RelayerTransactionState",
         "try_build_wallet_batch_request_with_signature",
@@ -33,6 +34,56 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
 }
 
 #[test]
+fn http_client_exposes_only_the_reviewed_production_read_methods() {
+    let http =
+        fs::read_to_string("src/deposit_wallet/http.rs").expect("HTTP module source is readable");
+    let capability = fs::read_to_string("src/deposit_wallet/http/capability.rs")
+        .expect("read capability source is readable");
+    let read =
+        fs::read_to_string("src/deposit_wallet/http/read.rs").expect("read source is readable");
+    let deployed = fs::read_to_string("src/deposit_wallet/http/deployed.rs")
+        .expect("deployed read source is readable");
+    let read_surface = format!("{read}\n{deployed}");
+
+    assert!(
+        http.contains("pub use capability::RelayerReadPermit;"),
+        "HTTP module must explicitly re-export RelayerReadPermit"
+    );
+
+    for required in [
+        "pub struct RelayerReadPermit",
+        "pub fn for_owner",
+        "pub fn owner",
+        "pub fn chain_id",
+    ] {
+        assert!(
+            capability.contains(required),
+            "read capability surface is missing {required}"
+        );
+    }
+
+    for method in [
+        "get_wallet_nonce",
+        "get_transaction_for_owner",
+        "is_deposit_wallet_deployed",
+    ] {
+        assert!(
+            read_surface.contains(&format!("pub async fn {method}(")),
+            "reviewed production read surface is missing {method}"
+        );
+    }
+    assert_eq!(
+        read_surface.matches("permit: &RelayerReadPermit").count(),
+        3,
+        "every reviewed production read method must require RelayerReadPermit"
+    );
+    assert!(
+        !read_surface.contains("pub async fn submit"),
+        "HTTP client must not expose a production submit method in PBRSDK-6"
+    );
+}
+
+#[test]
 fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
     let module = fs::read_to_string("src/deposit_wallet/mod.rs")
         .expect("deposit_wallet module is readable");
@@ -41,6 +92,10 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
     assert!(
         contains_identifier(&module, "try_build_wallet_batch_request_with_signature"),
         "deposit_wallet surface must advertise the fallible WALLET batch helper"
+    );
+    assert!(
+        contains_identifier(&module, "RelayerReadPermit"),
+        "deposit_wallet surface must explicitly re-export RelayerReadPermit"
     );
     assert!(
         !contains_identifier(&module, "build_wallet_batch_request_with_signature"),

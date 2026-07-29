@@ -16,11 +16,9 @@ pub(super) enum DepositWalletRelayerUrlKind {
 impl DepositWalletRelayerUrl {
     /// Builds a production relayer URL.
     ///
-    /// This validates the production host boundary only. PR #20 keeps
-    /// production WALLET polling and nonce reads blocked until official or
-    /// recorded deposit-wallet relayer response evidence is reviewed; live
-    /// submit approval also needs durable owner state and a trusted capability
-    /// outside this URL type.
+    /// This validates the production host boundary only. Read methods also
+    /// require an owner- and chain-scoped `RelayerReadPermit`; live mutation
+    /// approval remains outside this URL type.
     pub fn parse(raw: &str) -> Result<Self> {
         let url = Url::parse(raw)
             .map_err(|e| RelayerError::invalid_relayer_url(format!("could not parse URL: {e}")))?;
@@ -31,7 +29,6 @@ impl DepositWalletRelayerUrl {
         })
     }
 
-    #[cfg(test)]
     pub(super) fn endpoint(&self, path: &str) -> Url {
         let mut url = self.base.clone();
         url.set_path(path);

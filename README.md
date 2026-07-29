@@ -13,8 +13,16 @@ The crate root is the consumer-facing integration surface. For deposit-wallet
 work, use the reviewed fallible APIs such as
 `try_build_wallet_batch_request_with_signature`,
 `DepositWalletRelayerClient`, `DepositWalletRelayerUrl`,
-`DepositWalletRequestContext`, `DepositWalletCall`, `RelayerKeyAuth`, and the
-documented request/response types re-exported from `polymarket_relayer`.
+`RelayerReadPermit`, `DepositWalletRequestContext`, `DepositWalletCall`,
+`RelayerKeyAuth`, and the documented request/response types re-exported from
+`polymarket_relayer`.
+
+The production HTTP surface is read-only: an owner- and chain-scoped
+`RelayerReadPermit` is required for `is_deposit_wallet_deployed`,
+`get_wallet_nonce`, and `get_transaction_for_owner`. No production
+`POST /submit` or recent-transactions method is exposed. A successful deployed
+read records deployment fact only; it does not establish mutation readiness,
+which still requires the separate `STATE_CONFIRMED` and operator gates.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the
