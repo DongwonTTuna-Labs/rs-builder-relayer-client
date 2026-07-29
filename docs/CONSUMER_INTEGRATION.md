@@ -71,6 +71,7 @@ The reviewed crate-root integration surface is intentionally narrow:
 ```text
 DepositWalletRelayerClient
 DepositWalletRelayerUrl
+RelayerReadPermit
 DepositWalletCall
 RelayerKeyAuth
 DepositWalletRequestContext
@@ -133,26 +134,54 @@ grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_requ
 
 ### HTTP client surface
 
-The deposit-wallet HTTP client public surface in this PR exposes construction
-only:
+The deposit-wallet HTTP client exposes construction plus exactly three reviewed
+production reads:
 
 ```text
 DepositWalletRelayerUrl::parse
 DepositWalletRelayerClient::new
+DepositWalletRelayerClient::is_deposit_wallet_deployed
+DepositWalletRelayerClient::get_wallet_nonce
+DepositWalletRelayerClient::get_transaction_for_owner
 ```
 
-Transaction and nonce read helpers remain crate-internal in this PR. The current
-official `GET /transaction` reference documents `SAFE`/`PROXY` transaction
-types, while the deposit-wallet docs describe `WALLET` submit/body construction
-without documenting the polling response shape. Until an official or recorded
-`WALLET` polling response fixture is reviewed, this crate must not claim
-production deposit-wallet transaction polling compatibility. Local loopback and
-recorded fixture tests preserve relayer wire evidence that the response is a
-`WALLET` transaction, that `owner` is present, that `from == owner`, and that
-`to` matches the configured deposit-wallet factory, and that `proxyAddress`
-matches the deposit wallet derived from `owner` and the configured factory.
-`WALLET-CREATE` responses are not treated as WALLET owner evidence by this parser because
-deployment identity and wallet mutation identity are reviewed separately.
+Each read requires a `RelayerReadPermit` whose owner equals the requested owner
+and whose chain id matches the client's deposit-wallet contract config. Create
+one at the relayer adapter boundary and pass the same owner to the read:
+
+```rust
+use polymarket_relayer::RelayerReadPermit;
+
+let permit = RelayerReadPermit::for_owner(owner, 137);
+
+let deployed = client
+    .is_deposit_wallet_deployed(owner, &permit)
+    .await?;
+let nonce = client.get_wallet_nonce(owner, &permit).await?;
+let transaction = client
+    .get_transaction_for_owner(owner, transaction_id, &permit)
+    .await?;
+```
+
+The read permit intentionally has no expiry because it grants only idempotent
+reads. It does not grant submit authority, reserve the nonce for signing, or
+replace the future mutation permit. `POST /submit` remains unavailable on this
+production HTTP client, and `GET /transactions` remains deferred to PBRSDK-13
+reconciliation work.
+
+Transaction reads preserve the recorded PBRSDK-2 evidence contract: the
+response must be a `WALLET` transaction, `owner` must be present, `from` must
+equal `owner`, `to` must equal the configured deposit-wallet factory, and
+`proxyAddress` must equal the wallet derived from `owner` and the configured
+contract config. `WALLET-CREATE` responses are not accepted as WALLET owner
+evidence because deployment identity and wallet mutation identity are reviewed
+separately.
+
+`is_deposit_wallet_deployed` derives the deposit-wallet address from the owner
+and sends that derived address to `GET /deployed?address=...&type=WALLET`. A
+`true` response records deployment fact only. It is not submit readiness and
+must not bypass the separate `STATE_CONFIRMED`, mutation capability, recovery,
+or operator gates.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -165,22 +194,17 @@ https://docs.polymarket.com/api-reference/relayer-api-keys/get-all-relayer-api-k
 Those docs name `RELAYER_API_KEY` and `RELAYER_API_KEY_ADDRESS` as the Relayer
 API key auth headers and define `RELAYER_API_KEY_ADDRESS` as the address that
 owns the key. This HTTP read client sends those headers on read requests as
-credential identity, while still treating transaction `owner`/`from` evidence
-as a separate owner-bound response contract. Consumers must not assume the
-relayer API key address, owner signer, deposit wallet, or funder are the same
-identity.
+credential identity, while still treating the permit owner and transaction
+`owner`/`from` evidence as a separate owner-bound contract. Consumers must not
+assume the relayer API key address, owner signer, deposit wallet, or funder are
+the same identity.
 
-WALLET nonce reads also remain crate-internal in this layer. Production URLs
-reject nonce reads until the mutation-state stack owns a nonce lease from nonce
-fetch through signing and submit. Consumers must not treat this PR as live
-nonce, submit, polling, or recovery capable.
-
-Migration path: consumer adapters may construct the client behind their adapter
-boundary, but must not expose transaction status or nonce reads until a later PR
-adds reviewed polling evidence and owner-scoped nonce lease semantics.
-Rollback path: stop importing the HTTP read client and keep the existing
+Migration path: consumer adapters may add `RelayerReadPermit` at their relayer
+adapter boundary and map the three read results into local port types. Do not
+leak the permit or HTTP receipt DTO into domain, strategy, risk, or actor state.
+Rollback path: stop calling the three read methods and retain the existing
 fixture/signing-only integration; no consumer domain type should depend on the
-new HTTP DTOs.
+HTTP DTOs or permit.
 
 Consumer adapter migration status for PR #8:
 

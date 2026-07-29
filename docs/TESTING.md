@@ -20,6 +20,12 @@ wallet_nonce_uses_type_wallet
 wallet_batch_signature_matches_reference_digest
 wallet_batch_submit_body_matches_fixture
 transaction_state_unknown_blocks_live_retry
+is_deposit_wallet_deployed_matches_request_and_response_fixtures
+is_deposit_wallet_deployed_rejects_malformed_fixture_responses
+is_deposit_wallet_deployed_returns_typed_api_error_for_5xx
+get_transaction_for_owner_rejects_missing_owner_evidence
+read_methods_reject_owner_mismatched_permit_before_input_or_http
+read_methods_reject_chain_mismatched_permit_before_input_or_http
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -42,6 +48,8 @@ tests/fixtures/
     derive_address.json
     wallet_create_submit_body.json
     wallet_nonce_request.json
+    wallet_deployed_http_request.json
+    wallet_deployed_response_cases.json
     wallet_batch_eip712.json
     wallet_submit_body.json
   relayer/
@@ -60,7 +68,20 @@ Golden tests should prove:
 - `/nonce?type=WALLET` is used immediately before signing;
 - EIP-712 domain, message, digest, and signature shape match reference behavior;
 - relayer auth identity can differ from wallet owner signer;
+- `/deployed` uses the derived deposit-wallet address and accepts only an object
+  with a boolean `deployed` field;
+- owner- or chain-mismatched read permits fail before input validation, URL
+  construction, or HTTP I/O;
 - unknown transaction states force non-mutating behavior.
+
+## Production Read Transport Gate
+
+The production-capable read transport is verified only against deterministic
+local loopback servers. Tests cover exact deployed/nonce/transaction request
+shape, auth header presence and sensitivity, redirects, 4xx/5xx and 429
+classification, Retry-After, bounded bodies, malformed response evidence, and
+permit rejection before HTTP. CI must not call the production host or require a
+live relayer credential.
 
 ## Manual Live Gate
 

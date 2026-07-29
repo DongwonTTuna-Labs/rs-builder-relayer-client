@@ -1,0 +1,8 @@
+{
+  "method": "GET",
+  "path": "/deployed",
+  "owner": "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5",
+  "address": "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De",
+  "type": "WALLET",
+  "pathAndQuery": "/deployed?address=0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De&type=WALLET"
+}

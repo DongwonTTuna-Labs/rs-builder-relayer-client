@@ -5,6 +5,8 @@
 //! reference compatibility APIs. WALLET submit callers must use the fallible
 //! `try_build_wallet_batch_request_with_signature` API or the validated signed
 //! batch flow; unchecked submit DTO fields remain crate-private.
+//! Production HTTP reads require an owner- and chain-scoped
+//! `RelayerReadPermit`; this does not grant submit authority.
 //!
 //! This crate is not a CLOB order/sign/cancel/post SDK. CLOB trading behavior
 //! belongs in the official Polymarket Rust CLOB SDK and the consumer CLOB
@@ -30,7 +32,7 @@ pub use deposit_wallet::{
     derive_deposit_wallet_address, try_build_wallet_batch_request_with_signature,
     DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
     DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletRequestContext,
-    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerSubmitResponse,
+    DepositWalletTransactionReceipt, RelayerKeyAuth, RelayerReadPermit, RelayerSubmitResponse,
     RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};

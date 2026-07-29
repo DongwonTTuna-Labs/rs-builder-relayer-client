@@ -173,3 +173,48 @@ Rollback:
   public API replacement, consumer migration path, and CLOB ownership impact;
 - do not roll back by restoring unchecked raw submit construction or adding CLOB
   modules to this crate.
+
+## ADR-0008: PBRSDK-6 Production Relayer Read Surface
+
+Decision:
+
+```text
+Promote only GET /deployed, GET /nonce, and GET /transaction to production
+methods on DepositWalletRelayerClient. Every method requires a
+RelayerReadPermit bound to the requested owner and the client's configured
+deposit-wallet chain.
+```
+
+The read permit stores only `owner` and `chain_id`. It intentionally has no
+expiry because these calls are idempotent reads; mutation authorization,
+evidence, and expiry belong to the separate PBRSDK-7 mutation capability.
+Permit validation runs before transaction-id validation, URL construction, or
+HTTP I/O. The relayer URL continues to require HTTPS, the allowlisted host, the
+default HTTPS port, no userinfo, and no path, query, or fragment.
+
+The former production-host hard block is removed because PBRSDK-2 recorded the
+reviewed WALLET response provenance in
+`tests/fixtures/deposit_wallet/PROVENANCE.md`,
+`wallet_transaction_response.json`, and
+`transaction_array_response_cases.json`. This authorizes the reviewed read
+surface only; it does not authorize live mutation or duplicate-submit recovery.
+
+`GET /deployed` follows the official TypeScript relayer SDK
+`@polymarket/builder-relayer-client` `0.0.10` at commit
+`9122f6fb1856f1ecfe4406685bfa19a2c5a7b290`: query `address` is the derived
+deposit-wallet address, `type` is `WALLET`, and only an object containing a JSON
+boolean `deployed` field is accepted. A `true` result is deployment fact, not
+submit readiness; readiness still requires the separate `STATE_CONFIRMED`
+policy.
+
+Consequences:
+
+- auth headers retain sensitive marking and response/error bodies remain
+  bounded;
+- transaction reads retain ID, WALLET type, owner/from, factory, derived-wallet,
+  state, and hash evidence validation;
+- `GET /transactions` remains deferred to PBRSDK-13 reconciliation work;
+- no production `POST /submit`, mutation permit, WALLET-CREATE submit, or WALLET
+  submit method is added by this decision;
+- production-host happy paths are not called in CI because tests use only local
+  loopback servers and synthetic credentials.

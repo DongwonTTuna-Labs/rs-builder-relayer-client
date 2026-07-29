@@ -60,12 +60,16 @@
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
+- [ ] Production HTTP methods are limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; no `POST /submit` or `GET /transactions` method is introduced by the read-surface change.
+- [ ] Every production read takes an owner- and chain-scoped `RelayerReadPermit` and rejects mismatch before input validation, URL construction, or HTTP I/O.
+- [ ] A successful deployed read is not treated as submit readiness; readiness still requires `STATE_CONFIRMED` and the mutation/operator gates.
 
 ## Public API Boundary
 
 - [ ] `tests/public_api_boundary_test.rs` passes.
 - [ ] `cargo doc --workspace --all-features --no-deps` succeeds and rustdoc shows the reviewed `0.2.0` crate-root/deposit-wallet boundary.
 - [ ] Crate-root and `deposit_wallet` public exports are explicit; no wildcard public re-export is introduced.
+- [ ] `RelayerReadPermit` and the three reviewed HTTP read methods are present in the audited public surface.
 - [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.
 - [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.
 - [ ] Legacy Safe/Proxy APIs stay reference/compatibility surface and are not reused for deposit-wallet `WALLET-CREATE` or `WALLET` flows without wire-level proof.

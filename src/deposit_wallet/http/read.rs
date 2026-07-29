@@ -12,18 +12,16 @@ pub(super) struct WalletNonceResponse<'a> {
 }
 
 impl DepositWalletRelayerClient {
-    /// Fetches a WALLET nonce for diagnostics and local test-loopback flows.
+    /// Fetches the owner's WALLET nonce under an owner- and chain-scoped read permit.
     ///
-    /// Production WALLET nonce reads remain disabled in this stack layer
-    /// because a later mutation-state PR must hold an owner-scoped nonce lease
-    /// through signing and submit.
-    pub(crate) async fn get_wallet_nonce(&self, owner: Address) -> Result<U256> {
-        if self.base_url.is_production_host() {
-            return Err(RelayerError::mutation_blocked(
-                "production WALLET nonce reads are disabled in this PR; future signing requires a crate-owned nonce lease capability"
-                    .to_string(),
-            ));
-        }
+    /// This read does not grant mutation authority or create the nonce lease
+    /// required by a future signing-and-submit flow.
+    pub async fn get_wallet_nonce(
+        &self,
+        owner: Address,
+        permit: &RelayerReadPermit,
+    ) -> Result<U256> {
+        self.ensure_read_permit(permit, owner)?;
         self.fetch_wallet_nonce(owner).await
     }
 
@@ -37,17 +35,14 @@ impl DepositWalletRelayerClient {
         parse_wallet_nonce_response(&response)
     }
 
-    pub(crate) async fn get_transaction_for_owner(
+    /// Fetches and validates a WALLET transaction for the permitted owner.
+    pub async fn get_transaction_for_owner(
         &self,
         owner: Address,
         transaction_id: &str,
+        permit: &RelayerReadPermit,
     ) -> Result<DepositWalletTransactionReceipt> {
-        if self.base_url.is_production_host() {
-            return Err(RelayerError::read_blocked(
-                "production WALLET transaction reads are disabled in this PR until an official or recorded WALLET polling response fixture is reviewed"
-                    .to_string(),
-            ));
-        }
+        self.ensure_read_permit(permit, owner)?;
         self.fetch_transaction(transaction_id)
             .await
             .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))

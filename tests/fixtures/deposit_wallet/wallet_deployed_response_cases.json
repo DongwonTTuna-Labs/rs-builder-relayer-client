@@ -1,0 +1,49 @@
+{
+  "accepted": [
+    {
+      "label": "deployed",
+      "raw": "{\"deployed\":true}",
+      "expected": true
+    },
+    {
+      "label": "not deployed",
+      "raw": "{\"deployed\":false}",
+      "expected": false
+    },
+    {
+      "label": "unknown field ignored",
+      "raw": "{\"deployed\":true,\"futureField\":\"ignored\"}",
+      "expected": true
+    }
+  ],
+  "rejected": [
+    {
+      "label": "bare boolean",
+      "raw": "true"
+    },
+    {
+      "label": "string boolean",
+      "raw": "{\"deployed\":\"true\"}"
+    },
+    {
+      "label": "numeric boolean",
+      "raw": "{\"deployed\":1}"
+    },
+    {
+      "label": "missing deployed field",
+      "raw": "{}"
+    },
+    {
+      "label": "array",
+      "raw": "[]"
+    },
+    {
+      "label": "null",
+      "raw": "null"
+    },
+    {
+      "label": "empty body",
+      "raw": ""
+    }
+  ]
+}
