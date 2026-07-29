@@ -52,8 +52,6 @@ impl RelayerError {
         Self::Other(format!("Invalid relayer URL: {}", message.into()))
     }
 
-    // PBRSDK-7 will promote this when a production mutation caller exists.
-    #[cfg(test)]
     pub(crate) fn mutation_blocked(message: impl Into<String>) -> Self {
         Self::Other(format!("Deposit-wallet mutation blocked: {}", message.into()))
     }

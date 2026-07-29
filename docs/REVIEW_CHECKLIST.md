@@ -60,9 +60,17 @@
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
-- [ ] Production HTTP methods are limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; no `POST /submit` or `GET /transactions` method is introduced by the read-surface change.
+- [ ] Production reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; mutation is limited to the two reviewed permit-bound `POST /submit` methods, and `GET /transactions` remains deferred.
 - [ ] Every production read takes an owner- and chain-scoped `RelayerReadPermit` and rejects mismatch before input validation, URL construction, or HTTP I/O.
 - [ ] A successful deployed read is not treated as submit readiness; readiness still requires `STATE_CONFIRMED` and the mutation/operator gates.
+- [ ] `DepositWalletRelayerClient::new` is default-deny for live mutation; only `new_with_mutation_enabled` starts enabled, and the constructor never replaces a scoped `Live` permit.
+- [ ] Every submit requires a permit scoped to mode, operation, owner, chain, and unexpired Unix time with bounded evidence and operator-approval references; mismatch or expiry fails before HTTP.
+- [ ] A signed batch whose deadline is equal to or earlier than the current time fails before HTTP.
+- [ ] `DryRun` sends no HTTP, remains independent of the live latch, and exposes redacted review evidence without auth headers, signatures, full calldata, or a full replayable submit body.
+- [ ] Operator review of `DryRun` evidence is followed by a freshly created scoped `Live` permit; dry-run authority is not reused as live authority.
+- [ ] `disable_mutation` is a shared one-way latch across all client clones, exposes no re-enable method, blocks later live submits, and leaves reads and valid `DryRun` submissions available.
+- [ ] Invalid/partial submit responses, post-dispatch transport failures, and oversized 2xx responses require reconciliation before any resubmission.
+- [ ] The PR does not claim complete live readiness while transaction polling, persistent idempotency, recent-transaction lookup, or duplicate-submit recovery remains deferred.
 
 ## Public API Boundary
 
@@ -70,6 +78,7 @@
 - [ ] `cargo doc --workspace --all-features --no-deps` succeeds and rustdoc shows the reviewed `0.2.0` crate-root/deposit-wallet boundary.
 - [ ] Crate-root and `deposit_wallet` public exports are explicit; no wildcard public re-export is introduced.
 - [ ] `RelayerReadPermit` and the three reviewed HTTP read methods are present in the audited public surface.
+- [ ] Mutation permit/evidence/outcome types, `new_with_mutation_enabled`, `disable_mutation`, `submit_wallet_create`, and `submit_signed_wallet_batch` are present in the audited public surface.
 - [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.
 - [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.
 - [ ] Legacy Safe/Proxy APIs stay reference/compatibility surface and are not reused for deposit-wallet `WALLET-CREATE` or `WALLET` flows without wire-level proof.

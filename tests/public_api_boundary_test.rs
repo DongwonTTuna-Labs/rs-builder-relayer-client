@@ -20,8 +20,15 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "DepositWalletRelayerUrl",
         "DepositWalletRequestContext",
         "DepositWalletCall",
+        "DepositWalletDryRunEvidence",
+        "DepositWalletSubmitReceipt",
+        "DryRunCallSummary",
         "RelayerKeyAuth",
+        "RelayerMutationMode",
+        "RelayerMutationOperation",
+        "RelayerMutationPermit",
         "RelayerReadPermit",
+        "RelayerSubmitOutcome",
         "RelayerSubmitResponse",
         "RelayerTransactionState",
         "try_build_wallet_batch_request_with_signature",
@@ -34,7 +41,7 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
 }
 
 #[test]
-fn http_client_exposes_only_the_reviewed_production_read_methods() {
+fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     let http =
         fs::read_to_string("src/deposit_wallet/http.rs").expect("HTTP module source is readable");
     let capability = fs::read_to_string("src/deposit_wallet/http/capability.rs")
@@ -43,12 +50,37 @@ fn http_client_exposes_only_the_reviewed_production_read_methods() {
         fs::read_to_string("src/deposit_wallet/http/read.rs").expect("read source is readable");
     let deployed = fs::read_to_string("src/deposit_wallet/http/deployed.rs")
         .expect("deployed read source is readable");
+    let mutation = fs::read_to_string("src/deposit_wallet/http/mutation.rs")
+        .expect("mutation capability source is readable");
+    let submit = fs::read_to_string("src/deposit_wallet/http/submit.rs")
+        .expect("submit source is readable");
     let read_surface = format!("{read}\n{deployed}");
 
+    assert_no_wildcard_reexports("src/deposit_wallet/http.rs", &http);
     assert!(
         http.contains("pub use capability::RelayerReadPermit;"),
         "HTTP module must explicitly re-export RelayerReadPermit"
     );
+    assert!(
+        http.contains("pub use mutation::{"),
+        "HTTP module must explicitly re-export reviewed mutation types"
+    );
+    assert!(!http.contains("pub use clock"), "clock must remain internal");
+
+    for required in [
+        "DepositWalletDryRunEvidence",
+        "DepositWalletSubmitReceipt",
+        "DryRunCallSummary",
+        "RelayerMutationMode",
+        "RelayerMutationOperation",
+        "RelayerMutationPermit",
+        "RelayerSubmitOutcome",
+    ] {
+        assert!(
+            contains_identifier(&http, required),
+            "HTTP module reviewed mutation re-export is missing {required}"
+        );
+    }
 
     for required in [
         "pub struct RelayerReadPermit",
@@ -77,9 +109,75 @@ fn http_client_exposes_only_the_reviewed_production_read_methods() {
         3,
         "every reviewed production read method must require RelayerReadPermit"
     );
+
+    for method in ["new_with_mutation_enabled", "disable_mutation"] {
+        assert!(
+            http.contains(&format!("pub fn {method}(")),
+            "reviewed mutation gate surface is missing {method}"
+        );
+    }
+    for method in ["submit_wallet_create", "submit_signed_wallet_batch"] {
+        assert!(
+            submit.contains(&format!("pub async fn {method}(")),
+            "reviewed mutation submit surface is missing {method}"
+        );
+        assert!(
+            function_block(&submit, &format!("pub async fn {method}"))
+                .contains("permit: &RelayerMutationPermit"),
+            "reviewed mutation submit method {method} must require RelayerMutationPermit"
+        );
+    }
+    assert_eq!(
+        submit.matches("pub async fn submit_").count(),
+        2,
+        "only the two reviewed mutation submit methods may be public"
+    );
     assert!(
-        !read_surface.contains("pub async fn submit"),
-        "HTTP client must not expose a production submit method in PBRSDK-6"
+        !http.contains("pub fn enable_mutation"),
+        "the one-way mutation latch must not expose a reactivation method"
+    );
+
+    for required in [
+        "pub struct RelayerMutationPermit",
+        "pub fn try_new",
+        "pub fn mode",
+        "pub fn operation",
+        "pub fn owner",
+        "pub fn chain_id",
+        "pub fn expires_at_unix",
+        "pub struct DepositWalletDryRunEvidence",
+        "pub struct DryRunCallSummary",
+        "pub struct DepositWalletSubmitReceipt",
+        "pub enum RelayerSubmitOutcome",
+    ] {
+        assert!(
+            mutation.contains(required),
+            "reviewed mutation capability surface is missing {required}"
+        );
+    }
+    assert_eq!(
+        mutation.matches("pub fn evidence_ref").count(),
+        1,
+        "only dry-run evidence may expose the evidence reference"
+    );
+    assert_eq!(
+        mutation.matches("pub fn operator_approval_ref").count(),
+        1,
+        "only dry-run evidence may expose the operator approval reference"
+    );
+    assert!(
+        mutation.contains("#[derive(Clone, PartialEq, Eq)]\npub struct RelayerMutationPermit"),
+        "permit must not derive Debug, Display, or Serialize"
+    );
+    let permit_attributes = derive_attributes_for_struct(&mutation, "RelayerMutationPermit");
+    assert!(
+        !permit_attributes.contains("Debug") && !permit_attributes.contains("Serialize"),
+        "permit must use only its redacted manual Debug and must not derive Serialize"
+    );
+    assert!(
+        !mutation.contains("Serialize for RelayerMutationPermit")
+            && !mutation.contains("Display for RelayerMutationPermit"),
+        "permit must not expose reference contents through Serialize or Display"
     );
 }
 
@@ -93,10 +191,21 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         contains_identifier(&module, "try_build_wallet_batch_request_with_signature"),
         "deposit_wallet surface must advertise the fallible WALLET batch helper"
     );
-    assert!(
-        contains_identifier(&module, "RelayerReadPermit"),
-        "deposit_wallet surface must explicitly re-export RelayerReadPermit"
-    );
+    for required in [
+        "DepositWalletDryRunEvidence",
+        "DepositWalletSubmitReceipt",
+        "DryRunCallSummary",
+        "RelayerMutationMode",
+        "RelayerMutationOperation",
+        "RelayerMutationPermit",
+        "RelayerReadPermit",
+        "RelayerSubmitOutcome",
+    ] {
+        assert!(
+            contains_identifier(&module, required),
+            "deposit_wallet surface must explicitly re-export {required}"
+        );
+    }
     assert!(
         !contains_identifier(&module, "build_wallet_batch_request_with_signature"),
         "deposit_wallet surface must not restore the removed infallible helper"
@@ -144,6 +253,66 @@ fn wallet_submit_dto_fields_stay_crate_private() {
             !params.contains(&format!("pub {field}:")),
             "DepositWalletParams::{field} must not become publicly constructible"
         );
+    }
+}
+
+#[test]
+fn mutation_permit_evidence_and_receipt_fields_stay_private() {
+    let mutation = fs::read_to_string("src/deposit_wallet/http/mutation.rs")
+        .expect("mutation capability source is readable");
+
+    for (name, fields) in [
+        (
+            "RelayerMutationPermit",
+            &[
+                "mode",
+                "operation",
+                "owner",
+                "chain_id",
+                "expires_at_unix",
+                "evidence_ref",
+                "operator_approval_ref",
+            ][..],
+        ),
+        (
+            "DryRunCallSummary",
+            &["target", "value", "selector", "data_len"][..],
+        ),
+        (
+            "DepositWalletDryRunEvidence",
+            &[
+                "operation",
+                "endpoint_path",
+                "chain_id",
+                "owner",
+                "deposit_wallet",
+                "to",
+                "payload_keccak256",
+                "nonce",
+                "deadline",
+                "calls",
+                "evidence_ref",
+                "operator_approval_ref",
+                "redaction",
+            ][..],
+        ),
+        (
+            "DepositWalletSubmitReceipt",
+            &["transaction_id", "state", "payload_keccak256"][..],
+        ),
+    ] {
+        let block = struct_block(&mutation, name);
+        for field in fields {
+            assert!(
+                block.contains(&format!("{field}:")),
+                "{name}::{field} must remain in the reviewed shape"
+            );
+            assert!(
+                !block.contains(&format!("pub {field}:"))
+                    && !block.contains(&format!("pub(crate) {field}:")),
+                "{name}::{field} must stay private"
+            );
+        }
     }
 }
 
@@ -203,6 +372,11 @@ fn docs_record_semver_boundary_and_grep_audit_contract() {
             "ADR-0007: PBRSDK-4 Public API Boundary Audit",
         ),
         (
+            "docs/DECISIONS.md",
+            decisions.as_str(),
+            "ADR-0009: PBRSDK-7 Explicit Mutation Permit and Dry-Run Gate",
+        ),
+        (
             "docs/REVIEW_CHECKLIST.md",
             checklist.as_str(),
             "Public API Boundary",
@@ -252,4 +426,28 @@ fn struct_block<'a>(source: &'a str, name: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{name} struct should have a closing brace"));
 
     &rest[..end]
+}
+
+fn function_block<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("function signature {signature:?} should exist"));
+    let rest = &source[start..];
+    let end = rest
+        .find("\n    }\n")
+        .unwrap_or_else(|| panic!("function {signature:?} should have a closing brace"));
+
+    &rest[..end]
+}
+
+fn derive_attributes_for_struct<'a>(source: &'a str, name: &str) -> &'a str {
+    let needle = format!("pub struct {name}");
+    let struct_start = source
+        .find(&needle)
+        .unwrap_or_else(|| panic!("{name} struct should exist"));
+    let attributes_start = source[..struct_start]
+        .rfind("#[derive(")
+        .unwrap_or_else(|| panic!("{name} should have derive attributes"));
+
+    &source[attributes_start..struct_start]
 }

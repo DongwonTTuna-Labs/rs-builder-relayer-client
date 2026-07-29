@@ -1,15 +1,20 @@
+use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
+use ethers::types::Bytes;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
 use crate::deposit_wallet::{
-    deposit_wallet_contract_config, derive_deposit_wallet_address, AMOY_CHAIN_ID,
-    WALLET_TRANSACTION_TYPE,
+    build_wallet_create_request, deposit_wallet_contract_config, derive_deposit_wallet_address,
+    DepositWalletBatchRequest, DepositWalletCall, DepositWalletRequestContext, AMOY_CHAIN_ID,
+    WALLET_CREATE_TRANSACTION_TYPE, WALLET_TRANSACTION_TYPE,
 };
+use crate::deposit_wallet::requests::build_wallet_batch_request_unchecked;
 
+use super::clock::RelayerClock;
 use super::response::{parse_transaction_response, validate_transaction_id};
 use super::*;
 
@@ -17,8 +22,20 @@ const API_KEY: &str = "unit-test-relayer-api-key";
 const API_KEY_ADDRESS: &str = "0xA6Db23622C9EA7584D5c61C3e7497c80E2CE167B";
 const WALLET_OWNER: &str = "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5";
 const OTHER_OWNER: &str = "0x0000000000000000000000000000000000000001";
+const FIXED_NOW_UNIX: u64 = 1_700_000_000;
+const FIXED_PERMIT_EXPIRY_UNIX: u64 = 2_000_000_000;
 const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 const NO_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
+
+struct FixedClock {
+    now_unix: u64,
+}
+
+impl RelayerClock for FixedClock {
+    fn now_unix(&self) -> u64 {
+        self.now_unix
+    }
+}
 
 #[derive(Debug)]
 struct CapturedRequest {
@@ -109,6 +126,100 @@ fn test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient 
         relayer_auth(),
         deposit_wallet_contract_config(137).unwrap(),
     )
+}
+
+fn mutation_test_client(
+    base_url: DepositWalletRelayerUrl,
+    now_unix: u64,
+    mutation_enabled: bool,
+) -> DepositWalletRelayerClient {
+    DepositWalletRelayerClient::from_parts_with(
+        reqwest_client(Duration::from_secs(2)),
+        base_url,
+        relayer_auth(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        Arc::new(FixedClock { now_unix }),
+        mutation_enabled,
+    )
+}
+
+fn mutation_permit(
+    mode: RelayerMutationMode,
+    operation: RelayerMutationOperation,
+    owner: Address,
+    chain_id: u64,
+    expires_at_unix: u64,
+) -> RelayerMutationPermit {
+    RelayerMutationPermit::try_new(
+        mode,
+        operation,
+        owner,
+        chain_id,
+        expires_at_unix,
+        "evidence/test",
+        "approval/test",
+    )
+    .unwrap()
+}
+
+fn wallet_batch_request() -> DepositWalletBatchRequest {
+    let fixture = fixture_value("wallet_submit_body.json");
+    let params = &fixture["depositWalletParams"];
+    let calls = params["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|call| DepositWalletCall {
+            target: address(call["target"].as_str().unwrap()),
+            value: U256::from_dec_str(call["value"].as_str().unwrap()).unwrap(),
+            data: Bytes::from(
+                hex::decode(
+                    call["data"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix("0x")
+                        .unwrap(),
+                )
+                .unwrap(),
+            ),
+        })
+        .collect();
+    let ctx = DepositWalletRequestContext {
+        owner_address: address(fixture["from"].as_str().unwrap()),
+        deposit_wallet_address: address(params["depositWallet"].as_str().unwrap()),
+    };
+
+    build_wallet_batch_request_unchecked(
+        ctx,
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        U256::from_dec_str(fixture["nonce"].as_str().unwrap()).unwrap(),
+        U256::from_dec_str(params["deadline"].as_str().unwrap()).unwrap(),
+        calls,
+        fixture["signature"].as_str().unwrap().to_string(),
+    )
+}
+
+fn expected_payload_keccak256<T: serde::Serialize>(request: &T) -> String {
+    let body = serde_json::to_vec(request).unwrap();
+    format!("0x{}", hex::encode(keccak256(body)))
+}
+
+fn expect_dry_run(outcome: RelayerSubmitOutcome) -> Box<DepositWalletDryRunEvidence> {
+    match outcome {
+        RelayerSubmitOutcome::DryRun(evidence) => evidence,
+        RelayerSubmitOutcome::Submitted(receipt) => {
+            panic!("expected dry-run evidence, got submitted receipt: {receipt:?}")
+        }
+    }
+}
+
+fn expect_submitted(outcome: RelayerSubmitOutcome) -> DepositWalletSubmitReceipt {
+    match outcome {
+        RelayerSubmitOutcome::Submitted(receipt) => receipt,
+        RelayerSubmitOutcome::DryRun(evidence) => {
+            panic!("expected submitted receipt, got dry-run evidence: {evidence:?}")
+        }
+    }
 }
 
 async fn spawn_server(
@@ -204,6 +315,63 @@ async fn spawn_reset_server() -> (DepositWalletRelayerUrl, JoinHandle<Vec<Captur
         DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
         handle,
     )
+}
+
+async fn spawn_single_response_and_watch_for_retry(
+    response: Option<TestResponse>,
+) -> (
+    DepositWalletRelayerUrl,
+    JoinHandle<Vec<CapturedRequest>>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().unwrap();
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = tokio::time::timeout(TEST_SERVER_TIMEOUT, listener.accept())
+            .await
+            .expect("server accept should not hang")
+            .expect("server should accept");
+        let first_request = read_request(&mut stream).await;
+        if let Some(response) = response {
+            write_response(&mut stream, response).await;
+        }
+        drop(stream);
+
+        let mut requests = vec![first_request];
+        loop {
+            tokio::select! {
+                _ = &mut stop_rx => break,
+                accepted = listener.accept() => {
+                    let (mut retry_stream, _) = accepted.expect("retry accept should succeed");
+                    requests.push(read_request(&mut retry_stream).await);
+                    write_response(
+                        &mut retry_stream,
+                        TestResponse::json("500 Internal Server Error", "{}"),
+                    )
+                    .await;
+                }
+            }
+        }
+        requests
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+        stop_tx,
+    )
+}
+
+async fn finish_retry_watch(
+    stop_tx: tokio::sync::oneshot::Sender<()>,
+    handle: JoinHandle<Vec<CapturedRequest>>,
+) -> Vec<CapturedRequest> {
+    tokio::task::yield_now().await;
+    let _ = stop_tx.send(());
+    handle.await.unwrap()
 }
 
 async fn read_request(stream: &mut TcpStream) -> CapturedRequest {
@@ -1620,4 +1788,792 @@ fn transaction_id_validation_covers_bounds_and_opaque_ids() {
     assert!(validate_transaction_id(" tx-leading-space").is_err());
     assert!(validate_transaction_id("tx-trailing-space ").is_err());
     assert!(validate_transaction_id("tx\nabc").is_err());
+}
+
+#[tokio::test]
+async fn mutation_is_default_deny_for_wallet_create_and_wallet_batch_before_http() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let owner = address(WALLET_OWNER);
+    let client = DepositWalletRelayerClient::new(
+        url.clone(),
+        relayer_auth(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+    )
+    .unwrap();
+    let create_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        u64::MAX,
+    );
+
+    let create_error = client
+        .submit_wallet_create(owner, &create_permit)
+        .await
+        .unwrap_err();
+    assert!(create_error.is_deposit_wallet_mutation_blocked());
+    assert!(create_error.to_string().contains("relayer mutation is disabled"));
+
+    let batch_client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let batch_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let batch_error = batch_client
+        .submit_signed_wallet_batch(wallet_batch_request(), &batch_permit)
+        .await
+        .unwrap_err();
+    assert!(batch_error.is_deposit_wallet_mutation_blocked());
+    assert!(batch_error.to_string().contains("relayer mutation is disabled"));
+
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[test]
+fn mutation_permit_validates_references_expiry_and_scoped_getters() {
+    let owner = address(WALLET_OWNER);
+    let permit = RelayerMutationPermit::try_new(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+        "  evidence/DON-78  ",
+        "  approval/DON-78  ",
+    )
+    .unwrap();
+    assert_eq!(permit.mode(), RelayerMutationMode::DryRun);
+    assert_eq!(
+        permit.operation(),
+        RelayerMutationOperation::WalletCreate
+    );
+    assert_eq!(permit.owner(), owner);
+    assert_eq!(permit.chain_id(), POLYGON_CHAIN_ID);
+    assert_eq!(permit.expires_at_unix(), FIXED_PERMIT_EXPIRY_UNIX);
+
+    for (label, evidence_ref, approval_ref) in [
+        ("empty evidence", "", "approval"),
+        ("blank evidence", "   ", "approval"),
+        ("control evidence", "ticket\ninternal", "approval"),
+        ("empty approval", "evidence", ""),
+        ("blank approval", "evidence", "   "),
+        ("control approval", "evidence", "ticket\tinternal"),
+    ] {
+        let error = RelayerMutationPermit::try_new(
+            RelayerMutationMode::DryRun,
+            RelayerMutationOperation::WalletCreate,
+            owner,
+            POLYGON_CHAIN_ID,
+            FIXED_PERMIT_EXPIRY_UNIX,
+            evidence_ref,
+            approval_ref,
+        )
+        .unwrap_err();
+        assert!(
+            error.is_deposit_wallet_mutation_blocked(),
+            "{label}: {error}"
+        );
+    }
+
+    let oversized = "x".repeat(257);
+    for (label, evidence_ref, approval_ref) in [
+        ("oversized evidence", oversized.as_str(), "approval"),
+        ("oversized approval", "evidence", oversized.as_str()),
+    ] {
+        let error = RelayerMutationPermit::try_new(
+            RelayerMutationMode::Live,
+            RelayerMutationOperation::WalletBatch,
+            owner,
+            POLYGON_CHAIN_ID,
+            FIXED_PERMIT_EXPIRY_UNIX,
+            evidence_ref,
+            approval_ref,
+        )
+        .unwrap_err();
+        assert!(
+            error.is_deposit_wallet_mutation_blocked(),
+            "{label}: {error}"
+        );
+    }
+
+    let zero_expiry_error = RelayerMutationPermit::try_new(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        0,
+        "evidence",
+        "approval",
+    )
+    .unwrap_err();
+    assert!(zero_expiry_error.is_deposit_wallet_mutation_blocked());
+}
+
+#[tokio::test]
+async fn mutation_permit_scope_and_expiry_fail_before_http() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let owner = address(WALLET_OWNER);
+
+    let create_operation_mismatch = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &create_operation_mismatch)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+
+    let batch_operation_mismatch = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_signed_wallet_batch(wallet_batch_request(), &batch_operation_mismatch)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+
+    let owner_mismatch = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        address(OTHER_OWNER),
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &owner_mismatch)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+
+    let chain_mismatch = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        AMOY_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &chain_mismatch)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+
+    let expired = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_NOW_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &expired)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.to_string().contains("mutation permit expired"));
+
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn wallet_batch_deadline_guard_treats_equal_clock_as_expired_before_http() {
+    let fixture_deadline = 1_760_000_000;
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, fixture_deadline, true);
+    let owner = address(WALLET_OWNER);
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let error = client
+        .submit_signed_wallet_batch(wallet_batch_request(), &permit)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.to_string().contains("batch deadline expired"));
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn dry_run_builds_redacted_create_and_batch_evidence_without_http() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let owner = address(WALLET_OWNER);
+    let config = deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap();
+
+    let create_permit = RelayerMutationPermit::try_new(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+        "  evidence/create-001  ",
+        "  approval/create-001  ",
+    )
+    .unwrap();
+    let create_request = build_wallet_create_request(owner, config);
+    let create_expected_hash = expected_payload_keccak256(&create_request);
+    let create_evidence = expect_dry_run(
+        client
+            .submit_wallet_create(owner, &create_permit)
+            .await
+            .unwrap(),
+    );
+    let expected_wallet = derive_deposit_wallet_address(owner, config).unwrap();
+
+    assert_eq!(
+        create_evidence.operation(),
+        WALLET_CREATE_TRANSACTION_TYPE
+    );
+    assert_eq!(create_evidence.endpoint_path(), SUBMIT_PATH);
+    assert_eq!(create_evidence.chain_id(), POLYGON_CHAIN_ID);
+    assert_eq!(
+        create_evidence.owner(),
+        super::redaction::redacted_address(owner)
+    );
+    assert_eq!(
+        create_evidence.deposit_wallet(),
+        super::redaction::redacted_address(expected_wallet)
+    );
+    assert_eq!(create_evidence.to(), to_checksum(&config.factory, None));
+    assert_eq!(
+        create_evidence.payload_keccak256(),
+        create_expected_hash
+    );
+    assert_eq!(create_evidence.nonce(), None);
+    assert_eq!(create_evidence.deadline(), None);
+    assert!(create_evidence.calls().is_empty());
+    assert_eq!(create_evidence.evidence_ref(), "evidence/create-001");
+    assert_eq!(
+        create_evidence.operator_approval_ref(),
+        "approval/create-001"
+    );
+    assert_eq!(
+        create_evidence.redaction(),
+        "signature, auth headers, and full submit body are intentionally omitted"
+    );
+    let create_json = serde_json::to_value(create_evidence.as_ref()).unwrap();
+    assert_eq!(create_json["evidence_ref"], json!("evidence/create-001"));
+    assert_eq!(
+        create_json["operator_approval_ref"],
+        json!("approval/create-001")
+    );
+
+    let batch_permit = RelayerMutationPermit::try_new(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+        "  evidence/batch-001  ",
+        "  approval/batch-001  ",
+    )
+    .unwrap();
+    let batch_request = wallet_batch_request();
+    let batch_expected_hash = expected_payload_keccak256(&batch_request);
+    let batch_evidence = expect_dry_run(
+        client
+            .submit_signed_wallet_batch(batch_request, &batch_permit)
+            .await
+            .unwrap(),
+    );
+    let batch_fixture = fixture_value("wallet_submit_body.json");
+    let call_fixture = &batch_fixture["depositWalletParams"]["calls"][0];
+    let call = &batch_evidence.calls()[0];
+
+    assert_eq!(batch_evidence.operation(), WALLET_TRANSACTION_TYPE);
+    assert_eq!(batch_evidence.endpoint_path(), SUBMIT_PATH);
+    assert_eq!(batch_evidence.chain_id(), POLYGON_CHAIN_ID);
+    assert_eq!(
+        batch_evidence.owner(),
+        super::redaction::redacted_address(owner)
+    );
+    assert_eq!(
+        batch_evidence.deposit_wallet(),
+        super::redaction::redacted_address(address(
+            batch_fixture["depositWalletParams"]["depositWallet"]
+                .as_str()
+                .unwrap()
+        ))
+    );
+    assert_eq!(batch_evidence.to(), to_checksum(&config.factory, None));
+    assert_eq!(batch_evidence.payload_keccak256(), batch_expected_hash);
+    assert_eq!(batch_evidence.nonce(), Some("31"));
+    assert_eq!(batch_evidence.deadline(), Some("1760000000"));
+    assert_eq!(batch_evidence.calls().len(), 1);
+    assert_eq!(
+        call.target(),
+        super::redaction::redacted_address(address(call_fixture["target"].as_str().unwrap()))
+    );
+    assert_eq!(call.value(), "0");
+    assert_eq!(call.selector(), Some("0x095ea7b3"));
+    assert_eq!(call.data_len(), 68);
+    assert_eq!(batch_evidence.evidence_ref(), "evidence/batch-001");
+    assert_eq!(
+        batch_evidence.operator_approval_ref(),
+        "approval/batch-001"
+    );
+    assert_eq!(
+        batch_evidence.redaction(),
+        "signature, auth headers, and full submit body are intentionally omitted"
+    );
+    let batch_json = serde_json::to_value(batch_evidence.as_ref()).unwrap();
+    assert_eq!(batch_json["evidence_ref"], json!("evidence/batch-001"));
+    assert_eq!(
+        batch_json["operator_approval_ref"],
+        json!("approval/batch-001")
+    );
+
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn dry_run_and_permit_debug_redact_replayable_and_authorization_material() {
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let owner = address(WALLET_OWNER);
+    let permit = RelayerMutationPermit::try_new(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+        " evidence-sensitive-ref ",
+        " operator-sensitive-ref ",
+    )
+    .unwrap();
+    let fixture = fixture_value("wallet_submit_body.json");
+    let signature = fixture["signature"].as_str().unwrap();
+    let calldata = fixture["depositWalletParams"]["calls"][0]["data"]
+        .as_str()
+        .unwrap();
+
+    let evidence = expect_dry_run(
+        client
+            .submit_signed_wallet_batch(wallet_batch_request(), &permit)
+            .await
+            .unwrap(),
+    );
+    let evidence_debug = format!("{evidence:?}");
+    let evidence_json = serde_json::to_string(evidence.as_ref()).unwrap();
+    for forbidden in [signature, calldata, API_KEY, "RELAYER_API_KEY"] {
+        assert!(
+            !evidence_debug.contains(forbidden),
+            "evidence Debug leaked forbidden material"
+        );
+        assert!(
+            !evidence_json.contains(forbidden),
+            "evidence JSON leaked forbidden material"
+        );
+    }
+    let evidence_object = serde_json::to_value(evidence.as_ref()).unwrap();
+    assert!(evidence_object.get("signature").is_none());
+    assert!(evidence_object.get("data").is_none());
+    assert!(evidence_object.get("body").is_none());
+
+    let permit_debug = format!("{permit:?}");
+    assert!(!permit_debug.contains("evidence-sensitive-ref"));
+    assert!(!permit_debug.contains("operator-sensitive-ref"));
+    assert!(permit_debug.contains("evidence_ref_len"));
+    assert!(permit_debug.contains("operator_approval_ref_len"));
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn live_submit_posts_fixture_bodies_and_preserves_receipts() {
+    let responses = vec![
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-create-001", "state": "STATE_NEW"}).to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-batch-001", "state": "STATE_NEW"}).to_string(),
+        ),
+    ];
+    let (url, handle) = spawn_server(responses).await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let owner = address(WALLET_OWNER);
+    let config = deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap();
+
+    let create_request = build_wallet_create_request(owner, config);
+    let create_hash = expected_payload_keccak256(&create_request);
+    let create_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let create_receipt = expect_submitted(
+        client
+            .submit_wallet_create(owner, &create_permit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(create_receipt.transaction_id(), "tx-create-001");
+    assert_eq!(create_receipt.state(), &RelayerTransactionState::New);
+    assert_eq!(create_receipt.payload_keccak256(), create_hash);
+    let create_debug = format!("{create_receipt:?}");
+    assert!(!create_debug.contains("tx-create-001"));
+    assert!(create_debug.contains("sha3:0x"));
+
+    let batch_request = wallet_batch_request();
+    let batch_hash = expected_payload_keccak256(&batch_request);
+    let batch_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let batch_receipt = expect_submitted(
+        client
+            .submit_signed_wallet_batch(batch_request, &batch_permit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(batch_receipt.transaction_id(), "tx-batch-001");
+    assert_eq!(batch_receipt.state(), &RelayerTransactionState::New);
+    assert_eq!(batch_receipt.payload_keccak256(), batch_hash);
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, SUBMIT_PATH);
+        assert!(request.header("RELAYER_API_KEY").is_some());
+        assert!(request.header("RELAYER_API_KEY_ADDRESS").is_some());
+        assert_eq!(request.header("content-type"), Some("application/json"));
+    }
+    assert_eq!(
+        serde_json::from_str::<Value>(&requests[0].body).unwrap(),
+        fixture_value("wallet_create_submit_body.json")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&requests[1].body).unwrap(),
+        fixture_value("wallet_submit_body.json")
+    );
+}
+
+#[tokio::test]
+async fn submit_response_anomalies_require_reconciliation_without_resubmission() {
+    let owner = address(WALLET_OWNER);
+    let invalid_responses = vec![
+        (
+            "missing transaction id",
+            json!({"state": "STATE_NEW"}).to_string(),
+        ),
+        (
+            "empty transaction id",
+            json!({"transactionID": "", "state": "STATE_NEW"}).to_string(),
+        ),
+        (
+            "blank transaction id",
+            json!({"transactionID": "   ", "state": "STATE_NEW"}).to_string(),
+        ),
+        (
+            "control transaction id",
+            json!({"transactionID": "tx\ninvalid", "state": "STATE_NEW"}).to_string(),
+        ),
+        (
+            "missing state",
+            json!({"transactionID": "tx-missing-state"}).to_string(),
+        ),
+        ("invalid json", "not-json".to_string()),
+    ];
+
+    for (label, body) in invalid_responses {
+        let (url, handle, stop_tx) =
+            spawn_single_response_and_watch_for_retry(Some(TestResponse::json("200 OK", body)))
+                .await;
+        let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+        let permit = mutation_permit(
+            RelayerMutationMode::Live,
+            RelayerMutationOperation::WalletCreate,
+            owner,
+            POLYGON_CHAIN_ID,
+            FIXED_PERMIT_EXPIRY_UNIX,
+        );
+
+        let error = client
+            .submit_wallet_create(owner, &permit)
+            .await
+            .unwrap_err();
+        assert!(
+            error.is_deposit_wallet_reconciliation_required(),
+            "{label}: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("submit response did not include a valid transactionID"),
+            "{label}: {error}"
+        );
+        assert_eq!(
+            finish_retry_watch(stop_tx, handle).await.len(),
+            1,
+            "{label}"
+        );
+    }
+
+    for (status, expected_status) in [
+        ("503 Service Unavailable", 503),
+        ("429 Too Many Requests", 429),
+    ] {
+        let (url, handle, stop_tx) =
+            spawn_single_response_and_watch_for_retry(Some(TestResponse::json(
+                status,
+                "response ignored",
+            )))
+            .await;
+        let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+        let permit = mutation_permit(
+            RelayerMutationMode::Live,
+            RelayerMutationOperation::WalletCreate,
+            owner,
+            POLYGON_CHAIN_ID,
+            FIXED_PERMIT_EXPIRY_UNIX,
+        );
+        let error = client
+            .submit_wallet_create(owner, &permit)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            RelayerError::Api { status, .. } if status == expected_status
+        ));
+        assert_eq!(finish_retry_watch(stop_tx, handle).await.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn submit_transport_and_oversized_success_responses_require_reconciliation() {
+    let owner = address(WALLET_OWNER);
+
+    let (url, handle, stop_tx) = spawn_single_response_and_watch_for_retry(None).await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &permit)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(!matches!(error, RelayerError::Http(_)));
+    assert_eq!(finish_retry_watch(stop_tx, handle).await.len(), 1);
+
+    let content_length_too_large =
+        TestResponse::json_without_content_length("200 OK", "").with_header(
+            "content-length",
+            (MAX_SUCCESS_BODY_BYTES + 1).to_string(),
+        );
+    let (url, handle, stop_tx) =
+        spawn_single_response_and_watch_for_retry(Some(content_length_too_large)).await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &permit)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(finish_retry_watch(stop_tx, handle).await.len(), 1);
+
+    let oversized_body = "x".repeat(MAX_SUCCESS_BODY_BYTES + 1);
+    let (url, handle, stop_tx) = spawn_single_response_and_watch_for_retry(Some(
+        TestResponse::json_without_content_length("200 OK", oversized_body),
+    ))
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let error = client
+        .submit_wallet_create(owner, &permit)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(finish_retry_watch(stop_tx, handle).await.len(), 1);
+}
+
+#[tokio::test]
+async fn submit_preserves_unknown_transaction_state_without_success_classification() {
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"transactionID": "tx-future-state", "state": "STATE_FUTURE"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let owner = address(WALLET_OWNER);
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let receipt = expect_submitted(
+        client
+            .submit_wallet_create(owner, &permit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        receipt.state(),
+        &RelayerTransactionState::Unknown("STATE_FUTURE".to_string())
+    );
+    assert!(!receipt.state().is_success());
+    let receipt_debug = format!("{receipt:?}");
+    assert!(!receipt_debug.contains("STATE_FUTURE"));
+    assert!(receipt_debug.contains("<unrecognized relayer state>"));
+    assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn rollback_latch_disables_all_clones_while_reads_and_dry_run_continue() {
+    let owner = address(WALLET_OWNER);
+    let transaction_id = "tx-rollback-read";
+    let responses = vec![
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-before-rollback", "state": "STATE_NEW"}).to_string(),
+        ),
+        TestResponse::json("200 OK", json!({"deployed": true}).to_string()),
+        TestResponse::json("200 OK", json!({"nonce": 31}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_NEW").to_string(),
+        ),
+    ];
+    let (url, handle) = spawn_server(responses).await;
+    let client = DepositWalletRelayerClient::new_with_mutation_enabled(
+        url,
+        relayer_auth(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+    )
+    .unwrap();
+    let cloned_client = client.clone();
+    let live_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        u64::MAX,
+    );
+
+    let receipt = expect_submitted(
+        client
+            .submit_wallet_create(owner, &live_permit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(receipt.transaction_id(), "tx-before-rollback");
+
+    client.disable_mutation();
+    let same_client_error = client
+        .submit_wallet_create(owner, &live_permit)
+        .await
+        .unwrap_err();
+    let clone_error = cloned_client
+        .submit_wallet_create(owner, &live_permit)
+        .await
+        .unwrap_err();
+    assert!(same_client_error.is_deposit_wallet_mutation_blocked());
+    assert!(clone_error.is_deposit_wallet_mutation_blocked());
+
+    let read_permit = read_permit(owner);
+    assert!(client
+        .is_deposit_wallet_deployed(owner, &read_permit)
+        .await
+        .unwrap());
+    assert_eq!(
+        client.get_wallet_nonce(owner, &read_permit).await.unwrap(),
+        U256::from(31u64)
+    );
+    let transaction = client
+        .get_transaction_for_owner(owner, transaction_id, &read_permit)
+        .await
+        .unwrap();
+    assert_eq!(transaction.transaction_id, transaction_id);
+    assert_eq!(transaction.state, RelayerTransactionState::New);
+
+    let dry_run_permit = mutation_permit(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        u64::MAX,
+    );
+    let evidence = expect_dry_run(
+        client
+            .submit_wallet_create(owner, &dry_run_permit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(evidence.operation(), WALLET_CREATE_TRANSACTION_TYPE);
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[0].path, SUBMIT_PATH);
+    assert!(requests[1].path.starts_with(DEPLOYED_PATH));
+    assert!(requests[2].path.starts_with("/nonce"));
+    assert!(requests[3].path.starts_with(TRANSACTION_PATH));
+}
+
+#[test]
+fn mutation_permit_debug_redacts_owner_and_reference_contents() {
+    let owner = address(WALLET_OWNER);
+    let owner_checksum = to_checksum(&owner, None);
+    let permit = RelayerMutationPermit::try_new(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+        "evidence-reference-secret-looking",
+        "operator-approval-secret-looking",
+    )
+    .unwrap();
+
+    let debug = format!("{permit:?}");
+    assert!(debug.contains(&super::redaction::redacted_address(owner)));
+    assert!(debug.contains("evidence_ref_len"));
+    assert!(debug.contains("operator_approval_ref_len"));
+    assert!(!debug.contains(&owner_checksum));
+    assert!(!debug.contains(&owner_checksum.to_ascii_lowercase()));
+    assert!(!debug.contains("evidence-reference-secret-looking"));
+    assert!(!debug.contains("operator-approval-secret-looking"));
 }
