@@ -42,8 +42,24 @@ impl DepositWalletRelayerClient {
         transaction_id: &str,
         permit: &RelayerReadPermit,
     ) -> Result<DepositWalletTransactionReceipt> {
+        self.get_transaction_for_owner_with_expected_type(
+            owner,
+            transaction_id,
+            permit,
+            WALLET_TRANSACTION_TYPE,
+        )
+        .await
+    }
+
+    pub(super) async fn get_transaction_for_owner_with_expected_type(
+        &self,
+        owner: Address,
+        transaction_id: &str,
+        permit: &RelayerReadPermit,
+        expected_type: &str,
+    ) -> Result<DepositWalletTransactionReceipt> {
         self.ensure_read_permit(permit, owner)?;
-        self.fetch_transaction(transaction_id)
+        self.fetch_transaction(transaction_id, expected_type)
             .await
             .and_then(|parsed| validate_owner_transaction_receipt(owner, parsed.receipt))
     }
@@ -51,6 +67,7 @@ impl DepositWalletRelayerClient {
     pub(super) async fn fetch_transaction(
         &self,
         transaction_id: &str,
+        expected_type: &str,
     ) -> Result<ParsedTransactionReceipt> {
         if transaction_id.trim().is_empty() {
             return Err(RelayerError::Other(
@@ -64,7 +81,7 @@ impl DepositWalletRelayerClient {
         let response = self
             .send_with_success_limit(Method::GET, url, None, MAX_TRANSACTION_SUCCESS_BODY_BYTES)
             .await?;
-        parse_transaction_response(&transaction_id, self.config, &response)
+        parse_transaction_response(&transaction_id, expected_type, self.config, &response)
             .map_err(|parse_error| parse_error.error)
     }
 }

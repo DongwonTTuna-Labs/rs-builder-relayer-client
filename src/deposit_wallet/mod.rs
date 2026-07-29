@@ -21,7 +21,8 @@ pub use config::{
     POLYGON_DEPOSIT_WALLET_FACTORY, POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
 };
 pub use http::{
-    DepositWalletDryRunEvidence, DepositWalletRelayerClient, DepositWalletRelayerUrl,
+    DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletDryRunEvidence,
+    DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletSubmitReceipt, DepositWalletTransactionReceipt, DryRunCallSummary, RelayerKeyAuth,
     RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerReadPermit,
     RelayerSubmitOutcome,

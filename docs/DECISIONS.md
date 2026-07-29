@@ -277,3 +277,74 @@ Consequences:
   remain deferred to later reconciliation work;
 - this decision does not relax the `STATE_CONFIRMED`, fixture, consumer, or
   operator enablement gates.
+
+## ADR-0010: PBRSDK-8 Deposit-Wallet Deployment Lifecycle
+
+Decision:
+
+```text
+Compose the approved deployed read and WALLET-CREATE submit paths into an
+explicit-policy deployment lifecycle, then perform at most one typed
+WALLET-CREATE transaction read. Only STATE_CONFIRMED produces Ready.
+```
+
+`DepositWalletDeploymentPolicy` is supplied on every lifecycle call and does
+not implement `Default`. Consumers normally choose `Predeployed`, which keeps
+WALLET-CREATE disabled and returns a mutation-blocked error if the deployed
+read is false. A runtime that explicitly owns provisioning may choose
+`DeployIfMissing`, but a missing wallet still cannot enter submission without
+an explicit `RelayerMutationPermit`.
+
+The lifecycle always calls `is_deposit_wallet_deployed` first. That existing
+path validates the owner- and chain-scoped read permit, derives the deposit
+wallet, validates the configured contract source, and performs the deployed
+read. A `true` result short-circuits without consulting mutation authority. On
+a false result, `submit_wallet_create` remains the sole owner of mutation
+operation, owner, chain, expiry, one-way latch, mode, factory, and request-body
+validation. The lifecycle does not duplicate or weaken either validation
+path. In short, the deployed read already performs derivation and contract
+configuration validation, while `submit_wallet_create` already performs permit
+and configuration validation.
+
+The official TypeScript SDK at commit
+`9122f6fb1856f1ecfe4406685bfa19a2c5a7b290` defines transaction types
+`WALLET` and `WALLET-CREATE` separately. Transaction wire validation therefore
+accepts an internal expected type while preserving all existing id, owner,
+from, configured-factory `to`, derived `proxyAddress`, state, and hash checks.
+The public `get_transaction_for_owner` continues to require `WALLET`;
+deployment readiness alone uses `WALLET-CREATE`. Neither type is accepted as
+the other.
+
+`check_deposit_wallet_deployment_readiness` performs one read only. Confirmed
+with the required hash evidence maps to `Ready`; New, Executed, and Mined map
+to `Pending`. Invalid and Failed retain their typed errors, while Unknown,
+wrong-type, malformed, absent, or otherwise ambiguous evidence remains an
+error requiring reconciliation. There is no polling loop, retry, sleep,
+backoff, cancellation, or resubmission in this round; bounded polling belongs
+to PBRSDK-10.
+
+The no-redeployment contract is expressed through outcomes and errors, not a
+new persistence layer. `CreateSubmitted` preserves `transaction_id` and
+`payload_keccak256`; consumers must persist both and reconcile until readiness
+is confirmed. They must not call the deployment entry again for an owner with
+a pending create. Owner-scoped intent state and code-enforced duplicate-submit
+prevention belong to PBRSDK-11, with later reconciliation work remaining in
+PBRSDK-12/13.
+
+Consequences:
+
+- the public lifecycle surface adds
+  `DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`,
+  `DepositWalletReadiness`, `ensure_deposit_wallet_deployment`, and
+  `check_deposit_wallet_deployment_readiness`;
+- the public submit surface remains exactly the two PBRSDK-7 permit-bound
+  `submit_*` methods; lifecycle orchestration does not add another submit API;
+- dry-run returns redacted create evidence and sends no submit HTTP request;
+- deterministic loopback tests prove deployed short-circuiting, default
+  predeployed denial, permit and latch propagation, exact signature-free
+  WALLET-CREATE body, confirmed-only readiness, typed failures, type isolation,
+  and read-permit rejection before HTTP;
+- `wallet_create_transaction_response.json` is schema-constructed from the
+  recorded WALLET response shape plus the official type enum. No live-recorded
+  WALLET-CREATE response is available yet, so live shape parity remains an
+  explicit residual risk and this decision does not authorize live deployment.

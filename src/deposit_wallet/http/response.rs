@@ -2,9 +2,7 @@ use super::redaction::{
     external_token_hash, redacted_address, sanitized_external_token, unknown_state_error_summary,
 };
 use super::*;
-use crate::deposit_wallet::{
-    derive_deposit_wallet_address, DepositWalletContractConfig, WALLET_TRANSACTION_TYPE,
-};
+use crate::deposit_wallet::{derive_deposit_wallet_address, DepositWalletContractConfig};
 use serde_json::Value;
 
 const DEPOSIT_WALLET_RECONCILIATION_REQUIRED_PREFIX: &str =
@@ -101,6 +99,7 @@ pub(super) struct RelayerTransactionResponseWithOwner {
 
 pub(super) fn parse_transaction_response(
     expected_transaction_id: &str,
+    expected_type: &str,
     config: DepositWalletContractConfig,
     bytes: &[u8],
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
@@ -121,6 +120,7 @@ pub(super) fn parse_transaction_response(
                 })?;
             return parse_verified_transaction_response(
                 expected_transaction_id,
+                expected_type,
                 config,
                 response,
             );
@@ -134,11 +134,12 @@ pub(super) fn parse_transaction_response(
     }
 
     let response = select_transaction_response_from_array(expected_transaction_id, bytes)?;
-    parse_verified_transaction_response(expected_transaction_id, config, response)
+    parse_verified_transaction_response(expected_transaction_id, expected_type, config, response)
 }
 
 fn parse_verified_transaction_response(
     expected_transaction_id: &str,
+    expected_type: &str,
     config: DepositWalletContractConfig,
     response: RelayerTransactionResponseWithOwner,
 ) -> std::result::Result<ParsedTransactionReceipt, TransactionParseError> {
@@ -158,7 +159,8 @@ fn parse_verified_transaction_response(
             )),
         ));
     }
-    let deposit_wallet = validate_transaction_wire_evidence(&response, config, owner)?;
+    let deposit_wallet =
+        validate_transaction_wire_evidence(&response, expected_type, config, owner)?;
     let parsed = receipt_from_submit_response(response.response, owner, Some(deposit_wallet))
         .map_err(TransactionParseError::new)?;
     Ok(parsed)
@@ -166,6 +168,7 @@ fn parse_verified_transaction_response(
 
 fn validate_transaction_wire_evidence(
     response: &RelayerTransactionResponseWithOwner,
+    expected_type: &str,
     config: DepositWalletContractConfig,
     owner: Option<Address>,
 ) -> std::result::Result<Address, TransactionParseError> {
@@ -175,12 +178,11 @@ fn validate_transaction_wire_evidence(
                 .to_string(),
         ))
     })?;
-    if tx_type != WALLET_TRANSACTION_TYPE {
+    if tx_type != expected_type {
         return Err(TransactionParseError::new(
-            RelayerError::reconciliation_required(
-                "transaction response type was not WALLET; manual reconciliation required"
-                    .to_string(),
-            ),
+            RelayerError::reconciliation_required(format!(
+                "transaction response type was not {expected_type}; manual reconciliation required"
+            )),
         ));
     }
 

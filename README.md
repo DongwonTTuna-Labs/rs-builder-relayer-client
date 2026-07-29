@@ -14,16 +14,24 @@ work, use the reviewed fallible APIs such as
 `try_build_wallet_batch_request_with_signature`,
 `DepositWalletRelayerClient`, `DepositWalletRelayerUrl`,
 `RelayerReadPermit`, `DepositWalletRequestContext`, `DepositWalletCall`,
+`DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`,
+`DepositWalletReadiness`,
 `RelayerKeyAuth`, `RelayerMutationPermit`, `RelayerMutationMode`,
 `RelayerMutationOperation`, `RelayerSubmitOutcome`,
 `DepositWalletDryRunEvidence`, `DryRunCallSummary`,
 `DepositWalletSubmitReceipt`, and the documented request/response types
 re-exported from `polymarket_relayer`.
 
-The reviewed HTTP surface has three owner- and chain-scoped reads plus two
-explicitly gated mutation methods. `RelayerReadPermit` is required for
+The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
+two deployment-lifecycle methods, and exactly two explicitly gated public
+`submit_*` methods. `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
-`get_transaction_for_owner`. `submit_wallet_create` and
+`get_transaction_for_owner`, as well as both lifecycle methods.
+`ensure_deposit_wallet_deployment` checks deployed fact first and requires an
+explicit `DepositWalletDeploymentPolicy`; `Predeployed` is the normal consumer
+choice and blocks WALLET-CREATE when deployment is missing.
+`check_deposit_wallet_deployment_readiness` performs one WALLET-CREATE status
+read and maps only `STATE_CONFIRMED` to `Ready`. `submit_wallet_create` and
 `submit_signed_wallet_batch` each require a mode-, operation-, owner-, chain-,
 and expiry-scoped `RelayerMutationPermit`. `DepositWalletRelayerClient::new`
 starts with live mutation denied; `new_with_mutation_enabled` is the explicit
@@ -35,9 +43,11 @@ disabled.
 This mutation surface is a permit and transport gate, not a claim of complete
 deposit-wallet live readiness. A successful deployed read records deployment
 fact only, and a submit receipt records relayer acceptance evidence rather than
-`STATE_CONFIRMED`. Transaction polling, persistent idempotency/reconciliation,
-recent-transaction recovery, and the remaining operator gates are later work;
-do not enable an end-to-end live flow on PBRSDK-7 alone.
+`STATE_CONFIRMED`. PBRSDK-8 adds confirmed-only single-shot readiness, but
+bounded polling, owner-scoped pending-intent enforcement, persistent
+idempotency/reconciliation, recent-transaction recovery, and the remaining
+operator gates are later work. Preserve each submitted transaction id and
+payload hash, and never re-enter deployment for an owner with a pending create.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the

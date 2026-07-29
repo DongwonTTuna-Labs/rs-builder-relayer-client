@@ -71,6 +71,9 @@ The reviewed crate-root integration surface is intentionally narrow:
 ```text
 DepositWalletRelayerClient
 DepositWalletRelayerUrl
+DepositWalletDeploymentPolicy
+DepositWalletDeploymentStatus
+DepositWalletReadiness
 RelayerReadPermit
 RelayerMutationPermit
 RelayerMutationMode
@@ -142,7 +145,8 @@ grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_requ
 ### HTTP client surface
 
 The deposit-wallet HTTP client exposes construction, exactly three reviewed
-production reads, and exactly two permit-gated mutation methods:
+low-level production reads, two deployment-lifecycle orchestration methods,
+and exactly two permit-gated public `submit_*` methods:
 
 ```text
 DepositWalletRelayerUrl::parse
@@ -152,6 +156,8 @@ DepositWalletRelayerClient::disable_mutation
 DepositWalletRelayerClient::is_deposit_wallet_deployed
 DepositWalletRelayerClient::get_wallet_nonce
 DepositWalletRelayerClient::get_transaction_for_owner
+DepositWalletRelayerClient::ensure_deposit_wallet_deployment
+DepositWalletRelayerClient::check_deposit_wallet_deployment_readiness
 DepositWalletRelayerClient::submit_wallet_create
 DepositWalletRelayerClient::submit_signed_wallet_batch
 ```
@@ -193,6 +199,50 @@ and sends that derived address to `GET /deployed?address=...&type=WALLET`. A
 `true` response records deployment fact only. It is not submit readiness and
 must not bypass the separate `STATE_CONFIRMED`, mutation capability, recovery,
 or operator gates.
+
+### Deployment lifecycle workflow
+
+`DepositWalletDeploymentPolicy` is always an explicit method argument and does
+not implement `Default`. The normal consumer policy is `Predeployed`: it first
+performs the deployed read and blocks WALLET-CREATE when the wallet is missing.
+Use `DeployIfMissing` only in a runtime that explicitly owns wallet
+provisioning and has a scoped mutation permit.
+
+The consumer adapter must keep this order:
+
+```text
+choose Predeployed unless this runtime explicitly owns deployment
+  -> call ensure_deposit_wallet_deployment
+  -> AlreadyDeployed: record observed deployment fact; no submit occurred
+  -> CreateDryRun: retain redacted evidence; no submit occurred and wallet is
+     not ready
+  -> CreateSubmitted: persist transaction_id and payload_keccak256 immediately
+  -> call check_deposit_wallet_deployment_readiness once
+  -> Ready: STATE_CONFIRMED with required hash evidence was observed
+  -> Pending(New/Executed/Mined): hand off to PBRSDK-10 polling and do not call
+     ensure_deposit_wallet_deployment again for that owner
+  -> any error: stop mutation and reconcile; never infer authority to resubmit
+```
+
+The deployed preflight owns read-permit, derived-wallet, configured factory,
+chain, and source validation. If deployment is missing,
+`submit_wallet_create` owns mutation operation, owner, chain, expiry, latch,
+mode, and request validation. The orchestration layer intentionally does not
+duplicate those checks. `WALLET-CREATE` serialization remains the approved
+`type`/`from`/factory-`to` body and contains no user signature.
+
+Readiness accepts only a transaction response whose type is `WALLET-CREATE`.
+The public `get_transaction_for_owner` remains WALLET-only, so neither response
+type can cross the other lifecycle. Confirmed is the only `Ready` state. Failed
+and Invalid remain typed errors; Unknown, mismatched type, malformed evidence,
+absence, and ambiguous transport/results require reconciliation.
+
+PBRSDK-8 intentionally performs only one readiness read. It does not loop,
+sleep, retry, cancel, query recent transactions, persist owner state, or submit
+again. Bounded polling is PBRSDK-10, owner-scoped pending-intent enforcement is
+PBRSDK-11, and later reconciliation persistence belongs to PBRSDK-12/13. Until
+those controls exist, a consumer must use its adapter-owned state to forbid a
+second lifecycle entry for an owner with a pending create.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -260,10 +310,10 @@ gate or recall an in-flight POST; reconcile any such request before taking
 further mutation action.
 
 Invalid or partial success responses, transport failures, and oversized 2xx
-responses require reconciliation before any new submit. The D7 submit receipt
-is not `STATE_CONFIRMED`, and PBRSDK-7 does not provide the complete polling,
-persistent idempotency, recent-transaction lookup, or duplicate-submit recovery
-needed to claim end-to-end live readiness.
+responses require reconciliation before any new submit. A submit receipt is
+not `STATE_CONFIRMED`; PBRSDK-8 adds only a single-shot readiness check and does
+not provide the complete polling, persistent idempotency, recent-transaction
+lookup, or duplicate-submit recovery needed to claim end-to-end live readiness.
 
 Consumer adapter migration status for PR #8:
 
@@ -289,6 +339,7 @@ EIP-712 fixture tests pass
 pUSD/CTF calldata fixture tests pass
 identity separation tests pass
 transaction polling unknown-state tests pass
+deployment lifecycle short-circuit, policy, permit, and type-isolation tests pass
 dependency is pinned by commit SHA
 operator approval is recorded
 ```
