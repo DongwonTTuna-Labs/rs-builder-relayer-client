@@ -65,6 +65,7 @@ poll_wallet_transaction_stops_on_failed_invalid_and_unknown_states
 poll_wallet_transaction_retries_api_errors_on_policy_schedule
 poll_wallet_transaction_retries_transport_error_on_policy_schedule
 poll_wallet_transaction_cancels_in_flight_read_without_retry
+poll_wallet_transaction_cancels_during_backoff_without_another_read
 poll_wallet_transaction_prioritizes_immediate_cancellation_before_http
 polling_keeps_wallet_and_wallet_create_transaction_types_isolated
 poll_wallet_transaction_treats_missing_array_item_as_transient
@@ -198,9 +199,13 @@ the next timer during I/O and auto-advance the virtual clock instead of leaving
 I/O at zero elapsed time. The residual tradeoff is that a client bug that sends
 too few requests can hang an individual polling test. CI and command-runner
 timeouts are the hang guard; the test server does not add an internal timer.
-Cancellation is the one intentional extra timer. In the 500ms cancellation
-case one GET is observed, the in-flight read is dropped safely, and zero
-completed attempts are reported; no second GET occurs.
+Cancellation is the one intentional extra timer. The in-flight case holds the
+first response after observing one GET, then cancels the read after 500ms and
+reports zero completed attempts. The sleep-stage case writes and flushes a
+STATE_NEW response before arming its 500ms cancellation timer; attempt one
+therefore completes, cancellation wins the following 1s backoff, and one
+completed attempt is reported. Both cases observe exactly one GET and no
+second GET.
 
 ## Manual Live Gate
 

@@ -561,6 +561,59 @@ async fn spawn_polling_held_response_server() -> (
     )
 }
 
+async fn spawn_polling_response_then_watch_for_retry(
+    response: TestResponse,
+) -> (
+    DepositWalletRelayerUrl,
+    JoinHandle<Vec<CapturedRequest>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("polling backoff-cancel server should bind");
+    let addr = listener.local_addr().unwrap();
+    let (armed_tx, armed_rx) = tokio::sync::oneshot::channel();
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("polling backoff-cancel server should accept first request");
+        let first_request = read_polling_request(&mut stream).await;
+        write_response(&mut stream, response).await;
+        stream
+            .flush()
+            .await
+            .expect("polling response should flush before cancellation is armed");
+        armed_tx
+            .send(())
+            .expect("polling cancellation receiver should remain available");
+        drop(stream);
+
+        let mut requests = vec![first_request];
+        loop {
+            tokio::select! {
+                biased;
+                accepted = listener.accept() => {
+                    let (mut retry_stream, _) =
+                        accepted.expect("polling retry accept should succeed");
+                    requests.push(read_polling_request(&mut retry_stream).await);
+                }
+                _ = &mut stop_rx => break,
+            }
+        }
+        requests
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+        armed_rx,
+        stop_tx,
+    )
+}
+
 async fn spawn_optional_redirect_target(
     response: TestResponse,
 ) -> (String, JoinHandle<Vec<CapturedRequest>>) {
@@ -4204,6 +4257,45 @@ async fn poll_wallet_transaction_cancels_in_flight_read_without_retry() {
         .expect("polling held-response server should remain available");
     assert_eq!(outcome, RelayerPollOutcome::Cancelled { attempts: 0 });
     assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_cancels_during_backoff_without_another_read() {
+    let transaction_id = "tx-poll-cancel-backoff";
+    let response = TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, "STATE_NEW").to_string(),
+    );
+    let (url, handle, armed_rx, stop_server) =
+        spawn_polling_response_then_watch_for_retry(response).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let cancel = async move {
+        let _ = armed_rx.await.ok();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    let result = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            cancel,
+        )
+        .await;
+
+    stop_server
+        .send(())
+        .expect("polling retry watcher should remain available");
+    let requests = handle.await.unwrap();
+    let outcome = result.unwrap();
+    assert_eq!(outcome, RelayerPollOutcome::Cancelled { attempts: 1 });
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));
 }
 
 #[tokio::test(start_paused = true)]
