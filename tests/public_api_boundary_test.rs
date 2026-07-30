@@ -36,6 +36,14 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "RelayerSubmitOutcome",
         "RelayerSubmitResponse",
         "RelayerTransactionState",
+        "InMemoryMutationIntentStore",
+        "IntentGatedClient",
+        "MutationIntentLease",
+        "MutationIntentRecord",
+        "MutationIntentStatus",
+        "MutationIntentStore",
+        "OwnerMutationRegistry",
+        "TryBeginOutcome",
         "try_build_wallet_batch_request_with_signature",
     ] {
         assert!(
@@ -57,6 +65,8 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         .expect("deployed read source is readable");
     let execute = fs::read_to_string("src/deposit_wallet/http/execute.rs")
         .expect("WALLET batch execution source is readable");
+    let intent = fs::read_to_string("src/deposit_wallet/http/intent.rs")
+        .expect("mutation intent source is readable");
     let lifecycle = fs::read_to_string("src/deposit_wallet/http/lifecycle.rs")
         .expect("deployment lifecycle source is readable");
     let mutation = fs::read_to_string("src/deposit_wallet/http/mutation.rs")
@@ -86,6 +96,10 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "HTTP module must include the reviewed WALLET batch execution path"
     );
     assert!(
+        http.contains("mod intent;") && http.contains("pub use intent::{"),
+        "HTTP module must include and explicitly re-export the reviewed mutation intent path"
+    );
+    assert!(
         http.contains("mod polling;"),
         "HTTP module must include the reviewed bounded polling path"
     );
@@ -106,6 +120,14 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "RelayerMutationOperation",
         "RelayerMutationPermit",
         "RelayerSubmitOutcome",
+        "InMemoryMutationIntentStore",
+        "IntentGatedClient",
+        "MutationIntentLease",
+        "MutationIntentRecord",
+        "MutationIntentStatus",
+        "MutationIntentStore",
+        "OwnerMutationRegistry",
+        "TryBeginOutcome",
     ] {
         assert!(
             contains_identifier(&http, required),
@@ -124,6 +146,129 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             "read capability surface is missing {required}"
         );
     }
+
+    for required in [
+        "pub trait MutationIntentStore",
+        "pub enum TryBeginOutcome",
+        "pub struct InMemoryMutationIntentStore",
+        "pub struct MutationIntentRecord",
+        "pub enum MutationIntentStatus",
+        "pub struct OwnerMutationRegistry",
+        "pub struct MutationIntentLease",
+        "pub struct IntentGatedClient",
+    ] {
+        assert!(
+            intent.contains(required),
+            "mutation intent surface is missing {required}"
+        );
+    }
+    for required in [
+        "fn load(&self, owner: Address, chain_id: u64)",
+        "fn try_begin(&self, template: MutationIntentRecord)",
+        "expected_epoch: u64",
+        "expected_revision: u64",
+        "record: MutationIntentRecord",
+    ] {
+        assert!(
+            intent.contains(required),
+            "mutation intent store contract is missing {required:?}"
+        );
+    }
+    assert!(
+        !intent.contains("fn save("),
+        "mutation intent storage must expose only atomic begin and versioned update writes"
+    );
+    assert!(
+        intent.contains("#[cfg(test)]\n    pub(super) fn with_clock("),
+        "registry clock injection must retain the reviewed test-only parent visibility"
+    );
+    let gate_signature = function_signatures(&intent, "pub fn gate");
+    assert_eq!(gate_signature.len(), 1);
+    assert!(
+        gate_signature[0].contains("client: &'a DepositWalletRelayerClient")
+            && gate_signature[0].contains("IntentGatedClient<'a>"),
+        "registry gate must return the client- and registry-borrowing wrapper"
+    );
+    let poll_record_signature = function_signatures(&intent, "pub fn record_poll_outcome");
+    assert_eq!(poll_record_signature.len(), 1);
+    assert!(
+        poll_record_signature[0].contains("owner: Address")
+            && poll_record_signature[0].contains("chain_id: u64")
+            && poll_record_signature[0].contains("polled_transaction_id: &str")
+            && poll_record_signature[0].contains("outcome: &RelayerPollOutcome"),
+        "poll outcomes must be explicitly bound to owner, chain, and transaction ID"
+    );
+    let terminal_failure_signature =
+        function_signatures(&intent, "pub fn record_terminal_failure");
+    assert_eq!(terminal_failure_signature.len(), 1);
+    assert!(
+        terminal_failure_signature[0].contains("polled_transaction_id: &str")
+            && terminal_failure_signature[0].contains("error: &RelayerError"),
+        "terminal failure recording must stay transaction-bound and lease-free"
+    );
+    let begin_signature = function_signatures(&intent, "pub fn begin_intent");
+    assert_eq!(begin_signature.len(), 1);
+    for required in [
+        "owner: Address",
+        "chain_id: u64",
+        "operation: RelayerMutationOperation",
+        "Result<MutationIntentLease<'_>>",
+    ] {
+        assert!(
+            begin_signature[0].contains(required),
+            "begin_intent signature is missing {required:?}"
+        );
+    }
+    let record_block = struct_block(&intent, "MutationIntentRecord");
+    for field in [
+        "owner",
+        "chain_id",
+        "epoch",
+        "revision",
+        "operation",
+        "status",
+        "nonce",
+        "payload_keccak256",
+        "deadline_unix",
+        "transaction_id",
+        "last_observed_state",
+        "created_at_unix",
+        "updated_at_unix",
+    ] {
+        assert!(
+            record_block.contains(&format!("    {field}:")),
+            "MutationIntentRecord::{field} must exist"
+        );
+        assert!(
+            !record_block.contains(&format!("pub {field}:"))
+                && !record_block.contains(&format!("pub(crate) {field}:")),
+            "MutationIntentRecord::{field} must remain private"
+        );
+        assert!(
+            intent.contains(&format!("pub fn {field}(&self)"))
+                || intent.contains(&format!("pub fn {field}(\n")),
+            "MutationIntentRecord::{field} must have the reviewed getter"
+        );
+    }
+    let record_attributes = derive_attributes_for_struct(&intent, "MutationIntentRecord");
+    assert!(
+        record_attributes.contains("Serialize")
+            && record_attributes.contains("Deserialize")
+            && !record_attributes.contains("Debug"),
+        "mutation intent records must round-trip through stores and use manual redacted Debug"
+    );
+    let status_attributes = derive_attributes_for_enum(&intent, "MutationIntentStatus");
+    assert!(
+        status_attributes.contains("Serialize") && status_attributes.contains("Deserialize"),
+        "mutation intent status must round-trip through durable stores"
+    );
+    let operation_attributes =
+        derive_attributes_for_enum(&mutation, "RelayerMutationOperation");
+    assert!(
+        operation_attributes.contains("Serialize")
+            && operation_attributes.contains("Deserialize"),
+        "mutation operation must be serializable as part of durable intent state"
+    );
 
     for method in [
         "get_wallet_nonce",
@@ -309,13 +454,43 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         function_signatures(&production_http_surface, "pub async fn submit_");
     assert_eq!(
         production_submit_signatures.len(),
-        2,
-        "the complete production HTTP implementation must expose exactly two public submit methods"
+        3,
+        "the complete production HTTP implementation must expose two permit-bound primitives plus one intent-gated wrapper"
     );
     for signature in production_submit_signatures {
         assert!(
             signature.contains("permit: &RelayerMutationPermit"),
             "every public submit method in the complete production HTTP implementation must require RelayerMutationPermit: {signature}"
+        );
+    }
+    let production_execute_signatures =
+        function_signatures(&production_http_surface, "pub async fn execute_wallet_batch");
+    assert_eq!(
+        production_execute_signatures.len(),
+        2,
+        "the complete production HTTP implementation must expose the primitive and intent-gated execute methods"
+    );
+    for signature in production_execute_signatures {
+        assert!(
+            signature.contains("read_permit: &RelayerReadPermit")
+                && signature.contains("mutation_permit: &RelayerMutationPermit"),
+            "every execute wrapper layer must remain read- and mutation-permit-bound: {signature}"
+        );
+    }
+    let production_ensure_signatures = function_signatures(
+        &production_http_surface,
+        "pub async fn ensure_deposit_wallet_deployment",
+    );
+    assert_eq!(
+        production_ensure_signatures.len(),
+        2,
+        "the complete production HTTP implementation must expose the primitive and intent-gated deployment methods"
+    );
+    for signature in production_ensure_signatures {
+        assert!(
+            signature.contains("read_permit: &RelayerReadPermit")
+                && signature.contains("mutation_permit: Option<&RelayerMutationPermit>"),
+            "every deployment wrapper layer must retain read authority and optional scoped mutation authority: {signature}"
         );
     }
     for forbidden in ["pub fn enable_mutation", "pub async fn enable_mutation"] {
@@ -394,6 +569,14 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "RelayerPollPolicy",
         "RelayerReadPermit",
         "RelayerSubmitOutcome",
+        "InMemoryMutationIntentStore",
+        "IntentGatedClient",
+        "MutationIntentLease",
+        "MutationIntentRecord",
+        "MutationIntentStatus",
+        "MutationIntentStore",
+        "OwnerMutationRegistry",
+        "TryBeginOutcome",
     ] {
         assert!(
             contains_identifier(&module, required),
@@ -569,6 +752,11 @@ fn docs_record_semver_boundary_and_grep_audit_contract() {
             "docs/DECISIONS.md",
             decisions.as_str(),
             "ADR-0009: PBRSDK-7 Explicit Mutation Permit and Dry-Run Gate",
+        ),
+        (
+            "docs/DECISIONS.md",
+            decisions.as_str(),
+            "ADR-0013: PBRSDK-12 Owner-Scoped Mutation Intent Registry",
         ),
         (
             "docs/REVIEW_CHECKLIST.md",

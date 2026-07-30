@@ -6,6 +6,8 @@
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+cargo build --workspace --all-targets --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 git diff --check
 ```
 
@@ -71,6 +73,24 @@ polling_keeps_wallet_and_wallet_create_transaction_types_isolated
 poll_wallet_transaction_treats_missing_array_item_as_transient
 poll_wallet_transaction_rejects_mismatched_permit_before_http
 relayer_poll_policy_validates_bounds_and_exposes_values
+mutation_intent_lease_lifecycle_preserves_versions_timestamps_and_terminal_reentry
+mutation_intent_binding_and_terminal_failure_rules_reject_misdelivery_and_regression
+mutation_intent_poll_outcomes_are_transaction_bound_and_distrust_variant_names
+mutation_intents_block_unresolved_scope_and_keep_other_owner_or_chain_independent
+mutation_intent_transition_guards_leave_records_unchanged
+mutation_intent_store_assigns_generations_fences_stale_writers_and_fails_closed_at_bounds
+mutation_intent_restart_recovery_uses_registry_terminal_failure_without_rebuilding_lease
+mutation_intent_store_errors_fail_closed_and_post_submit_recording_failure_keeps_lock
+intent_gated_execute_records_submission_then_confirmed_poll_and_reopens_owner
+intent_gated_execute_rejects_existing_owner_before_nonce_or_http
+intent_gated_execute_maps_disconnect_to_ambiguous_and_local_deadline_failure_to_failed
+intent_gated_dry_run_reads_nonce_without_creating_a_lease
+intent_gated_create_and_lifecycle_dry_runs_never_create_a_lease
+intent_gated_invalid_transaction_id_is_ambiguous_without_echoing_raw_identity
+intent_gated_api_failures_use_conservative_ambiguous_phase_classification
+intent_gated_create_and_lifecycle_wrappers_preserve_outcomes_and_lease_policy
+mutation_intent_serialization_and_debug_are_secret_free_and_redacted
+intent_gated_submit_recording_failure_returns_store_error_and_leaves_owner_locked
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -165,6 +185,32 @@ Golden tests should prove:
   attempts and never starts another read;
 - WALLET and WALLET-CREATE polling remain type-isolated and no polling outcome
   invokes submit, signing, nonce fetch, or automatic reconciliation;
+- mutation intent begin is atomic and store-issued, rejects a second unresolved
+  owner/chain lease before nonce or HTTP, and keeps different owners/chains
+  independent;
+- record updates preserve creation time, refresh update time, advance revision
+  exactly once, and reject stale epoch/revision writers without changing the
+  newer record;
+- Preparing, Submitted, and AmbiguousNoId remain unresolved, while Confirmed,
+  bound terminal Failed, and Reconciled admit a new generation without epoch or
+  revision wrap;
+- receipt, poll, and terminal-failure writes are transaction-bound; a
+  mislabeled Confirmed variant, mismatched id, delayed old-intent result, and
+  non-terminal error cannot release the owner;
+- a registry reconstructed over the same store sees Submitted, blocks begin,
+  records a bound terminal failure without a lease, and then admits a successor;
+- gated live execute blocks before nonce I/O, records payload/deadline/id after
+  success, maps submit uncertainty and all API failures to AmbiguousNoId, and
+  maps proven local pre-submit failures to Failed;
+- DryRun creates no intent, deployment AlreadyDeployed/Predeployed paths do not
+  pollute owner history, and the live DeployIfMissing wrapper records exactly
+  the intended extra preflight reads and submit;
+- record JSON and Debug contain no raw signature, API key, auth header, private
+  key, calldata, or replayable body, while Debug redacts owner and transaction
+  id;
+- begin/update store errors, stale CAS, epoch exhaustion, and revision
+  exhaustion fail closed, and a post-submit record failure leaves Preparing
+  unresolved without echoing the transaction id;
 - unknown transaction states force non-mutating behavior.
 
 ## Production Read Transport Gate
@@ -207,6 +253,15 @@ therefore completes, cancellation wins the following 1s backoff, and one
 completed attempt is reported. Both cases observe exactly one GET and no
 second GET.
 
+PBRSDK-12 intent tests reuse the same loopback transport and injected clock.
+The only supplied store is a single-`Mutex` in-memory implementation; tests use
+it to prove the atomic begin contract, sequential rejection, generation and
+revision fencing, restart behavior through a newly constructed registry over
+the same store, and fail-closed boundaries. This is not a durable-store or
+concurrency stress qualification; deterministic concurrent expansion belongs
+to PBRSDK-14. No live host, retry loop, mock venue, file store, or database
+harness is introduced.
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.
@@ -233,9 +288,17 @@ idempotency, reconciliation, or duplicate-submit recovery gate.
 For PBRSDK-8, retain the submitted WALLET-CREATE transaction id and payload
 hash, then record `STATE_CONFIRMED` through the expected-type readiness path.
 Pending or error results forbid lifecycle re-entry for that owner until the
-bounded deployment poll observes confirmation and later owner-scoped intent
-controls reconcile the original submission. Exhaustion, cancellation, or an
-error still forbids lifecycle re-entry.
+bounded deployment poll observes confirmation and the durable owner registry
+records that exact bound result. Exhaustion, cancellation, unknown, ambiguous,
+or an unbound error still forbids lifecycle re-entry.
+
+For PBRSDK-12, live evidence must use a consumer-supplied durable
+`MutationIntentStore`; `InMemoryMutationIntentStore` is forbidden. Capture a
+restart exercise proving the unresolved row blocks a new mutation, then prove
+that only a matching Confirmed receipt or matching TransactionFailed/Invalid
+result reopens the owner. PBRSDK-13 ambiguous reconciliation and PBRSDK-14
+deterministic concurrency remain separate gates; neither may be replaced by an
+automatic resubmit.
 
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only

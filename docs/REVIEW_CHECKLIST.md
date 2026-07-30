@@ -40,11 +40,13 @@
 - [ ] Deployment lifecycle checks `/deployed` before any mutation, short-circuits when already deployed, and defaults operationally to the explicit `Predeployed` policy.
 - [ ] Missing deployment is blocked without an explicit matching mutation permit, and a closed live latch produces no submit HTTP request.
 - [ ] WALLET-CREATE readiness is single-shot: Confirmed alone is `Ready`; New/Executed/Mined are pending; Failed/Invalid/Unknown/ambiguous evidence is never success or resubmit authority.
-- [ ] Pending owners are not passed through deployment entry again; transaction id and payload hash are retained for bounded deployment polling and PBRSDK-11/12 reconciliation.
+- [ ] Pending owners enter live mutation only through `OwnerMutationRegistry::gate`; transaction id and payload hash are retained and bound polling results are recorded back into the durable intent row.
 - [ ] `execute_wallet_batch` validates mutation permit, read permit, deadline, signer, resource limits, and derived wallet before fetching the WALLET nonce.
 - [ ] Fresh nonce fetch is immediately followed by local EIP-712 signing with no intervening HTTP await, then the existing validated request builder and permit-gated submit path are reused.
 - [ ] DryRun still fetches and records the fresh nonce but sends no POST; a closed Live latch may allow that read but blocks the POST.
-- [ ] Same-owner concurrent execute calls remain forbidden until the PBRSDK-11/12 owner-scoped lease and intent contract exists.
+- [ ] A second same-owner/chain live execute is rejected while Preparing, Submitted, or AmbiguousNoId, before nonce fetch, signing, or HTTP; different owner/chain scopes remain independent.
+- [ ] Confirmed and bound TransactionFailed/Invalid results alone reopen the owner in this round; unknown, ambiguous, exhausted, cancelled, mismatched, and stale results keep or leave the lock unchanged.
+- [ ] DryRun creates no mutation intent, and dropping a lease never implicitly releases or deletes its record.
 
 ## Identity And Security
 
@@ -70,7 +72,7 @@
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
-- [ ] Production reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; mutation is limited to the two reviewed permit-bound `POST /submit` methods, and `GET /transactions` remains deferred.
+- [ ] Production reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; mutation still reaches only the two reviewed permit-bound primitive `POST /submit` methods, while approved live entry uses the additive intent-gated wrappers and `GET /transactions` remains deferred.
 - [ ] Polling reuses only the verified expected-type `GET /transaction` path, keeps WALLET and WALLET-CREATE isolated, and treats API/HTTP/temporary-absence errors as transient only within the finite policy.
 - [ ] `Retry-After` does not alter the PBRSDK-10 schedule; bounded retries of all API statuses, including auth-related 4xx responses, are documented as an observability tradeoff.
 - [ ] The deployment policy is chosen explicitly at every call; `Predeployed` is the normal consumer choice and `DepositWalletDeploymentPolicy` has no `Default` implementation.
@@ -86,7 +88,11 @@
 - [ ] Operator review of `DryRun` evidence is followed by a freshly created scoped `Live` permit; dry-run authority is not reused as live authority.
 - [ ] `disable_mutation` is a shared one-way latch across all client clones, exposes no re-enable method, blocks later live submits, and leaves reads and valid `DryRun` submissions available.
 - [ ] Invalid/partial submit responses, post-dispatch transport failures, and oversized 2xx responses require reconciliation before any resubmission.
-- [ ] The PR does not claim complete live readiness while owner-scoped intent, persistent idempotency, recent-transaction lookup, and duplicate-submit recovery remain deferred.
+- [ ] `MutationIntentRecord` has no raw signature, auth header, private key, calldata, or replayable-body field; its Debug redacts owner and hashes transaction id.
+- [ ] The synchronous durable store implements atomic `try_begin` and epoch/revision CAS as fast local operations; blocking I/O is isolated outside the async executor path.
+- [ ] `InMemoryMutationIntentStore` is used only for tests/development and is never presented as restart-safe or live-capable.
+- [ ] A durable-store restart exercise proves an unresolved owner remains blocked; PBRSDK-24/25 live qualification is not inferred from the in-memory test.
+- [ ] The PR does not claim complete live readiness while ambiguous reconciliation, recent-transaction lookup, duplicate-submit recovery, durable-store qualification, and remaining operator gates are deferred.
 
 ## Public API Boundary
 
@@ -96,11 +102,16 @@
 - [ ] `RelayerReadPermit` and the three reviewed HTTP read methods are present in the audited public surface.
 - [ ] `RelayerPollPolicy`, `RelayerPollOutcome`, `poll_wallet_transaction`, and `poll_deposit_wallet_deployment` are explicitly present in the audited public surface.
 - [ ] `DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`, `DepositWalletReadiness`, and both lifecycle methods are present in the audited public surface.
-- [ ] The read audit covers three public methods plus one crate-internal expected-type helper, all permit-bound, while the complete production source still exposes exactly two public `submit_*` methods.
+- [ ] The read audit covers three public methods plus one crate-internal expected-type helper, all permit-bound; file-local primitive counts remain unchanged while combined production source exposes two submit primitives plus one intent-gated submit wrapper.
 - [ ] The polling audit fixes both signatures, including policy, read permit, and `cancel: impl Future<Output = ()> + Send`, without changing the low-level read-permit count or adding a public `submit_*` method.
 - [ ] Paused polling tests use a timeout-free polling client and plain loopback accept/read futures; exact virtual elapsed time contains only polling sleeps, with CI/runner timeout documented as the server hang guard.
 - [ ] Mutation permit/evidence/outcome types, `new_with_mutation_enabled`, `disable_mutation`, `submit_wallet_create`, and `submit_signed_wallet_batch` are present in the audited public surface.
-- [ ] Exactly one `execute_wallet_batch` method has the reviewed generic signer plus read/mutation permit signature, without adding another public `submit_*` method or public type.
+- [ ] `execute.rs` still contains exactly one reviewed generic-signer `execute_wallet_batch`; combined source contains that primitive plus one intent-gated wrapper, both with read/mutation permits.
+- [ ] `submit.rs` still contains exactly two public `submit_*` primitives, `lifecycle.rs` still contains exactly two public async methods, and their existing assertions are unchanged.
+- [ ] Combined production source contains exactly three `submit_*`, two `execute_wallet_batch`, and two `ensure_deposit_wallet_deployment` signatures, with permit arguments on all wrapper layers.
+- [ ] `MutationIntentStore`, `TryBeginOutcome`, `InMemoryMutationIntentStore`, `MutationIntentRecord`, `MutationIntentStatus`, `OwnerMutationRegistry`, `MutationIntentLease`, and `IntentGatedClient` are explicitly re-exported at all three public boundaries.
+- [ ] The store surface has no generic `save`; begin generation is store-issued atomically and every later write is epoch/revision CAS with overflow fail-closed.
+- [ ] `record_poll_outcome` and `record_terminal_failure` both require an explicit polled transaction id and cannot resolve a mismatched or non-Submitted record.
 - [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.
 - [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.
 - [ ] Legacy Safe/Proxy APIs stay reference/compatibility surface and are not reused for deposit-wallet `WALLET-CREATE` or `WALLET` flows without wire-level proof.

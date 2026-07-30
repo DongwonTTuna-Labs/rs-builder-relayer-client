@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -33,12 +34,105 @@ const FIXED_PERMIT_EXPIRY_UNIX: u64 = 2_000_000_000;
 const EXECUTE_DEADLINE_UNIX: u64 = 1_760_000_000;
 const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 const NO_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
+const STALE_INTENT_LEASE_ERROR: &str =
+    "stale mutation intent lease; a newer write superseded this lease";
 
 /// Synthetic throwaway key, never a real credential.
 const SYNTHETIC_EXECUTE_SIGNER_KEY: [u8; 32] = [0x42u8; 32];
 
 struct FixedClock {
     now_unix: u64,
+}
+
+struct AdvancingClock {
+    now_unix: AtomicU64,
+}
+
+impl RelayerClock for AdvancingClock {
+    fn now_unix(&self) -> u64 {
+        self.now_unix.fetch_add(1, AtomicOrdering::SeqCst)
+    }
+}
+
+#[derive(Default)]
+struct CountingMutationIntentStore {
+    inner: InMemoryMutationIntentStore,
+    try_begin_calls: AtomicUsize,
+    load_calls: AtomicUsize,
+}
+
+impl MutationIntentStore for CountingMutationIntentStore {
+    fn load(&self, owner: Address, chain_id: u64) -> Result<Option<MutationIntentRecord>> {
+        self.load_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        self.inner.load(owner, chain_id)
+    }
+
+    fn try_begin(&self, template: MutationIntentRecord) -> Result<TryBeginOutcome> {
+        self.try_begin_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        self.inner.try_begin(template)
+    }
+
+    fn update(
+        &self,
+        expected_epoch: u64,
+        expected_revision: u64,
+        record: MutationIntentRecord,
+    ) -> Result<bool> {
+        self.inner
+            .update(expected_epoch, expected_revision, record)
+    }
+}
+
+struct FailingBeginMutationIntentStore;
+
+impl MutationIntentStore for FailingBeginMutationIntentStore {
+    fn load(&self, _owner: Address, _chain_id: u64) -> Result<Option<MutationIntentRecord>> {
+        Ok(None)
+    }
+
+    fn try_begin(&self, _template: MutationIntentRecord) -> Result<TryBeginOutcome> {
+        Err(RelayerError::Other(
+            "synthetic mutation intent begin failure".to_string(),
+        ))
+    }
+
+    fn update(
+        &self,
+        _expected_epoch: u64,
+        _expected_revision: u64,
+        _record: MutationIntentRecord,
+    ) -> Result<bool> {
+        panic!("update must not run after a failed begin")
+    }
+}
+
+struct FailingSecondUpdateMutationIntentStore {
+    inner: InMemoryMutationIntentStore,
+}
+
+impl MutationIntentStore for FailingSecondUpdateMutationIntentStore {
+    fn load(&self, owner: Address, chain_id: u64) -> Result<Option<MutationIntentRecord>> {
+        self.inner.load(owner, chain_id)
+    }
+
+    fn try_begin(&self, template: MutationIntentRecord) -> Result<TryBeginOutcome> {
+        self.inner.try_begin(template)
+    }
+
+    fn update(
+        &self,
+        expected_epoch: u64,
+        expected_revision: u64,
+        record: MutationIntentRecord,
+    ) -> Result<bool> {
+        if expected_revision == 1 {
+            return Err(RelayerError::Other(
+                "synthetic mutation intent update failure".to_string(),
+            ));
+        }
+        self.inner
+            .update(expected_epoch, expected_revision, record)
+    }
 }
 
 impl RelayerClock for FixedClock {
@@ -217,6 +311,66 @@ fn execute_permit(mode: RelayerMutationMode, owner: Address) -> RelayerMutationP
         POLYGON_CHAIN_ID,
         FIXED_PERMIT_EXPIRY_UNIX,
     )
+}
+
+fn intent_registry(store: Arc<dyn MutationIntentStore>) -> OwnerMutationRegistry {
+    OwnerMutationRegistry::with_clock(
+        store,
+        Arc::new(FixedClock {
+            now_unix: FIXED_NOW_UNIX,
+        }),
+    )
+}
+
+fn expect_intent_begin_error(
+    result: Result<MutationIntentLease<'_>>,
+) -> RelayerError {
+    match result {
+        Ok(_) => panic!("mutation intent begin unexpectedly succeeded"),
+        Err(error) => error,
+    }
+}
+
+fn intent_receipt(
+    transaction_id: &str,
+    state: RelayerTransactionState,
+) -> DepositWalletTransactionReceipt {
+    DepositWalletTransactionReceipt {
+        transaction_id: transaction_id.to_string(),
+        state,
+        transaction_hash: None,
+        owner: None,
+        deposit_wallet: None,
+    }
+}
+
+fn serialized_intent_record(
+    owner: Address,
+    chain_id: u64,
+    epoch: u64,
+    revision: u64,
+    status: MutationIntentStatus,
+) -> MutationIntentRecord {
+    serde_json::from_value(json!({
+        "owner": owner,
+        "chain_id": chain_id,
+        "epoch": epoch,
+        "revision": revision,
+        "operation": "WalletBatch",
+        "status": status,
+        "nonce": null,
+        "payload_keccak256": null,
+        "deadline_unix": null,
+        "transaction_id": null,
+        "last_observed_state": null,
+        "created_at_unix": FIXED_NOW_UNIX,
+        "updated_at_unix": FIXED_NOW_UNIX,
+    }))
+    .expect("serialized mutation intent should deserialize")
+}
+
+fn test_payload_keccak256() -> String {
+    format!("0x{}", "11".repeat(32))
 }
 
 async fn expected_execute_request(
@@ -4462,4 +4616,1617 @@ async fn relayer_poll_policy_validates_bounds_and_exposes_values() {
             "{error}"
         );
     }
+}
+
+#[test]
+fn mutation_intent_lease_lifecycle_preserves_versions_timestamps_and_terminal_reentry() {
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = OwnerMutationRegistry::with_clock(
+        store,
+        Arc::new(AdvancingClock {
+            now_unix: AtomicU64::new(FIXED_NOW_UNIX),
+        }),
+    );
+    let owner = address(WALLET_OWNER);
+    let mut lease = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+
+    let preparing = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(preparing.owner(), owner);
+    assert_eq!(preparing.chain_id(), POLYGON_CHAIN_ID);
+    assert_eq!(preparing.epoch(), 0);
+    assert_eq!(preparing.revision(), 0);
+    assert_eq!(preparing.operation(), RelayerMutationOperation::WalletBatch);
+    assert_eq!(preparing.status(), MutationIntentStatus::Preparing);
+    assert_eq!(preparing.nonce(), None);
+    assert_eq!(preparing.created_at_unix(), FIXED_NOW_UNIX);
+    assert_eq!(preparing.updated_at_unix(), FIXED_NOW_UNIX);
+
+    let payload_hash = test_payload_keccak256();
+    lease
+        .record_payload(&payload_hash, Some(U256::from(u64::MAX) + U256::one()))
+        .unwrap();
+    let payload_record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(payload_record.revision(), 1);
+    assert_eq!(payload_record.payload_keccak256(), Some(payload_hash.as_str()));
+    assert_eq!(payload_record.deadline_unix(), Some(u64::MAX));
+    assert_eq!(payload_record.created_at_unix(), FIXED_NOW_UNIX);
+    assert_eq!(payload_record.updated_at_unix(), FIXED_NOW_UNIX + 1);
+
+    lease.record_submitted("tx-intent-lifecycle").unwrap();
+    let submitted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(submitted.status(), MutationIntentStatus::Submitted);
+    assert_eq!(submitted.revision(), 2);
+    assert_eq!(submitted.transaction_id(), Some("tx-intent-lifecycle"));
+    assert_eq!(submitted.created_at_unix(), FIXED_NOW_UNIX);
+    assert_eq!(submitted.updated_at_unix(), FIXED_NOW_UNIX + 2);
+
+    lease
+        .record_observed_receipt(&intent_receipt(
+            "tx-intent-lifecycle",
+            RelayerTransactionState::Confirmed,
+        ))
+        .unwrap();
+    let confirmed = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(confirmed.status(), MutationIntentStatus::Confirmed);
+    assert_eq!(confirmed.revision(), 3);
+    assert_eq!(confirmed.last_observed_state(), Some("Confirmed"));
+    assert_eq!(confirmed.created_at_unix(), FIXED_NOW_UNIX);
+    assert_eq!(confirmed.updated_at_unix(), FIXED_NOW_UNIX + 3);
+
+    let next = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    let next_record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(next_record.status(), MutationIntentStatus::Preparing);
+    assert_eq!(next_record.epoch(), 1);
+    assert_eq!(next_record.revision(), 0);
+    assert_eq!(next_record.created_at_unix(), FIXED_NOW_UNIX + 4);
+    drop(next);
+}
+
+#[test]
+fn mutation_intent_binding_and_terminal_failure_rules_reject_misdelivery_and_regression() {
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let owner = address(WALLET_OWNER);
+    let mut lease = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    lease
+        .record_payload(&test_payload_keccak256(), Some(U256::from(123u64)))
+        .unwrap();
+    lease.record_submitted("tx-bound-a").unwrap();
+    let submitted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+
+    let mismatch = lease
+        .record_observed_receipt(&intent_receipt(
+            "tx-bound-b",
+            RelayerTransactionState::Confirmed,
+        ))
+        .unwrap_err();
+    assert!(mismatch
+        .to_string()
+        .contains("observed receipt does not match this intent's transaction"));
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    let duplicate_submit = lease.record_submitted("tx-bound-a").unwrap_err();
+    assert!(duplicate_submit
+        .to_string()
+        .contains("invalid mutation intent transition"));
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    registry
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-bound-b",
+            &RelayerError::TransactionFailed("synthetic".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    let reconciliation = RelayerError::reconciliation_required("synthetic ambiguous failure");
+    let error = registry
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-bound-a",
+            &reconciliation,
+        )
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("only bound terminal failures may resolve an intent"));
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
+
+    registry
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-bound-a",
+            &RelayerError::TransactionFailed("synthetic".to_string()),
+        )
+        .unwrap();
+    let failed = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status(), MutationIntentStatus::Failed);
+    assert_eq!(failed.last_observed_state(), Some("Failed"));
+    assert!(registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_ok());
+}
+
+#[test]
+fn mutation_intent_poll_outcomes_are_transaction_bound_and_distrust_variant_names() {
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let owner = address(WALLET_OWNER);
+    let mut lease = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    lease
+        .record_payload(&test_payload_keccak256(), None)
+        .unwrap();
+    lease.record_submitted("tx-poll-a").unwrap();
+    let submitted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-a",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-poll-a",
+                RelayerTransactionState::New,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-b",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-poll-b",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-a",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-poll-b",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-a",
+            &RelayerPollOutcome::Exhausted {
+                attempts: 3,
+                last_state: Some(RelayerTransactionState::Mined),
+            },
+        )
+        .unwrap();
+    let exhausted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(exhausted.status(), MutationIntentStatus::Submitted);
+    assert_eq!(exhausted.last_observed_state(), Some("Mined"));
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-a",
+            &RelayerPollOutcome::Cancelled { attempts: 3 },
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        exhausted
+    );
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-a",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-poll-a",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Confirmed
+    );
+
+    let preparing = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    let preparing_record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-a",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-poll-a",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        preparing_record
+    );
+    drop(preparing);
+}
+
+#[test]
+fn mutation_intents_block_unresolved_scope_and_keep_other_owner_or_chain_independent() {
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let owner = address(WALLET_OWNER);
+    let other_owner = address(OTHER_OWNER);
+    let mut preparing = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+
+    let blocked = expect_intent_begin_error(registry.begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        ));
+    assert!(blocked.is_deposit_wallet_mutation_blocked());
+    assert!(blocked.to_string().contains("status Preparing"));
+    assert!(registry
+        .begin_intent(
+            other_owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_ok());
+    assert!(registry
+        .begin_intent(
+            owner,
+            AMOY_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_ok());
+
+    preparing.record_ambiguous_without_id().unwrap();
+    let blocked = expect_intent_begin_error(registry.begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        ));
+    assert!(blocked.to_string().contains("status AmbiguousNoId"));
+
+    let submitted_store = Arc::new(InMemoryMutationIntentStore::default());
+    let submitted_registry = intent_registry(submitted_store);
+    let mut submitted = submitted_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    submitted.record_submitted("tx-unresolved").unwrap();
+    let blocked = expect_intent_begin_error(submitted_registry.begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        ));
+    assert!(blocked.to_string().contains("status Submitted"));
+
+    let failed_store = Arc::new(InMemoryMutationIntentStore::default());
+    let failed_registry = intent_registry(failed_store);
+    let mut failed = failed_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    failed.abandon_before_submit().unwrap();
+    assert!(failed_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_ok());
+
+    let reconciled_store = InMemoryMutationIntentStore::default();
+    reconciled_store
+        .try_begin(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            99,
+            99,
+            MutationIntentStatus::Reconciled,
+        ))
+        .unwrap();
+    let outcome = reconciled_store
+        .try_begin(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            777,
+            777,
+            MutationIntentStatus::Preparing,
+        ))
+        .unwrap();
+    let TryBeginOutcome::Started(reconciled_successor) = outcome else {
+        panic!("a reconciled record must admit a successor")
+    };
+    assert_eq!(reconciled_successor.epoch(), 1);
+    assert_eq!(reconciled_successor.revision(), 0);
+}
+
+#[test]
+fn mutation_intent_transition_guards_leave_records_unchanged() {
+    let owner = address(WALLET_OWNER);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let mut lease = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    let preparing = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let error = lease
+        .record_observed_receipt(&intent_receipt(
+            "tx-transition",
+            RelayerTransactionState::New,
+        ))
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("invalid mutation intent transition"));
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        preparing
+    );
+
+    lease.record_submitted("tx-transition").unwrap();
+    let submitted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert!(lease.abandon_before_submit().is_err());
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        submitted
+    );
+
+    let failed_store = Arc::new(InMemoryMutationIntentStore::default());
+    let failed_registry = intent_registry(failed_store);
+    let mut failed = failed_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    failed.abandon_before_submit().unwrap();
+    let failed_record = failed_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert!(failed
+        .record_payload(&test_payload_keccak256(), None)
+        .is_err());
+    assert_eq!(
+        failed_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        failed_record
+    );
+}
+
+#[test]
+fn mutation_intent_store_assigns_generations_fences_stale_writers_and_fails_closed_at_bounds() {
+    fn assert_send<T: Send>() {}
+    assert_send::<MutationIntentLease<'static>>();
+
+    let owner = address(WALLET_OWNER);
+    let counting_store = Arc::new(CountingMutationIntentStore::default());
+    let counting_registry = intent_registry(counting_store.clone());
+    let first = counting_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    assert!(counting_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_err());
+    assert_eq!(
+        counting_store
+            .try_begin_calls
+            .load(AtomicOrdering::SeqCst),
+        2
+    );
+    assert_eq!(counting_store.load_calls.load(AtomicOrdering::SeqCst), 0);
+    drop(first);
+
+    let generation_store = InMemoryMutationIntentStore::default();
+    generation_store
+        .seed_for_test(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            41,
+            9,
+            MutationIntentStatus::Confirmed,
+        ))
+        .unwrap();
+    let started = generation_store
+        .try_begin(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            999,
+            999,
+            MutationIntentStatus::Preparing,
+        ))
+        .unwrap();
+    let TryBeginOutcome::Started(assigned) = started else {
+        panic!("resolved generation must start")
+    };
+    assert_eq!(assigned.epoch(), 42);
+    assert_eq!(assigned.revision(), 0);
+
+    let invariant_store = InMemoryMutationIntentStore::default();
+    let started = invariant_store
+        .try_begin(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            99,
+            99,
+            MutationIntentStatus::Preparing,
+        ))
+        .unwrap();
+    let TryBeginOutcome::Started(invariant_record) = started else {
+        panic!("first invariant record must start")
+    };
+    let mut tampered = serde_json::to_value(&invariant_record).unwrap();
+    tampered["created_at_unix"] = json!(1);
+    tampered["updated_at_unix"] = json!(FIXED_NOW_UNIX + 10);
+    let tampered = serde_json::from_value(tampered).unwrap();
+    assert!(invariant_store.update(0, 0, tampered).unwrap());
+    let preserved = invariant_store
+        .load(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.created_at_unix(), FIXED_NOW_UNIX);
+    assert_eq!(preserved.updated_at_unix(), FIXED_NOW_UNIX + 10);
+    assert_eq!(preserved.revision(), 1);
+
+    let fencing_store = Arc::new(InMemoryMutationIntentStore::default());
+    let fencing_registry = intent_registry(fencing_store.clone());
+    let mut lease_a = fencing_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    lease_a
+        .record_payload(&test_payload_keccak256(), None)
+        .unwrap();
+    lease_a.record_submitted("tx-fence-a").unwrap();
+    let revision_two = fencing_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(revision_two.revision(), 2);
+    assert!(!fencing_store
+        .update(revision_two.epoch(), 0, revision_two.clone())
+        .unwrap());
+    assert_eq!(
+        fencing_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        revision_two
+    );
+
+    fencing_registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-fence-a",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-fence-a",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    let lease_b = fencing_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    let lease_b_record = fencing_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let stale = lease_a
+        .record_observed_receipt(&intent_receipt(
+            "tx-fence-a",
+            RelayerTransactionState::Mined,
+        ))
+        .unwrap_err();
+    assert_eq!(stale.to_string(), STALE_INTENT_LEASE_ERROR);
+    assert_eq!(
+        lease_a
+            .record_observed_receipt(&intent_receipt(
+                "tx-fence-a",
+                RelayerTransactionState::Mined,
+            ))
+            .unwrap_err()
+            .to_string(),
+        STALE_INTENT_LEASE_ERROR
+    );
+    assert_eq!(
+        fencing_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        lease_b_record
+    );
+    drop(lease_b);
+
+    let epoch_store = InMemoryMutationIntentStore::default();
+    epoch_store
+        .seed_for_test(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            u64::MAX,
+            0,
+            MutationIntentStatus::Confirmed,
+        ))
+        .unwrap();
+    assert!(epoch_store
+        .try_begin(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            0,
+            MutationIntentStatus::Preparing,
+        ))
+        .unwrap_err()
+        .to_string()
+        .contains("epoch exhausted"));
+
+    let revision_store = InMemoryMutationIntentStore::default();
+    let max_revision = serialized_intent_record(
+        owner,
+        POLYGON_CHAIN_ID,
+        7,
+        u64::MAX,
+        MutationIntentStatus::Submitted,
+    );
+    revision_store
+        .seed_for_test(max_revision.clone())
+        .unwrap();
+    assert!(revision_store
+        .update(7, u64::MAX, max_revision)
+        .unwrap_err()
+        .to_string()
+        .contains("revision exhausted"));
+}
+
+#[test]
+fn mutation_intent_restart_recovery_uses_registry_terminal_failure_without_rebuilding_lease() {
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let owner = address(WALLET_OWNER);
+    {
+        let registry = intent_registry(store.clone());
+        let mut lease = registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch,
+            )
+            .unwrap();
+        lease.record_submitted("tx-restart").unwrap();
+    }
+
+    let restarted = intent_registry(store);
+    assert!(expect_intent_begin_error(restarted.begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        ))
+        .is_deposit_wallet_mutation_blocked());
+    restarted
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-stale-delivery",
+            &RelayerError::TransactionInvalid("synthetic".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        restarted
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
+    restarted
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-restart",
+            &RelayerError::TransactionInvalid("synthetic".to_string()),
+        )
+        .unwrap();
+    let failed = restarted
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status(), MutationIntentStatus::Failed);
+    assert_eq!(failed.last_observed_state(), Some("Invalid"));
+    let successor = restarted
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    assert_eq!(
+        restarted
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .epoch(),
+        1
+    );
+    drop(successor);
+}
+
+#[test]
+fn mutation_intent_store_errors_fail_closed_and_post_submit_recording_failure_keeps_lock() {
+    let owner = address(WALLET_OWNER);
+    let failing_registry = intent_registry(Arc::new(FailingBeginMutationIntentStore));
+    let error = expect_intent_begin_error(failing_registry.begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        ));
+    assert!(error
+        .to_string()
+        .contains("synthetic mutation intent begin failure"));
+
+    let update_store = Arc::new(FailingSecondUpdateMutationIntentStore {
+        inner: InMemoryMutationIntentStore::default(),
+    });
+    let update_registry = intent_registry(update_store);
+    let mut lease = update_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    lease
+        .record_payload(&test_payload_keccak256(), None)
+        .unwrap();
+    let error = lease.record_submitted("tx-store-failure").unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("synthetic mutation intent update failure"));
+    assert!(!error.to_string().contains("tx-store-failure"));
+    assert_eq!(
+        update_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Preparing
+    );
+    assert_eq!(
+        lease
+            .record_submitted("tx-store-failure")
+            .unwrap_err()
+            .to_string(),
+        STALE_INTENT_LEASE_ERROR
+    );
+    assert!(expect_intent_begin_error(update_registry.begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        ))
+        .is_deposit_wallet_mutation_blocked());
+}
+
+#[tokio::test]
+async fn intent_gated_execute_records_submission_then_confirmed_poll_and_reopens_owner() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let ctx = execute_context(owner);
+    let calls = execute_calls();
+    let deadline = U256::from(EXECUTE_DEADLINE_UNIX);
+    let expected_request = expected_execute_request(
+        &signer,
+        ctx.clone(),
+        calls.clone(),
+        U256::from(31u64),
+        deadline,
+    )
+    .await;
+    let expected_hash = expected_payload_keccak256(&expected_request);
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-gated-execute", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let receipt = expect_submitted(
+        registry
+            .gate(&client)
+            .execute_wallet_batch(
+                ctx,
+                calls,
+                deadline,
+                &signer,
+                &read_permit(owner),
+                &permit,
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(receipt.transaction_id(), "tx-gated-execute");
+    assert_eq!(receipt.payload_keccak256(), expected_hash);
+    let submitted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(submitted.status(), MutationIntentStatus::Submitted);
+    assert_eq!(submitted.payload_keccak256(), Some(expected_hash.as_str()));
+    assert_eq!(submitted.deadline_unix(), Some(EXECUTE_DEADLINE_UNIX));
+    assert_eq!(submitted.transaction_id(), Some("tx-gated-execute"));
+    assert_eq!(submitted.nonce(), None);
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-gated-execute",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-gated-execute",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Confirmed
+    );
+    let successor = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    drop(successor);
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0].path.starts_with("/nonce?"));
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, SUBMIT_PATH);
+    assert_eq!(
+        serde_json::from_str::<Value>(&requests[1].body).unwrap(),
+        serde_json::to_value(expected_request).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn intent_gated_execute_rejects_existing_owner_before_nonce_or_http() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let existing = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+
+    let error = registry
+        .gate(&client)
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error.to_string().contains("status Preparing"));
+    assert!(handle.await.unwrap().is_empty());
+    drop(existing);
+}
+
+#[tokio::test]
+async fn intent_gated_execute_maps_disconnect_to_ambiguous_and_local_deadline_failure_to_failed() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_nonce_then_reset_server(TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    ))
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+
+    let error = registry
+        .gate(&client)
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    let ambiguous = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ambiguous.status(), MutationIntentStatus::AmbiguousNoId);
+    assert!(registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_err());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[1].method, "POST");
+
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let error = registry
+        .gate(&client)
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(FIXED_NOW_UNIX),
+            &signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    let failed = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(failed.status(), MutationIntentStatus::Failed);
+    assert_eq!(failed.last_observed_state(), None);
+    assert!(registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_ok());
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn intent_gated_dry_run_reads_nonce_without_creating_a_lease() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"nonce": "31"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+
+    let evidence = expect_dry_run(
+        registry
+            .gate(&client)
+            .execute_wallet_batch(
+                execute_context(owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &signer,
+                &read_permit(owner),
+                &execute_permit(RelayerMutationMode::DryRun, owner),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(evidence.nonce(), Some("31"));
+    assert!(registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .is_none());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+}
+
+#[tokio::test]
+async fn intent_gated_create_and_lifecycle_dry_runs_never_create_a_lease() {
+    let owner = address(WALLET_OWNER);
+    let dry_run_permit = mutation_permit(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let submit_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let evidence = expect_dry_run(
+        submit_registry
+            .gate(&client)
+            .submit_wallet_create(owner, &dry_run_permit)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(evidence.operation(), WALLET_CREATE_TRANSACTION_TYPE);
+    assert!(submit_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .is_none());
+    assert!(handle.await.unwrap().is_empty());
+
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let lifecycle_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let status = lifecycle_registry
+        .gate(&client)
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&dry_run_permit),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        status,
+        DepositWalletDeploymentStatus::CreateDryRun(_)
+    ));
+    assert!(lifecycle_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .is_none());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_deployed_request(&requests[0]);
+    assert_deployed_request(&requests[1]);
+}
+
+#[tokio::test]
+async fn intent_gated_invalid_transaction_id_is_ambiguous_without_echoing_raw_identity() {
+    let owner = address(WALLET_OWNER);
+    let raw_invalid_transaction_id = " sensitive-transaction-token ";
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({
+            "transactionID": raw_invalid_transaction_id,
+            "state": "STATE_NEW"
+        })
+        .to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let error = registry
+        .gate(&client)
+        .submit_wallet_create(owner, &permit)
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert!(!error.to_string().contains(raw_invalid_transaction_id));
+    let record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.status(), MutationIntentStatus::AmbiguousNoId);
+    assert_eq!(record.transaction_id(), None);
+    assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn intent_gated_api_failures_use_conservative_ambiguous_phase_classification() {
+    let owner = execute_signer().address();
+    let create_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "503 Service Unavailable",
+        "{}",
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let create_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let create_error = create_registry
+        .gate(&client)
+        .submit_wallet_create(owner, &create_permit)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        create_error,
+        RelayerError::Api { status: 503, .. }
+    ));
+    assert_eq!(
+        create_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::AmbiguousNoId
+    );
+    assert!(create_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletCreate,
+        )
+        .is_err());
+    assert_eq!(handle.await.unwrap().len(), 1);
+
+    let signer = execute_signer();
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "503 Service Unavailable",
+        "{}",
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let nonce_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let nonce_error = nonce_registry
+        .gate(&client)
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(nonce_error, RelayerError::Api { status: 503, .. }));
+    assert_eq!(
+        nonce_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::AmbiguousNoId
+    );
+    assert!(nonce_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_err());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json("503 Service Unavailable", "{}"),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let submit_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let submit_error = submit_registry
+        .gate(&client)
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        submit_error,
+        RelayerError::Api { status: 503, .. }
+    ));
+    assert_eq!(
+        submit_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::AmbiguousNoId
+    );
+    assert!(submit_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .is_err());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[1].method, "POST");
+}
+
+#[tokio::test]
+async fn intent_gated_create_and_lifecycle_wrappers_preserve_outcomes_and_lease_policy() {
+    let owner = address(WALLET_OWNER);
+    let create_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"transactionID": "tx-gated-create", "state": "STATE_NEW"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let create_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let receipt = expect_submitted(
+        create_registry
+            .gate(&client)
+            .submit_wallet_create(owner, &create_permit)
+            .await
+            .unwrap(),
+    );
+    let create_record = create_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(create_record.status(), MutationIntentStatus::Submitted);
+    assert_eq!(create_record.operation(), RelayerMutationOperation::WalletCreate);
+    assert_eq!(create_record.transaction_id(), Some("tx-gated-create"));
+    assert_eq!(create_record.deadline_unix(), None);
+    assert_eq!(
+        create_record.payload_keccak256(),
+        Some(receipt.payload_keccak256())
+    );
+    create_registry
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-delayed-other",
+            &RelayerError::TransactionFailed("synthetic".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        create_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
+    let reconciliation = RelayerError::reconciliation_required("synthetic unknown outcome");
+    assert!(create_registry
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-gated-create",
+            &reconciliation,
+        )
+        .is_err());
+    assert_eq!(
+        create_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
+    create_registry
+        .record_terminal_failure(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-gated-create",
+            &RelayerError::TransactionFailed("synthetic".to_string()),
+        )
+        .unwrap();
+    assert_eq!(
+        create_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Failed
+    );
+    let next = create_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletCreate,
+        )
+        .unwrap();
+    drop(next);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"deployed": true}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let already_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let status = already_registry
+        .gate(&client)
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&create_permit),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status, DepositWalletDeploymentStatus::AlreadyDeployed);
+    assert!(already_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .is_none());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_deployed_request(&requests[0]);
+
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, false);
+    let predeployed_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let error = predeployed_registry
+        .gate(&client)
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::Predeployed,
+            &read_permit(owner),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_mutation_blocked());
+    assert!(error
+        .to_string()
+        .contains("predeployed policy forbids WALLET-CREATE"));
+    assert!(predeployed_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .is_none());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_deployed_request(&requests[0]);
+    assert_deployed_request(&requests[1]);
+
+    let (url, handle) = spawn_server(vec![
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+        TestResponse::json("200 OK", json!({"deployed": false}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-gated-lifecycle", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let lifecycle_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let status = lifecycle_registry
+        .gate(&client)
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&create_permit),
+        )
+        .await
+        .unwrap();
+    let receipt = match status {
+        DepositWalletDeploymentStatus::CreateSubmitted(receipt) => receipt,
+        other => panic!("expected intent-gated lifecycle submit, got {other:?}"),
+    };
+    assert_eq!(receipt.transaction_id(), "tx-gated-lifecycle");
+    let lifecycle_record = lifecycle_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(lifecycle_record.status(), MutationIntentStatus::Submitted);
+    assert_eq!(
+        lifecycle_record.transaction_id(),
+        Some("tx-gated-lifecycle")
+    );
+    assert_eq!(lifecycle_record.deadline_unix(), None);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_deployed_request(&requests[0]);
+    assert_deployed_request(&requests[1]);
+    assert_eq!(requests[2].method, "POST");
+    assert_eq!(requests[2].path, SUBMIT_PATH);
+}
+
+#[test]
+fn mutation_intent_serialization_and_debug_are_secret_free_and_redacted() {
+    let owner = address(WALLET_OWNER);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let registry = intent_registry(store);
+    let mut lease = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    lease
+        .record_payload(&test_payload_keccak256(), Some(U256::from(123u64)))
+        .unwrap();
+    lease.record_submitted("tx-secret-free").unwrap();
+    let record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let serialized = serde_json::to_string(&record).unwrap();
+    let debug = format!("{record:?}");
+    let fixture = fixture_value("wallet_submit_body.json");
+    let raw_signature = fixture["signature"].as_str().unwrap();
+    let raw_calldata = fixture["depositWalletParams"]["calls"][0]["data"]
+        .as_str()
+        .unwrap();
+    let synthetic_private_key = format!("0x{}", hex::encode(SYNTHETIC_EXECUTE_SIGNER_KEY));
+
+    for forbidden in [
+        raw_signature,
+        raw_calldata,
+        API_KEY,
+        "RELAYER_API_KEY",
+        synthetic_private_key.as_str(),
+    ] {
+        assert!(!serialized.contains(forbidden));
+        assert!(!debug.contains(forbidden));
+    }
+    assert!(serialized.contains(&test_payload_keccak256()));
+    assert!(serialized.contains("tx-secret-free"));
+    assert!(!debug.contains(WALLET_OWNER));
+    assert!(!debug.contains("tx-secret-free"));
+    assert!(debug.contains(&super::redaction::redacted_address(owner)));
+    assert!(debug.contains("sha3:0x"));
+
+    let before = record;
+    let error = lease
+        .record_observed_receipt(&intent_receipt(
+            "tx-secret-free",
+            RelayerTransactionState::Unknown(API_KEY.to_string()),
+        ))
+        .unwrap_err();
+    assert!(!error.to_string().contains(API_KEY));
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn intent_gated_submit_recording_failure_returns_store_error_and_leaves_owner_locked() {
+    let owner = address(WALLET_OWNER);
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        json!({"transactionID": "tx-accepted-store-failed", "state": "STATE_NEW"}).to_string(),
+    )])
+    .await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let store = Arc::new(FailingSecondUpdateMutationIntentStore {
+        inner: InMemoryMutationIntentStore::default(),
+    });
+    let registry = intent_registry(store);
+    let permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let error = registry
+        .gate(&client)
+        .submit_wallet_create(owner, &permit)
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("synthetic mutation intent update failure"));
+    assert!(!error.to_string().contains("tx-accepted-store-failed"));
+    let record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.status(), MutationIntentStatus::Preparing);
+    assert!(record.payload_keccak256().is_some());
+    assert_eq!(record.transaction_id(), None);
+    assert!(registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletCreate,
+        )
+        .is_err());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
 }

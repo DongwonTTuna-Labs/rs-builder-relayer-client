@@ -81,6 +81,14 @@ RelayerMutationPermit
 RelayerMutationMode
 RelayerMutationOperation
 RelayerSubmitOutcome
+MutationIntentStore
+InMemoryMutationIntentStore
+MutationIntentRecord
+MutationIntentStatus
+TryBeginOutcome
+OwnerMutationRegistry
+MutationIntentLease
+IntentGatedClient
 DepositWalletDryRunEvidence
 DepositWalletSubmitReceipt
 DryRunCallSummary
@@ -149,7 +157,8 @@ grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_requ
 The deposit-wallet HTTP client exposes construction, exactly three reviewed
 low-level production reads, two bounded transaction-polling methods, two
 deployment-lifecycle orchestration methods, and exactly two permit-gated
-public `submit_*` methods:
+primitive `submit_*` methods. `IntentGatedClient` adds one wrapper for each
+live mutation entry without changing the existing client signatures:
 
 ```text
 DepositWalletRelayerUrl::parse
@@ -166,6 +175,10 @@ DepositWalletRelayerClient::check_deposit_wallet_deployment_readiness
 DepositWalletRelayerClient::execute_wallet_batch
 DepositWalletRelayerClient::submit_wallet_create
 DepositWalletRelayerClient::submit_signed_wallet_batch
+OwnerMutationRegistry::gate
+IntentGatedClient::execute_wallet_batch
+IntentGatedClient::submit_wallet_create
+IntentGatedClient::ensure_deposit_wallet_deployment
 ```
 
 Each read requires a `RelayerReadPermit` whose owner equals the requested owner
@@ -199,6 +212,56 @@ equal `owner`, `to` must equal the configured deposit-wallet factory, and
 contract config. `WALLET-CREATE` responses are not accepted as WALLET owner
 evidence because deployment identity and wallet mutation identity are reviewed
 separately.
+
+### Owner-scoped mutation intent wiring
+
+Live consumer wiring must provide one durable `MutationIntentStore` and one
+`OwnerMutationRegistry` shared by every relayer adapter actor that can mutate
+the same owner. The synchronous store methods must be fast local operations.
+A DB-backed implementation must make `try_begin` and `update` transactional or
+CAS-based, and must hide blocking I/O behind the consumer's blocking boundary.
+
+```rust
+use std::sync::Arc;
+
+use polymarket_relayer::{MutationIntentStore, OwnerMutationRegistry};
+
+// Adapter-owned durable implementation; not supplied by this crate.
+let store: Arc<dyn MutationIntentStore> =
+    Arc::new(ConsumerDurableMutationIntentStore::open(database)?);
+let registry = OwnerMutationRegistry::new(store);
+let gated = registry.gate(&client);
+```
+
+Use `gated.execute_wallet_batch`, `gated.submit_wallet_create`, or
+`gated.ensure_deposit_wallet_deployment` for every live entry. The registry
+writes Preparing before nonce, signing, or submit I/O. Preparing, Submitted,
+and AmbiguousNoId reject a second lease for the same `(owner, chain_id)`;
+different owners and chains remain independent. DryRun delegates without a
+lease. The original client methods remain additive compatibility primitives,
+not the approved live consumer entry after PBRSDK-12.
+
+After polling, feed the explicitly bound transaction id and result back to the
+same registry. Confirmed may resolve the intent only when the outcome receipt
+also says Confirmed and carries the same transaction id. Exhausted stores only
+a present pending label; Cancelled is a no-op. If polling returns
+`TransactionFailed` or `TransactionInvalid`, call
+`record_terminal_failure(owner, chain_id, transaction_id, &error)`. Other
+errors and unknown/reconciliation-required evidence must leave the owner
+blocked for PBRSDK-13 reconciliation.
+
+`MutationIntentRecord` stores only owner/chain identity, generation/revision,
+operation/status, an optional decimal nonce placeholder, payload hash,
+deadline, transaction id, safe observed-state label, and timestamps. It has no
+signature, auth header, private-key, calldata, or replayable-body field. Record
+Debug redacts owner and hashes transaction ids. Dropping
+`MutationIntentLease` never deletes or resolves the record.
+
+`InMemoryMutationIntentStore` loses all records on restart and is restricted to
+tests and development. It must never protect live traffic. A durable store is
+the restart contract: unresolved rows survive and block new mutation until a
+bound terminal result or later authoritative reconciliation resolves them.
+PBRSDK-24/25 live gates require that durable wiring.
 
 ### Bounded confirmed-only polling
 
@@ -258,9 +321,9 @@ Preserve transport telemetry for operator diagnosis.
 
 Polling calls only the existing verified `GET /transaction` path. It never
 calls submit, signs, fetches a nonce, queries `GET /transactions`, or infers
-that exhaustion/cancellation permits another mutation. Owner-scoped pending
-intent storage and automated reconciliation remain PBRSDK-11 through
-PBRSDK-13 work.
+that exhaustion/cancellation permits another mutation. PBRSDK-12 records the
+bound outcome in the owner intent; automated reconciliation remains PBRSDK-13
+work.
 
 `is_deposit_wallet_deployed` derives the deposit-wallet address from the owner
 and sends that derived address to `GET /deployed?address=...&type=WALLET`. A
@@ -291,7 +354,8 @@ let ctx = DepositWalletRequestContext {
     deposit_wallet_address: derive_deposit_wallet_address(owner, config)?,
 };
 
-let outcome = client
+let outcome = registry
+    .gate(&client)
     .execute_wallet_batch(
         ctx,
         calls,
@@ -314,9 +378,11 @@ DryRun follows the same path through the fresh nonce read and local signature,
 then returns redacted evidence without a submit HTTP request. A closed live
 latch blocks the POST but intentionally does not retroactively block the nonce
 read. Preserve a submitted transaction id and payload hash, and never retry an
-ambiguous submission. Until PBRSDK-11/12 adds the owner-scoped nonce lease and
-intent contract, the consumer adapter must serialize execution per owner and
-must not call this method concurrently for the same owner.
+ambiguous submission. The registry rejects a second same-owner/chain live
+execution before nonce I/O while Preparing, Submitted, or AmbiguousNoId is
+unresolved. The nonce field remains `None` in this wrapper round because the
+opaque primitive does not expose the fetched nonce; PBRSDK-13 may add an
+internal provenance hook without changing this public wrapper.
 
 ### Deployment lifecycle workflow
 
@@ -330,7 +396,7 @@ The consumer adapter must keep this order:
 
 ```text
 choose Predeployed unless this runtime explicitly owns deployment
-  -> call ensure_deposit_wallet_deployment
+  -> call registry.gate(&client).ensure_deposit_wallet_deployment
   -> AlreadyDeployed: record observed deployment fact; no submit occurred
   -> CreateDryRun: retain redacted evidence; no submit occurred and wallet is
      not ready
@@ -357,13 +423,11 @@ and Invalid remain typed errors; Unknown, mismatched type, malformed evidence,
 absence, and ambiguous transport/results require reconciliation.
 
 PBRSDK-8 intentionally performs only one readiness read. PBRSDK-10 now provides
-the bounded continuation above, but neither layer queries recent transactions,
-persists owner intent, reconciles automatically, or submits again. Owner-scoped
-pending-intent enforcement is PBRSDK-11, and later reconciliation persistence
-belongs to PBRSDK-12/13. Until those controls exist, a consumer must use its
-adapter-owned state to forbid a second lifecycle entry for an owner with a
-pending create. `Exhausted`, `Cancelled`, or an error does not release that
-guard.
+the bounded continuation above, and PBRSDK-12 persists the submitted owner
+intent through the consumer's durable store. Neither layer queries recent
+transactions, reconciles automatically, or submits again. `Exhausted`,
+`Cancelled`, unknown, or ambiguous evidence does not release the registry
+guard; later authoritative reconciliation belongs to PBRSDK-13.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -401,11 +465,12 @@ The consumer adapter must keep this order:
 
 ```text
 create an operation/owner/chain/expiry-scoped DryRun permit
-  -> call the matching submit method and retain redacted DryRun evidence
+  -> call the matching intent-gated method and retain redacted DryRun evidence
   -> operator reviews that exact evidence and records approval
   -> create a fresh Live permit for the reviewed operation/owner/chain with a
      fresh expiry and the reviewed evidence/completed-approval references
-  -> use an explicitly enabled client for the one reviewed live submit
+  -> use OwnerMutationRegistry::gate with an explicitly enabled client for the
+     one reviewed live submit
 ```
 
 A `DryRun` permit is not upgraded or reused as live authority. Dry-run request
@@ -434,9 +499,11 @@ further mutation action.
 Invalid or partial success responses, transport failures, and oversized 2xx
 responses require reconciliation before any new submit. A submit receipt is
 not `STATE_CONFIRMED`; PBRSDK-8 adds a single-shot readiness check and PBRSDK-10
-adds bounded confirmed-only polling. Persistent idempotency, owner-scoped
-intent, recent-transaction lookup, and duplicate-submit recovery remain absent,
-so these additions do not claim end-to-end live readiness.
+adds bounded confirmed-only polling. PBRSDK-12 adds the owner-scoped durable
+store boundary and lease fencing, but recent-transaction lookup, automatic
+ambiguous reconciliation, duplicate-submit recovery, and durable-store live
+qualification remain absent, so these additions do not claim end-to-end live
+readiness.
 
 Consumer adapter migration status for PR #8:
 
@@ -464,6 +531,8 @@ identity separation tests pass
 bounded transaction polling timing, cancellation, exhaustion, and unknown-state tests pass
 deployment lifecycle short-circuit, policy, permit, and type-isolation tests pass
 fresh-nonce WALLET execute ordering, identity, redaction, and failure-boundary tests pass
+durable owner mutation intent store is wired and restart recovery is exercised
+same-owner unresolved mutation is rejected before nonce/signing/HTTP
 dependency is pinned by commit SHA
 operator approval is recorded
 ```
