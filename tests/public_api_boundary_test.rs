@@ -36,13 +36,18 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "RelayerSubmitOutcome",
         "RelayerSubmitResponse",
         "RelayerTransactionState",
+        "AmbiguousCandidate",
+        "AmbiguousCandidateReport",
         "InMemoryMutationIntentStore",
         "IntentGatedClient",
+        "IntentReconcileOutcome",
         "MutationIntentLease",
         "MutationIntentRecord",
         "MutationIntentStatus",
         "MutationIntentStore",
         "OwnerMutationRegistry",
+        "ReconciliationDecision",
+        "ReconciliationEvidence",
         "TryBeginOutcome",
         "try_build_wallet_batch_request_with_signature",
     ] {
@@ -73,6 +78,8 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         .expect("mutation capability source is readable");
     let polling = fs::read_to_string("src/deposit_wallet/http/polling.rs")
         .expect("polling source is readable");
+    let recent = fs::read_to_string("src/deposit_wallet/http/recent.rs")
+        .expect("recent transaction source is readable");
     let submit = fs::read_to_string("src/deposit_wallet/http/submit.rs")
         .expect("submit source is readable");
     let read_surface = format!("{read}\n{deployed}");
@@ -107,6 +114,10 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         http.contains("pub use polling::{RelayerPollOutcome, RelayerPollPolicy};"),
         "HTTP module must explicitly re-export the reviewed polling types"
     );
+    assert!(
+        http.contains("mod recent;") && http.contains("pub use recent::{"),
+        "HTTP module must include and explicitly re-export the reviewed recent report path"
+    );
     assert!(!http.contains("pub use clock"), "clock must remain internal");
 
     for required in [
@@ -120,13 +131,18 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "RelayerMutationOperation",
         "RelayerMutationPermit",
         "RelayerSubmitOutcome",
+        "AmbiguousCandidate",
+        "AmbiguousCandidateReport",
         "InMemoryMutationIntentStore",
         "IntentGatedClient",
+        "IntentReconcileOutcome",
         "MutationIntentLease",
         "MutationIntentRecord",
         "MutationIntentStatus",
         "MutationIntentStore",
         "OwnerMutationRegistry",
+        "ReconciliationDecision",
+        "ReconciliationEvidence",
         "TryBeginOutcome",
     ] {
         assert!(
@@ -156,6 +172,9 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "pub struct OwnerMutationRegistry",
         "pub struct MutationIntentLease",
         "pub struct IntentGatedClient",
+        "pub enum ReconciliationDecision",
+        "pub struct ReconciliationEvidence",
+        "pub enum IntentReconcileOutcome",
     ] {
         assert!(
             intent.contains(required),
@@ -219,6 +238,63 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             "begin_intent signature is missing {required:?}"
         );
     }
+    let manual_signature = function_signatures(&intent, "pub fn reconcile_manually");
+    assert_eq!(manual_signature.len(), 1);
+    for required in [
+        "owner: Address",
+        "chain_id: u64",
+        "expected_epoch: u64",
+        "evidence: ReconciliationEvidence",
+        "Result<()>",
+    ] {
+        assert!(
+            manual_signature[0].contains(required),
+            "reconcile_manually signature is missing {required:?}"
+        );
+    }
+    let adopt_signature = function_signatures(&intent, "pub fn adopt_transaction");
+    assert_eq!(adopt_signature.len(), 1);
+    for required in [
+        "owner: Address",
+        "chain_id: u64",
+        "expected_epoch: u64",
+        "transaction_id: &str",
+        "evidence: ReconciliationEvidence",
+        "Result<()>",
+    ] {
+        assert!(
+            adopt_signature[0].contains(required),
+            "adopt_transaction signature is missing {required:?}"
+        );
+    }
+    let reconcile_poll_signature =
+        function_signatures(&intent, "pub async fn reconcile_by_polling");
+    assert_eq!(reconcile_poll_signature.len(), 1);
+    for required in [
+        "owner: Address",
+        "policy: RelayerPollPolicy",
+        "read_permit: &RelayerReadPermit",
+        "cancel: impl Future<Output = ()> + Send",
+        "Result<IntentReconcileOutcome>",
+    ] {
+        assert!(
+            reconcile_poll_signature[0].contains(required),
+            "reconcile_by_polling signature is missing {required:?}"
+        );
+    }
+    let report_signature =
+        function_signatures(&intent, "pub async fn report_ambiguous_candidates");
+    assert_eq!(report_signature.len(), 1);
+    for required in [
+        "owner: Address",
+        "read_permit: &RelayerReadPermit",
+        "Result<AmbiguousCandidateReport>",
+    ] {
+        assert!(
+            report_signature[0].contains(required),
+            "report_ambiguous_candidates signature is missing {required:?}"
+        );
+    }
     let record_block = struct_block(&intent, "MutationIntentRecord");
     for field in [
         "owner",
@@ -232,6 +308,7 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "deadline_unix",
         "transaction_id",
         "last_observed_state",
+        "reconciliation",
         "created_at_unix",
         "updated_at_unix",
     ] {
@@ -269,6 +346,79 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             && operation_attributes.contains("Deserialize"),
         "mutation operation must be serializable as part of durable intent state"
     );
+    let evidence_block = struct_block(&intent, "ReconciliationEvidence");
+    for field in ["operator_ref", "decision", "summary", "recorded_at_unix"] {
+        assert!(
+            evidence_block.contains(&format!("    {field}:")),
+            "ReconciliationEvidence::{field} must exist"
+        );
+        assert!(
+            !evidence_block.contains(&format!("pub {field}:"))
+                && !evidence_block.contains(&format!("pub(crate) {field}:")),
+            "ReconciliationEvidence::{field} must remain private"
+        );
+        assert!(
+            intent.contains(&format!("pub fn {field}(&self)")),
+            "ReconciliationEvidence::{field} must have the reviewed getter"
+        );
+    }
+    let evidence_attributes = derive_attributes_for_struct(&intent, "ReconciliationEvidence");
+    assert!(
+        evidence_attributes.contains("Serialize")
+            && evidence_attributes.contains("Deserialize")
+            && !evidence_attributes.contains("Debug"),
+        "reconciliation evidence must serialize for stores and use manual redacted Debug"
+    );
+    let decision_attributes = derive_attributes_for_enum(&intent, "ReconciliationDecision");
+    assert!(
+        decision_attributes.contains("Serialize") && decision_attributes.contains("Deserialize"),
+        "reconciliation decisions must round-trip with evidence"
+    );
+    assert!(
+        derive_attributes_for_enum(&intent, "IntentReconcileOutcome").contains("Debug"),
+        "intent reconciliation outcomes must retain reviewed debug value semantics"
+    );
+
+    for (name, fields) in [
+        (
+            "AmbiguousCandidate",
+            &["transaction_id", "state_label", "tx_type", "created_at"][..],
+        ),
+        (
+            "AmbiguousCandidateReport",
+            &[
+                "owner",
+                "intent_status",
+                "intent_payload_keccak256",
+                "intent_epoch",
+                "intent_created_at_unix",
+                "candidates",
+                "skipped_items",
+                "redaction",
+            ][..],
+        ),
+    ] {
+        let block = struct_block(&recent, name);
+        for field in fields {
+            assert!(
+                block.contains(&format!("    {field}:")),
+                "{name}::{field} must exist"
+            );
+            assert!(
+                !block.contains(&format!("pub {field}:"))
+                    && !block.contains(&format!("pub(crate) {field}:")),
+                "{name}::{field} must remain private"
+            );
+            assert!(
+                recent.contains(&format!("pub fn {field}(&self)")),
+                "{name}::{field} must have the reviewed getter"
+            );
+        }
+        assert!(
+            derive_attributes_for_struct(&recent, name).contains("Serialize"),
+            "{name} must serialize as review evidence"
+        );
+    }
 
     for method in [
         "get_wallet_nonce",
@@ -399,6 +549,22 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             && !polling.contains("submit_signed_wallet_batch(")
             && !polling.contains("get_wallet_nonce("),
         "polling must remain read-only and must not submit or fetch a nonce"
+    );
+    for required in [
+        "pub struct AmbiguousCandidate",
+        "pub struct AmbiguousCandidateReport",
+        "pub(super) async fn fetch_recent_wallet_transactions",
+    ] {
+        assert!(
+            recent.contains(required),
+            "recent report surface is missing {required}"
+        );
+    }
+    assert!(
+        !recent.contains("submit_wallet_create(")
+            && !recent.contains("submit_signed_wallet_batch(")
+            && !recent.contains("get_wallet_nonce("),
+        "recent report lookup must remain read-only"
     );
 
     let execute_signature = function_signatures(&execute, "pub async fn execute_wallet_batch");
@@ -569,13 +735,18 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "RelayerPollPolicy",
         "RelayerReadPermit",
         "RelayerSubmitOutcome",
+        "AmbiguousCandidate",
+        "AmbiguousCandidateReport",
         "InMemoryMutationIntentStore",
         "IntentGatedClient",
+        "IntentReconcileOutcome",
         "MutationIntentLease",
         "MutationIntentRecord",
         "MutationIntentStatus",
         "MutationIntentStore",
         "OwnerMutationRegistry",
+        "ReconciliationDecision",
+        "ReconciliationEvidence",
         "TryBeginOutcome",
     ] {
         assert!(
@@ -757,6 +928,11 @@ fn docs_record_semver_boundary_and_grep_audit_contract() {
             "docs/DECISIONS.md",
             decisions.as_str(),
             "ADR-0013: PBRSDK-12 Owner-Scoped Mutation Intent Registry",
+        ),
+        (
+            "docs/DECISIONS.md",
+            decisions.as_str(),
+            "ADR-0014: PBRSDK-13 Evidence-Bound Ambiguous Reconciliation",
         ),
         (
             "docs/REVIEW_CHECKLIST.md",

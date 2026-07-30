@@ -135,6 +135,50 @@ impl MutationIntentStore for FailingSecondUpdateMutationIntentStore {
     }
 }
 
+#[derive(Default)]
+struct ReconciliationCasMutationIntentStore {
+    inner: InMemoryMutationIntentStore,
+    false_updates_remaining: AtomicUsize,
+}
+
+impl ReconciliationCasMutationIntentStore {
+    fn fail_next_updates(&self, count: usize) {
+        self.false_updates_remaining
+            .store(count, AtomicOrdering::SeqCst);
+    }
+}
+
+impl MutationIntentStore for ReconciliationCasMutationIntentStore {
+    fn load(&self, owner: Address, chain_id: u64) -> Result<Option<MutationIntentRecord>> {
+        self.inner.load(owner, chain_id)
+    }
+
+    fn try_begin(&self, template: MutationIntentRecord) -> Result<TryBeginOutcome> {
+        self.inner.try_begin(template)
+    }
+
+    fn update(
+        &self,
+        expected_epoch: u64,
+        expected_revision: u64,
+        record: MutationIntentRecord,
+    ) -> Result<bool> {
+        if self
+            .false_updates_remaining
+            .fetch_update(
+                AtomicOrdering::SeqCst,
+                AtomicOrdering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Ok(false);
+        }
+        self.inner
+            .update(expected_epoch, expected_revision, record)
+    }
+}
+
 impl RelayerClock for FixedClock {
     fn now_unix(&self) -> u64 {
         self.now_unix
@@ -371,6 +415,42 @@ fn serialized_intent_record(
 
 fn test_payload_keccak256() -> String {
     format!("0x{}", "11".repeat(32))
+}
+
+fn test_reconciliation_evidence(
+    decision: ReconciliationDecision,
+) -> ReconciliationEvidence {
+    ReconciliationEvidence::try_new(
+        "operator/ticket-59",
+        decision,
+        "reviewed against venue and on-chain evidence",
+    )
+    .unwrap()
+}
+
+fn prepare_submitted_intent(
+    registry: &OwnerMutationRegistry,
+    owner: Address,
+    operation: RelayerMutationOperation,
+    transaction_id: &str,
+) {
+    let mut lease = registry
+        .begin_intent(owner, POLYGON_CHAIN_ID, operation)
+        .unwrap();
+    lease.record_payload(&test_payload_keccak256(), None).unwrap();
+    lease.record_submitted(transaction_id).unwrap();
+}
+
+fn prepare_ambiguous_intent(
+    registry: &OwnerMutationRegistry,
+    owner: Address,
+    operation: RelayerMutationOperation,
+) {
+    let mut lease = registry
+        .begin_intent(owner, POLYGON_CHAIN_ID, operation)
+        .unwrap();
+    lease.record_payload(&test_payload_keccak256(), None).unwrap();
+    lease.record_ambiguous_without_id().unwrap();
 }
 
 async fn expected_execute_request(
@@ -4615,6 +4695,1028 @@ async fn relayer_poll_policy_validates_bounds_and_exposes_values() {
             matches!(error, RelayerError::Other(ref message) if message.starts_with("invalid poll policy: ")),
             "{error}"
         );
+    }
+}
+
+#[test]
+fn reconciliation_evidence_validates_redacts_and_round_trips_with_legacy_records() {
+    let evidence = ReconciliationEvidence::try_new(
+        "  operator/ticket-59  ",
+        ReconciliationDecision::ConfirmedOnChain,
+        "  checked venue receipt\nand on-chain state  ",
+    )
+    .unwrap();
+    assert_eq!(evidence.operator_ref(), "operator/ticket-59");
+    assert_eq!(
+        evidence.decision(),
+        ReconciliationDecision::ConfirmedOnChain
+    );
+    assert_eq!(
+        evidence.summary(),
+        "checked venue receipt\nand on-chain state"
+    );
+    assert_eq!(evidence.recorded_at_unix(), 0);
+
+    for operator_ref in ["", "   ", "operator\nref", "operator\tref", "operator\0ref"] {
+        assert!(ReconciliationEvidence::try_new(
+            operator_ref,
+            ReconciliationDecision::NotAccepted,
+            "valid summary"
+        )
+        .is_err());
+    }
+    assert!(ReconciliationEvidence::try_new(
+        "r".repeat(256),
+        ReconciliationDecision::NotAccepted,
+        "valid summary"
+    )
+    .is_ok());
+    assert!(ReconciliationEvidence::try_new(
+        "r".repeat(257),
+        ReconciliationDecision::NotAccepted,
+        "valid summary"
+    )
+    .is_err());
+    for summary in ["", "   ", "bad\tsummary", "bad\rsummary", "bad\0summary"] {
+        assert!(ReconciliationEvidence::try_new(
+            "operator/ref",
+            ReconciliationDecision::Superseded,
+            summary
+        )
+        .is_err());
+    }
+    assert!(ReconciliationEvidence::try_new(
+        "operator/ref",
+        ReconciliationDecision::Superseded,
+        "s".repeat(1024)
+    )
+    .is_ok());
+    assert!(ReconciliationEvidence::try_new(
+        "operator/ref",
+        ReconciliationDecision::Superseded,
+        "s".repeat(1025)
+    )
+    .is_err());
+
+    let debug = format!("{evidence:?}");
+    assert!(!debug.contains(evidence.operator_ref()));
+    assert!(!debug.contains(evidence.summary()));
+    assert!(debug.contains("operator_ref_len"));
+    assert!(debug.contains("summary_len"));
+    assert!(debug.contains("ConfirmedOnChain"));
+
+    let serialized = serde_json::to_string(&evidence).unwrap();
+    let round_trip: ReconciliationEvidence = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(round_trip, evidence);
+    assert!(serialized.contains("operator/ticket-59"));
+
+    let legacy = serialized_intent_record(
+        address(WALLET_OWNER),
+        POLYGON_CHAIN_ID,
+        0,
+        0,
+        MutationIntentStatus::Preparing,
+    );
+    assert_eq!(legacy.reconciliation(), None);
+}
+
+#[test]
+fn reconcile_manually_resolves_all_unresolved_states_and_requires_current_generation() {
+    let owner = address(WALLET_OWNER);
+    for status in [
+        MutationIntentStatus::Preparing,
+        MutationIntentStatus::Submitted,
+        MutationIntentStatus::AmbiguousNoId,
+    ] {
+        let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+        let mut lease = registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch,
+            )
+            .unwrap();
+        match status {
+            MutationIntentStatus::Preparing => {}
+            MutationIntentStatus::Submitted => lease.record_submitted("tx-manual").unwrap(),
+            MutationIntentStatus::AmbiguousNoId => {
+                lease.record_ambiguous_without_id().unwrap()
+            }
+            _ => unreachable!("test enumerates unresolved statuses only"),
+        }
+        drop(lease);
+        let epoch = registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .epoch();
+
+        registry
+            .reconcile_manually(
+                owner,
+                POLYGON_CHAIN_ID,
+                epoch,
+                test_reconciliation_evidence(ReconciliationDecision::NotAccepted),
+            )
+            .unwrap();
+        let reconciled = registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(reconciled.status(), MutationIntentStatus::Reconciled);
+        let evidence = reconciled.reconciliation().unwrap();
+        assert_eq!(evidence.recorded_at_unix(), FIXED_NOW_UNIX);
+        assert_eq!(evidence.decision(), ReconciliationDecision::NotAccepted);
+        let record_debug = format!("{reconciled:?}");
+        assert!(record_debug.contains("NotAccepted"));
+        assert!(record_debug.contains("operator_ref_len"));
+        assert!(!record_debug.contains(evidence.operator_ref()));
+        assert!(registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch
+            )
+            .is_ok());
+    }
+
+    let absent_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let absent_error = absent_registry
+        .reconcile_manually(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            test_reconciliation_evidence(ReconciliationDecision::Superseded),
+        )
+        .unwrap_err();
+    assert_eq!(
+        absent_error.to_string(),
+        "no unresolved mutation intent to reconcile"
+    );
+
+    let resolved_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let mut resolved_lease = resolved_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    resolved_lease.abandon_before_submit().unwrap();
+    drop(resolved_lease);
+    let resolved_error = resolved_registry
+        .reconcile_manually(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            test_reconciliation_evidence(ReconciliationDecision::Superseded),
+        )
+        .unwrap_err();
+    assert_eq!(
+        resolved_error.to_string(),
+        "no unresolved mutation intent to reconcile"
+    );
+
+    let aba_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let mut generation_a = aba_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    generation_a.abandon_before_submit().unwrap();
+    drop(generation_a);
+    let generation_b = aba_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    drop(generation_b);
+    let before = aba_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.epoch(), 1);
+    let stale_error = aba_registry
+        .reconcile_manually(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            test_reconciliation_evidence(ReconciliationDecision::NotAccepted),
+        )
+        .unwrap_err();
+    assert_eq!(
+        stale_error.to_string(),
+        "mutation intent generation changed; re-inspect before reconciling"
+    );
+    assert_eq!(
+        aba_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn manual_reconciliation_retries_one_cas_miss_and_reports_a_second_miss() {
+    let owner = address(WALLET_OWNER);
+    let retry_store = Arc::new(ReconciliationCasMutationIntentStore::default());
+    let retry_registry = intent_registry(retry_store.clone());
+    prepare_ambiguous_intent(
+        &retry_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+    );
+    retry_store.fail_next_updates(1);
+    retry_registry
+        .reconcile_manually(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            test_reconciliation_evidence(ReconciliationDecision::NotAccepted),
+        )
+        .unwrap();
+    assert_eq!(
+        retry_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Reconciled
+    );
+
+    let failure_store = Arc::new(ReconciliationCasMutationIntentStore::default());
+    let failure_registry = intent_registry(failure_store.clone());
+    prepare_ambiguous_intent(
+        &failure_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+    );
+    let before = failure_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    failure_store.fail_next_updates(2);
+    let error = failure_registry
+        .reconcile_manually(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            test_reconciliation_evidence(ReconciliationDecision::NotAccepted),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "concurrent intent update; retry reconciliation"
+    );
+    assert_eq!(
+        failure_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        before
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn transaction_adoption_is_epoch_fenced_evidence_bound_and_poll_resolved() {
+    let owner = address(WALLET_OWNER);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let mut generation_a = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    generation_a.abandon_before_submit().unwrap();
+    drop(generation_a);
+    prepare_ambiguous_intent(&registry, owner, RelayerMutationOperation::WalletBatch);
+    let ambiguous = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ambiguous.epoch(), 1);
+
+    let stale_error = registry
+        .adopt_transaction(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            "tx-adopted",
+            test_reconciliation_evidence(ReconciliationDecision::ConfirmedOnChain),
+        )
+        .unwrap_err();
+    assert_eq!(
+        stale_error.to_string(),
+        "mutation intent generation changed; re-inspect before reconciling"
+    );
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        ambiguous
+    );
+    assert!(expect_intent_begin_error(registry.begin_intent(
+        owner,
+        POLYGON_CHAIN_ID,
+        RelayerMutationOperation::WalletBatch,
+    ))
+    .is_deposit_wallet_mutation_blocked());
+
+    let invalid_error = registry
+        .adopt_transaction(
+            owner,
+            POLYGON_CHAIN_ID,
+            1,
+            "bad\ntransaction",
+            test_reconciliation_evidence(ReconciliationDecision::ConfirmedOnChain),
+        )
+        .unwrap_err();
+    assert!(invalid_error.to_string().contains("transaction id must be"));
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        ambiguous
+    );
+
+    registry
+        .adopt_transaction(
+            owner,
+            POLYGON_CHAIN_ID,
+            1,
+            "tx-adopted",
+            test_reconciliation_evidence(ReconciliationDecision::ConfirmedOnChain),
+        )
+        .unwrap();
+    let adopted = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(adopted.status(), MutationIntentStatus::Submitted);
+    assert_eq!(adopted.transaction_id(), Some("tx-adopted"));
+    assert_eq!(
+        adopted.reconciliation().unwrap().decision(),
+        ReconciliationDecision::ConfirmedOnChain
+    );
+    assert_eq!(
+        adopted.reconciliation().unwrap().recorded_at_unix(),
+        FIXED_NOW_UNIX
+    );
+
+    let (url, handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value("tx-adopted", "STATE_CONFIRMED").to_string(),
+    )])
+    .await;
+    let client = polling_test_client(url);
+    let outcome = registry
+        .gate(&client)
+        .reconcile_by_polling(
+            owner,
+            RelayerPollPolicy::try_new(
+                1,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            )
+            .unwrap(),
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome,
+        IntentReconcileOutcome::Resolved(MutationIntentStatus::Confirmed)
+    );
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Confirmed
+    );
+    assert!(registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch
+        )
+        .is_ok());
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests.iter().all(|request| request.method != "POST"));
+    assert_eq!(requests[0].path, "/transaction?id=tx-adopted");
+}
+
+#[test]
+fn transaction_adoption_rejects_non_ambiguous_statuses() {
+    let owner = address(WALLET_OWNER);
+    for submitted in [false, true] {
+        let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+        let mut lease = registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch,
+            )
+            .unwrap();
+        if submitted {
+            lease.record_submitted("tx-existing").unwrap();
+        }
+        drop(lease);
+        let before = registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap();
+        let error = registry
+            .adopt_transaction(
+                owner,
+                POLYGON_CHAIN_ID,
+                before.epoch(),
+                "tx-candidate",
+                test_reconciliation_evidence(ReconciliationDecision::ConfirmedOnChain),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "transaction adoption requires an ambiguous mutation intent"
+        );
+        assert_eq!(
+            registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+            before
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconcile_by_polling_maps_confirmed_and_terminal_failure_without_submit() {
+    let owner = address(WALLET_OWNER);
+    for (transaction_id, state, expected_status) in [
+        (
+            "tx-reconcile-confirmed",
+            "STATE_CONFIRMED",
+            MutationIntentStatus::Confirmed,
+        ),
+        (
+            "tx-reconcile-failed",
+            "STATE_FAILED",
+            MutationIntentStatus::Failed,
+        ),
+    ] {
+        let (url, handle) = spawn_polling_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, state).to_string(),
+        )])
+        .await;
+        let client = polling_test_client(url);
+        let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+        prepare_submitted_intent(
+            &registry,
+            owner,
+            RelayerMutationOperation::WalletBatch,
+            transaction_id,
+        );
+
+        let outcome = registry
+            .gate(&client)
+            .reconcile_by_polling(
+                owner,
+                RelayerPollPolicy::try_new(
+                    1,
+                    Duration::from_millis(1),
+                    Duration::from_millis(1),
+                )
+                .unwrap(),
+                &read_permit(owner),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome, IntentReconcileOutcome::Resolved(expected_status));
+        assert_eq!(
+            registry
+                .intent(owner, POLYGON_CHAIN_ID)
+                .unwrap()
+                .unwrap()
+                .status(),
+            expected_status
+        );
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests.iter().all(|request| request.method != "POST"));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconcile_by_polling_preserves_pending_cancelled_and_unknown_locks_without_submit() {
+    let owner = address(WALLET_OWNER);
+    let policy = RelayerPollPolicy::try_new(
+        2,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+
+    let pending_id = "tx-reconcile-pending";
+    let (pending_url, pending_handle) = spawn_polling_server(vec![
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(pending_id, "STATE_NEW").to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(pending_id, "STATE_NEW").to_string(),
+        ),
+    ])
+    .await;
+    let pending_client = polling_test_client(pending_url);
+    let pending_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &pending_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+        pending_id,
+    );
+    let pending_outcome = pending_registry
+        .gate(&pending_client)
+        .reconcile_by_polling(
+            owner,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        pending_outcome,
+        IntentReconcileOutcome::StillPending {
+            attempts: 2,
+            last_state: Some(RelayerTransactionState::New),
+        }
+    );
+    let pending_record = pending_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending_record.status(), MutationIntentStatus::Submitted);
+    assert_eq!(pending_record.last_observed_state(), Some("New"));
+    let pending_requests = pending_handle.await.unwrap();
+    assert_eq!(pending_requests.len(), 2);
+    assert!(pending_requests
+        .iter()
+        .all(|request| request.method != "POST"));
+
+    let cancel_id = "tx-reconcile-cancelled";
+    let (cancel_url, cancel_handle) = spawn_polling_server(Vec::new()).await;
+    let cancel_client = polling_test_client(cancel_url);
+    let cancel_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &cancel_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+        cancel_id,
+    );
+    let cancel_before = cancel_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let cancel_outcome = cancel_registry
+        .gate(&cancel_client)
+        .reconcile_by_polling(
+            owner,
+            policy,
+            &read_permit(owner),
+            std::future::ready(()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cancel_outcome,
+        IntentReconcileOutcome::Cancelled { attempts: 0 }
+    );
+    assert_eq!(
+        cancel_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        cancel_before
+    );
+    assert!(cancel_handle.await.unwrap().is_empty());
+
+    let unknown_id = "tx-reconcile-unknown";
+    let (unknown_url, unknown_handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value(unknown_id, "STATE_FUTURE").to_string(),
+    )])
+    .await;
+    let unknown_client = polling_test_client(unknown_url);
+    let unknown_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &unknown_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+        unknown_id,
+    );
+    let unknown_before = unknown_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let unknown_error = unknown_registry
+        .gate(&unknown_client)
+        .reconcile_by_polling(
+            owner,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert!(unknown_error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(
+        unknown_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        unknown_before
+    );
+    let unknown_requests = unknown_handle.await.unwrap();
+    assert_eq!(unknown_requests.len(), 1);
+    assert!(unknown_requests
+        .iter()
+        .all(|request| request.method != "POST"));
+}
+
+#[tokio::test]
+async fn reconcile_by_polling_rejects_non_submitted_records_before_http() {
+    let owner = address(WALLET_OWNER);
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = polling_test_client(url);
+    let policy = RelayerPollPolicy::try_new(
+        1,
+        Duration::from_millis(1),
+        Duration::from_millis(1),
+    )
+    .unwrap();
+
+    let absent_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let absent_error = absent_registry
+        .gate(&client)
+        .reconcile_by_polling(
+            owner,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        absent_error.to_string(),
+        "no submitted mutation intent to reconcile for this owner"
+    );
+
+    for ambiguous in [false, true] {
+        let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+        if ambiguous {
+            prepare_ambiguous_intent(&registry, owner, RelayerMutationOperation::WalletBatch);
+        } else {
+            let lease = registry
+                .begin_intent(
+                    owner,
+                    POLYGON_CHAIN_ID,
+                    RelayerMutationOperation::WalletBatch,
+                )
+                .unwrap();
+            drop(lease);
+        }
+        let error = registry
+            .gate(&client)
+            .reconcile_by_polling(
+                owner,
+                policy,
+                &read_permit(owner),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "intent has no transaction id; use the recent-transaction report and manual adoption or reconciliation"
+        );
+    }
+
+    let resolved_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let mut resolved = resolved_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    resolved.abandon_before_submit().unwrap();
+    drop(resolved);
+    let resolved_error = resolved_registry
+        .gate(&client)
+        .reconcile_by_polling(
+            owner,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        resolved_error.to_string(),
+        "no submitted mutation intent to reconcile for this owner"
+    );
+
+    let defensive_store = Arc::new(InMemoryMutationIntentStore::default());
+    defensive_store
+        .seed_for_test(serialized_intent_record(
+            owner,
+            POLYGON_CHAIN_ID,
+            0,
+            0,
+            MutationIntentStatus::Submitted,
+        ))
+        .unwrap();
+    let defensive_registry = intent_registry(defensive_store);
+    let defensive_error = defensive_registry
+        .gate(&client)
+        .reconcile_by_polling(
+            owner,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        defensive_error.to_string(),
+        "intent has no transaction id; use the recent-transaction report and manual adoption or reconciliation"
+    );
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn reconcile_by_polling_uses_wallet_create_type_and_rejects_wallet_receipt() {
+    let owner = address(WALLET_OWNER);
+    let transaction_id = "tx-reconcile-create-type";
+    let (url, handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+    )])
+    .await;
+    let client = polling_test_client(url);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &registry,
+        owner,
+        RelayerMutationOperation::WalletCreate,
+        transaction_id,
+    );
+    let before = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+
+    let error = registry
+        .gate(&client)
+        .reconcile_by_polling(
+            owner,
+            RelayerPollPolicy::try_new(
+                1,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            )
+            .unwrap(),
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        before
+    );
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests.iter().all(|request| request.method != "POST"));
+}
+
+#[tokio::test]
+async fn ambiguous_candidate_report_filters_and_redacts_fixture_without_state_change() {
+    let owner = address(WALLET_OWNER);
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        fixture_text("wallet_recent_transactions_response.json"),
+    )])
+    .await;
+    let client = test_client(url);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_ambiguous_intent(&registry, owner, RelayerMutationOperation::WalletBatch);
+    let before = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+
+    let report = registry
+        .gate(&client)
+        .report_ambiguous_candidates(owner, &read_permit(owner))
+        .await
+        .unwrap();
+    assert_eq!(report.owner(), "0x6e0c...B5b5");
+    assert_eq!(report.intent_status(), "AmbiguousNoId");
+    let payload_hash = test_payload_keccak256();
+    assert_eq!(
+        report.intent_payload_keccak256(),
+        Some(payload_hash.as_str())
+    );
+    assert_eq!(report.intent_epoch(), before.epoch());
+    assert_eq!(report.intent_created_at_unix(), FIXED_NOW_UNIX);
+    assert_eq!(report.skipped_items(), 4);
+    assert_eq!(
+        report.redaction(),
+        "auth material and raw bodies are intentionally omitted; candidates are read-only"
+    );
+    assert_eq!(report.candidates().len(), 3);
+    assert_eq!(
+        (
+            report.candidates()[0].transaction_id(),
+            report.candidates()[0].state_label(),
+            report.candidates()[0].tx_type(),
+            report.candidates()[0].created_at(),
+        ),
+        (
+            "recent-wallet-confirmed",
+            "Confirmed",
+            WALLET_TRANSACTION_TYPE,
+            Some("2024-07-14T21:13:08.819782Z"),
+        )
+    );
+    assert_eq!(
+        (
+            report.candidates()[1].transaction_id(),
+            report.candidates()[1].state_label(),
+            report.candidates()[1].tx_type(),
+        ),
+        (
+            "recent-create-executed",
+            "Executed",
+            WALLET_CREATE_TRANSACTION_TYPE,
+        )
+    );
+    assert_eq!(
+        (
+            report.candidates()[2].transaction_id(),
+            report.candidates()[2].state_label(),
+            report.candidates()[2].tx_type(),
+            report.candidates()[2].created_at(),
+        ),
+        (
+            "recent-wallet-new",
+            "New",
+            WALLET_TRANSACTION_TYPE,
+            None,
+        )
+    );
+    let serialized = serde_json::to_string(&report).unwrap();
+    assert!(!serialized.contains("STATE_FUTURE_SECRET_LABEL"));
+    assert!(!serialized.contains(API_KEY));
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        before
+    );
+
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, "/transactions");
+    assert!(requests[0].body.is_empty());
+    assert_eq!(requests[0].header("RELAYER_API_KEY"), Some(API_KEY));
+    assert_eq!(
+        requests[0].header("RELAYER_API_KEY_ADDRESS"),
+        Some(to_checksum(&address(API_KEY_ADDRESS), None).as_str())
+    );
+}
+
+#[tokio::test]
+async fn ambiguous_candidate_report_rejects_scope_before_http_and_enforces_item_limit() {
+    let owner = address(WALLET_OWNER);
+    let (permit_url, permit_handle) = spawn_optional_request_server().await;
+    let permit_client = test_client(permit_url);
+    let permit_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let permit_error = permit_registry
+        .gate(&permit_client)
+        .report_ambiguous_candidates(owner, &read_permit(address(OTHER_OWNER)))
+        .await
+        .unwrap_err();
+    assert!(permit_error.is_deposit_wallet_read_blocked());
+    assert!(permit_handle.await.unwrap().is_empty());
+
+    let (absent_url, absent_handle) = spawn_optional_request_server().await;
+    let absent_client = test_client(absent_url);
+    let absent_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let absent_error = absent_registry
+        .gate(&absent_client)
+        .report_ambiguous_candidates(owner, &read_permit(owner))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        absent_error.to_string(),
+        "no unresolved mutation intent; nothing to report"
+    );
+    assert!(absent_handle.await.unwrap().is_empty());
+
+    let (resolved_url, resolved_handle) = spawn_optional_request_server().await;
+    let resolved_client = test_client(resolved_url);
+    let resolved_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let mut resolved = resolved_registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    resolved.abandon_before_submit().unwrap();
+    drop(resolved);
+    let resolved_error = resolved_registry
+        .gate(&resolved_client)
+        .report_ambiguous_candidates(owner, &read_permit(owner))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        resolved_error.to_string(),
+        "no unresolved mutation intent; nothing to report"
+    );
+    assert!(resolved_handle.await.unwrap().is_empty());
+
+    let oversized = Value::Array((0..33).map(|_| json!({})).collect()).to_string();
+    let (limit_url, limit_handle) =
+        spawn_server(vec![TestResponse::json("200 OK", oversized)]).await;
+    let limit_client = test_client(limit_url);
+    let limit_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_ambiguous_intent(
+        &limit_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+    );
+    let limit_before = limit_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let limit_error = limit_registry
+        .gate(&limit_client)
+        .report_ambiguous_candidates(owner, &read_permit(owner))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        limit_error.to_string(),
+        "transactions response item limit exceeded"
+    );
+    assert_eq!(
+        limit_registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        limit_before
+    );
+    let limit_requests = limit_handle.await.unwrap();
+    assert_eq!(limit_requests.len(), 1);
+    assert!(limit_requests.iter().all(|request| request.method != "POST"));
+}
+
+#[tokio::test]
+async fn ambiguous_candidate_report_rejects_non_array_or_invalid_json() {
+    let owner = address(WALLET_OWNER);
+    for body in ["{}", "not-json"] {
+        let (url, handle) = spawn_server(vec![TestResponse::json("200 OK", body)]).await;
+        let client = test_client(url);
+        let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+        prepare_ambiguous_intent(&registry, owner, RelayerMutationOperation::WalletBatch);
+        let before = registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap();
+        let error = registry
+            .gate(&client)
+            .report_ambiguous_candidates(owner, &read_permit(owner))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "could not parse transactions response"
+        );
+        assert_eq!(
+            registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+            before
+        );
+        let requests = handle.await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests.iter().all(|request| request.method != "POST"));
     }
 }
 

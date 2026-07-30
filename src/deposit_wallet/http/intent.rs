@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use ethers::signers::Signer;
@@ -7,13 +8,14 @@ use ethers::types::{Address, U256};
 use serde::{Deserialize, Serialize};
 
 use super::clock::{RelayerClock, SystemClock};
+use super::recent::AmbiguousCandidateReport;
 use super::redaction::{redacted_address, sanitized_external_token};
 use super::response::validate_transaction_id;
 use super::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus,
     DepositWalletRelayerClient, DepositWalletTransactionReceipt, RelayerMutationMode,
-    RelayerMutationOperation, RelayerMutationPermit, RelayerPollOutcome, RelayerReadPermit,
-    RelayerSubmitOutcome,
+    RelayerMutationOperation, RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy,
+    RelayerReadPermit, RelayerSubmitOutcome,
 };
 use crate::deposit_wallet::config::deposit_wallet_contract_chain_id;
 use crate::deposit_wallet::{
@@ -25,6 +27,111 @@ const STALE_LEASE_ERROR: &str =
     "stale mutation intent lease; a newer write superseded this lease";
 const TERMINAL_FAILURE_BINDING_ERROR: &str =
     "only bound terminal failures may resolve an intent; ambiguous or unknown errors require reconciliation";
+const GENERATION_CHANGED_ERROR: &str =
+    "mutation intent generation changed; re-inspect before reconciling";
+const CONCURRENT_RECONCILIATION_ERROR: &str =
+    "concurrent intent update; retry reconciliation";
+const NO_UNRESOLVED_RECONCILIATION_ERROR: &str =
+    "no unresolved mutation intent to reconcile";
+const TRANSACTION_ADOPTION_STATUS_ERROR: &str =
+    "transaction adoption requires an ambiguous mutation intent";
+const NO_SUBMITTED_RECONCILIATION_ERROR: &str =
+    "no submitted mutation intent to reconcile for this owner";
+const NO_TRANSACTION_ID_RECONCILIATION_ERROR: &str =
+    "intent has no transaction id; use the recent-transaction report and manual adoption or reconciliation";
+const NO_UNRESOLVED_REPORT_ERROR: &str =
+    "no unresolved mutation intent; nothing to report";
+const MAX_RECONCILIATION_OPERATOR_REF_BYTES: usize = 256;
+const MAX_RECONCILIATION_SUMMARY_BYTES: usize = 1024;
+
+/// Operator decision attached to a manual reconciliation action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReconciliationDecision {
+    /// The operator confirmed that the original transaction was accepted.
+    ConfirmedOnChain,
+    /// The operator confirmed that the original transaction was not accepted.
+    NotAccepted,
+    /// The original intent was replaced through another controlled path.
+    Superseded,
+}
+
+/// Redacted-debug operator evidence for a manual reconciliation action.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReconciliationEvidence {
+    operator_ref: String,
+    decision: ReconciliationDecision,
+    summary: String,
+    recorded_at_unix: u64,
+}
+
+impl ReconciliationEvidence {
+    /// Validates operator-authored evidence before it can be attached to an intent.
+    pub fn try_new(
+        operator_ref: impl Into<String>,
+        decision: ReconciliationDecision,
+        summary: impl Into<String>,
+    ) -> Result<Self> {
+        let operator_ref = validate_reconciliation_text(
+            "reconciliation operator reference",
+            operator_ref.into(),
+            MAX_RECONCILIATION_OPERATOR_REF_BYTES,
+            false,
+        )?;
+        let summary = validate_reconciliation_text(
+            "reconciliation summary",
+            summary.into(),
+            MAX_RECONCILIATION_SUMMARY_BYTES,
+            true,
+        )?;
+        Ok(Self {
+            operator_ref,
+            decision,
+            summary,
+            recorded_at_unix: 0,
+        })
+    }
+
+    pub fn operator_ref(&self) -> &str {
+        &self.operator_ref
+    }
+
+    pub fn decision(&self) -> ReconciliationDecision {
+        self.decision
+    }
+
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    pub fn recorded_at_unix(&self) -> u64 {
+        self.recorded_at_unix
+    }
+}
+
+impl fmt::Debug for ReconciliationEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReconciliationEvidence")
+            .field("operator_ref_len", &self.operator_ref.len())
+            .field("decision", &self.decision)
+            .field("summary_len", &self.summary.len())
+            .field("recorded_at_unix", &self.recorded_at_unix)
+            .finish()
+    }
+}
+
+/// Result of reconciling a stored submitted intent through authoritative polling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntentReconcileOutcome {
+    /// Polling observed a terminal result and the matching intent was resolved.
+    Resolved(MutationIntentStatus),
+    /// Polling exhausted its finite policy and the intent remains submitted.
+    StillPending {
+        attempts: u32,
+        last_state: Option<RelayerTransactionState>,
+    },
+    /// The caller cancelled polling and the intent was not changed.
+    Cancelled { attempts: u32 },
+}
 
 /// Result of atomically attempting to begin an owner-scoped mutation intent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +274,8 @@ pub struct MutationIntentRecord {
     deadline_unix: Option<u64>,
     transaction_id: Option<String>,
     last_observed_state: Option<String>,
+    #[serde(default)]
+    reconciliation: Option<ReconciliationEvidence>,
     created_at_unix: u64,
     updated_at_unix: u64,
 }
@@ -190,6 +299,7 @@ impl MutationIntentRecord {
             deadline_unix: None,
             transaction_id: None,
             last_observed_state: None,
+            reconciliation: None,
             created_at_unix: now_unix,
             updated_at_unix: now_unix,
         }
@@ -239,6 +349,10 @@ impl MutationIntentRecord {
         self.last_observed_state.as_deref()
     }
 
+    pub fn reconciliation(&self) -> Option<&ReconciliationEvidence> {
+        self.reconciliation.as_ref()
+    }
+
     pub fn created_at_unix(&self) -> u64 {
         self.created_at_unix
     }
@@ -271,6 +385,7 @@ impl fmt::Debug for MutationIntentRecord {
                 "last_observed_state",
                 &safe_observed_state_debug(self.last_observed_state.as_deref()),
             )
+            .field("reconciliation", &self.reconciliation)
             .field("created_at_unix", &self.created_at_unix)
             .field("updated_at_unix", &self.updated_at_unix)
             .finish()
@@ -456,6 +571,100 @@ impl OwnerMutationRegistry {
             .update(expected_epoch, expected_revision, record)?;
         Ok(())
     }
+
+    /// Resolves any unresolved generation using explicit operator evidence.
+    pub fn reconcile_manually(
+        &self,
+        owner: Address,
+        chain_id: u64,
+        expected_epoch: u64,
+        evidence: ReconciliationEvidence,
+    ) -> Result<()> {
+        for attempt in 0..2 {
+            let Some(mut record) = self.store.load(owner, chain_id)? else {
+                return Err(RelayerError::Other(
+                    NO_UNRESOLVED_RECONCILIATION_ERROR.to_string(),
+                ));
+            };
+            if record.epoch != expected_epoch {
+                return Err(RelayerError::Other(GENERATION_CHANGED_ERROR.to_string()));
+            }
+            if !record.status.is_unresolved() {
+                return Err(RelayerError::Other(
+                    NO_UNRESOLVED_RECONCILIATION_ERROR.to_string(),
+                ));
+            }
+
+            let expected_revision = record.revision;
+            let now_unix = self.clock.now_unix();
+            let mut recorded_evidence = evidence.clone();
+            recorded_evidence.recorded_at_unix = now_unix;
+            record.status = MutationIntentStatus::Reconciled;
+            record.reconciliation = Some(recorded_evidence);
+            record.updated_at_unix = now_unix;
+            if self
+                .store
+                .update(expected_epoch, expected_revision, record)?
+            {
+                return Ok(());
+            }
+            if attempt == 1 {
+                return Err(RelayerError::Other(
+                    CONCURRENT_RECONCILIATION_ERROR.to_string(),
+                ));
+            }
+        }
+
+        unreachable!("manual reconciliation loop has a fixed non-empty range")
+    }
+
+    /// Attaches an operator-verified transaction ID to an ambiguous generation.
+    pub fn adopt_transaction(
+        &self,
+        owner: Address,
+        chain_id: u64,
+        expected_epoch: u64,
+        transaction_id: &str,
+        evidence: ReconciliationEvidence,
+    ) -> Result<()> {
+        for attempt in 0..2 {
+            let Some(mut record) = self.store.load(owner, chain_id)? else {
+                return Err(RelayerError::Other(
+                    TRANSACTION_ADOPTION_STATUS_ERROR.to_string(),
+                ));
+            };
+            if record.epoch != expected_epoch {
+                return Err(RelayerError::Other(GENERATION_CHANGED_ERROR.to_string()));
+            }
+            if record.status != MutationIntentStatus::AmbiguousNoId {
+                return Err(RelayerError::Other(
+                    TRANSACTION_ADOPTION_STATUS_ERROR.to_string(),
+                ));
+            }
+            let transaction_id = validate_transaction_id(transaction_id)?;
+            let expected_revision = record.revision;
+            let now_unix = self.clock.now_unix();
+            let mut recorded_evidence = evidence.clone();
+            recorded_evidence.recorded_at_unix = now_unix;
+            record.status = MutationIntentStatus::Submitted;
+            record.transaction_id = Some(transaction_id);
+            record.reconciliation = Some(recorded_evidence);
+            record.updated_at_unix = now_unix;
+            if self
+                .store
+                .update(expected_epoch, expected_revision, record)?
+            {
+                return Ok(());
+            }
+            if attempt == 1 {
+                return Err(RelayerError::Other(
+                    CONCURRENT_RECONCILIATION_ERROR.to_string(),
+                ));
+            }
+        }
+
+        unreachable!("transaction adoption loop has a fixed non-empty range")
+    }
 }
 
 /// A fenced handle for one mutation intent generation.
@@ -614,6 +823,150 @@ pub struct IntentGatedClient<'a> {
 }
 
 impl IntentGatedClient<'_> {
+    /// Reconciles a submitted intent by polling its already-stored transaction ID.
+    pub async fn reconcile_by_polling(
+        &self,
+        owner: Address,
+        policy: RelayerPollPolicy,
+        read_permit: &RelayerReadPermit,
+        cancel: impl Future<Output = ()> + Send,
+    ) -> Result<IntentReconcileOutcome> {
+        let chain_id = deposit_wallet_contract_chain_id(self.client.config)?;
+        let Some(record) = self.registry.intent(owner, chain_id)? else {
+            return Err(RelayerError::Other(
+                NO_SUBMITTED_RECONCILIATION_ERROR.to_string(),
+            ));
+        };
+        match record.status {
+            MutationIntentStatus::Submitted => {}
+            MutationIntentStatus::Preparing | MutationIntentStatus::AmbiguousNoId => {
+                return Err(RelayerError::Other(
+                    NO_TRANSACTION_ID_RECONCILIATION_ERROR.to_string(),
+                ));
+            }
+            MutationIntentStatus::Confirmed
+            | MutationIntentStatus::Failed
+            | MutationIntentStatus::Reconciled => {
+                return Err(RelayerError::Other(
+                    NO_SUBMITTED_RECONCILIATION_ERROR.to_string(),
+                ));
+            }
+        }
+        let Some(transaction_id) = record.transaction_id.clone() else {
+            return Err(RelayerError::Other(
+                NO_TRANSACTION_ID_RECONCILIATION_ERROR.to_string(),
+            ));
+        };
+
+        let outcome = match record.operation {
+            RelayerMutationOperation::WalletBatch => {
+                self.client
+                    .poll_wallet_transaction(
+                        owner,
+                        &transaction_id,
+                        policy,
+                        read_permit,
+                        cancel,
+                    )
+                    .await
+            }
+            RelayerMutationOperation::WalletCreate => {
+                self.client
+                    .poll_deposit_wallet_deployment(
+                        owner,
+                        &transaction_id,
+                        policy,
+                        read_permit,
+                        cancel,
+                    )
+                    .await
+            }
+        };
+
+        match outcome {
+            Ok(outcome @ RelayerPollOutcome::Confirmed(_)) => {
+                self.registry.record_poll_outcome(
+                    owner,
+                    chain_id,
+                    &transaction_id,
+                    &outcome,
+                )?;
+                Ok(IntentReconcileOutcome::Resolved(
+                    MutationIntentStatus::Confirmed,
+                ))
+            }
+            Ok(outcome @ RelayerPollOutcome::Exhausted { .. }) => {
+                let (attempts, last_state) = match &outcome {
+                    RelayerPollOutcome::Exhausted {
+                        attempts,
+                        last_state,
+                    } => (*attempts, last_state.clone()),
+                    _ => unreachable!("outcome pattern is fixed by the outer match"),
+                };
+                self.registry.record_poll_outcome(
+                    owner,
+                    chain_id,
+                    &transaction_id,
+                    &outcome,
+                )?;
+                Ok(IntentReconcileOutcome::StillPending {
+                    attempts,
+                    last_state,
+                })
+            }
+            Ok(RelayerPollOutcome::Cancelled { attempts }) => {
+                Ok(IntentReconcileOutcome::Cancelled { attempts })
+            }
+            Err(error)
+                if matches!(
+                    &error,
+                    RelayerError::TransactionFailed(_) | RelayerError::TransactionInvalid(_)
+                ) =>
+            {
+                self.registry.record_terminal_failure(
+                    owner,
+                    chain_id,
+                    &transaction_id,
+                    &error,
+                )?;
+                Ok(IntentReconcileOutcome::Resolved(
+                    MutationIntentStatus::Failed,
+                ))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Builds a read-only redacted report for an unresolved intent.
+    pub async fn report_ambiguous_candidates(
+        &self,
+        owner: Address,
+        read_permit: &RelayerReadPermit,
+    ) -> Result<AmbiguousCandidateReport> {
+        self.client.ensure_read_permit(read_permit, owner)?;
+        let chain_id = deposit_wallet_contract_chain_id(self.client.config)?;
+        let Some(record) = self.registry.intent(owner, chain_id)? else {
+            return Err(RelayerError::Other(NO_UNRESOLVED_REPORT_ERROR.to_string()));
+        };
+        if !record.status.is_unresolved() {
+            return Err(RelayerError::Other(NO_UNRESOLVED_REPORT_ERROR.to_string()));
+        }
+
+        let (candidates, skipped_items) = self
+            .client
+            .fetch_recent_wallet_transactions(owner)
+            .await?;
+        Ok(AmbiguousCandidateReport::new(
+            redacted_address(owner),
+            record.status.label().to_string(),
+            record.payload_keccak256.clone(),
+            record.epoch,
+            record.created_at_unix,
+            candidates,
+            skipped_items,
+        ))
+    }
+
     pub async fn execute_wallet_batch<S: Signer>(
         &self,
         ctx: DepositWalletRequestContext,
@@ -800,6 +1153,34 @@ fn validate_payload_keccak256(value: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn validate_reconciliation_text(
+    label: &str,
+    value: String,
+    max_bytes: usize,
+    allow_newlines: bool,
+) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(RelayerError::mutation_blocked(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if trimmed.len() > max_bytes {
+        return Err(RelayerError::mutation_blocked(format!(
+            "{label} must not exceed {max_bytes} bytes"
+        )));
+    }
+    if trimmed
+        .chars()
+        .any(|character| character.is_control() && !(allow_newlines && character == '\n'))
+    {
+        return Err(RelayerError::mutation_blocked(format!(
+            "{label} must not contain control characters"
+        )));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn saturating_u256_to_u64(value: U256) -> u64 {

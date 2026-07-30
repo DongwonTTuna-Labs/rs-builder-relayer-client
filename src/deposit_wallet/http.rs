@@ -22,6 +22,7 @@ use crate::error::{RelayerError, Result};
 
 const RELAYER_HOST: &str = "relayer-v2.polymarket.com";
 const TRANSACTION_PATH: &str = "/transaction";
+const TRANSACTIONS_PATH: &str = "/transactions";
 const DEPLOYED_PATH: &str = "/deployed";
 const SUBMIT_PATH: &str = "/submit";
 const MAX_SUCCESS_BODY_BYTES: usize = 64 * 1024;
@@ -46,6 +47,7 @@ mod lifecycle;
 mod mutation;
 mod polling;
 mod read;
+mod recent;
 mod redaction;
 mod response;
 mod submit;
@@ -55,9 +57,9 @@ mod url;
 pub use auth::RelayerKeyAuth;
 pub use capability::RelayerReadPermit;
 pub use intent::{
-    InMemoryMutationIntentStore, IntentGatedClient, MutationIntentLease,
+    InMemoryMutationIntentStore, IntentGatedClient, IntentReconcileOutcome, MutationIntentLease,
     MutationIntentRecord, MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry,
-    TryBeginOutcome,
+    ReconciliationDecision, ReconciliationEvidence, TryBeginOutcome,
 };
 pub use lifecycle::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletReadiness,
@@ -67,6 +69,7 @@ pub use mutation::{
     RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerSubmitOutcome,
 };
 pub use polling::{RelayerPollOutcome, RelayerPollPolicy};
+pub use recent::{AmbiguousCandidate, AmbiguousCandidateReport};
 pub use response::DepositWalletTransactionReceipt;
 pub use url::DepositWalletRelayerUrl;
 

@@ -21,13 +21,15 @@ pub use config::{
     POLYGON_DEPOSIT_WALLET_FACTORY, POLYGON_DEPOSIT_WALLET_IMPLEMENTATION,
 };
 pub use http::{
-    DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletDryRunEvidence,
-    DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
-    DepositWalletSubmitReceipt, DepositWalletTransactionReceipt, DryRunCallSummary, RelayerKeyAuth,
-    InMemoryMutationIntentStore, IntentGatedClient, MutationIntentLease, MutationIntentRecord,
-    MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry, RelayerMutationMode,
-    RelayerMutationOperation, RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy,
-    RelayerReadPermit, RelayerSubmitOutcome, TryBeginOutcome,
+    AmbiguousCandidate, AmbiguousCandidateReport, DepositWalletDeploymentPolicy,
+    DepositWalletDeploymentStatus, DepositWalletDryRunEvidence, DepositWalletReadiness,
+    DepositWalletRelayerClient, DepositWalletRelayerUrl, DepositWalletSubmitReceipt,
+    DepositWalletTransactionReceipt, DryRunCallSummary, InMemoryMutationIntentStore,
+    IntentGatedClient, IntentReconcileOutcome, MutationIntentLease, MutationIntentRecord,
+    MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry, ReconciliationDecision,
+    ReconciliationEvidence, RelayerKeyAuth, RelayerMutationMode, RelayerMutationOperation,
+    RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy, RelayerReadPermit,
+    RelayerSubmitOutcome, TryBeginOutcome,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

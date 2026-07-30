@@ -30,15 +30,17 @@ pub use direct::{DirectExecutor, DirectTxResult};
 pub use deposit_wallet::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,
     derive_deposit_wallet_address, try_build_wallet_batch_request_with_signature,
-    DepositWalletCall, DepositWalletContractConfig, DepositWalletCreateRequest,
-    DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletDryRunEvidence,
-    DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
-    DepositWalletRequestContext, DepositWalletSubmitReceipt, DepositWalletTransactionReceipt,
-    DryRunCallSummary, InMemoryMutationIntentStore, IntentGatedClient, MutationIntentLease,
-    MutationIntentRecord, MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry,
-    RelayerKeyAuth, RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit,
-    RelayerPollOutcome, RelayerPollPolicy, RelayerReadPermit, RelayerSubmitOutcome,
-    RelayerSubmitResponse, RelayerTransactionState, TryBeginOutcome, WalletNonceRequest,
+    AmbiguousCandidate, AmbiguousCandidateReport, DepositWalletCall, DepositWalletContractConfig,
+    DepositWalletCreateRequest, DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus,
+    DepositWalletDryRunEvidence, DepositWalletReadiness, DepositWalletRelayerClient,
+    DepositWalletRelayerUrl, DepositWalletRequestContext, DepositWalletSubmitReceipt,
+    DepositWalletTransactionReceipt, DryRunCallSummary, InMemoryMutationIntentStore,
+    IntentGatedClient, IntentReconcileOutcome, MutationIntentLease, MutationIntentRecord,
+    MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry, ReconciliationDecision,
+    ReconciliationEvidence, RelayerKeyAuth, RelayerMutationMode, RelayerMutationOperation,
+    RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy, RelayerReadPermit,
+    RelayerSubmitOutcome, RelayerSubmitResponse, RelayerTransactionState, TryBeginOutcome,
+    WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{
