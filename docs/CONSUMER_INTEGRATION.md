@@ -83,12 +83,15 @@ RelayerMutationOperation
 RelayerSubmitOutcome
 MutationIntentStore
 InMemoryMutationIntentStore
+MutationIntentAuditArtifact
 MutationIntentRecord
 MutationIntentStatus
 TryBeginOutcome
 OwnerMutationRegistry
 MutationIntentLease
 IntentGatedClient
+ReconciliationSummary
+MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION
 DepositWalletDryRunEvidence
 DepositWalletSubmitReceipt
 DryRunCallSummary
@@ -183,6 +186,7 @@ IntentGatedClient::reconcile_by_polling
 IntentGatedClient::report_ambiguous_candidates
 OwnerMutationRegistry::adopt_transaction
 OwnerMutationRegistry::reconcile_manually
+OwnerMutationRegistry::export_audit_artifact
 ```
 
 Each read requires a `RelayerReadPermit` whose owner equals the requested owner
@@ -258,11 +262,70 @@ leave the owner blocked.
 
 `MutationIntentRecord` stores only owner/chain identity, generation/revision,
 operation/status, an optional decimal nonce placeholder, payload hash,
-deadline, transaction id, safe observed-state label, optional reconciliation
-evidence, and timestamps. It has no signature, auth header, private-key,
+deadline, transaction id, safe observed-state label, cumulative poll attempts,
+optional reconciliation evidence, and timestamps. It has no signature, auth header, private-key,
 calldata, or replayable-body field. Record Debug redacts owner, hashes
 transaction ids, and prints evidence text lengths rather than text. Dropping
 `MutationIntentLease` never deletes or resolves the record.
+
+### Redacted mutation audit artifact
+
+Export a ticket-ready snapshot with the registry, not by serializing the
+durable record directly:
+
+```rust
+let artifact = registry.export_audit_artifact(owner, chain_id)?;
+let attachment_json = serde_json::to_string_pretty(&artifact)?;
+attach_to_operator_ticket(attachment_json)?;
+```
+
+Export is a pure read and accepts Preparing, Submitted, AmbiguousNoId,
+Confirmed, Failed, and Reconciled rows. The owner is shortened, an unrecognized
+stored state is replaced with `<unrecognized relayer state>`, and manual
+reconciliation text is reduced to decision, UTF-8 byte lengths, and recorded
+time. `operator_ref` and `summary` are never present in the artifact even when
+the durable row was restored through Deserialize. Operators who need those
+original strings must inspect their protected store record; do not attach that
+record in place of the redacted artifact.
+
+JSON retains the transaction id for later adoption/polling. Artifact Debug
+replaces it with a `sha3:0x...` token. Nonce is allowed in the artifact but is
+intentionally absent from mutation-intent tracing. `poll_attempts` counts a
+matching Confirmed observation as one and adds Exhausted attempts only when a
+last state was present. Older records without that field export zero.
+
+Sample schema-v1 redacted artifact:
+
+```json
+{
+  "schema_version": 1,
+  "owner": "0x6e0c...B5b5",
+  "chain_id": 137,
+  "operation": "WalletBatch",
+  "epoch": 4,
+  "revision": 5,
+  "status": "Confirmed",
+  "nonce": null,
+  "payload_keccak256": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "deadline_unix": 1760000000,
+  "transaction_id": "tx-reviewed-don-61",
+  "last_observed_state": "Confirmed",
+  "poll_attempts": 4,
+  "reconciliation": {
+    "decision": "ConfirmedOnChain",
+    "operator_ref_len": 15,
+    "summary_len": 30,
+    "recorded_at_unix": 1760000001
+  },
+  "created_at_unix": 1760000000,
+  "updated_at_unix": 1760000004,
+  "redaction": "api keys, auth headers, private keys, signatures, typed data, and full submit bodies are intentionally omitted"
+}
+```
+
+The pre-submit `DepositWalletDryRunEvidence` remains the source for selector
+and call summaries. The mutation audit artifact deliberately omits them;
+`payload_keccak256` is the correlation key between the two artifacts.
 
 `InMemoryMutationIntentStore` loses all records on restart and is restricted to
 tests and development. It must never protect live traffic. A durable store is

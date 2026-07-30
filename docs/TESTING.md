@@ -109,6 +109,11 @@ owner_concurrency_reopens_only_after_confirmed_reconciliation
 owner_concurrency_keeps_ambiguous_and_unknown_owners_blocked
 owner_concurrency_block_error_is_stable_and_record_preserving
 owner_concurrency_blocks_create_and_deploy_after_read_preflight
+mutation_audit_artifact_tracks_poll_attempts_and_summarizes_reconciliation
+mutation_audit_artifact_sanitizes_unknown_labels_at_write_and_export_boundaries
+public_observability_debug_and_artifact_json_omit_all_secret_sentinels
+failure_displays_apply_the_same_secret_redaction_contract
+mutation_intent_tracing_is_structured_complete_and_redacted
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -331,6 +336,47 @@ completion. CI and command-runner timeouts are the hang guard; adding an
 internal timer would reintroduce paused-time auto-advance and invalidate the
 deterministic ordering proof.
 
+## PBRSDK-15 Redaction And Observability Gate
+
+The mutation audit gate must prove all of the following with unique secret and
+malicious-text sentinels:
+
+- pre-`poll_attempts` record JSON deserializes with zero, Exhausted with a
+  present state accumulates its attempts, matching Confirmed adds one, and
+  Exhausted without a state plus Cancelled remain write-free no-ops;
+- Unknown text is replaced at normal poll write time, and a separate durable
+  row preloaded through Deserialize with an unsafe state label is replaced
+  again at export time;
+- artifact JSON contains every schema-v1 key, a shortened owner, the fixed
+  omission marker, and the raw operator-usable transaction id, while artifact
+  Debug omits that id and contains its `sha3:0x...` token;
+- reconciliation export contains only decision, `value.len()` UTF-8 byte
+  lengths, and recorded time. Preloaded operator reference and summary
+  sentinels never appear in artifact JSON or Debug;
+- Debug for every reviewed public observability type, failure Display/Debug,
+  artifact JSON, and captured tracing omit the API key, auth-header name,
+  private-key bytes, signature, full calldata, typed data, and replayable body;
+- the tracing test owns the guard returned by
+  `tracing::subscriber::set_default` across every await in a default
+  current-thread `#[tokio::test(start_paused = true)]`. It must not use
+  `with_default` or `flavor = "multi_thread"`;
+- every tracing line has redacted owner, chain id, and epoch, plus only the
+  ADR-0015 event-specific fields. Registry resolution is absent on a stale CAS
+  and nonce/reference/summary/body fields are absent everywhere.
+
+The tracing test uses the existing timeout-free loopback path and the already
+declared `tracing-subscriber` dev dependency. PBRSDK-15 adds no fixture, Cargo
+target, dependency, mock venue, logging collector, metrics system, OTel stack,
+live host call, or credential.
+
+The required source hygiene checks remain match-zero gates:
+
+```bash
+grep -rn "pub use .*::\*" src/
+grep -rn "dbg!\|println!" src/deposit_wallet/
+grep -rn "allow(" src/deposit_wallet/http.rs src/deposit_wallet/http/ --include=*.rs | grep -v "http/tests.rs"
+```
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.
@@ -373,6 +419,16 @@ unchanged. Preparing manual reconciliation is restart recovery only and
 requires proof that no live work for that owner remains. PBRSDK-14 deterministic
 concurrency is a separate gate; no gate may be replaced by automatic candidate
 selection or automatic resubmit.
+
+For PBRSDK-15, retain both complementary artifacts for the reviewed mutation:
+the pre-submit `DepositWalletDryRunEvidence` and the exported
+`MutationIntentAuditArtifact`, joined by `payload_keccak256`. Attach only the
+redacted audit artifact to tickets/PRs; original reconciliation text remains in
+the protected durable store. Preserve captured structured events using the
+`polymarket_relayer::mutation_intent` target and verify the closed field set,
+but do not add nonce, raw transaction ids, operator text, signatures, auth
+material, typed data, or submit bodies to logs. This observability evidence does
+not replace the durable-store restart or live execution gates.
 
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only

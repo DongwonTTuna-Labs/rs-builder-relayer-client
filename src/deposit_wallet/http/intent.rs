@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use super::clock::{RelayerClock, SystemClock};
 use super::recent::AmbiguousCandidateReport;
-use super::redaction::{redacted_address, sanitized_external_token};
+use super::redaction::{
+    redacted_address, sanitized_external_token, unknown_state_error_summary,
+};
 use super::response::validate_transaction_id;
 use super::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus,
@@ -43,6 +45,10 @@ const NO_UNRESOLVED_REPORT_ERROR: &str =
     "no unresolved mutation intent; nothing to report";
 const MAX_RECONCILIATION_OPERATOR_REF_BYTES: usize = 256;
 const MAX_RECONCILIATION_SUMMARY_BYTES: usize = 1024;
+const MUTATION_AUDIT_REDACTION_MARKER: &str =
+    "api keys, auth headers, private keys, signatures, typed data, and full submit bodies are intentionally omitted";
+
+pub const MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION: u32 = 1;
 
 /// Operator decision attached to a manual reconciliation action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +121,164 @@ impl fmt::Debug for ReconciliationEvidence {
             .field("decision", &self.decision)
             .field("summary_len", &self.summary.len())
             .field("recorded_at_unix", &self.recorded_at_unix)
+            .finish()
+    }
+}
+
+/// Artifact-only reconciliation summary that never includes operator-authored text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ReconciliationSummary {
+    decision: ReconciliationDecision,
+    operator_ref_len: usize,
+    summary_len: usize,
+    recorded_at_unix: u64,
+}
+
+impl ReconciliationSummary {
+    fn from_evidence(evidence: &ReconciliationEvidence) -> Self {
+        Self {
+            decision: evidence.decision,
+            operator_ref_len: evidence.operator_ref.len(),
+            summary_len: evidence.summary.len(),
+            recorded_at_unix: evidence.recorded_at_unix,
+        }
+    }
+
+    pub fn decision(&self) -> ReconciliationDecision {
+        self.decision
+    }
+
+    pub fn operator_ref_len(&self) -> usize {
+        self.operator_ref_len
+    }
+
+    pub fn summary_len(&self) -> usize {
+        self.summary_len
+    }
+
+    pub fn recorded_at_unix(&self) -> u64 {
+        self.recorded_at_unix
+    }
+}
+
+/// Ticket-ready, redacted evidence for one mutation-intent generation.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct MutationIntentAuditArtifact {
+    schema_version: u32,
+    owner: String,
+    chain_id: u64,
+    operation: RelayerMutationOperation,
+    epoch: u64,
+    revision: u64,
+    status: MutationIntentStatus,
+    nonce: Option<String>,
+    payload_keccak256: Option<String>,
+    deadline_unix: Option<u64>,
+    transaction_id: Option<String>,
+    last_observed_state: Option<String>,
+    poll_attempts: u64,
+    reconciliation: Option<ReconciliationSummary>,
+    created_at_unix: u64,
+    updated_at_unix: u64,
+    redaction: String,
+}
+
+impl MutationIntentAuditArtifact {
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    pub fn operation(&self) -> RelayerMutationOperation {
+        self.operation
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn status(&self) -> MutationIntentStatus {
+        self.status
+    }
+
+    pub fn nonce(&self) -> Option<&str> {
+        self.nonce.as_deref()
+    }
+
+    pub fn payload_keccak256(&self) -> Option<&str> {
+        self.payload_keccak256.as_deref()
+    }
+
+    pub fn deadline_unix(&self) -> Option<u64> {
+        self.deadline_unix
+    }
+
+    pub fn transaction_id(&self) -> Option<&str> {
+        self.transaction_id.as_deref()
+    }
+
+    pub fn last_observed_state(&self) -> Option<&str> {
+        self.last_observed_state.as_deref()
+    }
+
+    pub fn poll_attempts(&self) -> u64 {
+        self.poll_attempts
+    }
+
+    pub fn reconciliation(&self) -> Option<&ReconciliationSummary> {
+        self.reconciliation.as_ref()
+    }
+
+    pub fn created_at_unix(&self) -> u64 {
+        self.created_at_unix
+    }
+
+    pub fn updated_at_unix(&self) -> u64 {
+        self.updated_at_unix
+    }
+
+    pub fn redaction(&self) -> &str {
+        &self.redaction
+    }
+}
+
+impl fmt::Debug for MutationIntentAuditArtifact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MutationIntentAuditArtifact")
+            .field("schema_version", &self.schema_version)
+            .field("owner", &self.owner)
+            .field("chain_id", &self.chain_id)
+            .field("operation", &self.operation)
+            .field("epoch", &self.epoch)
+            .field("revision", &self.revision)
+            .field("status", &self.status)
+            .field("nonce", &self.nonce)
+            .field("payload_keccak256", &self.payload_keccak256)
+            .field("deadline_unix", &self.deadline_unix)
+            .field(
+                "transaction_id",
+                &self
+                    .transaction_id
+                    .as_deref()
+                    .map(sanitized_external_token),
+            )
+            .field("last_observed_state", &self.last_observed_state)
+            .field("poll_attempts", &self.poll_attempts)
+            .field("reconciliation", &self.reconciliation)
+            .field("created_at_unix", &self.created_at_unix)
+            .field("updated_at_unix", &self.updated_at_unix)
+            .field("redaction", &self.redaction)
             .finish()
     }
 }
@@ -275,6 +439,8 @@ pub struct MutationIntentRecord {
     transaction_id: Option<String>,
     last_observed_state: Option<String>,
     #[serde(default)]
+    poll_attempts: u64,
+    #[serde(default)]
     reconciliation: Option<ReconciliationEvidence>,
     created_at_unix: u64,
     updated_at_unix: u64,
@@ -299,6 +465,7 @@ impl MutationIntentRecord {
             deadline_unix: None,
             transaction_id: None,
             last_observed_state: None,
+            poll_attempts: 0,
             reconciliation: None,
             created_at_unix: now_unix,
             updated_at_unix: now_unix,
@@ -349,6 +516,10 @@ impl MutationIntentRecord {
         self.last_observed_state.as_deref()
     }
 
+    pub fn poll_attempts(&self) -> u64 {
+        self.poll_attempts
+    }
+
     pub fn reconciliation(&self) -> Option<&ReconciliationEvidence> {
         self.reconciliation.as_ref()
     }
@@ -385,6 +556,7 @@ impl fmt::Debug for MutationIntentRecord {
                 "last_observed_state",
                 &safe_observed_state_debug(self.last_observed_state.as_deref()),
             )
+            .field("poll_attempts", &self.poll_attempts)
             .field("reconciliation", &self.reconciliation)
             .field("created_at_unix", &self.created_at_unix)
             .field("updated_at_unix", &self.updated_at_unix)
@@ -464,6 +636,44 @@ impl OwnerMutationRegistry {
         self.store.load(owner, chain_id)
     }
 
+    /// Exports a redacted, read-only artifact for any recorded intent state.
+    pub fn export_audit_artifact(
+        &self,
+        owner: Address,
+        chain_id: u64,
+    ) -> Result<MutationIntentAuditArtifact> {
+        let record = self.store.load(owner, chain_id)?.ok_or_else(|| {
+            RelayerError::Other("no mutation intent recorded for this owner".to_string())
+        })?;
+
+        Ok(MutationIntentAuditArtifact {
+            schema_version: MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION,
+            owner: redacted_address(record.owner),
+            chain_id: record.chain_id,
+            operation: record.operation,
+            epoch: record.epoch,
+            revision: record.revision,
+            status: record.status,
+            nonce: record.nonce,
+            payload_keccak256: record.payload_keccak256,
+            deadline_unix: record.deadline_unix,
+            transaction_id: record.transaction_id,
+            last_observed_state: record
+                .last_observed_state
+                .as_deref()
+                .map(sanitized_observed_state_label)
+                .map(str::to_string),
+            poll_attempts: record.poll_attempts,
+            reconciliation: record
+                .reconciliation
+                .as_ref()
+                .map(ReconciliationSummary::from_evidence),
+            created_at_unix: record.created_at_unix,
+            updated_at_unix: record.updated_at_unix,
+            redaction: MUTATION_AUDIT_REDACTION_MARKER.to_string(),
+        })
+    }
+
     /// Begins a write-ahead owner mutation intent before nonce, signing, or HTTP work.
     pub fn begin_intent(
         &self,
@@ -474,17 +684,37 @@ impl OwnerMutationRegistry {
         let now_unix = self.clock.now_unix();
         let template = MutationIntentRecord::preparing(owner, chain_id, operation, now_unix);
         match self.store.try_begin(template)? {
-            TryBeginOutcome::Started(record) => Ok(MutationIntentLease {
-                registry: self,
-                expected_epoch: record.epoch,
-                expected_revision: record.revision,
-                record,
-                unusable: false,
-            }),
-            TryBeginOutcome::Rejected(record) => Err(RelayerError::mutation_blocked(format!(
-                "owner has an unresolved mutation intent (status {}); reconcile before starting another mutation",
-                record.status.label()
-            ))),
+            TryBeginOutcome::Started(record) => {
+                tracing::info!(
+                    target: "polymarket_relayer::mutation_intent",
+                    owner = %redacted_address(record.owner),
+                    chain_id = record.chain_id,
+                    epoch = record.epoch,
+                    operation = ?record.operation,
+                    "mutation intent started"
+                );
+                Ok(MutationIntentLease {
+                    registry: self,
+                    expected_epoch: record.epoch,
+                    expected_revision: record.revision,
+                    record,
+                    unusable: false,
+                })
+            }
+            TryBeginOutcome::Rejected(record) => {
+                tracing::warn!(
+                    target: "polymarket_relayer::mutation_intent",
+                    owner = %redacted_address(record.owner),
+                    chain_id = record.chain_id,
+                    epoch = record.epoch,
+                    status = ?record.status,
+                    "mutation intent blocked"
+                );
+                Err(RelayerError::mutation_blocked(format!(
+                    "owner has an unresolved mutation intent (status {}); reconcile before starting another mutation",
+                    record.status.label()
+                )))
+            }
         }
     }
 
@@ -515,14 +745,20 @@ impl OwnerMutationRegistry {
                     && receipt.state == RelayerTransactionState::Confirmed =>
             {
                 record.status = MutationIntentStatus::Confirmed;
-                record.last_observed_state = Some(RelayerTransactionState::Confirmed.label());
+                record.last_observed_state = Some(stored_observed_state_label(
+                    &RelayerTransactionState::Confirmed,
+                ));
+                record.poll_attempts = record.poll_attempts.saturating_add(1);
             }
             RelayerPollOutcome::Confirmed(_) => return Ok(()),
             RelayerPollOutcome::Exhausted {
+                attempts,
                 last_state: Some(last_state),
-                ..
             } => {
-                record.last_observed_state = Some(last_state.label());
+                record.last_observed_state = Some(stored_observed_state_label(last_state));
+                record.poll_attempts = record
+                    .poll_attempts
+                    .saturating_add(u64::from(*attempts));
             }
             RelayerPollOutcome::Exhausted {
                 last_state: None, ..
@@ -532,10 +768,25 @@ impl OwnerMutationRegistry {
 
         let expected_epoch = record.epoch;
         let expected_revision = record.revision;
+        let resolved_status =
+            (record.status == MutationIntentStatus::Confirmed).then_some(record.status);
         record.updated_at_unix = self.clock.now_unix();
-        let _ = self
+        let updated = self
             .store
             .update(expected_epoch, expected_revision, record)?;
+        if updated {
+            if let Some(status) = resolved_status {
+                tracing::info!(
+                    target: "polymarket_relayer::mutation_intent",
+                    owner = %redacted_address(owner),
+                    chain_id,
+                    epoch = expected_epoch,
+                    status = ?status,
+                    transaction_id = %sanitized_external_token(polled_transaction_id),
+                    "mutation intent resolved"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -564,11 +815,22 @@ impl OwnerMutationRegistry {
         let expected_epoch = record.epoch;
         let expected_revision = record.revision;
         record.status = MutationIntentStatus::Failed;
-        record.last_observed_state = Some(observed_state);
+        record.last_observed_state = Some(sanitized_observed_state_label(&observed_state).to_string());
         record.updated_at_unix = self.clock.now_unix();
-        let _ = self
+        let updated = self
             .store
             .update(expected_epoch, expected_revision, record)?;
+        if updated {
+            tracing::info!(
+                target: "polymarket_relayer::mutation_intent",
+                owner = %redacted_address(owner),
+                chain_id,
+                epoch = expected_epoch,
+                status = ?MutationIntentStatus::Failed,
+                transaction_id = %sanitized_external_token(polled_transaction_id),
+                "mutation intent resolved"
+            );
+        }
         Ok(())
     }
 
@@ -606,6 +868,14 @@ impl OwnerMutationRegistry {
                 .store
                 .update(expected_epoch, expected_revision, record)?
             {
+                tracing::info!(
+                    target: "polymarket_relayer::mutation_intent",
+                    owner = %redacted_address(owner),
+                    chain_id,
+                    epoch = expected_epoch,
+                    decision = ?evidence.decision(),
+                    "mutation intent manually reconciled"
+                );
                 return Ok(());
             }
             if attempt == 1 {
@@ -642,6 +912,7 @@ impl OwnerMutationRegistry {
                 ));
             }
             let transaction_id = validate_transaction_id(transaction_id)?;
+            let sanitized_transaction_id = sanitized_external_token(&transaction_id);
             let expected_revision = record.revision;
             let now_unix = self.clock.now_unix();
             let mut recorded_evidence = evidence.clone();
@@ -654,6 +925,15 @@ impl OwnerMutationRegistry {
                 .store
                 .update(expected_epoch, expected_revision, record)?
             {
+                tracing::info!(
+                    target: "polymarket_relayer::mutation_intent",
+                    owner = %redacted_address(owner),
+                    chain_id,
+                    epoch = expected_epoch,
+                    decision = ?evidence.decision(),
+                    transaction_id = %sanitized_transaction_id,
+                    "transaction adopted"
+                );
                 return Ok(());
             }
             if attempt == 1 {
@@ -699,10 +979,20 @@ impl MutationIntentLease<'_> {
     pub fn record_submitted(&mut self, transaction_id: &str) -> Result<()> {
         self.ensure_status(MutationIntentStatus::Preparing, "record submitted transaction")?;
         let transaction_id = validate_transaction_id(transaction_id)?;
+        let sanitized_transaction_id = sanitized_external_token(&transaction_id);
         let mut next = self.record.clone();
         next.status = MutationIntentStatus::Submitted;
         next.transaction_id = Some(transaction_id);
-        self.persist(next)
+        self.persist(next)?;
+        tracing::info!(
+            target: "polymarket_relayer::mutation_intent",
+            owner = %redacted_address(self.record.owner),
+            chain_id = self.record.chain_id,
+            epoch = self.record.epoch,
+            transaction_id = %sanitized_transaction_id,
+            "mutation submitted"
+        );
+        Ok(())
     }
 
     /// Records a transaction-bound receipt while the intent is submitted.
@@ -722,15 +1012,17 @@ impl MutationIntentLease<'_> {
         }
 
         let mut next = self.record.clone();
-        match &receipt.state {
+        let resolved_status = match &receipt.state {
             RelayerTransactionState::Confirmed => {
                 next.status = MutationIntentStatus::Confirmed;
-                next.last_observed_state = Some(receipt.state.label());
+                next.last_observed_state = Some(stored_observed_state_label(&receipt.state));
+                Some(MutationIntentStatus::Confirmed)
             }
             RelayerTransactionState::New
             | RelayerTransactionState::Executed
             | RelayerTransactionState::Mined => {
-                next.last_observed_state = Some(receipt.state.label());
+                next.last_observed_state = Some(stored_observed_state_label(&receipt.state));
+                None
             }
             RelayerTransactionState::Failed
             | RelayerTransactionState::Invalid
@@ -740,8 +1032,20 @@ impl MutationIntentLease<'_> {
                         .to_string(),
                 ));
             }
+        };
+        self.persist(next)?;
+        if let Some(status) = resolved_status {
+            tracing::info!(
+                target: "polymarket_relayer::mutation_intent",
+                owner = %redacted_address(self.record.owner),
+                chain_id = self.record.chain_id,
+                epoch = self.record.epoch,
+                status = ?status,
+                transaction_id = %sanitized_external_token(&receipt.transaction_id),
+                "mutation intent resolved"
+            );
         }
-        self.persist(next)
+        Ok(())
     }
 
     /// Blocks the owner after a submit may have been dispatched without an ID.
@@ -752,7 +1056,15 @@ impl MutationIntentLease<'_> {
         )?;
         let mut next = self.record.clone();
         next.status = MutationIntentStatus::AmbiguousNoId;
-        self.persist(next)
+        self.persist(next)?;
+        tracing::warn!(
+            target: "polymarket_relayer::mutation_intent",
+            owner = %redacted_address(self.record.owner),
+            chain_id = self.record.chain_id,
+            epoch = self.record.epoch,
+            "mutation ambiguous without transaction id"
+        );
+        Ok(())
     }
 
     /// Resolves a local failure proven to have happened before submit dispatch.
@@ -764,7 +1076,15 @@ impl MutationIntentLease<'_> {
         let mut next = self.record.clone();
         next.status = MutationIntentStatus::Failed;
         next.last_observed_state = None;
-        self.persist(next)
+        self.persist(next)?;
+        tracing::warn!(
+            target: "polymarket_relayer::mutation_intent",
+            owner = %redacted_address(self.record.owner),
+            chain_id = self.record.chain_id,
+            epoch = self.record.epoch,
+            "mutation intent abandoned before submit"
+        );
+        Ok(())
     }
 
     fn ensure_status(&self, required: MutationIntentStatus, action: &str) -> Result<()> {
@@ -1191,12 +1511,22 @@ fn saturating_u256_to_u64(value: U256) -> u64 {
     }
 }
 
-fn safe_observed_state_debug(value: Option<&str>) -> Option<&str> {
+fn stored_observed_state_label(value: &RelayerTransactionState) -> String {
     match value {
-        Some("New" | "Executed" | "Mined" | "Confirmed" | "Invalid" | "Failed") => value,
-        Some(_) => Some("<unrecognized relayer state>"),
-        None => None,
+        RelayerTransactionState::Unknown(raw) => unknown_state_error_summary(raw).to_string(),
+        _ => value.label(),
     }
+}
+
+fn sanitized_observed_state_label(value: &str) -> &str {
+    match value {
+        "New" | "Executed" | "Mined" | "Confirmed" | "Invalid" | "Failed" => value,
+        _ => unknown_state_error_summary(value),
+    }
+}
+
+fn safe_observed_state_debug(value: Option<&str>) -> Option<&str> {
+    value.map(sanitized_observed_state_label)
 }
 
 fn stale_lease_error() -> RelayerError {

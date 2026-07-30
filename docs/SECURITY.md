@@ -88,7 +88,7 @@ Logs may include:
 ```text
 safe endpoint name
 HTTP status
-relayer transaction id
+sanitized relayer transaction id
 transaction state
 redacted wallet address
 redacted call summary
@@ -105,6 +105,48 @@ auth header
 full production signature material
 raw signed payload from a production account
 ```
+
+## Mutation Observability Contract
+
+The `polymarket_relayer::mutation_intent` tracing target has a closed field
+contract. Every event contains only the shortened owner, chain id, and intent
+epoch as common correlation fields. Depending on the event, the only permitted
+additional fields are the operation/status/decision enum Debug value and a
+`sha3:0x...` sanitized transaction id. Begin, blocked, submitted, ambiguous,
+resolved, abandoned, manual-reconciliation, and adoption events must not grow
+additional fields without a new reviewed observability decision.
+
+Never emit any of these values through tracing, logs, Debug, Display, errors,
+snapshots, or ticket artifacts:
+
+```text
+raw API key or auth header
+private key or signer backend error/source text
+raw production signature
+raw signed typed data
+full calldata or replayable submit body
+operator reconciliation reference or summary text
+unrecognized provider/caller state text
+```
+
+Nonce is intentionally absent from tracing even though it is allowed in the
+versioned audit artifact. Revision and payload hash are safe upper-bound values
+but are not fields in the schema-v1 mutation-intent events. Raw transaction ids
+are also forbidden in tracing; they remain only in the protected durable record
+and the serialized audit artifact where an operator needs them for
+adoption/polling.
+
+`MutationIntentAuditArtifact` is the only ticket/PR attachment form for the
+persisted lifecycle. It uses a shortened owner, sanitizes unknown state labels,
+and replaces `ReconciliationEvidence` free text with decision, stored UTF-8 byte
+lengths, and recorded time. Its manual Debug additionally hashes the transaction
+id. Do not attach `MutationIntentRecord` when original reconciliation text is
+present; operators retrieve that text directly from their protected store.
+
+`DepositWalletDryRunEvidence` is the complementary pre-submit artifact and may
+contain selector/call summaries. `MutationIntentAuditArtifact` deliberately
+does not. Their `payload_keccak256` values correlate the review and lifecycle
+without logging the signed payload or full body.
 
 ## Relayer-Specific Risks
 

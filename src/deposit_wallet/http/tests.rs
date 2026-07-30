@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use ethers::signers::{LocalWallet, Signer};
@@ -36,6 +36,11 @@ const TEST_SERVER_TIMEOUT: Duration = Duration::from_secs(2);
 const NO_REQUEST_TIMEOUT: Duration = Duration::from_millis(250);
 const STALE_INTENT_LEASE_ERROR: &str =
     "stale mutation intent lease; a newer write superseded this lease";
+const SECRET_API_KEY_SENTINEL: &str = "SECRET-API-KEY-SENTINEL";
+const EVIL_RECONCILIATION_REF_SENTINEL: &str = "EVIL-REF-SENTINEL";
+const EVIL_RECONCILIATION_SUMMARY_SENTINEL: &str = "EVIL-SUMMARY-SENTINEL";
+const EXPECTED_MUTATION_AUDIT_REDACTION_MARKER: &str =
+    "api keys, auth headers, private keys, signatures, typed data, and full submit bodies are intentionally omitted";
 
 /// Synthetic throwaway key, never a real credential.
 const SYNTHETIC_EXECUTE_SIGNER_KEY: [u8; 32] = [0x42u8; 32];
@@ -195,6 +200,23 @@ struct CapturedRequest {
     body: String,
 }
 
+struct InMemoryTraceBuffer(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for InMemoryTraceBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let mut buffer = self
+            .0
+            .lock()
+            .map_err(|_| std::io::Error::other("trace buffer lock was poisoned"))?;
+        buffer.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl CapturedRequest {
     fn header(&self, name: &str) -> Option<&str> {
         self.headers
@@ -312,6 +334,26 @@ fn paused_mutation_test_client(
     )
 }
 
+fn paused_mutation_test_client_with_api_key(
+    base_url: DepositWalletRelayerUrl,
+    api_key: &str,
+) -> DepositWalletRelayerClient {
+    let http = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("paused mutation test HTTP client should build");
+    DepositWalletRelayerClient::from_parts_with(
+        http,
+        base_url,
+        RelayerKeyAuth::new(api_key, address(API_KEY_ADDRESS)).unwrap(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        Arc::new(FixedClock {
+            now_unix: FIXED_NOW_UNIX,
+        }),
+        true,
+    )
+}
+
 fn mutation_test_client(
     base_url: DepositWalletRelayerUrl,
     now_unix: u64,
@@ -321,6 +363,22 @@ fn mutation_test_client(
         reqwest_client(Duration::from_secs(2)),
         base_url,
         relayer_auth(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        Arc::new(FixedClock { now_unix }),
+        mutation_enabled,
+    )
+}
+
+fn mutation_test_client_with_api_key(
+    base_url: DepositWalletRelayerUrl,
+    now_unix: u64,
+    mutation_enabled: bool,
+    api_key: &str,
+) -> DepositWalletRelayerClient {
+    DepositWalletRelayerClient::from_parts_with(
+        reqwest_client(Duration::from_secs(2)),
+        base_url,
+        RelayerKeyAuth::new(api_key, address(API_KEY_ADDRESS)).unwrap(),
         deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
         Arc::new(FixedClock { now_unix }),
         mutation_enabled,
@@ -4860,6 +4918,7 @@ fn reconciliation_evidence_validates_redacts_and_round_trips_with_legacy_records
         MutationIntentStatus::Preparing,
     );
     assert_eq!(legacy.reconciliation(), None);
+    assert_eq!(legacy.poll_attempts(), 0);
 }
 
 #[test]
@@ -5132,6 +5191,36 @@ async fn transaction_adoption_is_epoch_fenced_evidence_bound_and_poll_resolved()
             test_reconciliation_evidence(ReconciliationDecision::ConfirmedOnChain),
         )
         .unwrap();
+
+    let stale_owner = address("0x0000000000000000000000000000000000000003");
+    let stale_store = Arc::new(ReconciliationCasMutationIntentStore::default());
+    let stale_registry = intent_registry(stale_store.clone());
+    prepare_submitted_intent(
+        &stale_registry,
+        stale_owner,
+        RelayerMutationOperation::WalletBatch,
+        "tx-stale-resolved-event",
+    );
+    stale_store.fail_next_updates(1);
+    stale_registry
+        .record_poll_outcome(
+            stale_owner,
+            POLYGON_CHAIN_ID,
+            "tx-stale-resolved-event",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-stale-resolved-event",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        stale_registry
+            .intent(stale_owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
     let adopted = registry
         .intent(owner, POLYGON_CHAIN_ID)
         .unwrap()
@@ -6080,6 +6169,7 @@ fn mutation_intent_poll_outcomes_are_transaction_bound_and_distrust_variant_name
         .unwrap();
     assert_eq!(exhausted.status(), MutationIntentStatus::Submitted);
     assert_eq!(exhausted.last_observed_state(), Some("Mined"));
+    assert_eq!(exhausted.poll_attempts(), 3);
 
     registry
         .record_poll_outcome(
@@ -6105,14 +6195,12 @@ fn mutation_intent_poll_outcomes_are_transaction_bound_and_distrust_variant_name
             )),
         )
         .unwrap();
-    assert_eq!(
-        registry
-            .intent(owner, POLYGON_CHAIN_ID)
-            .unwrap()
-            .unwrap()
-            .status(),
-        MutationIntentStatus::Confirmed
-    );
+    let confirmed = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(confirmed.status(), MutationIntentStatus::Confirmed);
+    assert_eq!(confirmed.poll_attempts(), 4);
 
     let preparing = registry
         .begin_intent(
@@ -7885,6 +7973,861 @@ async fn intent_gated_create_and_lifecycle_wrappers_preserve_outcomes_and_lease_
     assert_deployed_request(&requests[1]);
     assert_eq!(requests[2].method, "POST");
     assert_eq!(requests[2].path, SUBMIT_PATH);
+}
+
+#[test]
+fn mutation_audit_artifact_tracks_poll_attempts_and_summarizes_reconciliation() {
+    let owner = address(WALLET_OWNER);
+    let other_owner = address(OTHER_OWNER);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+
+    let absent = registry
+        .export_audit_artifact(owner, POLYGON_CHAIN_ID)
+        .unwrap_err();
+    assert_eq!(
+        absent.to_string(),
+        "no mutation intent recorded for this owner"
+    );
+
+    let mut lease = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    lease
+        .record_payload(&test_payload_keccak256(), Some(U256::from(123u64)))
+        .unwrap();
+    lease.record_submitted("tx-audit-lifecycle").unwrap();
+    let before_no_state = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-audit-lifecycle",
+            &RelayerPollOutcome::Exhausted {
+                attempts: 99,
+                last_state: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        registry.intent(owner, POLYGON_CHAIN_ID).unwrap().unwrap(),
+        before_no_state
+    );
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-audit-lifecycle",
+            &RelayerPollOutcome::Exhausted {
+                attempts: 3,
+                last_state: Some(RelayerTransactionState::New),
+            },
+        )
+        .unwrap();
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-audit-lifecycle",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-audit-lifecycle",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+
+    let record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let artifact = registry
+        .export_audit_artifact(owner, POLYGON_CHAIN_ID)
+        .unwrap();
+    assert_eq!(
+        artifact.schema_version(),
+        MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION
+    );
+    assert_eq!(artifact.owner(), super::redaction::redacted_address(owner));
+    assert_eq!(artifact.chain_id(), record.chain_id());
+    assert_eq!(artifact.operation(), record.operation());
+    assert_eq!(artifact.epoch(), record.epoch());
+    assert_eq!(artifact.revision(), record.revision());
+    assert_eq!(artifact.status(), record.status());
+    assert_eq!(artifact.nonce(), record.nonce());
+    assert_eq!(artifact.payload_keccak256(), record.payload_keccak256());
+    assert_eq!(artifact.deadline_unix(), record.deadline_unix());
+    assert_eq!(artifact.transaction_id(), record.transaction_id());
+    assert_eq!(
+        artifact.last_observed_state(),
+        record.last_observed_state()
+    );
+    assert_eq!(artifact.poll_attempts(), 4);
+    assert_eq!(artifact.poll_attempts(), record.poll_attempts());
+    assert_eq!(artifact.reconciliation(), None);
+    assert_eq!(artifact.created_at_unix(), record.created_at_unix());
+    assert_eq!(artifact.updated_at_unix(), record.updated_at_unix());
+    assert_eq!(
+        artifact.redaction(),
+        EXPECTED_MUTATION_AUDIT_REDACTION_MARKER
+    );
+
+    let manual = registry
+        .begin_intent(
+            other_owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletCreate,
+        )
+        .unwrap();
+    drop(manual);
+    let evidence = ReconciliationEvidence::try_new(
+        "  operator/티켓-61  ",
+        ReconciliationDecision::NotAccepted,
+        "  검증 완료  ",
+    )
+    .unwrap();
+    assert!(evidence.operator_ref().len() > evidence.operator_ref().chars().count());
+    assert!(evidence.summary().len() > evidence.summary().chars().count());
+    registry
+        .reconcile_manually(other_owner, POLYGON_CHAIN_ID, 0, evidence.clone())
+        .unwrap();
+    let reconciled = registry
+        .export_audit_artifact(other_owner, POLYGON_CHAIN_ID)
+        .unwrap();
+    assert_eq!(reconciled.status(), MutationIntentStatus::Reconciled);
+    let summary = reconciled.reconciliation().unwrap();
+    assert_eq!(summary.decision(), ReconciliationDecision::NotAccepted);
+    assert_eq!(summary.operator_ref_len(), evidence.operator_ref().len());
+    assert_eq!(summary.summary_len(), evidence.summary().len());
+    assert_eq!(summary.recorded_at_unix(), FIXED_NOW_UNIX);
+
+    let saturated_owner = address("0x0000000000000000000000000000000000000004");
+    let saturated_store = Arc::new(InMemoryMutationIntentStore::default());
+    let mut saturated = serde_json::to_value(serialized_intent_record(
+        saturated_owner,
+        POLYGON_CHAIN_ID,
+        0,
+        0,
+        MutationIntentStatus::Submitted,
+    ))
+    .unwrap();
+    saturated["transaction_id"] = json!("tx-poll-saturated");
+    saturated["poll_attempts"] = json!(u64::MAX);
+    saturated_store
+        .seed_for_test(serde_json::from_value(saturated).unwrap())
+        .unwrap();
+    let saturated_registry = intent_registry(saturated_store);
+    saturated_registry
+        .record_poll_outcome(
+            saturated_owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-saturated",
+            &RelayerPollOutcome::Exhausted {
+                attempts: u32::MAX,
+                last_state: Some(RelayerTransactionState::New),
+            },
+        )
+        .unwrap();
+    saturated_registry
+        .record_poll_outcome(
+            saturated_owner,
+            POLYGON_CHAIN_ID,
+            "tx-poll-saturated",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-poll-saturated",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        saturated_registry
+            .intent(saturated_owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .poll_attempts(),
+        u64::MAX
+    );
+}
+
+#[test]
+fn mutation_audit_artifact_sanitizes_unknown_labels_at_write_and_export_boundaries() {
+    const WRITE_SENTINEL: &str = "EVIL-SENTINEL";
+    const STORE_SENTINEL: &str = "EVIL-STORE-SENTINEL";
+    const TRANSACTION_ID: &str = "tx-audit-debug-contract";
+
+    let owner = address(WALLET_OWNER);
+    let write_registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &write_registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+        "tx-unknown-write",
+    );
+    write_registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-unknown-write",
+            &RelayerPollOutcome::Exhausted {
+                attempts: 1,
+                last_state: Some(RelayerTransactionState::Unknown(
+                    WRITE_SENTINEL.to_string(),
+                )),
+            },
+        )
+        .unwrap();
+    let written = write_registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        written.last_observed_state(),
+        Some("<unrecognized relayer state>")
+    );
+    assert_eq!(written.poll_attempts(), 1);
+    assert!(!serde_json::to_string(&written).unwrap().contains(WRITE_SENTINEL));
+    assert!(!format!("{written:?}").contains(WRITE_SENTINEL));
+
+    let other_owner = address(OTHER_OWNER);
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let mut persisted = serde_json::to_value(serialized_intent_record(
+        other_owner,
+        POLYGON_CHAIN_ID,
+        7,
+        11,
+        MutationIntentStatus::Reconciled,
+    ))
+    .unwrap();
+    persisted["transaction_id"] = json!(TRANSACTION_ID);
+    persisted["last_observed_state"] = json!(STORE_SENTINEL);
+    persisted["poll_attempts"] = json!(7);
+    persisted["reconciliation"] = json!({
+        "operator_ref": EVIL_RECONCILIATION_REF_SENTINEL,
+        "decision": "Superseded",
+        "summary": EVIL_RECONCILIATION_SUMMARY_SENTINEL,
+        "recorded_at_unix": FIXED_NOW_UNIX,
+    });
+    let persisted: MutationIntentRecord = serde_json::from_value(persisted).unwrap();
+    store.seed_for_test(persisted).unwrap();
+    let registry = intent_registry(store);
+    let artifact = registry
+        .export_audit_artifact(other_owner, POLYGON_CHAIN_ID)
+        .unwrap();
+    let artifact_json = serde_json::to_string(&artifact).unwrap();
+    let artifact_debug = format!("{artifact:?}");
+
+    for forbidden in [
+        STORE_SENTINEL,
+        EVIL_RECONCILIATION_REF_SENTINEL,
+        EVIL_RECONCILIATION_SUMMARY_SENTINEL,
+    ] {
+        assert!(!artifact_json.contains(forbidden));
+        assert!(!artifact_debug.contains(forbidden));
+    }
+    assert_eq!(
+        artifact.last_observed_state(),
+        Some("<unrecognized relayer state>")
+    );
+    assert_eq!(artifact.poll_attempts(), 7);
+    let summary = artifact.reconciliation().unwrap();
+    assert_eq!(summary.decision(), ReconciliationDecision::Superseded);
+    assert_eq!(
+        summary.operator_ref_len(),
+        EVIL_RECONCILIATION_REF_SENTINEL.len()
+    );
+    assert_eq!(
+        summary.summary_len(),
+        EVIL_RECONCILIATION_SUMMARY_SENTINEL.len()
+    );
+    let artifact_value = serde_json::to_value(&artifact).unwrap();
+    for required in [
+        "schema_version",
+        "owner",
+        "chain_id",
+        "operation",
+        "epoch",
+        "revision",
+        "status",
+        "nonce",
+        "payload_keccak256",
+        "deadline_unix",
+        "transaction_id",
+        "last_observed_state",
+        "poll_attempts",
+        "reconciliation",
+        "created_at_unix",
+        "updated_at_unix",
+        "redaction",
+    ] {
+        assert!(artifact_value.get(required).is_some(), "missing {required}");
+    }
+    let reconciliation = artifact_value["reconciliation"].as_object().unwrap();
+    assert!(reconciliation.get("operator_ref").is_none());
+    assert!(reconciliation.get("summary").is_none());
+    assert_eq!(artifact_value["transaction_id"], json!(TRANSACTION_ID));
+    assert!(artifact_json.contains(TRANSACTION_ID));
+    assert!(!artifact_debug.contains(TRANSACTION_ID));
+    assert!(artifact_debug.contains(&super::redaction::sanitized_external_token(
+        TRANSACTION_ID
+    )));
+    assert_eq!(
+        artifact_value["owner"],
+        json!(super::redaction::redacted_address(other_owner))
+    );
+    assert!(artifact_value["owner"].as_str().unwrap().contains("..."));
+    assert!(!artifact_json.contains(&to_checksum(&other_owner, None)));
+}
+
+#[test]
+fn public_observability_debug_and_artifact_json_omit_all_secret_sentinels() {
+    let owner = address(WALLET_OWNER);
+    let fixture = fixture_value("wallet_submit_body.json");
+    let raw_signature = fixture["signature"].as_str().unwrap();
+    let raw_calldata = fixture["depositWalletParams"]["calls"][0]["data"]
+        .as_str()
+        .unwrap();
+    let synthetic_private_key = hex::encode(SYNTHETIC_EXECUTE_SIGNER_KEY);
+
+    let auth = RelayerKeyAuth::new(SECRET_API_KEY_SENTINEL, address(API_KEY_ADDRESS)).unwrap();
+    let read_permit = read_permit(owner);
+    let mutation_permit = RelayerMutationPermit::try_new(
+        RelayerMutationMode::DryRun,
+        RelayerMutationOperation::WalletBatch,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+        SECRET_API_KEY_SENTINEL,
+        raw_signature,
+    )
+    .unwrap();
+    let safe_permit = execute_permit(RelayerMutationMode::DryRun, owner);
+    let request = wallet_batch_request();
+    let request_body = serde_json::to_vec(&request).unwrap();
+    let dry_run = DepositWalletDryRunEvidence::for_wallet_batch(
+        &safe_permit,
+        POLYGON_CHAIN_ID,
+        &request,
+        &request_body,
+    );
+    let receipt = DepositWalletSubmitReceipt::new(
+        "tx-public-debug".to_string(),
+        RelayerTransactionState::Unknown(raw_signature.to_string()),
+        test_payload_keccak256(),
+    );
+    let reconciliation = ReconciliationEvidence::try_new(
+        SECRET_API_KEY_SENTINEL,
+        ReconciliationDecision::Superseded,
+        raw_signature,
+    )
+    .unwrap();
+    let report = AmbiguousCandidateReport::new(
+        super::redaction::redacted_address(owner),
+        "AmbiguousNoId".to_string(),
+        Some(test_payload_keccak256()),
+        0,
+        FIXED_NOW_UNIX,
+        Vec::new(),
+        0,
+    );
+
+    let store = Arc::new(InMemoryMutationIntentStore::default());
+    let mut persisted = serde_json::to_value(serialized_intent_record(
+        owner,
+        POLYGON_CHAIN_ID,
+        0,
+        0,
+        MutationIntentStatus::Reconciled,
+    ))
+    .unwrap();
+    persisted["last_observed_state"] = json!(raw_signature);
+    persisted["reconciliation"] = serde_json::to_value(&reconciliation).unwrap();
+    let record: MutationIntentRecord = serde_json::from_value(persisted).unwrap();
+    store.seed_for_test(record.clone()).unwrap();
+    let artifact = intent_registry(store)
+        .export_audit_artifact(owner, POLYGON_CHAIN_ID)
+        .unwrap();
+
+    let public_debug = [
+        ("RelayerKeyAuth", format!("{auth:?}")),
+        ("RelayerReadPermit", format!("{read_permit:?}")),
+        ("RelayerMutationPermit", format!("{mutation_permit:?}")),
+        ("DepositWalletDryRunEvidence", format!("{dry_run:?}")),
+        ("DepositWalletSubmitReceipt", format!("{receipt:?}")),
+        ("MutationIntentRecord", format!("{record:?}")),
+        ("ReconciliationEvidence", format!("{reconciliation:?}")),
+        ("AmbiguousCandidateReport", format!("{report:?}")),
+        ("MutationIntentAuditArtifact", format!("{artifact:?}")),
+    ];
+    let artifact_json = serde_json::to_string(&artifact).unwrap();
+    for forbidden in [
+        SECRET_API_KEY_SENTINEL,
+        raw_signature,
+        raw_calldata,
+        synthetic_private_key.as_str(),
+        "RELAYER_API_KEY",
+    ] {
+        for (name, debug) in &public_debug {
+            assert!(
+                !debug.contains(forbidden),
+                "{name} leaked forbidden material"
+            );
+        }
+        assert!(!artifact_json.contains(forbidden));
+    }
+    assert_eq!(
+        serde_json::to_value(&artifact).unwrap()["schema_version"],
+        json!(MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION)
+    );
+    assert_eq!(
+        artifact.redaction(),
+        EXPECTED_MUTATION_AUDIT_REDACTION_MARKER
+    );
+}
+
+#[tokio::test]
+async fn failure_displays_apply_the_same_secret_redaction_contract() {
+    let owner = execute_signer().address();
+    let loopback = DepositWalletRelayerUrl::loopback("http://127.0.0.1/").unwrap();
+    let client = mutation_test_client_with_api_key(
+        loopback,
+        FIXED_NOW_UNIX,
+        true,
+        SECRET_API_KEY_SENTINEL,
+    );
+    let wrong_owner_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        address(OTHER_OWNER),
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+    let permit_rejected = client
+        .submit_wallet_create(owner, &wrong_owner_permit)
+        .await
+        .unwrap_err();
+    let deadline_expired = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(FIXED_NOW_UNIX),
+            &execute_signer(),
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+
+    let (url, handle) = spawn_server(vec![TestResponse::json(
+        "200 OK",
+        format!(r#"{{"transactionID":"{SECRET_API_KEY_SENTINEL}""#),
+    )])
+    .await;
+    let truncated_client = mutation_test_client_with_api_key(
+        url,
+        FIXED_NOW_UNIX,
+        true,
+        SECRET_API_KEY_SENTINEL,
+    );
+    let truncated = truncated_client
+        .submit_wallet_create(
+            owner,
+            &mutation_permit(
+                RelayerMutationMode::Live,
+                RelayerMutationOperation::WalletCreate,
+                owner,
+                POLYGON_CHAIN_ID,
+                FIXED_PERMIT_EXPIRY_UNIX,
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(handle.await.unwrap().len(), 1);
+
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let mut unresolved = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    unresolved.record_submitted(SECRET_API_KEY_SENTINEL).unwrap();
+    let mutation_blocked = expect_intent_begin_error(registry.begin_intent(
+        owner,
+        POLYGON_CHAIN_ID,
+        RelayerMutationOperation::WalletBatch,
+    ));
+
+    let fixture = fixture_value("wallet_submit_body.json");
+    let raw_signature = fixture["signature"].as_str().unwrap();
+    let raw_calldata = fixture["depositWalletParams"]["calls"][0]["data"]
+        .as_str()
+        .unwrap();
+    let synthetic_private_key = hex::encode(SYNTHETIC_EXECUTE_SIGNER_KEY);
+    for error in [
+        permit_rejected,
+        deadline_expired,
+        truncated,
+        mutation_blocked,
+    ] {
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+        for forbidden in [
+            SECRET_API_KEY_SENTINEL,
+            raw_signature,
+            raw_calldata,
+            synthetic_private_key.as_str(),
+        ] {
+            assert!(!display.contains(forbidden));
+            assert!(!debug.contains(forbidden));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn mutation_intent_tracing_is_structured_complete_and_redacted() {
+    fn register_production_callsites_for_scoped_subscriber() {
+        let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+        let owner = address("0x0000000000000000000000000000000000000003");
+        let transaction_id = "tx-tracing-callsite-registration";
+        let mut submitted = registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch,
+            )
+            .unwrap();
+        submitted.record_submitted(transaction_id).unwrap();
+        assert!(registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch,
+            )
+            .is_err());
+        drop(submitted);
+        registry
+            .record_poll_outcome(
+                owner,
+                POLYGON_CHAIN_ID,
+                transaction_id,
+                &RelayerPollOutcome::Confirmed(intent_receipt(
+                    transaction_id,
+                    RelayerTransactionState::Confirmed,
+                )),
+            )
+            .unwrap();
+
+        let mut abandoned = registry
+            .begin_intent(
+                owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletCreate,
+            )
+            .unwrap();
+        abandoned.abandon_before_submit().unwrap();
+
+        let manual_owner = address("0x0000000000000000000000000000000000000004");
+        let mut ambiguous = registry
+            .begin_intent(
+                manual_owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletCreate,
+            )
+            .unwrap();
+        ambiguous.record_ambiguous_without_id().unwrap();
+        drop(ambiguous);
+        registry
+            .reconcile_manually(
+                manual_owner,
+                POLYGON_CHAIN_ID,
+                0,
+                ReconciliationEvidence::try_new(
+                    "callsite-registration",
+                    ReconciliationDecision::NotAccepted,
+                    "callsite registration evidence",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        let adopted_owner = address("0x0000000000000000000000000000000000000005");
+        let mut adoptable = registry
+            .begin_intent(
+                adopted_owner,
+                POLYGON_CHAIN_ID,
+                RelayerMutationOperation::WalletBatch,
+            )
+            .unwrap();
+        adoptable.record_ambiguous_without_id().unwrap();
+        drop(adoptable);
+        registry
+            .adopt_transaction(
+                adopted_owner,
+                POLYGON_CHAIN_ID,
+                0,
+                "tx-tracing-callsite-adoption",
+                ReconciliationEvidence::try_new(
+                    "callsite-registration",
+                    ReconciliationDecision::ConfirmedOnChain,
+                    "callsite registration evidence",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn event_line<'a>(output: &'a str, message: &str) -> &'a str {
+        output
+            .lines()
+            .find(|line| line.contains(message))
+            .unwrap_or_else(|| {
+                let captured_messages = [
+                    "mutation intent started",
+                    "mutation intent blocked",
+                    "mutation submitted",
+                    "mutation ambiguous without transaction id",
+                    "mutation intent resolved",
+                    "mutation intent abandoned before submit",
+                    "mutation intent manually reconciled",
+                    "transaction adopted",
+                ]
+                .into_iter()
+                .filter(|candidate| output.contains(candidate))
+                .collect::<Vec<_>>();
+                panic!(
+                    "missing tracing event {message:?}; captured known events: {captured_messages:?}"
+                )
+            })
+    }
+
+    fn assert_fields(line: &str, required: &[&str], forbidden: &[&str]) {
+        for field in required {
+            assert!(line.contains(field), "missing tracing field {field:?}");
+        }
+        for field in forbidden {
+            assert!(
+                !line.contains(field),
+                "unexpected tracing field {field:?}"
+            );
+        }
+    }
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let writer_buffer = Arc::clone(&buffer);
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || InMemoryTraceBuffer(Arc::clone(&writer_buffer)))
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let dispatch_guard = tracing::subscriber::set_default(subscriber);
+    // tracing-core caches callsite interest globally even though set_default is
+    // thread-local. Exercise the real production transitions synchronously,
+    // then rebuild their registered callsites against this scoped subscriber
+    // so a parallel test thread cannot suppress the capture. Discard only this
+    // registration pass; the assertions below exercise every transition again.
+    register_production_callsites_for_scoped_subscriber();
+    tracing::callsite::rebuild_interest_cache();
+    buffer.lock().unwrap().clear();
+
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, server_handle) = spawn_polling_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "31"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-tracing-submit", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let client = paused_mutation_test_client_with_api_key(url, SECRET_API_KEY_SENTINEL);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let outcome = registry
+        .gate(&client)
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap();
+    assert_eq!(expect_submitted(outcome).transaction_id(), "tx-tracing-submit");
+    let blocked = expect_intent_begin_error(registry.begin_intent(
+        owner,
+        POLYGON_CHAIN_ID,
+        RelayerMutationOperation::WalletBatch,
+    ));
+    assert!(blocked.is_deposit_wallet_mutation_blocked());
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-tracing-submit",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-tracing-submit",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+
+    let mut abandoned = registry
+        .begin_intent(
+            owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletCreate,
+        )
+        .unwrap();
+    abandoned.abandon_before_submit().unwrap();
+
+    let manual_owner = address(OTHER_OWNER);
+    let mut ambiguous = registry
+        .begin_intent(
+            manual_owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletCreate,
+        )
+        .unwrap();
+    ambiguous.record_ambiguous_without_id().unwrap();
+    drop(ambiguous);
+    registry
+        .reconcile_manually(
+            manual_owner,
+            POLYGON_CHAIN_ID,
+            0,
+            ReconciliationEvidence::try_new(
+                EVIL_RECONCILIATION_REF_SENTINEL,
+                ReconciliationDecision::NotAccepted,
+                EVIL_RECONCILIATION_SUMMARY_SENTINEL,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let adopted_owner = address("0x0000000000000000000000000000000000000002");
+    let mut adoptable = registry
+        .begin_intent(
+            adopted_owner,
+            POLYGON_CHAIN_ID,
+            RelayerMutationOperation::WalletBatch,
+        )
+        .unwrap();
+    adoptable.record_ambiguous_without_id().unwrap();
+    drop(adoptable);
+    registry
+        .adopt_transaction(
+            adopted_owner,
+            POLYGON_CHAIN_ID,
+            0,
+            "tx-tracing-adopted",
+            ReconciliationEvidence::try_new(
+                "operator/DON-61",
+                ReconciliationDecision::ConfirmedOnChain,
+                "matched authoritative evidence",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let requests = server_handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let submit_body = requests[1].body.as_str();
+    let submit_json: Value = serde_json::from_str(submit_body).unwrap();
+    let actual_signature = submit_json["signature"].as_str().unwrap();
+    let actual_calldata = submit_json["depositWalletParams"]["calls"][0]["data"]
+        .as_str()
+        .unwrap();
+    drop(dispatch_guard);
+    let output = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+
+    for message in [
+        "mutation intent started",
+        "mutation intent blocked",
+        "mutation submitted",
+        "mutation ambiguous without transaction id",
+        "mutation intent resolved",
+        "mutation intent abandoned before submit",
+        "mutation intent manually reconciled",
+        "transaction adopted",
+    ] {
+        let line = event_line(&output, message);
+        assert!(line.contains("polymarket_relayer::mutation_intent"));
+        assert_fields(line, &["owner=", "chain_id=", "epoch="], &["revision="]);
+    }
+    assert_eq!(output.matches("mutation intent resolved").count(), 1);
+    assert_fields(
+        event_line(&output, "mutation intent started"),
+        &["operation=WalletBatch"],
+        &["status=", "decision=", "transaction_id="],
+    );
+    assert_fields(
+        event_line(&output, "mutation intent blocked"),
+        &["status=Submitted"],
+        &["operation=", "decision=", "transaction_id="],
+    );
+    assert_fields(
+        event_line(&output, "mutation submitted"),
+        &["transaction_id=sha3:0x"],
+        &["operation=", "status=", "decision="],
+    );
+    assert_fields(
+        event_line(&output, "mutation ambiguous without transaction id"),
+        &[],
+        &["operation=", "status=", "decision=", "transaction_id="],
+    );
+    assert_fields(
+        event_line(&output, "mutation intent resolved"),
+        &["status=Confirmed", "transaction_id=sha3:0x"],
+        &["operation=", "decision="],
+    );
+    assert_fields(
+        event_line(&output, "mutation intent abandoned before submit"),
+        &[],
+        &["operation=", "status=", "decision=", "transaction_id="],
+    );
+    assert_fields(
+        event_line(&output, "mutation intent manually reconciled"),
+        &["decision=NotAccepted"],
+        &["operation=", "status=", "transaction_id="],
+    );
+    assert_fields(
+        event_line(&output, "transaction adopted"),
+        &["decision=ConfirmedOnChain", "transaction_id=sha3:0x"],
+        &["operation=", "status="],
+    );
+
+    let fixture = fixture_value("wallet_submit_body.json");
+    let fixture_signature = fixture["signature"].as_str().unwrap();
+    let fixture_calldata = fixture["depositWalletParams"]["calls"][0]["data"]
+        .as_str()
+        .unwrap();
+    let synthetic_private_key = hex::encode(SYNTHETIC_EXECUTE_SIGNER_KEY);
+    for forbidden in [
+        SECRET_API_KEY_SENTINEL,
+        actual_signature,
+        actual_calldata,
+        fixture_signature,
+        fixture_calldata,
+        synthetic_private_key.as_str(),
+        submit_body,
+        EVIL_RECONCILIATION_REF_SENTINEL,
+        EVIL_RECONCILIATION_SUMMARY_SENTINEL,
+        "nonce=",
+        "payload_keccak256=",
+        "operator_ref=",
+        "summary=",
+    ] {
+        assert!(!output.contains(forbidden), "tracing leaked forbidden material");
+    }
+    assert!(!output.contains(&to_checksum(&owner, None)));
 }
 
 #[test]

@@ -41,6 +41,7 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "InMemoryMutationIntentStore",
         "IntentGatedClient",
         "IntentReconcileOutcome",
+        "MutationIntentAuditArtifact",
         "MutationIntentLease",
         "MutationIntentRecord",
         "MutationIntentStatus",
@@ -48,7 +49,9 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "OwnerMutationRegistry",
         "ReconciliationDecision",
         "ReconciliationEvidence",
+        "ReconciliationSummary",
         "TryBeginOutcome",
+        "MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION",
         "try_build_wallet_batch_request_with_signature",
     ] {
         assert!(
@@ -136,6 +139,7 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "InMemoryMutationIntentStore",
         "IntentGatedClient",
         "IntentReconcileOutcome",
+        "MutationIntentAuditArtifact",
         "MutationIntentLease",
         "MutationIntentRecord",
         "MutationIntentStatus",
@@ -143,7 +147,9 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "OwnerMutationRegistry",
         "ReconciliationDecision",
         "ReconciliationEvidence",
+        "ReconciliationSummary",
         "TryBeginOutcome",
+        "MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION",
     ] {
         assert!(
             contains_identifier(&http, required),
@@ -174,6 +180,8 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "pub struct IntentGatedClient",
         "pub enum ReconciliationDecision",
         "pub struct ReconciliationEvidence",
+        "pub struct ReconciliationSummary",
+        "pub struct MutationIntentAuditArtifact",
         "pub enum IntentReconcileOutcome",
     ] {
         assert!(
@@ -201,6 +209,10 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         intent.contains("#[cfg(test)]\n    pub(super) fn with_clock("),
         "registry clock injection must retain the reviewed test-only parent visibility"
     );
+    assert!(
+        intent.contains("pub const MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION: u32 = 1;"),
+        "mutation audit artifact schema version must remain pinned at v1"
+    );
     let gate_signature = function_signatures(&intent, "pub fn gate");
     assert_eq!(gate_signature.len(), 1);
     assert!(
@@ -208,6 +220,19 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             && gate_signature[0].contains("IntentGatedClient<'a>"),
         "registry gate must return the client- and registry-borrowing wrapper"
     );
+    let export_signature = function_signatures(&intent, "pub fn export_audit_artifact");
+    assert_eq!(export_signature.len(), 1);
+    for required in [
+        "&self",
+        "owner: Address",
+        "chain_id: u64",
+        "Result<MutationIntentAuditArtifact>",
+    ] {
+        assert!(
+            export_signature[0].contains(required),
+            "export_audit_artifact signature is missing {required:?}"
+        );
+    }
     let poll_record_signature = function_signatures(&intent, "pub fn record_poll_outcome");
     assert_eq!(poll_record_signature.len(), 1);
     assert!(
@@ -308,6 +333,7 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
         "deadline_unix",
         "transaction_id",
         "last_observed_state",
+        "poll_attempts",
         "reconciliation",
         "created_at_unix",
         "updated_at_unix",
@@ -373,6 +399,78 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     assert!(
         decision_attributes.contains("Serialize") && decision_attributes.contains("Deserialize"),
         "reconciliation decisions must round-trip with evidence"
+    );
+    for (name, fields) in [
+        (
+            "MutationIntentAuditArtifact",
+            &[
+                "schema_version",
+                "owner",
+                "chain_id",
+                "operation",
+                "epoch",
+                "revision",
+                "status",
+                "nonce",
+                "payload_keccak256",
+                "deadline_unix",
+                "transaction_id",
+                "last_observed_state",
+                "poll_attempts",
+                "reconciliation",
+                "created_at_unix",
+                "updated_at_unix",
+                "redaction",
+            ][..],
+        ),
+        (
+            "ReconciliationSummary",
+            &[
+                "decision",
+                "operator_ref_len",
+                "summary_len",
+                "recorded_at_unix",
+            ][..],
+        ),
+    ] {
+        let block = struct_block(&intent, name);
+        for field in fields {
+            assert!(
+                block.contains(&format!("    {field}:")),
+                "{name}::{field} must exist"
+            );
+            assert!(
+                !block.contains(&format!("pub {field}:"))
+                    && !block.contains(&format!("pub(crate) {field}:")),
+                "{name}::{field} must remain private"
+            );
+            assert!(
+                intent.contains(&format!("pub fn {field}(&self)")),
+                "{name}::{field} must have the reviewed getter"
+            );
+        }
+    }
+    let artifact_attributes =
+        derive_attributes_for_struct(&intent, "MutationIntentAuditArtifact");
+    assert!(
+        artifact_attributes.contains("Clone")
+            && artifact_attributes.contains("PartialEq")
+            && artifact_attributes.contains("Eq")
+            && artifact_attributes.contains("Serialize")
+            && !artifact_attributes.contains("Debug")
+            && !artifact_attributes.contains("Deserialize")
+            && intent.contains("impl fmt::Debug for MutationIntentAuditArtifact"),
+        "mutation audit artifacts must serialize with reviewed value semantics and use manual redacted Debug"
+    );
+    let summary_attributes = derive_attributes_for_struct(&intent, "ReconciliationSummary");
+    assert!(
+        summary_attributes.contains("Clone")
+            && summary_attributes.contains("Debug")
+            && summary_attributes.contains("PartialEq")
+            && summary_attributes.contains("Eq")
+            && summary_attributes.contains("Serialize")
+            && !summary_attributes.contains("Deserialize"),
+        "reconciliation summaries must retain the reviewed redacted value semantics"
     );
     assert!(
         derive_attributes_for_enum(&intent, "IntentReconcileOutcome").contains("Debug"),
@@ -740,6 +838,7 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "InMemoryMutationIntentStore",
         "IntentGatedClient",
         "IntentReconcileOutcome",
+        "MutationIntentAuditArtifact",
         "MutationIntentLease",
         "MutationIntentRecord",
         "MutationIntentStatus",
@@ -747,7 +846,9 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "OwnerMutationRegistry",
         "ReconciliationDecision",
         "ReconciliationEvidence",
+        "ReconciliationSummary",
         "TryBeginOutcome",
+        "MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION",
     ] {
         assert!(
             contains_identifier(&module, required),
@@ -935,9 +1036,24 @@ fn docs_record_semver_boundary_and_grep_audit_contract() {
             "ADR-0014: PBRSDK-13 Evidence-Bound Ambiguous Reconciliation",
         ),
         (
+            "docs/DECISIONS.md",
+            decisions.as_str(),
+            "ADR-0015: PBRSDK-15 Redacted Mutation Audit and Tracing Contract",
+        ),
+        (
+            "docs/CONSUMER_INTEGRATION.md",
+            consumer.as_str(),
+            "Sample schema-v1 redacted artifact",
+        ),
+        (
             "docs/REVIEW_CHECKLIST.md",
             checklist.as_str(),
             "Public API Boundary",
+        ),
+        (
+            "docs/REVIEW_CHECKLIST.md",
+            checklist.as_str(),
+            "Mutation Audit And Observability",
         ),
     ] {
         assert!(text.contains(required), "{path} is missing {required:?}");

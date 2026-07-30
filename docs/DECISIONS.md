@@ -684,3 +684,86 @@ state safety. Invalid top-level JSON/envelopes and more than 32 items still fail
 the report. Candidate matching is never a reconciliation verdict: the operator
 must adopt a chosen transaction with evidence or manually reconcile, and a
 known transaction id must be polled rather than submitted again.
+
+## ADR-0015: PBRSDK-15 Redacted Mutation Audit and Tracing Contract
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+`MutationIntentAuditArtifact` is the ticket- and PR-attachable audit view of a
+stored mutation generation. Its schema is explicitly versioned by
+`MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION = 1`. Any later change to field names,
+field meaning, redaction behavior, or reconciliation-summary semantics requires
+a schema-version increment; consumers must branch on `schema_version` rather
+than assume a newer shape is v1. The registry exports any recorded state,
+including resolved rows, through the read-only
+`OwnerMutationRegistry::export_audit_artifact(owner, chain_id)` method. Export
+does not update the row or its revision.
+
+Schema v1 contains the redacted owner, chain, operation, epoch, revision,
+status, optional nonce and payload hash, optional deadline and transaction id,
+safe last-observed-state label, cumulative poll attempts, reconciliation
+summary, timestamps, and a fixed omission marker. It never contains an API
+key, auth header, private key, signature, signed typed data, full calldata, or
+full replayable submit body. JSON retains the transaction id because operators
+need it for adoption and polling; manual artifact Debug prints only its
+`sha3:0x...` sanitized token. Owner is always the existing shortened checksum
+form.
+
+The artifact never serializes `ReconciliationEvidence.operator_ref` or
+`summary`. Those fields are operator-authored free text and can contain pasted
+secrets, including in rows restored through Deserialize without constructor
+validation. `ReconciliationSummary` includes only decision, recorded time, and
+the stored strings' UTF-8 byte lengths from `value.len()`. Export does not trim
+again and does not count chars or graphemes. An operator who needs the original
+evidence text must read the protected durable-store record directly; that
+record must not be attached as the redacted artifact.
+
+`MutationIntentRecord.poll_attempts` uses `#[serde(default)]`, so pre-v1/R7
+rows load as zero. A matching Confirmed poll contributes one observation.
+Exhausted with a present last state contributes its reported attempts.
+Exhausted without a state and Cancelled retain their existing early-return
+no-op behavior and contribute nothing. Additions use `saturating_add` and ride
+the existing state-write CAS; no extra write is introduced. Unknown state text
+is replaced with `<unrecognized relayer state>` both when a poll label is
+stored and again when any durable row is exported. The two defenses are
+independent so bypassing the normal writer cannot leak a provider or caller
+string through the artifact.
+
+`DepositWalletDryRunEvidence` and `MutationIntentAuditArtifact` are
+complementary, not interchangeable. The dry-run evidence is created before
+submit and owns selector/data-length/call summaries. The audit artifact owns
+the persisted intent lifecycle after begin. `payload_keccak256` is their
+non-secret correlation key. The audit artifact deliberately repeats no method
+selector or call summary.
+
+Mutation-intent tracing uses the fixed target
+`polymarket_relayer::mutation_intent`. Every event has only redacted `owner`,
+`chain_id`, and `epoch` as common correlation fields. The closed event-specific
+field contract is:
+
+```text
+mutation intent started: operation
+mutation intent blocked: status
+mutation submitted: sanitized transaction_id
+mutation ambiguous without transaction id: no additional field
+mutation intent resolved: status, sanitized transaction_id
+mutation intent abandoned before submit: no additional field
+mutation intent manually reconciled: decision
+transaction adopted: decision, sanitized transaction_id
+```
+
+Resolved events from registry poll/failure paths are emitted only after the
+existing CAS returns `Ok(true)`; a stale no-op cannot claim resolution.
+Lease-based events are emitted only after their existing persist succeeds.
+Nonce is intentionally artifact-only and never a tracing field. Operator
+reference/summary text, payload bodies, signatures, typed data, auth material,
+and raw transaction ids are also forbidden in these events. No metrics, OTel,
+collector, or logging-system dependency is introduced.
+
+Regression tests preload malicious reconciliation text and unknown state
+labels through Deserialize, exercise success and failure Display/Debug paths,
+capture the current-thread tracing dispatcher in memory across async awaits,
+and inspect the actual locally submitted signature, calldata, and full body as
+forbidden sentinels. This is offline redaction and lifecycle evidence only; it
+does not qualify a durable store, production log collector, or live relayer
+execution.
