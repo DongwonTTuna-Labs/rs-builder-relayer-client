@@ -103,6 +103,12 @@ reconcile_by_polling_uses_wallet_create_type_and_rejects_wallet_receipt
 ambiguous_candidate_report_filters_and_redacts_fixture_without_state_change
 ambiguous_candidate_report_rejects_scope_before_http_and_enforces_item_limit
 ambiguous_candidate_report_rejects_non_array_or_invalid_json
+owner_concurrency_blocks_same_owner_before_second_nonce_while_submit_is_held
+owner_concurrency_allows_different_owner_while_submit_is_held
+owner_concurrency_reopens_only_after_confirmed_reconciliation
+owner_concurrency_keeps_ambiguous_and_unknown_owners_blocked
+owner_concurrency_block_error_is_stable_and_record_preserving
+owner_concurrency_blocks_create_and_deploy_after_read_preflight
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -291,6 +297,39 @@ per-item filtering, response limits, and report immutability. Every polling
 reconciliation request log asserts zero `POST /submit` calls. The recent fixture
 is schema-constructed from official TypeScript `RelayerTransaction` fields and
 the recorded-style WALLET fixture; it is not live-recorded evidence.
+
+PBRSDK-14 owner-concurrency tests fix the crate policy at immediate blocking:
+an unresolved owner receives the stable `mutation_blocked` error from
+`begin_intent`; queue tickets and scheduling remain the consumer actor's
+ADR-0013 responsibility. The deterministic scenarios prove that a held first
+submit blocks the same owner before a second nonce fetch, a different owner
+completes independently, Submitted remains blocked until a matching Confirmed
+poll outcome and then permits a complete successor mutation, AmbiguousNoId and
+an unknown polling result retain the lock, three repeated block attempts leave
+the record and epoch unchanged, and WALLET-CREATE/deployment use the same
+owner-wide gate. Deployment still performs its read-only `/deployed` preflight
+exactly once before the blocked create decision; it performs no nonce fetch or
+submit.
+
+Every PBRSDK-14 test uses `#[tokio::test(start_paused = true)]`, a
+mutation-enabled client assembled with `FixedClock` and a timeout-free reqwest
+client. Every server that expects a request uses polling-style accept and
+request-read paths with no timer. Zero-request assertions alone reuse
+`spawn_optional_request_server`: its `NO_REQUEST_TIMEOUT` intentionally
+auto-advances paused time to finish the negative observation, and its timed
+request reader runs only if an unexpected request arrives. The held-submit
+server signals request observation through a oneshot, waits on a second oneshot
+for release, and only then writes the submit response. Each scenario has
+exactly one registry coordination domain; separate servers and HTTP clients
+isolate request logs without separating the shared store. There is no real
+sleep or wall-clock ordering assertion.
+
+The timer-free held server has the same deliberate residual risk as the
+polling servers: if a regression sends fewer or more requests than the fixed
+sequence expects, an individual test can hang while awaiting I/O or task
+completion. CI and command-runner timeouts are the hang guard; adding an
+internal timer would reintroduce paused-time auto-advance and invalidate the
+deterministic ordering proof.
 
 ## Manual Live Gate
 
