@@ -39,6 +39,8 @@ const STALE_INTENT_LEASE_ERROR: &str =
 
 /// Synthetic throwaway key, never a real credential.
 const SYNTHETIC_EXECUTE_SIGNER_KEY: [u8; 32] = [0x42u8; 32];
+/// Synthetic throwaway key for a distinct owner, never a real credential.
+const SYNTHETIC_OTHER_OWNER_SIGNER_KEY: [u8; 32] = [0x43u8; 32];
 
 struct FixedClock {
     now_unix: u64,
@@ -291,6 +293,25 @@ fn polling_test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelaye
     )
 }
 
+fn paused_mutation_test_client(
+    base_url: DepositWalletRelayerUrl,
+) -> DepositWalletRelayerClient {
+    let http = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("paused mutation test HTTP client should build");
+    DepositWalletRelayerClient::from_parts_with(
+        http,
+        base_url,
+        relayer_auth(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        Arc::new(FixedClock {
+            now_unix: FIXED_NOW_UNIX,
+        }),
+        true,
+    )
+}
+
 fn mutation_test_client(
     base_url: DepositWalletRelayerUrl,
     now_unix: u64,
@@ -328,6 +349,12 @@ fn mutation_permit(
 fn execute_signer() -> LocalWallet {
     LocalWallet::from_bytes(&SYNTHETIC_EXECUTE_SIGNER_KEY)
         .expect("synthetic signer key should be valid")
+        .with_chain_id(POLYGON_CHAIN_ID)
+}
+
+fn other_owner_execute_signer() -> LocalWallet {
+    LocalWallet::from_bytes(&SYNTHETIC_OTHER_OWNER_SIGNER_KEY)
+        .expect("other-owner synthetic signer key should be valid")
         .with_chain_id(POLYGON_CHAIN_ID)
 }
 
@@ -725,6 +752,61 @@ async fn spawn_polling_server(
     (
         DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
         handle,
+    )
+}
+
+async fn spawn_polling_held_submit_server(
+    responses: Vec<TestResponse>,
+) -> (
+    DepositWalletRelayerUrl,
+    JoinHandle<Vec<CapturedRequest>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    assert!(
+        !responses.is_empty(),
+        "held-submit server needs at least one response"
+    );
+    let held_response_index = responses.len() - 1;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("polling held-submit server should bind");
+    let addr = listener.local_addr().unwrap();
+    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let mut requests = Vec::with_capacity(responses.len());
+        let mut request_seen_tx = Some(request_seen_tx);
+        let mut release_rx = Some(release_rx);
+        for (index, response) in responses.into_iter().enumerate() {
+            let (mut stream, _) = listener
+                .accept()
+                .await
+                .expect("polling held-submit server should accept");
+            let request = read_polling_request(&mut stream).await;
+            if index == held_response_index {
+                request_seen_tx
+                    .take()
+                    .expect("held submit observer should exist")
+                    .send(())
+                    .expect("held submit observer should remain available");
+                release_rx
+                    .take()
+                    .expect("held submit release should exist")
+                    .await
+                    .expect("held submit server should be released");
+            }
+            write_response(&mut stream, response).await;
+            requests.push(request);
+        }
+        requests
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+        request_seen_rx,
+        release_tx,
     )
 }
 
@@ -6685,6 +6767,587 @@ async fn intent_gated_execute_rejects_existing_owner_before_nonce_or_http() {
     assert!(error.to_string().contains("status Preparing"));
     assert!(handle.await.unwrap().is_empty());
     drop(existing);
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_concurrency_blocks_same_owner_before_second_nonce_while_submit_is_held() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, server_handle, request_seen, release) = spawn_polling_held_submit_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "41"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-owner-held", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let client = Arc::new(paused_mutation_test_client(url));
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let task_registry = registry.clone();
+    let task_client = Arc::clone(&client);
+    let first = tokio::spawn(async move {
+        task_registry
+            .gate(task_client.as_ref())
+            .execute_wallet_batch(
+                execute_context(owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &signer,
+                &read_permit(owner),
+                &execute_permit(RelayerMutationMode::Live, owner),
+            )
+            .await
+    });
+
+    request_seen
+        .await
+        .expect("first owner submit should reach the held response");
+    let second_signer = execute_signer();
+    let blocked = registry
+        .gate(client.as_ref())
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &second_signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(blocked.is_deposit_wallet_mutation_blocked());
+
+    release
+        .send(())
+        .expect("held submit should still be awaiting release");
+    let receipt = expect_submitted(
+        first
+            .await
+            .expect("first owner task should join")
+            .expect("first owner submit should succeed"),
+    );
+    assert_eq!(receipt.transaction_id(), "tx-owner-held");
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
+
+    let requests = server_handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "POST" && request.path == SUBMIT_PATH)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_concurrency_allows_different_owner_while_submit_is_held() {
+    let first_signer = execute_signer();
+    let first_owner = first_signer.address();
+    let (first_url, first_server_handle, request_seen, release) =
+        spawn_polling_held_submit_server(vec![
+            TestResponse::json("200 OK", json!({"nonce": "51"}).to_string()),
+            TestResponse::json(
+                "200 OK",
+                json!({"transactionID": "tx-owner-a-held", "state": "STATE_NEW"})
+                    .to_string(),
+            ),
+        ])
+        .await;
+    let first_client = Arc::new(paused_mutation_test_client(first_url));
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let task_registry = registry.clone();
+    let task_client = Arc::clone(&first_client);
+    let first = tokio::spawn(async move {
+        task_registry
+            .gate(task_client.as_ref())
+            .execute_wallet_batch(
+                execute_context(first_owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &first_signer,
+                &read_permit(first_owner),
+                &execute_permit(RelayerMutationMode::Live, first_owner),
+            )
+            .await
+    });
+
+    request_seen
+        .await
+        .expect("first owner submit should reach the held response");
+    let other_signer = other_owner_execute_signer();
+    let other_owner = other_signer.address();
+    assert_ne!(other_owner, first_owner);
+    let (other_url, other_server_handle) = spawn_polling_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "61"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-owner-b", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let other_client = paused_mutation_test_client(other_url);
+    let other_receipt = expect_submitted(
+        registry
+            .gate(&other_client)
+            .execute_wallet_batch(
+                execute_context(other_owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &other_signer,
+                &read_permit(other_owner),
+                &execute_permit(RelayerMutationMode::Live, other_owner),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(other_receipt.transaction_id(), "tx-owner-b");
+    assert_eq!(
+        registry
+            .intent(other_owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Submitted
+    );
+    let other_requests = other_server_handle.await.unwrap();
+    assert_eq!(other_requests.len(), 2);
+    assert_eq!(
+        other_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        other_requests
+            .iter()
+            .filter(|request| request.method == "POST" && request.path == SUBMIT_PATH)
+            .count(),
+        1
+    );
+
+    release
+        .send(())
+        .expect("first owner held submit should still await release");
+    let first_receipt = expect_submitted(
+        first
+            .await
+            .expect("first owner task should join")
+            .expect("first owner submit should succeed"),
+    );
+    assert_eq!(first_receipt.transaction_id(), "tx-owner-a-held");
+    let first_requests = first_server_handle.await.unwrap();
+    assert_eq!(first_requests.len(), 2);
+    assert_eq!(
+        first_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_concurrency_reopens_only_after_confirmed_reconciliation() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    let (first_url, first_server_handle) = spawn_polling_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "71"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-before-terminal", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let first_client = Arc::new(paused_mutation_test_client(first_url));
+    let task_registry = registry.clone();
+    let task_client = Arc::clone(&first_client);
+    let first = tokio::spawn(async move {
+        task_registry
+            .gate(task_client.as_ref())
+            .execute_wallet_batch(
+                execute_context(owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &signer,
+                &read_permit(owner),
+                &execute_permit(RelayerMutationMode::Live, owner),
+            )
+            .await
+    });
+    let first_receipt = expect_submitted(
+        first
+            .await
+            .expect("first mutation task should join")
+            .expect("first mutation should submit"),
+    );
+    assert_eq!(first_receipt.transaction_id(), "tx-before-terminal");
+    let first_record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first_record.status(), MutationIntentStatus::Submitted);
+    let first_epoch = first_record.epoch();
+
+    let blocked_signer = execute_signer();
+    let blocked = registry
+        .gate(first_client.as_ref())
+        .execute_wallet_batch(
+            execute_context(owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &blocked_signer,
+            &read_permit(owner),
+            &execute_permit(RelayerMutationMode::Live, owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(blocked.is_deposit_wallet_mutation_blocked());
+    let first_requests = first_server_handle.await.unwrap();
+    assert_eq!(first_requests.len(), 2);
+    assert_eq!(
+        first_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        1
+    );
+
+    registry
+        .record_poll_outcome(
+            owner,
+            POLYGON_CHAIN_ID,
+            "tx-before-terminal",
+            &RelayerPollOutcome::Confirmed(intent_receipt(
+                "tx-before-terminal",
+                RelayerTransactionState::Confirmed,
+            )),
+        )
+        .unwrap();
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap()
+            .status(),
+        MutationIntentStatus::Confirmed
+    );
+
+    let (successor_url, successor_server_handle) = spawn_polling_server(vec![
+        TestResponse::json("200 OK", json!({"nonce": "72"}).to_string()),
+        TestResponse::json(
+            "200 OK",
+            json!({"transactionID": "tx-after-terminal", "state": "STATE_NEW"}).to_string(),
+        ),
+    ])
+    .await;
+    let successor_client = paused_mutation_test_client(successor_url);
+    let successor_receipt = expect_submitted(
+        registry
+            .gate(&successor_client)
+            .execute_wallet_batch(
+                execute_context(owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &blocked_signer,
+                &read_permit(owner),
+                &execute_permit(RelayerMutationMode::Live, owner),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(successor_receipt.transaction_id(), "tx-after-terminal");
+    let successor_record = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    assert_eq!(successor_record.status(), MutationIntentStatus::Submitted);
+    assert_eq!(successor_record.epoch(), first_epoch + 1);
+    let successor_requests = successor_server_handle.await.unwrap();
+    assert_eq!(successor_requests.len(), 2);
+    assert_eq!(
+        successor_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        successor_requests
+            .iter()
+            .filter(|request| request.method == "POST" && request.path == SUBMIT_PATH)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_concurrency_keeps_ambiguous_and_unknown_owners_blocked() {
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+
+    let ambiguous_signer = execute_signer();
+    let ambiguous_owner = ambiguous_signer.address();
+    prepare_ambiguous_intent(
+        &registry,
+        ambiguous_owner,
+        RelayerMutationOperation::WalletBatch,
+    );
+    let ambiguous_before = registry
+        .intent(ambiguous_owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let (ambiguous_url, ambiguous_server_handle) = spawn_optional_request_server().await;
+    let ambiguous_client = paused_mutation_test_client(ambiguous_url);
+    let ambiguous_error = registry
+        .gate(&ambiguous_client)
+        .execute_wallet_batch(
+            execute_context(ambiguous_owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &ambiguous_signer,
+            &read_permit(ambiguous_owner),
+            &execute_permit(RelayerMutationMode::Live, ambiguous_owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(ambiguous_error.is_deposit_wallet_mutation_blocked());
+    assert_eq!(
+        registry
+            .intent(ambiguous_owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        ambiguous_before
+    );
+    assert!(ambiguous_server_handle.await.unwrap().is_empty());
+
+    let unknown_signer = other_owner_execute_signer();
+    let unknown_owner = unknown_signer.address();
+    assert_ne!(unknown_owner, ambiguous_owner);
+    let transaction_id = "tx-unknown-owner-lock";
+    prepare_submitted_intent(
+        &registry,
+        unknown_owner,
+        RelayerMutationOperation::WalletBatch,
+        transaction_id,
+    );
+    let unknown_before = registry
+        .intent(unknown_owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let unknown_owner_text = to_checksum(&unknown_owner, None);
+    let (unknown_url, unknown_server_handle) =
+        spawn_polling_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response_value_for_owner(
+                transaction_id,
+                "STATE_FUTURE",
+                &unknown_owner_text,
+            )
+            .to_string(),
+        )])
+        .await;
+    let unknown_client = paused_mutation_test_client(unknown_url);
+    let unknown_error = registry
+        .gate(&unknown_client)
+        .reconcile_by_polling(
+            unknown_owner,
+            RelayerPollPolicy::try_new(
+                1,
+                Duration::from_millis(1),
+                Duration::from_millis(1),
+            )
+            .unwrap(),
+            &read_permit(unknown_owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert!(unknown_error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(
+        registry
+            .intent(unknown_owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        unknown_before
+    );
+
+    let blocked_after_unknown = registry
+        .gate(&unknown_client)
+        .execute_wallet_batch(
+            execute_context(unknown_owner),
+            execute_calls(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &unknown_signer,
+            &read_permit(unknown_owner),
+            &execute_permit(RelayerMutationMode::Live, unknown_owner),
+        )
+        .await
+        .unwrap_err();
+    assert!(blocked_after_unknown.is_deposit_wallet_mutation_blocked());
+    assert_eq!(
+        registry
+            .intent(unknown_owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        unknown_before
+    );
+    let unknown_requests = unknown_server_handle.await.unwrap();
+    assert_eq!(unknown_requests.len(), 1);
+    assert!(unknown_requests[0].path.starts_with("/transaction?"));
+    assert_eq!(
+        unknown_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        0
+    );
+    assert!(unknown_requests
+        .iter()
+        .all(|request| request.method != "POST"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_concurrency_block_error_is_stable_and_record_preserving() {
+    let signer = execute_signer();
+    let owner = signer.address();
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+        "tx-stable-block",
+    );
+    let before = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let before_epoch = before.epoch();
+    let (url, server_handle) = spawn_optional_request_server().await;
+    let client = paused_mutation_test_client(url);
+    let mut messages = Vec::new();
+
+    for _ in 0..3 {
+        let error = registry
+            .gate(&client)
+            .execute_wallet_batch(
+                execute_context(owner),
+                execute_calls(),
+                U256::from(EXECUTE_DEADLINE_UNIX),
+                &signer,
+                &read_permit(owner),
+                &execute_permit(RelayerMutationMode::Live, owner),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.is_deposit_wallet_mutation_blocked());
+        messages.push(error.to_string());
+        let current = registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(current, before);
+        assert_eq!(current.epoch(), before_epoch);
+    }
+
+    assert!(messages
+        .iter()
+        .all(|message| message == &messages[0]));
+    assert!(server_handle.await.unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn owner_concurrency_blocks_create_and_deploy_after_read_preflight() {
+    let owner = address(WALLET_OWNER);
+    let registry = intent_registry(Arc::new(InMemoryMutationIntentStore::default()));
+    prepare_submitted_intent(
+        &registry,
+        owner,
+        RelayerMutationOperation::WalletBatch,
+        "tx-cross-operation-lock",
+    );
+    let before = registry
+        .intent(owner, POLYGON_CHAIN_ID)
+        .unwrap()
+        .unwrap();
+    let create_permit = mutation_permit(
+        RelayerMutationMode::Live,
+        RelayerMutationOperation::WalletCreate,
+        owner,
+        POLYGON_CHAIN_ID,
+        FIXED_PERMIT_EXPIRY_UNIX,
+    );
+
+    let (create_url, create_server_handle) = spawn_optional_request_server().await;
+    let create_client = paused_mutation_test_client(create_url);
+    let create_error = registry
+        .gate(&create_client)
+        .submit_wallet_create(owner, &create_permit)
+        .await
+        .unwrap_err();
+    assert!(create_error.is_deposit_wallet_mutation_blocked());
+    assert!(create_server_handle.await.unwrap().is_empty());
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        before
+    );
+
+    let (deploy_url, deploy_server_handle) =
+        spawn_polling_server(vec![TestResponse::json(
+            "200 OK",
+            json!({"deployed": false}).to_string(),
+        )])
+        .await;
+    let deploy_client = paused_mutation_test_client(deploy_url);
+    let deploy_error = registry
+        .gate(&deploy_client)
+        .ensure_deposit_wallet_deployment(
+            owner,
+            DepositWalletDeploymentPolicy::DeployIfMissing,
+            &read_permit(owner),
+            Some(&create_permit),
+        )
+        .await
+        .unwrap_err();
+    assert!(deploy_error.is_deposit_wallet_mutation_blocked());
+    assert_eq!(
+        registry
+            .intent(owner, POLYGON_CHAIN_ID)
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    let deploy_requests = deploy_server_handle.await.unwrap();
+    assert_eq!(deploy_requests.len(), 1);
+    assert_deployed_request(&deploy_requests[0]);
+    assert_eq!(
+        deploy_requests
+            .iter()
+            .filter(|request| request.path.starts_with("/nonce"))
+            .count(),
+        0
+    );
+    assert!(deploy_requests
+        .iter()
+        .all(|request| request.method != "POST"));
 }
 
 #[tokio::test]
