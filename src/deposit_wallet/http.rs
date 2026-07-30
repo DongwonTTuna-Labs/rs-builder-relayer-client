@@ -58,8 +58,9 @@ pub use auth::RelayerKeyAuth;
 pub use capability::RelayerReadPermit;
 pub use intent::{
     InMemoryMutationIntentStore, IntentGatedClient, IntentReconcileOutcome, MutationIntentLease,
-    MutationIntentRecord, MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry,
-    ReconciliationDecision, ReconciliationEvidence, TryBeginOutcome,
+    MutationIntentAuditArtifact, MutationIntentRecord, MutationIntentStatus, MutationIntentStore,
+    OwnerMutationRegistry, ReconciliationDecision, ReconciliationEvidence, ReconciliationSummary,
+    TryBeginOutcome, MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION,
 };
 pub use lifecycle::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletReadiness,

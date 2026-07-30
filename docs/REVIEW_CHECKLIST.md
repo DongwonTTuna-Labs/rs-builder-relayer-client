@@ -57,6 +57,7 @@
 - [ ] Tests prove relayer auth identity may differ from owner signer identity.
 - [ ] Secret-bearing types do not leak through `Debug`, logs, errors, snapshots, or fixtures.
 - [ ] Reconciliation evidence Debug exposes only text lengths, decision, and timestamp; reports omit auth material, raw bodies, and unknown provider state labels.
+- [ ] Mutation audit artifacts replace reconciliation reference/summary text with decision, stored UTF-8 byte lengths, and timestamp, including for records restored through Deserialize.
 - [ ] Signer backend Display, Debug, and source-chain material is discarded on signing failure; only the fixed redacted signing error is returned.
 - [ ] Production dependency instructions use pinned git `rev`, not branch.
 - [ ] Dependency changes review public API, transitive crypto/signing crates, and HTTP/TLS impact where applicable.
@@ -98,7 +99,20 @@
 - [ ] The synchronous durable store implements atomic `try_begin` and epoch/revision CAS as fast local operations; blocking I/O is isolated outside the async executor path.
 - [ ] `InMemoryMutationIntentStore` is used only for tests/development and is never presented as restart-safe or live-capable.
 - [ ] A durable-store restart exercise proves an unresolved owner remains blocked; PBRSDK-24/25 live qualification is not inferred from the in-memory test.
-- [ ] The PR does not claim complete live readiness: manual reconciliation/reporting does not qualify a durable store, automate candidate selection/resubmit, or complete PBRSDK-14/15 and PBRSDK-24/25 gates.
+- [ ] The PR does not claim complete live readiness: manual reconciliation/reporting/audit export does not qualify a durable store, logging collector, automated candidate selection/resubmit, or PBRSDK-24/25 gates.
+
+## Mutation Audit And Observability
+
+- [ ] `poll_attempts` uses `#[serde(default)]`; matching Confirmed adds one, Exhausted with a present state adds its attempts with saturation, and Exhausted without state plus Cancelled remain no-op.
+- [ ] Unknown state text is replaced with `<unrecognized relayer state>` independently at poll-record write time and artifact export time.
+- [ ] `MutationIntentAuditArtifact` schema v1 exports every intent status without mutating the record; owner is shortened and the fixed omission marker is present.
+- [ ] Artifact JSON retains the operator-usable transaction id, while artifact Debug and tracing contain only its `sha3:0x...` sanitized token.
+- [ ] Artifact reconciliation contains only decision, `value.len()` UTF-8 byte lengths, and recorded time; operator reference/summary text never appears.
+- [ ] `DepositWalletDryRunEvidence` owns pre-submit selector/call summaries, the audit artifact owns persisted lifecycle evidence, and `payload_keccak256` is their correlation key.
+- [ ] The `polymarket_relayer::mutation_intent` target emits redacted owner, chain id, and epoch on every event plus only the ADR-0015 event-specific fields; nonce and raw transaction ids are never logged.
+- [ ] Registry resolved events are emitted only after CAS `Ok(true)` and lease events only after successful persistence; stale/no-op transitions emit no false resolution.
+- [ ] Sentinel regression covers all reviewed public Debug types, artifact JSON, success/failure errors, captured async tracing, actual local signature/calldata/body, and malicious persisted reconciliation/state text.
+- [ ] No dependency, metric, OTel path, collector, live request, credential, or new harness was added for observability.
 
 ## Public API Boundary
 
@@ -117,6 +131,7 @@
 - [ ] Combined production source contains exactly three `submit_*`, two `execute_wallet_batch`, and two `ensure_deposit_wallet_deployment` signatures, with permit arguments on all wrapper layers.
 - [ ] `MutationIntentStore`, `TryBeginOutcome`, `InMemoryMutationIntentStore`, `MutationIntentRecord`, `MutationIntentStatus`, `OwnerMutationRegistry`, `MutationIntentLease`, and `IntentGatedClient` are explicitly re-exported at all three public boundaries.
 - [ ] `ReconciliationDecision`, `ReconciliationEvidence`, `IntentReconcileOutcome`, `AmbiguousCandidate`, and `AmbiguousCandidateReport` are explicitly re-exported at all three public boundaries with private fields and reviewed getters.
+- [ ] `MutationIntentAuditArtifact`, `ReconciliationSummary`, and `MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION` are explicitly re-exported at all three public boundaries; the schema constant and `export_audit_artifact` signature remain pinned.
 - [ ] `reconcile_manually`, `adopt_transaction`, `reconcile_by_polling`, and `report_ambiguous_candidates` retain their reviewed owner/epoch/evidence/policy/permit/cancel signatures.
 - [ ] The store surface has no generic `save`; begin generation is store-issued atomically and every later write is epoch/revision CAS with overflow fail-closed.
 - [ ] `record_poll_outcome` and `record_terminal_failure` both require an explicit polled transaction id and cannot resolve a mismatched or non-Submitted record.

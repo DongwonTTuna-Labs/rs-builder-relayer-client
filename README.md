@@ -21,10 +21,11 @@ work, use the reviewed fallible APIs such as
 `DepositWalletDryRunEvidence`, `DryRunCallSummary`,
 `DepositWalletSubmitReceipt`, `MutationIntentStore`,
 `InMemoryMutationIntentStore`, `MutationIntentRecord`,
-`MutationIntentStatus`, `TryBeginOutcome`, `OwnerMutationRegistry`,
-`MutationIntentLease`, `IntentGatedClient`, `ReconciliationDecision`,
-`ReconciliationEvidence`, `IntentReconcileOutcome`, `AmbiguousCandidate`,
-`AmbiguousCandidateReport`, and the documented request/response types
+`MutationIntentAuditArtifact`, `MutationIntentStatus`, `TryBeginOutcome`,
+`OwnerMutationRegistry`, `MutationIntentLease`, `IntentGatedClient`,
+`ReconciliationDecision`, `ReconciliationEvidence`, `ReconciliationSummary`,
+`IntentReconcileOutcome`, `AmbiguousCandidate`, `AmbiguousCandidateReport`,
+`MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION`, and the documented request/response types
 re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
@@ -41,6 +42,13 @@ Submitted intent, while `report_ambiguous_candidates` creates a redacted
 read-only `GET /transactions` report. Registry-level `adopt_transaction` and
 `reconcile_manually` both require operator evidence and the inspected intent
 epoch.
+PBRSDK-15 adds the pure-read
+`OwnerMutationRegistry::export_audit_artifact` surface. Its versioned JSON is
+safe to attach to a ticket or PR: owner and unknown state labels are redacted,
+reconciliation free text is reduced to decision/UTF-8 byte lengths/time, and
+raw signatures, typed data, auth material, and full submit bodies are omitted.
+Artifact JSON retains the transaction id for operator recovery, while Debug
+and mutation-intent tracing use only its sanitized `sha3:0x...` token.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, `report_ambiguous_candidates`, both polling
@@ -100,8 +108,8 @@ must provide a durable transactional/CAS `MutationIntentStore`, retain records
 across restart, and feed bounded poll outcomes or bound terminal failures back
 to the registry. Dropping a lease does nothing by design. The recent report and
 manual recovery surface do not qualify the durable store, select a candidate,
-or resubmit automatically; PBRSDK-14/15 and PBRSDK-24/25 concurrency, artifact,
-and live operator gates remain separate.
+or resubmit automatically. PBRSDK-15 supplies offline audit/tracing evidence;
+PBRSDK-24/25 durable-store and live operator gates remain separate.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the

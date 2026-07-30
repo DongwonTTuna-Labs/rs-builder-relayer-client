@@ -165,6 +165,27 @@ zero `POST /submit` across reconciliation polling. No live relayer, funded
 wallet, credential, file/DB store, concurrency harness, or automatic resubmit is
 introduced.
 
+PBRSDK-15 adds no Cargo target, fixture, dependency, feature, example, manifest
+entry, metrics backend, OTel stack, or logging collector. Production structured
+events use the existing `tracing` dependency. The async capture regression uses
+the already declared `tracing-subscriber` dev dependency with an in-memory
+writer, ANSI/time disabled, and a thread-local default-dispatch guard held
+across a default current-thread paused Tokio test.
+
+Production code adds the schema-v1 `MutationIntentAuditArtifact`, redacted
+`ReconciliationSummary`, `MutationIntentRecord.poll_attempts`, one pure-read
+registry export method, and mutation lifecycle events. The public boundary
+audit pins both new types, the exact schema constant, the export signature, and
+explicit HTTP/deposit-wallet/crate-root re-exports without changing existing
+primitive submit/execute/lifecycle counts. Unit tests cover legacy serde,
+counter/no-op rules, write/export unknown-state defenses, malicious persisted
+reconciliation text, JSON/Debug transaction-id separation, failure parity, and
+the exact tracing field set against actual local submit material.
+
+The PBRSDK-15 evidence is offline only. The in-memory writer is a test sink,
+not a production logging system, and the artifact export does not qualify a
+durable store or authorize live traffic.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -183,6 +204,9 @@ Implementation and review packets should include:
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,
+- a sample schema-v1 redacted mutation artifact and captured
+  `polymarket_relayer::mutation_intent` event evidence with only the reviewed
+  fields,
 - confirmation that PBRSDK-2 source matrix and fixture provenance files remain
   present and live behavior remains gated,
 - confirmation that live intent wiring uses a durable transactional/CAS store,
