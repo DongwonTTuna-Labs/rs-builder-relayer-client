@@ -20,7 +20,7 @@ use crate::deposit_wallet::{
 };
 use crate::deposit_wallet::requests::build_wallet_batch_request_unchecked;
 
-use super::clock::RelayerClock;
+use super::clock::{RelayerClock, SystemClock};
 use super::response::{parse_transaction_response, validate_transaction_id};
 use super::*;
 
@@ -135,6 +135,21 @@ fn test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient 
         base_url,
         relayer_auth(),
         deposit_wallet_contract_config(137).unwrap(),
+    )
+}
+
+fn polling_test_client(base_url: DepositWalletRelayerUrl) -> DepositWalletRelayerClient {
+    let http = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("polling test HTTP client should build");
+    DepositWalletRelayerClient::from_parts_with(
+        http,
+        base_url,
+        relayer_auth(),
+        deposit_wallet_contract_config(POLYGON_CHAIN_ID).unwrap(),
+        Arc::new(SystemClock),
+        false,
     )
 }
 
@@ -455,6 +470,150 @@ async fn spawn_server(
     )
 }
 
+async fn spawn_polling_server(
+    responses: Vec<TestResponse>,
+) -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test server should bind");
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let mut requests = Vec::with_capacity(responses.len());
+        for response in responses {
+            let (mut stream, _) = listener.accept().await.expect("polling server should accept");
+            let request = read_polling_request(&mut stream).await;
+            write_response(&mut stream, response).await;
+            requests.push(request);
+        }
+        requests
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+    )
+}
+
+async fn spawn_polling_reset_then_response_server(
+    response: TestResponse,
+) -> (DepositWalletRelayerUrl, JoinHandle<Vec<CapturedRequest>>) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("polling reset server should bind");
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let (mut reset_stream, _) = listener
+            .accept()
+            .await
+            .expect("polling reset server should accept first request");
+        let reset_request = read_polling_request(&mut reset_stream).await;
+        drop(reset_stream);
+
+        let (mut response_stream, _) = listener
+            .accept()
+            .await
+            .expect("polling reset server should accept retry");
+        let retry_request = read_polling_request(&mut response_stream).await;
+        write_response(&mut response_stream, response).await;
+
+        vec![reset_request, retry_request]
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+    )
+}
+
+async fn spawn_polling_held_response_server() -> (
+    DepositWalletRelayerUrl,
+    JoinHandle<Vec<CapturedRequest>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("polling held-response server should bind");
+    let addr = listener.local_addr().unwrap();
+    let (request_seen_tx, request_seen_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("polling held-response server should accept");
+        let request = read_polling_request(&mut stream).await;
+        request_seen_tx
+            .send(())
+            .expect("polling request observer should remain available");
+        release_rx
+            .await
+            .expect("polling held-response server should be released");
+        drop(stream);
+        vec![request]
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+        request_seen_rx,
+        release_tx,
+    )
+}
+
+async fn spawn_polling_response_then_watch_for_retry(
+    response: TestResponse,
+) -> (
+    DepositWalletRelayerUrl,
+    JoinHandle<Vec<CapturedRequest>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("polling backoff-cancel server should bind");
+    let addr = listener.local_addr().unwrap();
+    let (armed_tx, armed_rx) = tokio::sync::oneshot::channel();
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
+    let handle = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("polling backoff-cancel server should accept first request");
+        let first_request = read_polling_request(&mut stream).await;
+        write_response(&mut stream, response).await;
+        stream
+            .flush()
+            .await
+            .expect("polling response should flush before cancellation is armed");
+        armed_tx
+            .send(())
+            .expect("polling cancellation receiver should remain available");
+        drop(stream);
+
+        let mut requests = vec![first_request];
+        loop {
+            tokio::select! {
+                biased;
+                accepted = listener.accept() => {
+                    let (mut retry_stream, _) =
+                        accepted.expect("polling retry accept should succeed");
+                    requests.push(read_polling_request(&mut retry_stream).await);
+                }
+                _ = &mut stop_rx => break,
+            }
+        }
+        requests
+    });
+
+    (
+        DepositWalletRelayerUrl::loopback(&format!("http://{addr}")).unwrap(),
+        handle,
+        armed_rx,
+        stop_tx,
+    )
+}
+
 async fn spawn_optional_redirect_target(
     response: TestResponse,
 ) -> (String, JoinHandle<Vec<CapturedRequest>>) {
@@ -664,6 +823,60 @@ async fn read_request(stream: &mut TcpStream) -> CapturedRequest {
             .expect("body read should not hang")
             .expect("body should read");
         assert!(read > 0, "request ended before body completed");
+        buffer.extend_from_slice(&chunk[..read]);
+    }
+
+    let body = String::from_utf8(buffer[body_start..body_start + content_length].to_vec()).unwrap();
+
+    CapturedRequest {
+        method,
+        path,
+        headers,
+        body,
+    }
+}
+
+async fn read_polling_request(stream: &mut TcpStream) -> CapturedRequest {
+    let mut buffer = Vec::new();
+    let headers_end = loop {
+        let mut chunk = [0u8; 1024];
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .expect("polling request should read");
+        assert!(read > 0, "polling request ended before headers completed");
+        buffer.extend_from_slice(&chunk[..read]);
+        if let Some(index) = find_headers_end(&buffer) {
+            break index;
+        }
+    };
+
+    let body_start = headers_end + 4;
+    let header_text = String::from_utf8(buffer[..headers_end].to_vec()).unwrap();
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines.next().unwrap();
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap().to_string();
+    let path = request_parts.next().unwrap().to_string();
+    let headers = lines
+        .filter_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            Some((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect::<Vec<_>>();
+    let content_length = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    while buffer.len() < body_start + content_length {
+        let mut chunk = [0u8; 1024];
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .expect("polling request body should read");
+        assert!(read > 0, "polling request ended before body completed");
         buffer.extend_from_slice(&chunk[..read]);
     }
 
@@ -3688,4 +3901,565 @@ async fn execute_wallet_batch_discards_signer_error_and_source_material() {
     let requests = handle.await.unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].method, "GET");
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_returns_confirmed_without_delay() {
+    let transaction_id = "tx-poll-confirmed";
+    let (url, handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+    )])
+    .await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    let requests = handle.await.unwrap();
+    let RelayerPollOutcome::Confirmed(receipt) = outcome else {
+        panic!(
+            "expected confirmed polling outcome, got {outcome:?} after {:?}",
+            tokio::time::Instant::now() - started
+        );
+    };
+    assert_eq!(receipt.transaction_id, transaction_id);
+    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::ZERO);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_deposit_wallet_deployment_returns_confirmed_without_delay() {
+    let transaction_id = "tx-poll-deployment-confirmed";
+    let (url, handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        wallet_create_transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+    )])
+    .await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_deposit_wallet_deployment(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    let RelayerPollOutcome::Confirmed(receipt) = outcome else {
+        panic!("expected confirmed deployment polling outcome, got {outcome:?}");
+    };
+    assert_eq!(receipt.transaction_id, transaction_id);
+    assert_eq!(receipt.state, RelayerTransactionState::Confirmed);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::ZERO);
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_applies_exact_exponential_intervals() {
+    let transaction_id = "tx-poll-progress";
+    let responses = ["STATE_NEW", "STATE_EXECUTED", "STATE_CONFIRMED"]
+        .into_iter()
+        .map(|state| {
+            TestResponse::json(
+                "200 OK",
+                transaction_response_value(transaction_id, state).to_string(),
+            )
+        })
+        .collect();
+    let (url, handle) = spawn_polling_server(responses).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, RelayerPollOutcome::Confirmed(_)));
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(3)
+    );
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests
+        .iter()
+        .all(|request| request.path == format!("/transaction?id={transaction_id}")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_exhaustion_preserves_last_pending_state() {
+    let transaction_id = "tx-poll-exhausted";
+    let responses = (0..3)
+        .map(|_| {
+            TestResponse::json(
+                "200 OK",
+                transaction_response_value(transaction_id, "STATE_NEW").to_string(),
+            )
+        })
+        .collect();
+    let (url, handle) = spawn_polling_server(responses).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome,
+        RelayerPollOutcome::Exhausted {
+            attempts: 3,
+            last_state: Some(RelayerTransactionState::New),
+        }
+    );
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(3)
+    );
+    assert_eq!(handle.await.unwrap().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_caps_exponential_backoff() {
+    let transaction_id = "tx-poll-backoff-cap";
+    let responses = (0..4)
+        .map(|_| {
+            TestResponse::json(
+                "200 OK",
+                transaction_response_value(transaction_id, "STATE_NEW").to_string(),
+            )
+        })
+        .collect();
+    let (url, handle) = spawn_polling_server(responses).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(4, Duration::from_secs(1), Duration::from_secs(2)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome,
+        RelayerPollOutcome::Exhausted {
+            attempts: 4,
+            last_state: Some(RelayerTransactionState::New),
+        }
+    );
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(5)
+    );
+    assert_eq!(handle.await.unwrap().len(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_stops_on_failed_invalid_and_unknown_states() {
+    for (transaction_id, state) in [
+        ("tx-poll-failed", "STATE_FAILED"),
+        ("tx-poll-invalid", "STATE_INVALID"),
+        ("tx-poll-unknown", "STATE_FUTURE"),
+    ] {
+        let (url, handle) = spawn_polling_server(vec![TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, state).to_string(),
+        )])
+        .await;
+        let client = polling_test_client(url);
+        let owner = address(WALLET_OWNER);
+        let policy =
+            RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+        let started = tokio::time::Instant::now();
+
+        let error = client
+            .poll_wallet_transaction(
+                owner,
+                transaction_id,
+                policy,
+                &read_permit(owner),
+                std::future::pending::<()>(),
+            )
+            .await
+            .unwrap_err();
+
+        match state {
+            "STATE_FAILED" => assert!(matches!(error, RelayerError::TransactionFailed(_))),
+            "STATE_INVALID" => assert!(matches!(error, RelayerError::TransactionInvalid(_))),
+            "STATE_FUTURE" => {
+                assert!(error.is_deposit_wallet_reconciliation_required());
+            }
+            _ => unreachable!("test enumerates every state"),
+        }
+        assert_eq!(tokio::time::Instant::now() - started, Duration::ZERO);
+        assert_eq!(handle.await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_retries_api_errors_on_policy_schedule() {
+    let transaction_id = "tx-poll-transient-api";
+    let responses = vec![
+        TestResponse::json("429 Too Many Requests", "{}")
+            .with_header("Retry-After", "60"),
+        TestResponse::json("500 Internal Server Error", "{}"),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+        ),
+    ];
+    let (url, handle) = spawn_polling_server(responses).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, RelayerPollOutcome::Confirmed(_)));
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(3),
+        "Retry-After is intentionally not used as the polling interval"
+    );
+    assert_eq!(handle.await.unwrap().len(), 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_retries_transport_error_on_policy_schedule() {
+    let transaction_id = "tx-poll-transient-transport";
+    let (url, handle) = spawn_polling_reset_then_response_server(TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+    ))
+    .await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(2, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, RelayerPollOutcome::Confirmed(_)));
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(1)
+    );
+    let requests = handle.await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|request| request.path == format!("/transaction?id={transaction_id}")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_cancels_in_flight_read_without_retry() {
+    let transaction_id = "tx-poll-cancel-wait";
+    let (url, handle, request_seen, release_server) =
+        spawn_polling_held_response_server().await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let cancel = async move {
+        request_seen
+            .await
+            .expect("polling server should observe the first request");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            cancel,
+        )
+        .await
+        .unwrap();
+
+    release_server
+        .send(())
+        .expect("polling held-response server should remain available");
+    assert_eq!(outcome, RelayerPollOutcome::Cancelled { attempts: 0 });
+    assert_eq!(handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_cancels_during_backoff_without_another_read() {
+    let transaction_id = "tx-poll-cancel-backoff";
+    let response = TestResponse::json(
+        "200 OK",
+        transaction_response_value(transaction_id, "STATE_NEW").to_string(),
+    );
+    let (url, handle, armed_rx, stop_server) =
+        spawn_polling_response_then_watch_for_retry(response).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let cancel = async move {
+        let _ = armed_rx.await.ok();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    };
+
+    let result = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            cancel,
+        )
+        .await;
+
+    stop_server
+        .send(())
+        .expect("polling retry watcher should remain available");
+    let requests = handle.await.unwrap();
+    let outcome = result.unwrap();
+    assert_eq!(outcome, RelayerPollOutcome::Cancelled { attempts: 1 });
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].path, format!("/transaction?id={transaction_id}"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_prioritizes_immediate_cancellation_before_http() {
+    let (url, handle) = spawn_polling_server(Vec::new()).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            "tx-poll-cancel-immediate",
+            policy,
+            &read_permit(owner),
+            std::future::ready(()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, RelayerPollOutcome::Cancelled { attempts: 0 });
+    assert_eq!(tokio::time::Instant::now() - started, Duration::ZERO);
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn polling_keeps_wallet_and_wallet_create_transaction_types_isolated() {
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+
+    let wallet_transaction_id = "tx-poll-wallet-type";
+    let (wallet_url, wallet_handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        wallet_create_transaction_response_value(wallet_transaction_id, "STATE_CONFIRMED")
+            .to_string(),
+    )])
+    .await;
+    let wallet_client = polling_test_client(wallet_url);
+    let wallet_error = wallet_client
+        .poll_wallet_transaction(
+            owner,
+            wallet_transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert!(wallet_error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(wallet_handle.await.unwrap().len(), 1);
+
+    let deployment_transaction_id = "tx-poll-deployment-type";
+    let (deployment_url, deployment_handle) = spawn_polling_server(vec![TestResponse::json(
+        "200 OK",
+        transaction_response_value(deployment_transaction_id, "STATE_CONFIRMED").to_string(),
+    )])
+    .await;
+    let deployment_client = polling_test_client(deployment_url);
+    let deployment_error = deployment_client
+        .poll_deposit_wallet_deployment(
+            owner,
+            deployment_transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+    assert!(deployment_error.is_deposit_wallet_reconciliation_required());
+    assert_eq!(deployment_handle.await.unwrap().len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_treats_missing_array_item_as_transient() {
+    let transaction_id = "tx-poll-after-absence";
+    let responses = vec![
+        TestResponse::json(
+            "200 OK",
+            json!([transaction_response_value(
+                "tx-poll-unrelated",
+                "STATE_CONFIRMED"
+            )])
+            .to_string(),
+        ),
+        TestResponse::json(
+            "200 OK",
+            transaction_response_value(transaction_id, "STATE_CONFIRMED").to_string(),
+        ),
+    ];
+    let (url, handle) = spawn_polling_server(responses).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+    let started = tokio::time::Instant::now();
+
+    let outcome = client
+        .poll_wallet_transaction(
+            owner,
+            transaction_id,
+            policy,
+            &read_permit(owner),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, RelayerPollOutcome::Confirmed(_)));
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(1)
+    );
+    assert_eq!(handle.await.unwrap().len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn poll_wallet_transaction_rejects_mismatched_permit_before_http() {
+    let (url, handle) = spawn_polling_server(Vec::new()).await;
+    let client = polling_test_client(url);
+    let owner = address(WALLET_OWNER);
+    let policy =
+        RelayerPollPolicy::try_new(3, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+
+    let error = client
+        .poll_wallet_transaction(
+            owner,
+            "tx-poll-permit",
+            policy,
+            &read_permit(address(OTHER_OWNER)),
+            std::future::pending::<()>(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.is_deposit_wallet_read_blocked());
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn relayer_poll_policy_validates_bounds_and_exposes_values() {
+    let policy = RelayerPollPolicy::try_new(
+        100,
+        Duration::from_millis(1),
+        Duration::from_secs(600),
+    )
+    .unwrap();
+    assert_eq!(policy.max_attempts(), 100);
+    assert_eq!(policy.initial_interval(), Duration::from_millis(1));
+    assert_eq!(policy.max_interval(), Duration::from_secs(600));
+
+    for invalid in [
+        RelayerPollPolicy::try_new(0, Duration::from_secs(1), Duration::from_secs(60)),
+        RelayerPollPolicy::try_new(101, Duration::from_secs(1), Duration::from_secs(60)),
+        RelayerPollPolicy::try_new(1, Duration::ZERO, Duration::from_secs(60)),
+        RelayerPollPolicy::try_new(1, Duration::from_secs(2), Duration::from_secs(1)),
+        RelayerPollPolicy::try_new(1, Duration::from_secs(1), Duration::from_secs(601)),
+    ] {
+        let error = invalid.unwrap_err();
+        assert!(
+            matches!(error, RelayerError::Other(ref message) if message.starts_with("invalid poll policy: ")),
+            "{error}"
+        );
+    }
 }

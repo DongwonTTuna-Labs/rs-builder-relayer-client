@@ -56,6 +56,21 @@ execute_wallet_batch_preserves_submit_api_error_without_duplicate_post
 execute_wallet_batch_classifies_submit_disconnect_for_reconciliation
 execute_wallet_batch_closed_latch_allows_nonce_read_but_blocks_post
 execute_wallet_batch_discards_signer_error_and_source_material
+poll_wallet_transaction_returns_confirmed_without_delay
+poll_deposit_wallet_deployment_returns_confirmed_without_delay
+poll_wallet_transaction_applies_exact_exponential_intervals
+poll_wallet_transaction_exhaustion_preserves_last_pending_state
+poll_wallet_transaction_caps_exponential_backoff
+poll_wallet_transaction_stops_on_failed_invalid_and_unknown_states
+poll_wallet_transaction_retries_api_errors_on_policy_schedule
+poll_wallet_transaction_retries_transport_error_on_policy_schedule
+poll_wallet_transaction_cancels_in_flight_read_without_retry
+poll_wallet_transaction_cancels_during_backoff_without_another_read
+poll_wallet_transaction_prioritizes_immediate_cancellation_before_http
+polling_keeps_wallet_and_wallet_create_transaction_types_isolated
+poll_wallet_transaction_treats_missing_array_item_as_transient
+poll_wallet_transaction_rejects_mismatched_permit_before_http
+relayer_poll_policy_validates_bounds_and_exposes_values
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -139,6 +154,17 @@ Golden tests should prove:
   hash, while DryRun preserves the fetched nonce and sends no POST;
 - a closed live latch may observe the nonce read but blocks the POST, and
   signer backend error text and source chains are discarded before returning;
+- polling maps only Confirmed to success, retains New, Executed, and Mined as
+  pending, propagates Failed and Invalid immediately, and stops for Unknown or
+  type/owner/permit reconciliation errors;
+- polling performs exactly the configured attempts, sleeps only between
+  attempts, doubles `1s` to `2s`, applies the maximum-interval cap, and returns
+  `Exhausted` rather than an error after the final pending/transient attempt;
+- 429 with `Retry-After`, 5xx, transport errors, and temporary array absence are
+  transient only within the finite policy, while cancellation reports completed
+  attempts and never starts another read;
+- WALLET and WALLET-CREATE polling remain type-isolated and no polling outcome
+  invokes submit, signing, nonce fetch, or automatic reconciliation;
 - unknown transaction states force non-mutating behavior.
 
 ## Production Read Transport Gate
@@ -160,6 +186,27 @@ never a real credential and must not be replaced with a funded or production
 key. These tests prove call ordering and local validation only; they do not
 introduce a nonce lease, retry, polling, or live host call.
 
+PBRSDK-10 polling tests use `#[tokio::test(start_paused = true)]` and the
+production `tokio::time::sleep` calls directly; there is no sleeper injection
+and no wall-clock sleep. The polling-only reqwest client has redirects disabled
+and no request timeout. Its dedicated loopback server uses plain
+`listener.accept().await` and plain stream reads, with no Tokio timeout. This
+keeps non-cancellation I/O sections free of timers, so Tokio virtual time
+advances only by the exact `1s + 2s` or capped backoff schedule under test.
+
+The missing accept timeout is deliberate under paused time: a timeout would be
+the next timer during I/O and auto-advance the virtual clock instead of leaving
+I/O at zero elapsed time. The residual tradeoff is that a client bug that sends
+too few requests can hang an individual polling test. CI and command-runner
+timeouts are the hang guard; the test server does not add an internal timer.
+Cancellation is the one intentional extra timer. The in-flight case holds the
+first response after observing one GET, then cancels the read after 500ms and
+reports zero completed attempts. The sleep-stage case writes and flushes a
+STATE_NEW response before arming its 500ms cancellation timer; attempt one
+therefore completes, cancellation wins the following 1s backoff, and one
+completed attempt is reported. Both cases observe exactly one GET and no
+second GET.
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.
@@ -180,14 +227,15 @@ ambiguous submit timeout does not duplicate transaction
 For the PBRSDK-7 gate, first record a scoped `DryRun` outcome and operator
 review, then create a fresh scoped `Live` permit and use it only with an
 explicitly enabled client. These checks prove default denial, review evidence,
-and one-way rollback; they do not replace the later polling, persistent
+and one-way rollback; bounded polling does not replace the persistent
 idempotency, reconciliation, or duplicate-submit recovery gate.
 
 For PBRSDK-8, retain the submitted WALLET-CREATE transaction id and payload
 hash, then record `STATE_CONFIRMED` through the expected-type readiness path.
 Pending or error results forbid lifecycle re-entry for that owner until the
-deferred polling and owner-scoped intent controls reconcile the original
-submission.
+bounded deployment poll observes confirmation and later owner-scoped intent
+controls reconcile the original submission. Exhaustion, cancellation, or an
+error still forbids lifecycle re-entry.
 
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only

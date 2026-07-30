@@ -413,3 +413,85 @@ Consequences:
 - no live host, production credential, real private key, polling, retry, or
   lease is introduced, so this decision alone does not authorize complete live
   operation.
+
+## ADR-0012: PBRSDK-10 Bounded Confirmed-Only Transaction Polling
+
+Decision:
+
+```text
+Add two read-permit-bound polling methods over the existing verified
+GET /transaction path. Use a finite attempt policy and fixed doubling
+backoff. Only STATE_CONFIRMED is success; every other outcome preserves the
+original transaction identity and never authorizes signing or submission.
+```
+
+`RelayerPollPolicy::try_new` requires `max_attempts` in `1..=100`, an initial
+interval of at least one millisecond and no greater than the maximum interval,
+and a maximum interval no greater than 600 seconds. The delay before the next
+attempt doubles from the initial interval and saturates at the configured
+maximum. There is no caller-selected multiplier, jitter, default policy, or
+injected sleeper. Production uses `tokio::time::sleep`; paused Tokio time makes
+the same code deterministic in tests.
+
+`poll_wallet_transaction` requires `WALLET` evidence and
+`poll_deposit_wallet_deployment` requires `WALLET-CREATE` evidence. Both call
+the existing crate-internal expected-type transaction read, retaining its
+transaction-id, owner, from, configured-factory `to`, derived
+`proxyAddress`, state, hash, and read-permit validation. New, Executed, and
+Mined update the last pending state and continue. Confirmed returns the receipt
+and is the only terminal success. Failed and Invalid remain immediate typed
+errors. Unknown state, wrong type, missing owner evidence, read blocking, and
+all other reconciliation-required evidence stop immediately and are never
+blindly retried.
+
+Transport `Http` errors, every `Api` error, and a transaction temporarily
+absent from an array response are transient within the finite policy. Treating
+all `Api` statuses as transient is deliberate: it keeps transport plumbing
+unchanged and bounded, but it means non-transient 4xx conditions such as an
+authentication failure may consume every allowed attempt before surfacing as
+`Exhausted`. This loses status-level observability at the polling outcome.
+Consumers and operators must retain request/error telemetry, and a later
+observability task may introduce a reviewed structured classification without
+changing the no-resubmit contract.
+
+The transport already parses `Retry-After`, but this polling layer does not use
+it to change the interval. The bounded local policy remains the sole schedule,
+so attempts and maximum delay stay caller-auditable. Exact server-directed
+delay handling is deferred to the same later observability review rather than
+requiring transport-layer surgery here.
+
+Cancellation is a caller-provided `Future<Output = ()> + Send`. A biased
+`tokio::select!` checks the pinned cancellation future before each read and
+each interval sleep. Dropping an in-flight GET is safe because the read is
+idempotent. Callers that do not need cancellation pass
+`std::future::pending::<()>()`.
+
+`RelayerPollOutcome::Exhausted` records the exact attempts and last observed
+pending state, if any. `Cancelled` records completed attempts. Neither outcome,
+nor any returned error, grants authority to fetch a nonce, re-sign, resubmit,
+repeat WALLET-CREATE, or infer transaction absence. Recent-transactions lookup,
+owner-scoped intent persistence, reconciliation automation, and duplicate-
+submit recovery remain out of scope for PBRSDK-11 through PBRSDK-13.
+
+Paused-time loopback tests follow addendum A1: the polling-only reqwest client
+has no request timeout, and the polling server uses plain accept and read
+futures with no Tokio timeout. Therefore the only timers during non-cancelled
+polling are the production interval sleeps, and `tokio::time::Instant` advances
+by exactly their sum. Removing the server accept timeout means a missing
+request can hang the individual test until the CI or command runner timeout;
+that is an accepted test-infrastructure risk, not production behavior.
+
+Consequences:
+
+- the public surface adds `RelayerPollPolicy`, `RelayerPollOutcome`, and exactly
+  the two reviewed `poll_*` methods, all explicitly re-exported;
+- the three low-level read methods and their four read-permit occurrences
+  remain unchanged, and combined production source still exposes exactly two
+  public `submit_*` methods;
+- deterministic loopback tests prove exact attempt counts and `1s + 2s`
+  scheduling, max-interval capping, terminal failures, unknown-state stop,
+  bounded 429/5xx handling, absence propagation, cancellation priority, type
+  isolation, and permit rejection before HTTP;
+- this decision adds no submit, signing, nonce fetch, recent-transactions read,
+  live host call, persistence, or automatic reconciliation path and does not by
+  itself authorize end-to-end live operation.

@@ -43,6 +43,7 @@ mod deployed;
 mod execute;
 mod lifecycle;
 mod mutation;
+mod polling;
 mod read;
 mod redaction;
 mod response;
@@ -59,6 +60,7 @@ pub use mutation::{
     DepositWalletDryRunEvidence, DepositWalletSubmitReceipt, DryRunCallSummary,
     RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerSubmitOutcome,
 };
+pub use polling::{RelayerPollOutcome, RelayerPollPolicy};
 pub use response::DepositWalletTransactionReceipt;
 pub use url::DepositWalletRelayerUrl;
 

@@ -35,8 +35,8 @@ pub use deposit_wallet::{
     DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletRequestContext, DepositWalletSubmitReceipt, DepositWalletTransactionReceipt,
     DryRunCallSummary, RelayerKeyAuth, RelayerMutationMode, RelayerMutationOperation,
-    RelayerMutationPermit, RelayerReadPermit, RelayerSubmitOutcome, RelayerSubmitResponse,
-    RelayerTransactionState, WalletNonceRequest,
+    RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy, RelayerReadPermit,
+    RelayerSubmitOutcome, RelayerSubmitResponse, RelayerTransactionState, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

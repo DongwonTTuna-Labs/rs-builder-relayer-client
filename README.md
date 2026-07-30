@@ -15,7 +15,7 @@ work, use the reviewed fallible APIs such as
 `DepositWalletRelayerClient`, `DepositWalletRelayerUrl`,
 `RelayerReadPermit`, `DepositWalletRequestContext`, `DepositWalletCall`,
 `DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`,
-`DepositWalletReadiness`,
+`DepositWalletReadiness`, `RelayerPollPolicy`, `RelayerPollOutcome`,
 `RelayerKeyAuth`, `RelayerMutationPermit`, `RelayerMutationMode`,
 `RelayerMutationOperation`, `RelayerSubmitOutcome`,
 `DepositWalletDryRunEvidence`, `DryRunCallSummary`,
@@ -23,11 +23,12 @@ work, use the reviewed fallible APIs such as
 re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
-two deployment-lifecycle methods, one fresh-nonce WALLET batch execution
-method, and exactly two explicitly gated public `submit_*` methods.
+two bounded transaction-polling methods, two deployment-lifecycle methods, one
+fresh-nonce WALLET batch execution method, and exactly two explicitly gated
+public `submit_*` methods.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
-`get_transaction_for_owner`, as well as both lifecycle methods.
+`get_transaction_for_owner`, both polling methods, and both lifecycle methods.
 `ensure_deposit_wallet_deployment` checks deployed fact first and requires an
 explicit `DepositWalletDeploymentPolicy`; `Predeployed` is the normal consumer
 choice and blocks WALLET-CREATE when deployment is missing.
@@ -49,16 +50,27 @@ request through the existing signature-recovery checks, and delegates to the
 permit-gated submit path. Dry-run execution still reads the fresh nonce and
 signs locally, but sends no submit request.
 
+`poll_wallet_transaction` and `poll_deposit_wallet_deployment` reuse the
+verified expected-type transaction read with an explicit finite
+`RelayerPollPolicy`. Intervals double from the initial value to the configured
+cap. New, Executed, and Mined remain pending; Confirmed is the only successful
+`RelayerPollOutcome`. Exhaustion and cancellation report observation progress
+but never authorize nonce fetch, signing, resubmission, or another deployment.
+Failed, Invalid, Unknown, wrong-type, permit, and ambiguous evidence stop under
+their existing error policy. Callers without a cancellation signal pass
+`std::future::pending::<()>()`.
+
 This mutation surface is a permit and transport gate, not a claim of complete
 deposit-wallet live readiness. A successful deployed read records deployment
 fact only, and a submit receipt records relayer acceptance evidence rather than
 `STATE_CONFIRMED`. PBRSDK-8 adds confirmed-only single-shot readiness and
-PBRSDK-9 adds fresh-nonce batch execution, but bounded polling, owner-scoped
-nonce leases and pending-intent enforcement, persistent
-idempotency/reconciliation, recent-transaction recovery, and the remaining
-operator gates are later work. Preserve each submitted transaction id and
-payload hash, never re-enter deployment for an owner with a pending create,
-and do not execute concurrent batches for the same owner until the later lease
+PBRSDK-9 adds fresh-nonce batch execution, and PBRSDK-10 adds bounded
+confirmed-only polling. Owner-scoped nonce leases and pending-intent
+enforcement, persistent idempotency/reconciliation, recent-transaction
+recovery, and the remaining operator gates are later work. Preserve each
+submitted transaction id and payload hash, never re-enter deployment for an
+owner with a pending create after polling exhaustion/cancellation/error, and do
+not execute concurrent batches for the same owner until the later lease
 contract is implemented.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB

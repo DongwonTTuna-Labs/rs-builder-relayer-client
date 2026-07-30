@@ -100,6 +100,26 @@ classification, and signer-error redaction. The audit uses only a documented
 synthetic throwaway signer and does not authorize live execution or concurrent
 same-owner batches before the deferred lease contract.
 
+PBRSDK-10 adds `RelayerPollPolicy`, `RelayerPollOutcome`, and exactly two
+inherent `poll_*` methods. Both require the existing owner- and chain-scoped
+read permit and delegate to the same crate-internal expected-type transaction
+helper. The low-level read audit remains three public methods plus one internal
+permit occurrence, while the complete production source still exposes exactly
+two public `submit_*` methods. No submit, signer, nonce, recent-transactions, or
+automatic reconciliation surface is added.
+
+The polling tests are unit tests in the existing HTTP test module, so no Cargo
+target is added. The dev-dependency Tokio feature set adds only `test-util` for
+`#[tokio::test(start_paused = true)]`; the production Tokio dependency remains
+unchanged. A timeout-free polling-only reqwest client and plain loopback accept/
+read futures keep I/O sections free of virtual timers. Tests prove exact
+attempts and interval sums, backoff caps, confirmed-only success, terminal and
+unknown-state handling, bounded 429/5xx and absence retries, cancellation,
+type isolation, and pre-HTTP permit rejection. The server intentionally has no
+internal accept timeout, so the CI or command runner remains the hang guard.
+This audit does not authorize live mutation or treat exhaustion/cancellation as
+resubmit authority.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.

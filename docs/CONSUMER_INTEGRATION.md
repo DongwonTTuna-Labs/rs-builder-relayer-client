@@ -75,6 +75,8 @@ DepositWalletDeploymentPolicy
 DepositWalletDeploymentStatus
 DepositWalletReadiness
 RelayerReadPermit
+RelayerPollPolicy
+RelayerPollOutcome
 RelayerMutationPermit
 RelayerMutationMode
 RelayerMutationOperation
@@ -145,8 +147,9 @@ grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_requ
 ### HTTP client surface
 
 The deposit-wallet HTTP client exposes construction, exactly three reviewed
-low-level production reads, two deployment-lifecycle orchestration methods,
-and exactly two permit-gated public `submit_*` methods:
+low-level production reads, two bounded transaction-polling methods, two
+deployment-lifecycle orchestration methods, and exactly two permit-gated
+public `submit_*` methods:
 
 ```text
 DepositWalletRelayerUrl::parse
@@ -156,6 +159,8 @@ DepositWalletRelayerClient::disable_mutation
 DepositWalletRelayerClient::is_deposit_wallet_deployed
 DepositWalletRelayerClient::get_wallet_nonce
 DepositWalletRelayerClient::get_transaction_for_owner
+DepositWalletRelayerClient::poll_wallet_transaction
+DepositWalletRelayerClient::poll_deposit_wallet_deployment
 DepositWalletRelayerClient::ensure_deposit_wallet_deployment
 DepositWalletRelayerClient::check_deposit_wallet_deployment_readiness
 DepositWalletRelayerClient::execute_wallet_batch
@@ -194,6 +199,68 @@ equal `owner`, `to` must equal the configured deposit-wallet factory, and
 contract config. `WALLET-CREATE` responses are not accepted as WALLET owner
 evidence because deployment identity and wallet mutation identity are reviewed
 separately.
+
+### Bounded confirmed-only polling
+
+Use `RelayerPollPolicy` to continue observing a known transaction id without
+creating submit authority. The policy is explicit and finite; it doubles the
+interval until the configured cap:
+
+```rust
+use std::time::Duration;
+
+use polymarket_relayer::{RelayerPollOutcome, RelayerPollPolicy};
+
+let policy = RelayerPollPolicy::try_new(
+    3,
+    Duration::from_secs(1),
+    Duration::from_secs(60),
+)?;
+
+match client
+    .poll_wallet_transaction(
+        owner,
+        transaction_id,
+        policy,
+        &permit,
+        std::future::pending::<()>(),
+    )
+    .await?
+{
+    RelayerPollOutcome::Confirmed(receipt) => {
+        // This is the only outcome that authorizes reliance on wallet effects.
+        persist_confirmed_receipt(receipt)?;
+    }
+    RelayerPollOutcome::Exhausted { attempts, last_state } => {
+        persist_pending_poll(attempts, last_state)?;
+        // Reconcile the original transaction; do not sign or submit again.
+    }
+    RelayerPollOutcome::Cancelled { attempts } => {
+        persist_cancelled_poll(attempts)?;
+        // Cancellation is not evidence that the original request is absent.
+    }
+}
+```
+
+Use `poll_deposit_wallet_deployment` for the transaction id returned by
+WALLET-CREATE. It applies the same result policy but requires WALLET-CREATE
+wire evidence; the WALLET method and deployment method reject each other's
+transaction type. A caller with its own shutdown signal may pass that future
+instead of `std::future::pending::<()>()`.
+
+New, Executed, and Mined remain pending. Confirmed alone returns
+`RelayerPollOutcome::Confirmed`; Failed, Invalid, Unknown, wrong-type, permit,
+and ambiguous evidence stop as errors. HTTP transport errors, all API statuses,
+and a transaction temporarily absent from an array are retried only within the
+finite policy. The schedule intentionally ignores `Retry-After`; a 4xx auth
+error can therefore consume the bounded attempts and end as `Exhausted`.
+Preserve transport telemetry for operator diagnosis.
+
+Polling calls only the existing verified `GET /transaction` path. It never
+calls submit, signs, fetches a nonce, queries `GET /transactions`, or infers
+that exhaustion/cancellation permits another mutation. Owner-scoped pending
+intent storage and automated reconciliation remain PBRSDK-11 through
+PBRSDK-13 work.
 
 `is_deposit_wallet_deployed` derives the deposit-wallet address from the owner
 and sends that derived address to `GET /deployed?address=...&type=WALLET`. A
@@ -270,8 +337,9 @@ choose Predeployed unless this runtime explicitly owns deployment
   -> CreateSubmitted: persist transaction_id and payload_keccak256 immediately
   -> call check_deposit_wallet_deployment_readiness once
   -> Ready: STATE_CONFIRMED with required hash evidence was observed
-  -> Pending(New/Executed/Mined): hand off to PBRSDK-10 polling and do not call
-     ensure_deposit_wallet_deployment again for that owner
+  -> Pending(New/Executed/Mined): call poll_deposit_wallet_deployment with the
+     original transaction id and do not call ensure_deposit_wallet_deployment
+     again for that owner
   -> any error: stop mutation and reconcile; never infer authority to resubmit
 ```
 
@@ -288,12 +356,14 @@ type can cross the other lifecycle. Confirmed is the only `Ready` state. Failed
 and Invalid remain typed errors; Unknown, mismatched type, malformed evidence,
 absence, and ambiguous transport/results require reconciliation.
 
-PBRSDK-8 intentionally performs only one readiness read. It does not loop,
-sleep, retry, cancel, query recent transactions, persist owner state, or submit
-again. Bounded polling is PBRSDK-10, owner-scoped pending-intent enforcement is
-PBRSDK-11, and later reconciliation persistence belongs to PBRSDK-12/13. Until
-those controls exist, a consumer must use its adapter-owned state to forbid a
-second lifecycle entry for an owner with a pending create.
+PBRSDK-8 intentionally performs only one readiness read. PBRSDK-10 now provides
+the bounded continuation above, but neither layer queries recent transactions,
+persists owner intent, reconciles automatically, or submits again. Owner-scoped
+pending-intent enforcement is PBRSDK-11, and later reconciliation persistence
+belongs to PBRSDK-12/13. Until those controls exist, a consumer must use its
+adapter-owned state to forbid a second lifecycle entry for an owner with a
+pending create. `Exhausted`, `Cancelled`, or an error does not release that
+guard.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -321,8 +391,9 @@ HTTP DTOs or permit.
 ### Explicit mutation workflow and rollback
 
 `DepositWalletRelayerClient::new` is the normal default-deny constructor. Its
-three reads and valid `DryRun` submissions work, but every `Live` submission is
-blocked. `new_with_mutation_enabled` explicitly starts the live latch enabled;
+three low-level reads, two bounded polling methods, and valid `DryRun`
+submissions work, but every `Live` submission is blocked.
+`new_with_mutation_enabled` explicitly starts the live latch enabled;
 that constructor is necessary but not sufficient because each submit still
 requires a matching, unexpired `Live` permit.
 
@@ -362,9 +433,10 @@ further mutation action.
 
 Invalid or partial success responses, transport failures, and oversized 2xx
 responses require reconciliation before any new submit. A submit receipt is
-not `STATE_CONFIRMED`; PBRSDK-8 adds only a single-shot readiness check and does
-not provide the complete polling, persistent idempotency, recent-transaction
-lookup, or duplicate-submit recovery needed to claim end-to-end live readiness.
+not `STATE_CONFIRMED`; PBRSDK-8 adds a single-shot readiness check and PBRSDK-10
+adds bounded confirmed-only polling. Persistent idempotency, owner-scoped
+intent, recent-transaction lookup, and duplicate-submit recovery remain absent,
+so these additions do not claim end-to-end live readiness.
 
 Consumer adapter migration status for PR #8:
 
@@ -389,7 +461,7 @@ WALLET fixture tests pass
 EIP-712 fixture tests pass
 pUSD/CTF calldata fixture tests pass
 identity separation tests pass
-transaction polling unknown-state tests pass
+bounded transaction polling timing, cancellation, exhaustion, and unknown-state tests pass
 deployment lifecycle short-circuit, policy, permit, and type-isolation tests pass
 fresh-nonce WALLET execute ordering, identity, redaction, and failure-boundary tests pass
 dependency is pinned by commit SHA
