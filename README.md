@@ -22,8 +22,10 @@ work, use the reviewed fallible APIs such as
 `DepositWalletSubmitReceipt`, `MutationIntentStore`,
 `InMemoryMutationIntentStore`, `MutationIntentRecord`,
 `MutationIntentStatus`, `TryBeginOutcome`, `OwnerMutationRegistry`,
-`MutationIntentLease`, `IntentGatedClient`, and the documented
-request/response types re-exported from `polymarket_relayer`.
+`MutationIntentLease`, `IntentGatedClient`, `ReconciliationDecision`,
+`ReconciliationEvidence`, `IntentReconcileOutcome`, `AmbiguousCandidate`,
+`AmbiguousCandidateReport`, and the documented request/response types
+re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
 two bounded transaction-polling methods, two deployment-lifecycle methods, one
@@ -33,9 +35,16 @@ primitive `submit_*` methods. PBRSDK-12 adds three additive methods on
 deployment-lifecycle wrapper. Existing client methods and signatures remain
 unchanged for compatibility; live consumers must enter mutation through
 `OwnerMutationRegistry::gate`.
+PBRSDK-13 adds two read/recovery methods on that gated view:
+`reconcile_by_polling` polls only the transaction id already stored in a
+Submitted intent, while `report_ambiguous_candidates` creates a redacted
+read-only `GET /transactions` report. Registry-level `adopt_transaction` and
+`reconcile_manually` both require operator evidence and the inspected intent
+epoch.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
-`get_transaction_for_owner`, both polling methods, and both lifecycle methods.
+`get_transaction_for_owner`, `report_ambiguous_candidates`, both polling
+methods, and both lifecycle methods.
 `ensure_deposit_wallet_deployment` checks deployed fact first and requires an
 explicit `DepositWalletDeploymentPolicy`; `Predeployed` is the normal consumer
 choice and blocks WALLET-CREATE when deployment is missing.
@@ -78,13 +87,21 @@ Submitted, or AmbiguousNoId record rejects a second mutation before nonce or
 HTTP work. Confirmed and bound terminal failures reopen the scope; unknown or
 ambiguous evidence keeps it blocked. DryRun never creates a lease.
 
+Known transaction ids are reconciled through expected-type polling without a
+new submit. Id-less ambiguity may be reported, but candidates are never
+automatically selected. Only an operator-evidenced, epoch-fenced adoption or
+manual reconciliation can change that row, and adoption returns it to
+Submitted for authoritative polling. No recovery method fetches a nonce,
+signs, or calls `POST /submit`.
+
 `InMemoryMutationIntentStore` is process-local and test/development-only. It is
 not safe for live use because restart loses the owner block. Live consumers
 must provide a durable transactional/CAS `MutationIntentStore`, retain records
 across restart, and feed bounded poll outcomes or bound terminal failures back
-to the registry. Dropping a lease does nothing by design. Automatic ambiguous
-reconciliation, recent-transaction recovery, automatic resubmission, and the
-remaining PBRSDK-13/PBRSDK-24/25 operator gates are still absent.
+to the registry. Dropping a lease does nothing by design. The recent report and
+manual recovery surface do not qualify the durable store, select a candidate,
+or resubmit automatically; PBRSDK-14/15 and PBRSDK-24/25 concurrency, artifact,
+and live operator gates remain separate.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the

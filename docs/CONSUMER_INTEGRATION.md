@@ -179,6 +179,10 @@ OwnerMutationRegistry::gate
 IntentGatedClient::execute_wallet_batch
 IntentGatedClient::submit_wallet_create
 IntentGatedClient::ensure_deposit_wallet_deployment
+IntentGatedClient::reconcile_by_polling
+IntentGatedClient::report_ambiguous_candidates
+OwnerMutationRegistry::adopt_transaction
+OwnerMutationRegistry::reconcile_manually
 ```
 
 Each read requires a `RelayerReadPermit` whose owner equals the requested owner
@@ -202,8 +206,10 @@ let transaction = client
 The read permit intentionally has no expiry because it grants only idempotent
 reads. It does not grant submit authority, reserve the nonce for signing, or
 replace `RelayerMutationPermit`. `POST /submit` is reachable only through the
-two mutation methods with a matching mutation permit, and `GET /transactions`
-remains deferred to PBRSDK-13 reconciliation work.
+two mutation methods with a matching mutation permit. The additive
+`GET /transactions` path is reachable only through the unresolved-intent report
+method after read-permit validation; it is read-only evidence discovery and
+does not adopt a candidate or release the owner.
 
 Transaction reads preserve the recorded PBRSDK-2 evidence contract: the
 response must be a `WALLET` transaction, `owner` must be present, `from` must
@@ -241,20 +247,21 @@ different owners and chains remain independent. DryRun delegates without a
 lease. The original client methods remain additive compatibility primitives,
 not the approved live consumer entry after PBRSDK-12.
 
-After polling, feed the explicitly bound transaction id and result back to the
-same registry. Confirmed may resolve the intent only when the outcome receipt
-also says Confirmed and carries the same transaction id. Exhausted stores only
-a present pending label; Cancelled is a no-op. If polling returns
-`TransactionFailed` or `TransactionInvalid`, call
-`record_terminal_failure(owner, chain_id, transaction_id, &error)`. Other
-errors and unknown/reconciliation-required evidence must leave the owner
-blocked for PBRSDK-13 reconciliation.
+Prefer `gated.reconcile_by_polling` for a Submitted intent. It loads the stored
+transaction id, selects the WALLET or WALLET-CREATE expected-type poll from the
+stored operation, and records only the existing transaction-bound outcome.
+Confirmed may resolve the intent only when the receipt also says Confirmed and
+carries the same transaction id. Failed/Invalid resolve through the existing
+bound terminal-failure API. Exhausted stores only a present pending label;
+Cancelled is a no-op. Other errors and unknown/reconciliation-required evidence
+leave the owner blocked.
 
 `MutationIntentRecord` stores only owner/chain identity, generation/revision,
 operation/status, an optional decimal nonce placeholder, payload hash,
-deadline, transaction id, safe observed-state label, and timestamps. It has no
-signature, auth header, private-key, calldata, or replayable-body field. Record
-Debug redacts owner and hashes transaction ids. Dropping
+deadline, transaction id, safe observed-state label, optional reconciliation
+evidence, and timestamps. It has no signature, auth header, private-key,
+calldata, or replayable-body field. Record Debug redacts owner, hashes
+transaction ids, and prints evidence text lengths rather than text. Dropping
 `MutationIntentLease` never deletes or resolves the record.
 
 `InMemoryMutationIntentStore` loses all records on restart and is restricted to
@@ -262,6 +269,41 @@ tests and development. It must never protect live traffic. A durable store is
 the restart contract: unresolved rows survive and block new mutation until a
 bound terminal result or later authoritative reconciliation resolves them.
 PBRSDK-24/25 live gates require that durable wiring.
+
+### Ambiguous reconciliation runbook
+
+Use this order for every blocked owner. None of these steps grants submit
+authority by itself, and no step automatically retries the original submit.
+
+1. Inspect `registry.intent(owner, chain_id)` and retain its `epoch`. If the
+   intent is Submitted with a transaction id, call
+   `gated.reconcile_by_polling` first. Confirmed or bound Failed/Invalid is
+   authoritative; StillPending, Cancelled, unknown, and every other error keep
+   the owner blocked.
+2. If the intent has no transaction id, call
+   `gated.report_ambiguous_candidates(owner, &read_permit)`. The report contains
+   the inspected epoch, redacted intent metadata, validated candidates, and a
+   skipped-item count. It is a read-only review artifact, not a match verdict.
+3. After independent venue/on-chain review, create a fresh
+   `ReconciliationEvidence`. If the operator has identified the original
+   transaction id, call `registry.adopt_transaction` with the report epoch and
+   then return to step 1. Adoption is accepted only from AmbiguousNoId.
+4. If the operator instead has evidence that the original request was not
+   accepted, was already confirmed through another authoritative observation,
+   or was superseded, call `registry.reconcile_manually` with the inspected
+   epoch and the corresponding decision. Only this explicit evidence-bearing
+   transition permits a later `begin_intent`.
+
+Every manual call is epoch-fenced. A generation-changed or concurrent-update
+error requires a new `intent()` inspection and new operator decision; never
+reuse stale evidence blindly. Candidate type, timestamp, state, payload hash,
+or proximity is never sufficient for automatic adoption.
+
+**Preparing warning:** `reconcile_manually` on Preparing exists only for
+restart recovery. A living process may still have an in-flight submit tied to
+that row. Before reconciling Preparing, the operator must prove that no work for
+that owner is still running; otherwise manual release can race the original
+submission.
 
 ### Bounded confirmed-only polling
 
@@ -321,9 +363,8 @@ Preserve transport telemetry for operator diagnosis.
 
 Polling calls only the existing verified `GET /transaction` path. It never
 calls submit, signs, fetches a nonce, queries `GET /transactions`, or infers
-that exhaustion/cancellation permits another mutation. PBRSDK-12 records the
-bound outcome in the owner intent; automated reconciliation remains PBRSDK-13
-work.
+that exhaustion/cancellation permits another mutation. The separate recent
+report is operator evidence discovery only and never replaces polling.
 
 `is_deposit_wallet_deployed` derives the deposit-wallet address from the owner
 and sends that derived address to `GET /deployed?address=...&type=WALLET`. A
@@ -381,8 +422,9 @@ read. Preserve a submitted transaction id and payload hash, and never retry an
 ambiguous submission. The registry rejects a second same-owner/chain live
 execution before nonce I/O while Preparing, Submitted, or AmbiguousNoId is
 unresolved. The nonce field remains `None` in this wrapper round because the
-opaque primitive does not expose the fetched nonce; PBRSDK-13 may add an
-internal provenance hook without changing this public wrapper.
+opaque primitive does not expose the fetched nonce; PBRSDK-13 does not change
+that limitation, and a future provenance hook must preserve this public
+wrapper.
 
 ### Deployment lifecycle workflow
 
@@ -427,7 +469,8 @@ the bounded continuation above, and PBRSDK-12 persists the submitted owner
 intent through the consumer's durable store. Neither layer queries recent
 transactions, reconciles automatically, or submits again. `Exhausted`,
 `Cancelled`, unknown, or ambiguous evidence does not release the registry
-guard; later authoritative reconciliation belongs to PBRSDK-13.
+guard; use the PBRSDK-13 runbook above for authoritative or evidence-bound
+reconciliation.
 
 Relayer auth wire evidence is anchored to the official Polymarket relayer docs:
 
@@ -500,10 +543,11 @@ Invalid or partial success responses, transport failures, and oversized 2xx
 responses require reconciliation before any new submit. A submit receipt is
 not `STATE_CONFIRMED`; PBRSDK-8 adds a single-shot readiness check and PBRSDK-10
 adds bounded confirmed-only polling. PBRSDK-12 adds the owner-scoped durable
-store boundary and lease fencing, but recent-transaction lookup, automatic
-ambiguous reconciliation, duplicate-submit recovery, and durable-store live
-qualification remain absent, so these additions do not claim end-to-end live
-readiness.
+store boundary and lease fencing, and PBRSDK-13 adds evidence-bound recent
+lookup, manual adoption/reconciliation, and the stored-id polling wrapper.
+Automatic candidate selection, automatic resubmit, deterministic concurrency
+qualification, and durable-store live qualification remain absent, so these
+additions do not claim end-to-end live readiness.
 
 Consumer adapter migration status for PR #8:
 
@@ -533,6 +577,9 @@ deployment lifecycle short-circuit, policy, permit, and type-isolation tests pas
 fresh-nonce WALLET execute ordering, identity, redaction, and failure-boundary tests pass
 durable owner mutation intent store is wired and restart recovery is exercised
 same-owner unresolved mutation is rejected before nonce/signing/HTTP
+known-id reconciliation polls the stored id without any POST /submit
+id-less reconciliation records a redacted report and epoch-fenced operator evidence
+candidate adoption is manual, evidence-bound, and followed by authoritative polling
 dependency is pinned by commit SHA
 operator approval is recorded
 ```

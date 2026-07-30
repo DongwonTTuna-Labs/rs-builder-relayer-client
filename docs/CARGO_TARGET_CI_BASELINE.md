@@ -143,6 +143,28 @@ The in-memory restart test reconstructs a registry over the same process-local
 store; it does not qualify persistence. Live use remains blocked until a
 consumer durable store passes the PBRSDK-24/25 restart gate.
 
+PBRSDK-13 adds no Cargo target, dependency, feature, example, or manifest
+change. Production code adds `http/recent.rs`, one internal bounded
+`GET /transactions` fetch, three intent reconciliation types, two report types,
+two epoch-fenced registry methods, and two `IntentGatedClient` methods. The
+existing low-level read permit count, two polling methods, two primitive
+`submit_*` methods, and combined submit/execute/lifecycle counts remain
+unchanged. The public boundary audit fixes all five additive types and the
+`reconcile_manually`, `adopt_transaction`, `reconcile_by_polling`, and
+`report_ambiguous_candidates` signatures at the HTTP, deposit-wallet, and
+crate-root exports.
+
+PBRSDK-13 tests remain unit tests in `src/deposit_wallet/http/tests.rs` and use
+the existing loopback and injected-clock infrastructure. The only new fixture
+is the sanitized, schema-constructed
+`wallet_recent_transactions_response.json`; it is not a live-recorded response
+or adoption verdict. Tests cover evidence validation and serde compatibility,
+epoch ABA fencing, one CAS retry, manual adoption/reconciliation, authoritative
+poll result mapping, pure-read reporting and filtering, response bounds, and
+zero `POST /submit` across reconciliation polling. No live relayer, funded
+wallet, credential, file/DB store, concurrency harness, or automatic resubmit is
+introduced.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.

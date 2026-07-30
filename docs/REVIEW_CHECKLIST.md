@@ -45,14 +45,18 @@
 - [ ] Fresh nonce fetch is immediately followed by local EIP-712 signing with no intervening HTTP await, then the existing validated request builder and permit-gated submit path are reused.
 - [ ] DryRun still fetches and records the fresh nonce but sends no POST; a closed Live latch may allow that read but blocks the POST.
 - [ ] A second same-owner/chain live execute is rejected while Preparing, Submitted, or AmbiguousNoId, before nonce fetch, signing, or HTTP; different owner/chain scopes remain independent.
-- [ ] Confirmed and bound TransactionFailed/Invalid results alone reopen the owner in this round; unknown, ambiguous, exhausted, cancelled, mismatched, and stale results keep or leave the lock unchanged.
+- [ ] Confirmed and bound TransactionFailed/Invalid results reopen the owner authoritatively; otherwise only explicit epoch-matched `ReconciliationEvidence` may reconcile or adopt, while unknown, ambiguous, exhausted, cancelled, mismatched, and stale results keep or leave the lock unchanged.
 - [ ] DryRun creates no mutation intent, and dropping a lease never implicitly releases or deletes its record.
+- [ ] Known-id recovery polls the stored id and never submits; id-less recovery reports candidates only, and no heuristic candidate match automatically adopts or releases an intent.
+- [ ] Transaction adoption is evidence-bound, epoch-fenced, AmbiguousNoId-only, and returns the row to Submitted for authoritative expected-type polling.
+- [ ] Manual reconciliation covers unresolved restart recovery only with evidence; Preparing is never released until the operator proves no same-owner work is still in flight.
 
 ## Identity And Security
 
 - [ ] Relayer API key owner, wallet owner signer, and deposit wallet/funder are separate config/API fields.
 - [ ] Tests prove relayer auth identity may differ from owner signer identity.
 - [ ] Secret-bearing types do not leak through `Debug`, logs, errors, snapshots, or fixtures.
+- [ ] Reconciliation evidence Debug exposes only text lengths, decision, and timestamp; reports omit auth material, raw bodies, and unknown provider state labels.
 - [ ] Signer backend Display, Debug, and source-chain material is discarded on signing failure; only the fixed redacted signing error is returned.
 - [ ] Production dependency instructions use pinned git `rev`, not branch.
 - [ ] Dependency changes review public API, transitive crypto/signing crates, and HTTP/TLS impact where applicable.
@@ -72,7 +76,7 @@
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
-- [ ] Production reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; mutation still reaches only the two reviewed permit-bound primitive `POST /submit` methods, while approved live entry uses the additive intent-gated wrappers and `GET /transactions` remains deferred.
+- [ ] Low-level public reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; the gated report adds only permit-first, query-free `GET /transactions`, and mutation still reaches only the two reviewed permit-bound primitive `POST /submit` methods.
 - [ ] Polling reuses only the verified expected-type `GET /transaction` path, keeps WALLET and WALLET-CREATE isolated, and treats API/HTTP/temporary-absence errors as transient only within the finite policy.
 - [ ] `Retry-After` does not alter the PBRSDK-10 schedule; bounded retries of all API statuses, including auth-related 4xx responses, are documented as an observability tradeoff.
 - [ ] The deployment policy is chosen explicitly at every call; `Predeployed` is the normal consumer choice and `DepositWalletDeploymentPolicy` has no `Default` implementation.
@@ -89,10 +93,12 @@
 - [ ] `disable_mutation` is a shared one-way latch across all client clones, exposes no re-enable method, blocks later live submits, and leaves reads and valid `DryRun` submissions available.
 - [ ] Invalid/partial submit responses, post-dispatch transport failures, and oversized 2xx responses require reconciliation before any resubmission.
 - [ ] `MutationIntentRecord` has no raw signature, auth header, private key, calldata, or replayable-body field; its Debug redacts owner and hashes transaction id.
+- [ ] `MutationIntentRecord.reconciliation` has `#[serde(default)]`; evidence Deserialize follows the documented trusted-store model and does not silently revalidate persisted text.
+- [ ] Manual reconciliation/adoption reload after one CAS miss, repeat epoch and state checks, retry once, and return an explicit error on a second miss.
 - [ ] The synchronous durable store implements atomic `try_begin` and epoch/revision CAS as fast local operations; blocking I/O is isolated outside the async executor path.
 - [ ] `InMemoryMutationIntentStore` is used only for tests/development and is never presented as restart-safe or live-capable.
 - [ ] A durable-store restart exercise proves an unresolved owner remains blocked; PBRSDK-24/25 live qualification is not inferred from the in-memory test.
-- [ ] The PR does not claim complete live readiness while ambiguous reconciliation, recent-transaction lookup, duplicate-submit recovery, durable-store qualification, and remaining operator gates are deferred.
+- [ ] The PR does not claim complete live readiness: manual reconciliation/reporting does not qualify a durable store, automate candidate selection/resubmit, or complete PBRSDK-14/15 and PBRSDK-24/25 gates.
 
 ## Public API Boundary
 
@@ -110,6 +116,8 @@
 - [ ] `submit.rs` still contains exactly two public `submit_*` primitives, `lifecycle.rs` still contains exactly two public async methods, and their existing assertions are unchanged.
 - [ ] Combined production source contains exactly three `submit_*`, two `execute_wallet_batch`, and two `ensure_deposit_wallet_deployment` signatures, with permit arguments on all wrapper layers.
 - [ ] `MutationIntentStore`, `TryBeginOutcome`, `InMemoryMutationIntentStore`, `MutationIntentRecord`, `MutationIntentStatus`, `OwnerMutationRegistry`, `MutationIntentLease`, and `IntentGatedClient` are explicitly re-exported at all three public boundaries.
+- [ ] `ReconciliationDecision`, `ReconciliationEvidence`, `IntentReconcileOutcome`, `AmbiguousCandidate`, and `AmbiguousCandidateReport` are explicitly re-exported at all three public boundaries with private fields and reviewed getters.
+- [ ] `reconcile_manually`, `adopt_transaction`, `reconcile_by_polling`, and `report_ambiguous_candidates` retain their reviewed owner/epoch/evidence/policy/permit/cancel signatures.
 - [ ] The store surface has no generic `save`; begin generation is store-issued atomically and every later write is epoch/revision CAS with overflow fail-closed.
 - [ ] `record_poll_outcome` and `record_terminal_failure` both require an explicit polled transaction id and cannot resolve a mismatched or non-Submitted record.
 - [ ] `build_wallet_batch_request_with_signature` is not restored as a public crate-root or `deposit_wallet` helper.

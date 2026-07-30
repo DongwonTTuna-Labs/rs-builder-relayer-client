@@ -91,6 +91,18 @@ intent_gated_api_failures_use_conservative_ambiguous_phase_classification
 intent_gated_create_and_lifecycle_wrappers_preserve_outcomes_and_lease_policy
 mutation_intent_serialization_and_debug_are_secret_free_and_redacted
 intent_gated_submit_recording_failure_returns_store_error_and_leaves_owner_locked
+reconciliation_evidence_validates_redacts_and_round_trips_with_legacy_records
+reconcile_manually_resolves_all_unresolved_states_and_requires_current_generation
+manual_reconciliation_retries_one_cas_miss_and_reports_a_second_miss
+transaction_adoption_is_epoch_fenced_evidence_bound_and_poll_resolved
+transaction_adoption_rejects_non_ambiguous_statuses
+reconcile_by_polling_maps_confirmed_and_terminal_failure_without_submit
+reconcile_by_polling_preserves_pending_cancelled_and_unknown_locks_without_submit
+reconcile_by_polling_rejects_non_submitted_records_before_http
+reconcile_by_polling_uses_wallet_create_type_and_rejects_wallet_receipt
+ambiguous_candidate_report_filters_and_redacts_fixture_without_state_change
+ambiguous_candidate_report_rejects_scope_before_http_and_enforces_item_limit
+ambiguous_candidate_report_rejects_non_array_or_invalid_json
 pusd_adapter_approval_calldata_matches_fixture
 pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
@@ -104,6 +116,9 @@ idless_submit_timeout_blocks_owner_until_manual_reconcile
 - Fixtures must not contain production private keys, API credentials, auth headers, or raw production signatures.
 - Fixture names should include endpoint and scenario.
 - If a fixture comes from official TypeScript/Python SDK behavior, record the SDK version or commit.
+- Recent-transaction fixtures must distinguish schema construction from a
+  live-recorded response and must never be cited as proof that a candidate is
+  the original ambiguous submission.
 
 Recommended fixture layout:
 
@@ -113,6 +128,7 @@ tests/fixtures/
     derive_address.json
     wallet_create_submit_body.json
     wallet_create_transaction_response.json
+    wallet_recent_transactions_response.json
     wallet_nonce_request.json
     wallet_deployed_http_request.json
     wallet_deployed_response_cases.json
@@ -134,6 +150,8 @@ Golden tests should prove:
 - `/nonce?type=WALLET` is used immediately before signing;
 - EIP-712 domain, message, digest, and signature shape match reference behavior;
 - relayer auth identity can differ from wallet owner signer;
+- `/transactions` sends no query, filters only validated same-owner
+  WALLET/WALLET-CREATE items, omits unknown labels, and changes no intent;
 - `/deployed` uses the derived deposit-wallet address and accepts only an object
   with a boolean `deployed` field;
 - owner- or chain-mismatched read permits fail before input validation, URL
@@ -262,6 +280,18 @@ concurrency stress qualification; deterministic concurrent expansion belongs
 to PBRSDK-14. No live host, retry loop, mock venue, file store, or database
 harness is introduced.
 
+PBRSDK-13 tests remain in the same HTTP unit-test module and add one sanitized
+recent-transactions fixture. Registry setup uses only `begin_intent` and the
+existing lease recording methods, so reconciliation request logs are not
+contaminated by setup submits. The tests prove evidence validation/redacted
+Debug/serde compatibility, epoch ABA fencing, evidence-bound AmbiguousNoId
+adoption, one bounded CAS retry, stored-id polling for both operations,
+Confirmed/Failed/pending/cancelled/unknown mappings, permit-first reporting,
+per-item filtering, response limits, and report immutability. Every polling
+reconciliation request log asserts zero `POST /submit` calls. The recent fixture
+is schema-constructed from official TypeScript `RelayerTransaction` fields and
+the recorded-style WALLET fixture; it is not live-recorded evidence.
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.
@@ -292,13 +322,18 @@ bounded deployment poll observes confirmation and the durable owner registry
 records that exact bound result. Exhaustion, cancellation, unknown, ambiguous,
 or an unbound error still forbids lifecycle re-entry.
 
-For PBRSDK-12, live evidence must use a consumer-supplied durable
+For PBRSDK-12/13, live evidence must use a consumer-supplied durable
 `MutationIntentStore`; `InMemoryMutationIntentStore` is forbidden. Capture a
 restart exercise proving the unresolved row blocks a new mutation, then prove
 that only a matching Confirmed receipt or matching TransactionFailed/Invalid
-result reopens the owner. PBRSDK-13 ambiguous reconciliation and PBRSDK-14
-deterministic concurrency remain separate gates; neither may be replaced by an
-automatic resubmit.
+result, or an epoch-matched operator decision with serialized redacted evidence,
+reopens the owner. For an id-less ambiguity, retain the recent report, selected
+transaction id when one is manually adopted, evidence text, inspected epoch,
+and subsequent authoritative polling result. A report alone must leave the row
+unchanged. Preparing manual reconciliation is restart recovery only and
+requires proof that no live work for that owner remains. PBRSDK-14 deterministic
+concurrency is a separate gate; no gate may be replaced by automatic candidate
+selection or automatic resubmit.
 
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only

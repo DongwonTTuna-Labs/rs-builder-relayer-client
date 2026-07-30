@@ -213,7 +213,8 @@ Consequences:
   bounded;
 - transaction reads retain ID, WALLET type, owner/from, factory, derived-wallet,
   state, and hash evidence validation;
-- `GET /transactions` remains deferred to PBRSDK-13 reconciliation work;
+- this PBRSDK-6 decision defers `GET /transactions`; ADR-0014 later adds the
+  permit-first report-only PBRSDK-13 path;
 - no production `POST /submit`, mutation permit, WALLET-CREATE submit, or WALLET
   submit method is added by this decision;
 - production-host happy paths are not called in CI because tests use only local
@@ -469,9 +470,10 @@ idempotent. Callers that do not need cancellation pass
 `RelayerPollOutcome::Exhausted` records the exact attempts and last observed
 pending state, if any. `Cancelled` records completed attempts. Neither outcome,
 nor any returned error, grants authority to fetch a nonce, re-sign, resubmit,
-repeat WALLET-CREATE, or infer transaction absence. Recent-transactions lookup,
-owner-scoped intent persistence, reconciliation automation, and duplicate-
-submit recovery remain out of scope for PBRSDK-11 through PBRSDK-13.
+repeat WALLET-CREATE, or infer transaction absence. This PBRSDK-10 decision
+does not add recent lookup, owner intent persistence, reconciliation, or
+duplicate-submit recovery; ADR-0013 and ADR-0014 add the later bounded pieces
+without changing these polling semantics.
 
 Paused-time loopback tests follow addendum A1: the polling-only reqwest client
 has no request timeout, and the polling server uses plain accept and read
@@ -560,8 +562,8 @@ id and its state is actually Confirmed. Exhausted records only a present state
 label and stays Submitted; Cancelled records nothing. `record_terminal_failure`
 resolves only a matching Submitted row and only for `TransactionFailed` or
 `TransactionInvalid`. Mismatched or delayed observations are no-ops. Unknown,
-ambiguous, and reconciliation-required errors keep the owner locked for
-PBRSDK-13.
+ambiguous, and reconciliation-required errors keep the owner locked until an
+ADR-0014 authoritative or evidence-bound reconciliation path is used.
 
 `OwnerMutationRegistry::gate` returns `IntentGatedClient`, whose three methods
 wrap the unchanged existing execute, create-submit, and deployment lifecycle
@@ -571,9 +573,9 @@ receipt records payload hash and then transaction id. Reconciliation-required
 errors and every `Api` error become AmbiguousNoId; this deliberately
 over-blocks nonce/deployed GET 429/5xx because the current opaque primitive
 cannot distinguish read phase from a POST that may have been accepted. Other
-errors become the local pre-submit Failed representation. PBRSDK-13 may add
-internal phase provenance, but this round never guesses that a failed API call
-was safe to retry.
+errors become the local pre-submit Failed representation. PBRSDK-13 does not
+add internal phase provenance, and no round guesses that a failed API call was
+safe to retry.
 
 The deployment wrapper performs one extra deployed read before deciding
 whether a lease is appropriate. AlreadyDeployed, Predeployed, absent mutation
@@ -613,3 +615,72 @@ Consequences:
 - this layer blocks duplicate entry but does not complete ambiguous recovery,
   durable database qualification, consumer actor queuing, or end-to-end live
   readiness.
+
+## ADR-0014: PBRSDK-13 Evidence-Bound Ambiguous Reconciliation
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+An unresolved owner may be released only by authoritative polling of its
+already stored transaction id or by an explicit operator action carrying a
+validated `ReconciliationEvidence`. There is no evidence-free release method,
+automatic resubmit, or automatic candidate adoption.
+
+`ReconciliationEvidence` records a non-secret operator reference, one explicit
+`ReconciliationDecision`, a bounded summary, and the registry clock time. The
+reference is trimmed, non-empty, at most 256 bytes, and contains no control
+characters. The summary is trimmed, non-empty, at most 1024 bytes, and permits
+newlines but no other control characters. Serialize retains the reviewable
+text; manual Debug exposes only the decision, timestamp, and reference/summary
+lengths. `MutationIntentRecord.reconciliation` uses `#[serde(default)]` so
+PBRSDK-12 rows remain loadable. Derived Deserialize follows the same durable
+store-trust model as the rest of `MutationIntentRecord`: loaded evidence is not
+revalidated, so consumers must protect and validate their persistence layer.
+
+Both manual registry writes require the epoch inspected by the operator.
+`reconcile_manually` accepts any unresolved Preparing, Submitted, or
+AmbiguousNoId row and moves it to Reconciled with evidence. `adopt_transaction`
+accepts only AmbiguousNoId, validates and stores the operator-confirmed
+transaction id, and moves the row to Submitted so the existing expected-type
+polling path remains authoritative. Adoption without evidence is not exposed.
+An epoch mismatch fails immediately with a generation-changed error, preventing
+evidence for generation A from modifying a later generation B.
+
+These operator paths use load, state/epoch checks, and epoch/revision CAS. One
+CAS `Ok(false)` causes a fresh load, a repeated epoch/state check, and exactly
+one retry. A second miss returns `concurrent intent update; retry
+reconciliation`; resolved, replaced, or generation-changed rows are never
+overwritten. This explicit bounded failure is preferable to a silent no-op for
+an operator decision.
+
+`IntentGatedClient::reconcile_by_polling` first loads the unresolved record and
+uses only a stored Submitted transaction id. WALLET intents call
+`poll_wallet_transaction`; WALLET-CREATE intents call
+`poll_deposit_wallet_deployment`. Confirmed and bound Failed/Invalid results are
+fed only through the existing `record_poll_outcome` and
+`record_terminal_failure` APIs. Exhausted remains Submitted, Cancelled records
+nothing, and unknown/reconciliation-required errors propagate with the lock
+unchanged. The method performs no nonce read, signing, or submit. The existing
+registry recording APIs deliberately treat a stale CAS as a no-op; therefore a
+returned `Resolved` can differ from the stored status when a newer concurrent
+write won. The newer stored write remains authoritative and must be inspected.
+
+For an id-less ambiguity,
+`IntentGatedClient::report_ambiguous_candidates` performs a permit-first,
+read-only authenticated `GET /transactions` with no query parameters. The
+official TypeScript SDK `@polymarket/builder-relayer-client` `0.0.10` commit
+`9122f6fb1856f1ecfe4406685bfa19a2c5a7b290` defines that endpoint and returns a
+top-level `RelayerTransaction[]`. Reports include the redacted owner, inspected
+intent status, payload hash when present, epoch, creation time, validated
+WALLET/WALLET-CREATE candidates, and a fixed redaction marker. They omit auth
+material and raw bodies and never mutate the intent.
+
+Malformed, other-owner, non-WALLET, invalid-id, and unknown-state items are
+excluded and counted in `skipped_items`; unrecognized state labels are never
+copied into review output. An unsafe or oversized `createdAt` is omitted while
+the otherwise valid candidate remains. Per-item skipping is appropriate here
+because the endpoint is evidence discovery only and cannot unlock anything;
+failing the whole report would lose safe operator context without increasing
+state safety. Invalid top-level JSON/envelopes and more than 32 items still fail
+the report. Candidate matching is never a reconciliation verdict: the operator
+must adopt a chosen transaction with evidence or manually reconcile, and a
+known transaction id must be polled rather than submitted again.
