@@ -495,3 +495,121 @@ Consequences:
 - this decision adds no submit, signing, nonce fetch, recent-transactions read,
   live host call, persistence, or automatic reconciliation path and does not by
   itself authorize end-to-end live operation.
+
+## ADR-0013: PBRSDK-12 Owner-Scoped Mutation Intent Registry
+
+Decision:
+
+```text
+Place a synchronous, consumer-supplied persistence boundary in front of every
+approved live mutation entry. Atomically issue an owner/chain intent epoch
+before nonce, signing, or HTTP, fence every later write with epoch/revision
+CAS, and reopen the scope only after bound terminal evidence or later
+authoritative reconciliation.
+```
+
+`MutationIntentStore` is synchronous to avoid a new async-trait dependency.
+Its implementation must be fast local storage; a consumer using blocking I/O
+must isolate that work behind its blocking boundary. `try_begin` performs the
+unresolved check and generation issuance in one DB transaction/CAS or, for the
+provided development implementation, one `Mutex` critical section. The store,
+not the caller, ignores template generations and assigns epoch zero initially
+or the prior resolved epoch plus one. Overflow fails closed. `update` compares
+owner, chain, epoch, and revision, ignores the candidate revision, and assigns
+`expected_revision + 1`; stale writers receive `false` and cannot overwrite a
+newer or terminal state.
+
+The persisted statuses are Preparing, Submitted, AmbiguousNoId, Confirmed,
+Failed, and Reconciled. Preparing, Submitted, and AmbiguousNoId are unresolved
+and block a second lease for the same owner and chain. Confirmed, Failed, and
+Reconciled admit a new generation. Different owners or chains are independent.
+Every successful write preserves `created_at_unix` and refreshes
+`updated_at_unix` from `RelayerClock`.
+
+`MutationIntentRecord` deliberately has no raw signature, auth header, private
+key, calldata, or replayable submit-body field. It stores only the scope,
+versions, operation/status, optional decimal nonce, payload keccak, saturated
+deadline seconds, transaction id, safe observed-state label, and timestamps.
+Serialization retains the owner and transaction id so a durable store can
+round-trip and reconcile identity. Manual Debug redacts the owner and hashes
+the transaction id.
+
+`InMemoryMutationIntentStore` is test/development-only. It loses the owner
+block on process restart and therefore cannot protect live traffic. The crash
+acceptance contract is met through the public durable-store boundary: a
+durable implementation restores the unresolved row and a new registry rejects
+mutation after restart. PBRSDK-24/25 live gates require durable wiring and
+restart evidence before this layer may protect live execution.
+
+`MutationIntentLease` holds the store-issued epoch and current revision. It
+records a payload only while Preparing, a transaction id only on the single
+Preparing-to-Submitted transition, transaction-bound pending/Confirmed
+receipts only while Submitted, AmbiguousNoId only from Preparing, and a proven
+local pre-submit abandonment as Failed. The latter keeps
+`last_observed_state = None` to distinguish a local failure before submit from
+a relayer terminal state. Dropping the lease is intentionally a no-op: implicit
+release would turn a panic, cancellation, or crash into duplicate-submit
+authority. A CAS miss permanently poisons that lease and returns the fixed
+stale-lease error.
+
+Terminal polling integration is registry-level so it remains usable after
+restart without reconstructing a lease. `record_poll_outcome` applies only to
+a Submitted row whose stored transaction id equals the explicitly supplied
+poll target. A Confirmed variant is trusted only when the receipt repeats that
+id and its state is actually Confirmed. Exhausted records only a present state
+label and stays Submitted; Cancelled records nothing. `record_terminal_failure`
+resolves only a matching Submitted row and only for `TransactionFailed` or
+`TransactionInvalid`. Mismatched or delayed observations are no-ops. Unknown,
+ambiguous, and reconciliation-required errors keep the owner locked for
+PBRSDK-13.
+
+`OwnerMutationRegistry::gate` returns `IntentGatedClient`, whose three methods
+wrap the unchanged existing execute, create-submit, and deployment lifecycle
+methods. DryRun delegates without a lease. Live execution writes Preparing
+before the opaque primitive can fetch a nonce, sign, or send HTTP. A submitted
+receipt records payload hash and then transaction id. Reconciliation-required
+errors and every `Api` error become AmbiguousNoId; this deliberately
+over-blocks nonce/deployed GET 429/5xx because the current opaque primitive
+cannot distinguish read phase from a POST that may have been accepted. Other
+errors become the local pre-submit Failed representation. PBRSDK-13 may add
+internal phase provenance, but this round never guesses that a failed API call
+was safe to retry.
+
+The deployment wrapper performs one extra deployed read before deciding
+whether a lease is appropriate. AlreadyDeployed, Predeployed, absent mutation
+authority, and DryRun do not create owner history. A missing wallet with
+DeployIfMissing and a Live permit begins the lease, then delegates to the
+unchanged lifecycle, whose own preflight accounts for the intentional second
+read. If that second read observes deployment, the lease is abandoned as a
+local pre-submit Failed record.
+
+Intent begin is write-ahead, while payload and transaction progress are
+recorded after the primitive returns. If the post-submit store update errors or
+loses CAS, the error is propagated without the raw transaction id and the
+persisted Preparing row remains unresolved. This fail-closed lock is safer than
+claiming the transaction was absent. There is no automatic resubmission,
+automatic reconciliation, Reconciled transition API, recent-transactions
+lookup, file/DB implementation, or lease release on Drop in PBRSDK-12. The
+public nonce field remains `None` because the unchanged opaque primitive does
+not expose the fetched nonce; a later internal provenance hook may fill it.
+
+Consequences:
+
+- the explicit public surface adds `MutationIntentStore`, `TryBeginOutcome`,
+  `InMemoryMutationIntentStore`, `MutationIntentRecord`,
+  `MutationIntentStatus`, `OwnerMutationRegistry`, `MutationIntentLease`, and
+  `IntentGatedClient` through the HTTP, deposit-wallet, and crate-root exports;
+- existing `DepositWalletRelayerClient` methods and the source files that own
+  them are unchanged; live consumer policy now requires the registry wrapper,
+  while later live gates enforce durable-store wiring;
+- the combined production source contains the two original permit-bound
+  submit primitives plus one intent-gated submit wrapper, and matching
+  primitive/wrapper pairs for execute and deployment lifecycle;
+- deterministic in-memory, injected-clock, serialization, loopback,
+  disconnect, and 5xx tests prove lifecycle, owner/chain isolation,
+  transaction binding, restart recovery through a shared store, fencing,
+  overflow, conservative error mapping, DryRun no-lease behavior, and
+  secret-free state;
+- this layer blocks duplicate entry but does not complete ambiguous recovery,
+  durable database qualification, consumer actor queuing, or end-to-end live
+  readiness.

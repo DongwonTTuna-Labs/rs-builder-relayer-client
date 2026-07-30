@@ -34,9 +34,11 @@ pub use deposit_wallet::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletDryRunEvidence,
     DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletRequestContext, DepositWalletSubmitReceipt, DepositWalletTransactionReceipt,
-    DryRunCallSummary, RelayerKeyAuth, RelayerMutationMode, RelayerMutationOperation,
-    RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy, RelayerReadPermit,
-    RelayerSubmitOutcome, RelayerSubmitResponse, RelayerTransactionState, WalletNonceRequest,
+    DryRunCallSummary, InMemoryMutationIntentStore, IntentGatedClient, MutationIntentLease,
+    MutationIntentRecord, MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry,
+    RelayerKeyAuth, RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit,
+    RelayerPollOutcome, RelayerPollPolicy, RelayerReadPermit, RelayerSubmitOutcome,
+    RelayerSubmitResponse, RelayerTransactionState, TryBeginOutcome, WalletNonceRequest,
 };
 pub use error::{RelayerError, Result};
 pub use operations::{

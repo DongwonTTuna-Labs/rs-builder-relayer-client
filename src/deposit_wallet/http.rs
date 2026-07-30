@@ -41,6 +41,7 @@ mod capability;
 mod clock;
 mod deployed;
 mod execute;
+mod intent;
 mod lifecycle;
 mod mutation;
 mod polling;
@@ -53,6 +54,11 @@ mod url;
 
 pub use auth::RelayerKeyAuth;
 pub use capability::RelayerReadPermit;
+pub use intent::{
+    InMemoryMutationIntentStore, IntentGatedClient, MutationIntentLease,
+    MutationIntentRecord, MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry,
+    TryBeginOutcome,
+};
 pub use lifecycle::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletReadiness,
 };

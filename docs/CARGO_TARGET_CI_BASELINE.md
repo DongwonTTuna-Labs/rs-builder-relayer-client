@@ -120,6 +120,29 @@ internal accept timeout, so the CI or command runner remains the hang guard.
 This audit does not authorize live mutation or treat exhaustion/cancellation as
 resubmit authority.
 
+PBRSDK-12 adds no Cargo target or dependency. It adds the public synchronous
+`MutationIntentStore` boundary, `TryBeginOutcome`, the test/development-only
+`InMemoryMutationIntentStore`, record/status, registry/lease, and
+`IntentGatedClient` in the existing HTTP module. Existing `submit.rs`,
+`execute.rs`, and `lifecycle.rs` method counts remain two, one, and two. The
+combined production-source audit now expects three public `submit_*`
+signatures (two permit-bound primitives plus one intent-gated wrapper), two
+`execute_wallet_batch` signatures, and two
+`ensure_deposit_wallet_deployment` signatures; every wrapper retains the
+reviewed permit arguments.
+
+PBRSDK-12 tests remain unit tests in `src/deposit_wallet/http/tests.rs`. They
+reuse the existing loopback transport and injected clocks and add no fixture,
+example, integration target, live host call, file store, DB harness, or
+credential. The boundary audit fixes the eight public types, synchronous
+atomic begin/versioned update methods, transaction-bound poll/failure
+signatures, explicit re-exports, and unchanged primitive method counts. Local
+evidence additionally requires warning-free rustdoc with
+`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`.
+The in-memory restart test reconstructs a registry over the same process-local
+store; it does not qualify persistence. Live use remains blocked until a
+consumer durable store passes the PBRSDK-24/25 restart gate.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -139,4 +162,7 @@ Implementation and review packets should include:
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,
 - confirmation that PBRSDK-2 source matrix and fixture provenance files remain
-  present and live behavior remains gated.
+  present and live behavior remains gated,
+- confirmation that live intent wiring uses a durable transactional/CAS store,
+  never `InMemoryMutationIntentStore`, and that ambiguous/unknown state has no
+  automatic resubmit or implicit lease release.

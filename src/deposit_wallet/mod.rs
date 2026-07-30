@@ -24,8 +24,10 @@ pub use http::{
     DepositWalletDeploymentPolicy, DepositWalletDeploymentStatus, DepositWalletDryRunEvidence,
     DepositWalletReadiness, DepositWalletRelayerClient, DepositWalletRelayerUrl,
     DepositWalletSubmitReceipt, DepositWalletTransactionReceipt, DryRunCallSummary, RelayerKeyAuth,
-    RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerReadPermit,
-    RelayerPollOutcome, RelayerPollPolicy, RelayerSubmitOutcome,
+    InMemoryMutationIntentStore, IntentGatedClient, MutationIntentLease, MutationIntentRecord,
+    MutationIntentStatus, MutationIntentStore, OwnerMutationRegistry, RelayerMutationMode,
+    RelayerMutationOperation, RelayerMutationPermit, RelayerPollOutcome, RelayerPollPolicy,
+    RelayerReadPermit, RelayerSubmitOutcome, TryBeginOutcome,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

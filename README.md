@@ -19,13 +19,20 @@ work, use the reviewed fallible APIs such as
 `RelayerKeyAuth`, `RelayerMutationPermit`, `RelayerMutationMode`,
 `RelayerMutationOperation`, `RelayerSubmitOutcome`,
 `DepositWalletDryRunEvidence`, `DryRunCallSummary`,
-`DepositWalletSubmitReceipt`, and the documented request/response types
-re-exported from `polymarket_relayer`.
+`DepositWalletSubmitReceipt`, `MutationIntentStore`,
+`InMemoryMutationIntentStore`, `MutationIntentRecord`,
+`MutationIntentStatus`, `TryBeginOutcome`, `OwnerMutationRegistry`,
+`MutationIntentLease`, `IntentGatedClient`, and the documented
+request/response types re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
 two bounded transaction-polling methods, two deployment-lifecycle methods, one
-fresh-nonce WALLET batch execution method, and exactly two explicitly gated
-public `submit_*` methods.
+fresh-nonce WALLET batch execution method, and exactly two permit-gated
+primitive `submit_*` methods. PBRSDK-12 adds three additive methods on
+`IntentGatedClient`: an execute wrapper, a WALLET-CREATE submit wrapper, and a
+deployment-lifecycle wrapper. Existing client methods and signatures remain
+unchanged for compatibility; live consumers must enter mutation through
+`OwnerMutationRegistry::gate`.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, both polling methods, and both lifecycle methods.
@@ -64,14 +71,20 @@ This mutation surface is a permit and transport gate, not a claim of complete
 deposit-wallet live readiness. A successful deployed read records deployment
 fact only, and a submit receipt records relayer acceptance evidence rather than
 `STATE_CONFIRMED`. PBRSDK-8 adds confirmed-only single-shot readiness and
-PBRSDK-9 adds fresh-nonce batch execution, and PBRSDK-10 adds bounded
-confirmed-only polling. Owner-scoped nonce leases and pending-intent
-enforcement, persistent idempotency/reconciliation, recent-transaction
-recovery, and the remaining operator gates are later work. Preserve each
-submitted transaction id and payload hash, never re-enter deployment for an
-owner with a pending create after polling exhaustion/cancellation/error, and do
-not execute concurrent batches for the same owner until the later lease
-contract is implemented.
+PBRSDK-9 adds fresh-nonce batch execution, PBRSDK-10 adds bounded
+confirmed-only polling, and PBRSDK-12 adds owner- and chain-scoped mutation
+intents around live fetch/sign/submit entry. An unresolved Preparing,
+Submitted, or AmbiguousNoId record rejects a second mutation before nonce or
+HTTP work. Confirmed and bound terminal failures reopen the scope; unknown or
+ambiguous evidence keeps it blocked. DryRun never creates a lease.
+
+`InMemoryMutationIntentStore` is process-local and test/development-only. It is
+not safe for live use because restart loses the owner block. Live consumers
+must provide a durable transactional/CAS `MutationIntentStore`, retain records
+across restart, and feed bounded poll outcomes or bound terminal failures back
+to the registry. Dropping a lease does nothing by design. Automatic ambiguous
+reconciliation, recent-transaction recovery, automatic resubmission, and the
+remaining PBRSDK-13/PBRSDK-24/25 operator gates are still absent.
 
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the

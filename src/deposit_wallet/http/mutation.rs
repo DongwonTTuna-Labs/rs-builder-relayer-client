@@ -2,7 +2,7 @@ use std::fmt;
 
 use ethers::types::Address;
 use ethers::utils::{keccak256, to_checksum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::redaction::{
     redacted_address, sanitized_external_token, unknown_state_error_summary,
@@ -24,7 +24,7 @@ pub enum RelayerMutationMode {
     Live,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RelayerMutationOperation {
     WalletCreate,
     WalletBatch,
