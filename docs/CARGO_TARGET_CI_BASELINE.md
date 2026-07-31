@@ -200,7 +200,32 @@ module with no `reqwest`, public async function, or `Deserialize`. Canonical
 Polygon configuration is source-backed and wire-truth-bound, strict subsets
 remain strict, and the adapter allowlist remains empty pending PBRSDK-19.
 
-This audit is offline only. It does not authorize live relayer mutation, CLOB
+PBRSDK-18 adds no Cargo target, dependency, feature, example, manifest entry,
+or HTTP module change. Production code adds only
+`src/deposit_wallet/calldata/amount.rs` and `approval.rs`, their private module
+declarations and explicit re-exports, and three additive crate-root exports.
+Tests remain module-local plus the existing `public_api_boundary_test` and
+`source_matrix_test` targets. No mock venue, network call, environment/file
+loader, credential, funded wallet, live host, or bespoke test harness is added.
+
+The two new flat JSON fixtures are
+`calldata_pusd_approval_call.json` and
+`calldata_ctf_approval_for_all_call.json` under the existing non-recursive
+deposit-wallet fixture directory. Their provenance is recorded in the existing
+ledger. Tests pin the recorded pUSD MAX call, supplied argument propagation,
+finite amount preservation, both golden fixtures, outsider/zero/subset
+allowlist failures, CTF revocation, unit conversion/serialization, and the
+builder's defense-in-depth zero guard.
+
+The PBRSDK-18 boundary audit pins `PusdAmount`, both builder signatures, their
+private module/explicit re-export shape, the exact private base-unit field, and
+all three crate-root exports. The combined calldata source remains synchronous,
+contains no runtime deserialization or HTTP path, and cannot reference legacy
+`crate::operations` or `crate::contracts`. The source-matrix target now requires
+the three PBRSDK-17 calldata truth rows plus
+`SM-CALLDATA-APPROVAL-ENCODING`.
+
+These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
 
@@ -218,6 +243,8 @@ Implementation and review packets should include:
 - match-zero output for wildcard re-exports, deposit-wallet debug printing,
   and production/calldata `allow(` attributes,
 - PBRSDK-17 source-matrix rows and calldata config boundary-test output,
+- PBRSDK-18 approval fixture, unit/allowlist, private-field, and
+  `SM-CALLDATA-APPROVAL-ENCODING` evidence,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,

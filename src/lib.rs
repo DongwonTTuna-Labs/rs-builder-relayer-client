@@ -27,8 +27,9 @@ pub use auth::{AuthMethod, BuilderConfig};
 pub use client::{RelayClient, TransactionResponseHandle};
 pub use direct::{DirectExecutor, DirectTxResult};
 pub use deposit_wallet::calldata::{
-    polygon_calldata_config, CalldataConfigInput, CalldataSourceRef,
-    DepositWalletCalldataConfig, SourcedAddress,
+    build_ctf_approval_for_all_call, build_pusd_approval_call, polygon_calldata_config,
+    CalldataConfigInput, CalldataSourceRef, DepositWalletCalldataConfig, PusdAmount,
+    SourcedAddress,
 };
 #[allow(deprecated)]
 pub use deposit_wallet::{

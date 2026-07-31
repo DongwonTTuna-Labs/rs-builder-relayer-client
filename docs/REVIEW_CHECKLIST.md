@@ -79,9 +79,23 @@
 - [ ] The adapter allowlist is empty until PBRSDK-19 verifies a deposit-wallet adapter route.
 - [ ] Source text enforces trim/non-empty, byte bounds, no control characters, and HTTPS-only URLs.
 - [ ] Config types expose `Serialize` but no `Deserialize`, environment loader, or file loader.
-- [ ] The calldata module is synchronous, contains no HTTP dependency, and explicitly re-exports the four types and canonical constructor.
+- [ ] The PBRSDK-17 config surface remains synchronous, contains no HTTP dependency, and explicitly re-exports its four types and canonical constructor.
 - [ ] Crate-root exports and every reviewed constructor/getter/helper signature are pinned by `tests/public_api_boundary_test.rs`.
-- [ ] No calldata encoder, ABI, selector, HTTP submit path, or live-capable behavior is added in PBRSDK-17.
+- [ ] The PBRSDK-17 portion remains config-only; PBRSDK-18 approval encoding is reviewed under its separate checklist below.
+
+## Approval Calldata Builders (PBRSDK-18)
+
+- [ ] `PusdAmount` has exactly one private `U256` base-unit field; raw integers cannot be passed directly to the pUSD builder.
+- [ ] Base-unit and whole-pUSD constructors reject zero, every `u64` whole amount converts exactly through `u128`, and `unlimited()` is documented as representation rather than policy.
+- [ ] Manual `Serialize` and `Debug` expose decimal-string `base_units` plus `decimals = 6`, not default `U256` hex.
+- [ ] pUSD and CTF targets come only from the supplied `DepositWalletCalldataConfig`; call value is zero and no hidden/global default is used.
+- [ ] Local selectors are exactly `0x095ea7b3` and `0xa22cb465`, and ABI argument words reflect the supplied spender, amount, operator, and boolean.
+- [ ] pUSD spender and CTF operator checks use the supplied config, including strict-subset rejection; well-formed outsiders and zero addresses fail distinctly.
+- [ ] The pUSD builder independently rejects a test-only unchecked zero amount, proving defense in depth beyond constructors.
+- [ ] The pUSD MAX call is byte-identical to the recorded local WALLET call, and both flat fixtures are covered by the provenance audit and `SM-CALLDATA-APPROVAL-ENCODING`.
+- [ ] CTF `approved = false` is supported as allowlisted revocation and encodes an all-zero boolean word.
+- [ ] `amount` and `approval` remain private synchronous modules with explicit exports and no `Deserialize`, HTTP, `crate::operations`, or `crate::contracts` path.
+- [ ] No split/merge/redeem, adapter route, batch composition, signing, submit path, dependency, or live-capability claim is included.
 
 ## Consumer Integration
 

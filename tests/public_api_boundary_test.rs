@@ -68,15 +68,85 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         .expect("deposit_wallet module is readable");
     let calldata_module = fs::read_to_string("src/deposit_wallet/calldata/mod.rs")
         .expect("calldata module is readable");
+    let amount = fs::read_to_string("src/deposit_wallet/calldata/amount.rs")
+        .expect("calldata amount source is readable");
+    let approval = fs::read_to_string("src/deposit_wallet/calldata/approval.rs")
+        .expect("calldata approval source is readable");
     let config = fs::read_to_string("src/deposit_wallet/calldata/config.rs")
         .expect("calldata config source is readable");
-    let calldata_src = format!("{calldata_module}\n{config}");
+    let calldata_src = format!("{calldata_module}\n{amount}\n{approval}\n{config}");
 
     assert_no_wildcard_reexports("src/deposit_wallet/calldata/mod.rs", &calldata_module);
     assert!(
         deposit_wallet.contains("pub mod calldata;"),
         "deposit_wallet must expose the reviewed calldata module"
     );
+    assert!(
+        calldata_module.contains("mod amount;")
+            && calldata_module.contains("mod approval;")
+            && !calldata_module.contains("pub mod amount;")
+            && !calldata_module.contains("pub mod approval;"),
+        "calldata implementations must remain private modules"
+    );
+    assert!(
+        calldata_module.contains("pub use amount::PusdAmount;")
+            && calldata_module.contains(
+                "pub use approval::{build_ctf_approval_for_all_call, build_pusd_approval_call};"
+            ),
+        "calldata module must explicitly re-export the reviewed PBRSDK-18 surface"
+    );
+    assert!(
+        amount.contains("pub struct PusdAmount {\n    base_units: U256,\n}"),
+        "PusdAmount must keep the exact reviewed private base-unit field shape"
+    );
+    assert!(
+        amount.contains(
+            "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]\npub struct PusdAmount"
+        ),
+        "PusdAmount must retain the reviewed value semantics without derived Debug or Serialize"
+    );
+
+    for signature in [
+        "pub fn from_base_units(base_units: U256) -> Result<Self>",
+        "pub fn from_whole_pusd(whole: u64) -> Result<Self>",
+        "pub fn unlimited() -> Self",
+        "pub fn base_units(&self) -> U256",
+        "pub fn decimals(&self) -> u8",
+        "pub fn is_unlimited(&self) -> bool",
+    ] {
+        assert!(
+            amount.contains(signature),
+            "pUSD amount surface is missing signature {signature:?}"
+        );
+    }
+
+    let pusd_builder = function_signatures(&approval, "pub fn build_pusd_approval_call");
+    assert_eq!(pusd_builder.len(), 1);
+    for required in [
+        "config: &DepositWalletCalldataConfig",
+        "spender: Address",
+        "amount: PusdAmount",
+        "Result<DepositWalletCall>",
+    ] {
+        assert!(
+            pusd_builder[0].contains(required),
+            "pUSD approval builder signature is missing {required:?}"
+        );
+    }
+    let ctf_builder =
+        function_signatures(&approval, "pub fn build_ctf_approval_for_all_call");
+    assert_eq!(ctf_builder.len(), 1);
+    for required in [
+        "config: &DepositWalletCalldataConfig",
+        "operator: Address",
+        "approved: bool",
+        "Result<DepositWalletCall>",
+    ] {
+        assert!(
+            ctf_builder[0].contains(required),
+            "CTF approval builder signature is missing {required:?}"
+        );
+    }
 
     for type_name in [
         "CalldataConfigInput",
@@ -191,7 +261,10 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         "CalldataConfigInput",
         "CalldataSourceRef",
         "DepositWalletCalldataConfig",
+        "PusdAmount",
         "SourcedAddress",
+        "build_ctf_approval_for_all_call",
+        "build_pusd_approval_call",
         "polygon_calldata_config",
     ] {
         assert!(
@@ -203,18 +276,48 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
     let _f: fn() -> polymarket_relayer::Result<
         polymarket_relayer::DepositWalletCalldataConfig,
     > = polymarket_relayer::polygon_calldata_config;
+    let _pusd: fn(
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        ethers::types::Address,
+        polymarket_relayer::PusdAmount,
+    ) -> polymarket_relayer::Result<polymarket_relayer::DepositWalletCall> =
+        polymarket_relayer::build_pusd_approval_call;
+    let _ctf: fn(
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        ethers::types::Address,
+        bool,
+    ) -> polymarket_relayer::Result<polymarket_relayer::DepositWalletCall> =
+        polymarket_relayer::build_ctf_approval_for_all_call;
+    let amount = polymarket_relayer::PusdAmount::unlimited();
+    assert_eq!(amount.decimals(), 6);
 
     assert!(
         !calldata_src.contains("reqwest"),
-        "calldata config must not depend on HTTP"
+        "calldata modules must not depend on HTTP"
     );
     assert!(
         !calldata_src.contains("pub async fn"),
-        "calldata config must remain synchronous"
+        "calldata modules must remain synchronous"
     );
     assert!(
         !calldata_src.contains("Deserialize"),
-        "calldata config must not create a runtime deserialization path"
+        "calldata modules must not create a runtime deserialization path"
+    );
+    assert!(
+        !calldata_src.contains("crate::operations")
+            && !calldata_src.contains("crate::contracts"),
+        "calldata approval builders must not reuse legacy operations or contract defaults"
+    );
+}
+
+#[test]
+fn calldata_amount_keeps_base_units_private() {
+    let amount = fs::read_to_string("src/deposit_wallet/calldata/amount.rs")
+        .expect("calldata amount source is readable");
+
+    assert!(
+        amount.contains("pub struct PusdAmount {\n    base_units: U256,\n}"),
+        "PusdAmount must keep the exact reviewed private base-unit field shape"
     );
 }
 

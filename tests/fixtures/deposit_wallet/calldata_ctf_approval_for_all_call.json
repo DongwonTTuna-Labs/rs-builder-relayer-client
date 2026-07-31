@@ -1,0 +1,9 @@
+{
+  "target": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+  "value": "0",
+  "data": "0xa22cb465000000000000000000000000e111180000d2663c0091e4f400237545b87b996b0000000000000000000000000000000000000000000000000000000000000001",
+  "selector": "0xa22cb465",
+  "operator": "0xE111180000d2663C0091e4f400237545B87B996B",
+  "approved": true,
+  "source": "ERC-1155 setApprovalForAll(address,bool) standard selector; addresses from PBRSDK-17 wire truth (Polymarket deposit-wallet docs and pinned Rust CLOB SDK)."
+}
