@@ -114,8 +114,20 @@ mutation_audit_artifact_sanitizes_unknown_labels_at_write_and_export_boundaries
 public_observability_debug_and_artifact_json_omit_all_secret_sentinels
 failure_displays_apply_the_same_secret_redaction_contract
 mutation_intent_tracing_is_structured_complete_and_redacted
-pusd_adapter_approval_calldata_matches_fixture
-pusd_adapter_merge_redeem_calldata_matches_fixture
+pusd_approval_call_matches_recorded_batch_call
+approval_calls_encode_supplied_spender_operator_and_amount
+pusd_amount_round_trips_finite_base_units_into_calldata
+pusd_approval_call_matches_fixture
+ctf_approval_for_all_call_matches_fixture
+approval_builders_reject_addresses_outside_verified_allowlists
+approval_builders_reject_zero_address_targets
+pusd_approval_respects_narrowed_config_allowlist
+ctf_approval_respects_narrowed_config_allowlist
+ctf_approval_for_all_encodes_revocation
+pusd_amount_rejects_zero_and_converts_whole_units
+pusd_amount_serializes_decimal_base_units_with_decimals
+pusd_approval_call_rejects_zero_amount_from_unchecked_construction
+calldata_amount_keeps_base_units_private
 relayer_auth_address_not_used_as_owner_implicitly
 ambiguous_submit_timeout_does_not_duplicate_submit
 idless_submit_timeout_blocks_owner_until_manual_reconcile
@@ -153,11 +165,10 @@ tests/fixtures/
     wallet_deployed_response_cases.json
     wallet_batch_eip712.json
     wallet_submit_body.json
+    calldata_pusd_approval_call.json
+    calldata_ctf_approval_for_all_call.json
   relayer/
     transaction_states.json
-  operations/
-    pusd_approval_calldata.json
-    merge_redeem_calldata.json
 ```
 
 ## Golden Test Scope
@@ -393,12 +404,13 @@ tests require checksum addresses and source metadata. The config types derive
 `Serialize` only and must not expose `Deserialize`, environment loading, or file
 loading.
 
-`tests/public_api_boundary_test.rs` pins all four public types, every reviewed
-constructor/getter/helper signature, the five crate-root exports, and the
-canonical constructor function type. It also rejects `reqwest` and public async
-functions anywhere in the calldata module. These are local config and source
-audits only: PBRSDK-17 adds no HTTP test, fixture, calldata encoding, selector,
-ABI, adapter route, or live request.
+`tests/public_api_boundary_test.rs` pins all four config types, every reviewed
+config constructor/getter/helper signature, the five PBRSDK-17 crate-root
+exports, and the canonical constructor function type. It also rejects
+`reqwest` and public async functions anywhere in the calldata module. The
+PBRSDK-17 portion remains a local config/source audit with no HTTP test or
+encoding; PBRSDK-18 adds the separately gated approval encoding below. Neither
+round adds an adapter route or live request.
 
 The required source hygiene checks remain match-zero gates:
 
@@ -407,6 +419,44 @@ grep -rn "pub use .*::\*" src/
 grep -rn "dbg!\|println!" src/deposit_wallet/
 grep -rn "allow(" src/deposit_wallet/http.rs src/deposit_wallet/http/ src/deposit_wallet/calldata/ --include=*.rs | grep -v "http/tests.rs"
 ```
+
+## PBRSDK-18 Approval Calldata Gate
+
+The module-local amount and approval tests named in the required list above are
+mandatory. They must prove all of the following:
+
+- the pUSD `uint256::MAX` call is target/value/data byte-identical to the
+  recorded local `wallet_submit_body.json` call;
+- a different verified spender, finite one-pUSD amount, and different verified
+  CTF operator appear in their exact ABI words, preventing fixed-payload
+  implementations;
+- finite base units survive `PusdAmount` construction and builder encoding
+  unchanged;
+- both flat fixtures match the serialized `target`, decimal-string `value`, and
+  hex `data`, while selector, address, boolean, amount, decimals, and unit
+  metadata are checked independently;
+- well-formed outsider and zero addresses fail, and a caller-supplied narrowed
+  config remains authoritative for each builder;
+- zero amount constructors fail, every `u64` whole-pUSD value converts through
+  `u128`, manual JSON/Debug use decimal base units and decimals, and a test-only
+  invariant bypass proves the builder's independent zero guard;
+- CTF `approved = false` encodes a zero boolean word without bypassing the
+  operator allowlist.
+
+`tests/public_api_boundary_test.rs` additionally pins the three additive
+crate-root exports and exact builder signatures, requires private `amount` and
+`approval` modules with explicit re-exports, and fixes the exact private
+`PusdAmount` field declaration through
+`calldata_amount_keeps_base_units_private`. The combined calldata source must
+remain synchronous and free of HTTP/runtime deserialization paths and
+`crate::operations` / `crate::contracts` references.
+
+The source matrix must require `SM-CALLDATA-PUSD-ADDR`,
+`SM-CALLDATA-CTF-EXCHANGES`, `SM-CALLDATA-PUSD-DECIMALS`, and
+`SM-CALLDATA-APPROVAL-ENCODING`; the non-recursive provenance audit must cover
+both new flat fixtures. This gate authorizes offline call construction only. It
+does not authorize split/merge/redeem, adapter routing, batch composition,
+signing, HTTP submission, or live execution.
 
 ## Manual Live Gate
 

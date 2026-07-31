@@ -816,3 +816,53 @@ This change adds source-backed configuration only. It does not encode calldata,
 select ABI methods, submit a wallet batch, change the HTTP layer, or authorize
 live execution. Consumers can roll back by ceasing to import the additive
 config surface; existing public APIs and request paths remain unchanged.
+
+## ADR-0017: PBRSDK-18 Unit-Safe pUSD And CTF Approval Calldata
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+pUSD approval amounts use the public `PusdAmount` newtype rather than a raw
+integer. Its sole `U256` base-unit field is private, and its fallible base-unit
+and whole-pUSD constructors reject zero. Whole pUSD is converted through
+`u128` at six decimals, which exactly accommodates every `u64` input without an
+unreachable overflow branch. `unlimited()` is a separate explicit constructor
+for `uint256::MAX`; it is only a representation and does not choose an
+unlimited-approval policy. Manual `Serialize` and `Debug` implementations emit
+decimal-string `base_units` plus `decimals = 6`, avoiding the ambiguous default
+hex-only `U256` representation.
+
+The pUSD builder encodes local selector `0x095ea7b3` followed by ABI
+`address,uint256`; the CTF builder encodes local selector `0xa22cb465` followed
+by ABI `address,bool`. Targets always come from the supplied
+`DepositWalletCalldataConfig`, and call value is always zero. A supplied zero
+spender/operator is rejected distinctly before the allowlist check. Every
+well-formed non-zero address must then be present in the supplied config's pUSD
+spender or CTF operator allowlist, including when a consumer chooses a strict
+subset. The pUSD builder also rechecks for a zero base-unit amount even though
+normal `PusdAmount` construction prevents it. CTF `approved = false` remains a
+valid revocation call and receives the same operator allowlist check.
+
+The legacy `operations::approve` and `contracts` defaults are not reused. They
+are Safe/Proxy-era USDC.e/global-address helpers and do not establish the pUSD
+target, the caller's narrowed allowlist, or the pUSD unit invariant required by
+this flow. The new approval module therefore owns its two reviewed selector
+constants and uses only PBRSDK-17 config getters plus standard ABI encoding.
+
+Two flat deposit-wallet fixtures pin selector, argument order, target, zero
+value, and metadata. The pUSD `uint256::MAX` fixture is byte-identical to the
+recorded local call in `wallet_submit_body.json`. Additional tests decompose a
+different verified spender, finite amount, and different verified CTF operator
+word-by-word so a hard-coded recorded payload cannot pass. Negative tests cover
+attacker-looking addresses, zero addresses, strict-subset configs, zero amount
+construction bypass, and CTF revocation. `SM-CALLDATA-APPROVAL-ENCODING`
+records this offline wire boundary and the fixture provenance ledger records
+both new fixtures.
+
+This is an additive pure builder API. It does not add split, merge, redeem,
+adapter routing, batch composition, nonce fetching, signing, HTTP submission,
+or a live-execution claim. Consumers can roll back by ceasing to import the
+three new crate-root symbols; existing public signatures and request paths are
+unchanged. Residual risks remain the separately recorded lack of a
+pUSD-specific official decimals document and the future policy choice around
+unlimited approvals. PBRSDK-19/PBRSDK-20 and later live gates must resolve
+their own route, composition, authorization, and rollback requirements.

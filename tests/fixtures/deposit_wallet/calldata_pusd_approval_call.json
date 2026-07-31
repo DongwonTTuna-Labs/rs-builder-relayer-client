@@ -1,0 +1,11 @@
+{
+  "target": "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
+  "value": "0",
+  "data": "0x095ea7b30000000000000000000000004d97dcd97ec945f40cf65f87097ace5ea0476045ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "selector": "0x095ea7b3",
+  "spender": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+  "amountBaseUnits": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+  "amountDecimals": 6,
+  "amountUnit": "pUSD",
+  "source": "ERC-20 approve(address,uint256) standard selector; addresses and decimals from PBRSDK-17 wire truth (Polymarket deposit-wallet docs and pinned Rust CLOB SDK); calldata byte-matched against the recorded wallet_submit_body.json call."
+}

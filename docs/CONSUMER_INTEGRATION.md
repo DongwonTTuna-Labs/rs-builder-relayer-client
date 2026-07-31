@@ -82,6 +82,9 @@ CalldataSourceRef
 DepositWalletCalldataConfig
 SourcedAddress
 polygon_calldata_config
+PusdAmount
+build_pusd_approval_call
+build_ctf_approval_for_all_call
 RelayerMutationPermit
 RelayerMutationMode
 RelayerMutationOperation
@@ -162,9 +165,9 @@ grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_requ
 
 ### Verified calldata configuration (PBRSDK-17)
 
-The future calldata builders must receive a validated config rather than raw
-contract targets or global defaults. Normal Polygon consumers should use the
-canonical constructor and inspect only its getters:
+Calldata builders receive a validated config rather than raw contract targets
+or global defaults. Normal Polygon consumers should use the canonical
+constructor and inspect only its getters:
 
 ```rust
 use ethers::types::Address;
@@ -188,9 +191,43 @@ reviewed extension. It is not validated until
 `DepositWalletCalldataConfig::try_new` succeeds and must not cross the consumer
 adapter into domain, strategy, risk, or actor state. PBRSDK-17 supports only
 Polygon `137`, preserves strict allowlist subsets, and exposes an empty adapter
-allowlist. It performs no ABI encoding or HTTP work; PBRSDK-18/PBRSDK-19 own
-those later gates. Config serialization is for offline review only. There is no
-`Deserialize`, environment, or file-loading path.
+allowlist. The PBRSDK-17 config boundary itself performs no ABI encoding or HTTP
+work. PBRSDK-18 supplies the approval encoders described below, while PBRSDK-19
+still owns adapter-route verification. Config serialization is for offline
+review only. There is no `Deserialize`, environment, or file-loading path.
+
+### Unit-safe approval calldata builders (PBRSDK-18)
+
+Construct pUSD amounts through `PusdAmount`; the builders do not accept a raw
+`u64` or `U256`. Both calls use the target and narrowed allowlist from the
+specific config passed by the caller:
+
+```rust
+use ethers::types::Address;
+use polymarket_relayer::{
+    build_ctf_approval_for_all_call, build_pusd_approval_call,
+    polygon_calldata_config, DepositWalletCall, PusdAmount, Result,
+};
+
+fn approval_calls(
+    pusd_spender: Address,
+    ctf_operator: Address,
+) -> Result<(DepositWalletCall, DepositWalletCall)> {
+    let config = polygon_calldata_config()?;
+    let amount = PusdAmount::from_whole_pusd(1)?;
+    let pusd = build_pusd_approval_call(&config, pusd_spender, amount)?;
+    let ctf = build_ctf_approval_for_all_call(&config, ctf_operator, true)?;
+
+    Ok((pusd, ctf))
+}
+```
+
+`PusdAmount::from_base_units` and `from_whole_pusd` reject zero.
+`PusdAmount::unlimited()` is an explicit representation of `uint256::MAX`, not
+an unlimited-approval policy decision. CTF approval revocation is expressed by
+passing `false`; the operator must still be in the supplied config's verified
+allowlist. These functions only return `DepositWalletCall` values. They do not
+compose a batch, fetch a nonce, sign, submit, or authorize live execution.
 
 ### HTTP client surface
 
