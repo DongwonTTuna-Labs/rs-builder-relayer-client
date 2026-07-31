@@ -144,6 +144,17 @@ ctf_builders_reject_zero_amount_from_unchecked_construction
 ctf_split_and_merge_reject_unlimited_amount
 neg_risk_redeem_accepts_duplicate_amounts
 calldata_position_keeps_base_units_private
+summary_exposes_only_review_metadata_and_preserves_order
+four_byte_data_does_not_become_replayable_selector_output
+every_builder_output_composes_into_an_ordered_batch_summary
+batch_summary_omits_full_calldata_full_targets_and_signatures
+wallet_batch_preflight_rejects_each_resource_limit_independently
+wallet_batch_preflight_rejects_wallet_chain_and_signer_mismatches
+narrowed_calldata_config_blocks_batch_composition_before_signing
+fixture_builder_output_is_compatible_with_wallet_submit_body
+summary_selector_boundary_omits_four_bytes_and_keeps_five_byte_routes
+summary_handles_empty_calldata_without_losing_exact_lengths
+summary_accepts_an_empty_batch_without_validation
 relayer_auth_address_not_used_as_owner_implicitly
 ambiguous_submit_timeout_does_not_duplicate_submit
 idless_submit_timeout_blocks_owner_until_manual_reconcile
@@ -525,6 +536,49 @@ deposit-wallet WALLET batch. This gate authorizes only individual offline
 `DepositWalletCall` construction; batch composition, position-id calculation,
 condition preparation, signing, HTTP, CLOB synchronization, and live execution
 remain outside scope.
+
+## PBRSDK-20 WALLET Batch Composition Gate
+
+The two module-local summary tests and all nine tests in
+`tests/calldata_batch_composition_test.rs` are mandatory. Together they must
+prove:
+
+- all six reviewed builder outputs expose fixture-matching target, value, and
+  data, compose in one ordered vector, and retain their route selector and
+  exact data length in the corresponding summary index;
+- call count, per-call data length, and total calldata bytes are exact, including
+  empty data, mixed empty/non-empty calls, and an empty batch;
+- serialized and Debug summaries contain the fixed redaction marker, redacted
+  targets, and no full target or full calldata;
+- exactly four bytes yields no selector and no payload bytes in JSON/Debug,
+  while five bytes retains only the first four-byte selector;
+- the existing public request builder independently rejects 257 calls and one
+  `1024 * 1024 + 1` byte call with distinct error substrings. The private
+  resource constants are neither imported nor asserted; the public preflight
+  behavior is the contract exercised here;
+- wrong derived wallet, Polygon/Amoy config mismatch, unsupported contract
+  config, and fixture `nonOwnerSignature` each fail before any submit path, with
+  the signer case specifically reporting `signer must match owner`;
+- a strict config excluding CTF from the pUSD spender subset prevents the
+  approval call and therefore prevents batch construction before signing;
+- the canonical builder approval plus the reviewed owner, nonce, deadline,
+  derived wallet, and synthetic signature passes the public WALLET request
+  builder, and serialized `depositWalletParams.calls[0]` matches the fixture in
+  all three fields.
+
+`tests/public_api_boundary_test.rs` must additionally pin the three crate-root
+exports, private `summary` module, exact private field blocks for both summary
+types, every getter/function signature, and the summary source in the combined
+synchronous/no-HTTP/no-Deserialize/no-legacy-reference audit. No fixture,
+provenance ledger, source-matrix row, dependency, feature, or wire truth is
+added by this gate.
+
+This gate does not claim deadline freshness from
+`try_build_wallet_batch_request_with_signature`; that function intentionally
+has no wall clock. Deadline freshness remains covered by the existing
+clock-injected `http/execute.rs` and `http/submit.rs` tests. PBRSDK-20 adds no
+signer, nonce fetch, HTTP call, live submit, actor orchestration, or live-
+readiness authority.
 
 ## Manual Live Gate
 

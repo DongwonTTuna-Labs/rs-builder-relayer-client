@@ -59,6 +59,9 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "build_merge_positions_call",
         "build_redeem_positions_call",
         "build_neg_risk_redeem_positions_call",
+        "summarize_batch_calls",
+        "BatchCallSummary",
+        "DepositWalletBatchSummary",
     ] {
         assert!(
             contains_identifier(&lib, required),
@@ -84,8 +87,11 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         .expect("calldata CTF source is readable");
     let position = fs::read_to_string("src/deposit_wallet/calldata/position.rs")
         .expect("calldata position source is readable");
-    let calldata_src =
-        format!("{calldata_module}\n{amount}\n{approval}\n{config}\n{ctf}\n{position}");
+    let summary = fs::read_to_string("src/deposit_wallet/calldata/summary.rs")
+        .expect("calldata summary source is readable");
+    let calldata_src = format!(
+        "{calldata_module}\n{amount}\n{approval}\n{config}\n{ctf}\n{position}\n{summary}"
+    );
 
     assert_no_wildcard_reexports("src/deposit_wallet/calldata/mod.rs", &calldata_module);
     assert!(
@@ -97,10 +103,12 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
             && calldata_module.contains("mod approval;")
             && calldata_module.contains("mod ctf;")
             && calldata_module.contains("mod position;")
+            && calldata_module.contains("mod summary;")
             && !calldata_module.contains("pub mod amount;")
             && !calldata_module.contains("pub mod approval;")
             && !calldata_module.contains("pub mod ctf;")
-            && !calldata_module.contains("pub mod position;"),
+            && !calldata_module.contains("pub mod position;")
+            && !calldata_module.contains("pub mod summary;"),
         "calldata implementations must remain private modules"
     );
     assert!(
@@ -118,6 +126,9 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         "build_split_position_call",
         "CtfRoute",
         "POLYGON_NEG_RISK_ADAPTER",
+        "summarize_batch_calls",
+        "BatchCallSummary",
+        "DepositWalletBatchSummary",
     ] {
         assert!(
             calldata_module.contains(required),
@@ -147,6 +158,26 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
     assert!(
         ctf.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]\npub enum CtfRoute"),
         "CtfRoute must enumerate only the reviewed serializable routes"
+    );
+    for type_name in ["BatchCallSummary", "DepositWalletBatchSummary"] {
+        assert!(
+            summary.contains(&format!(
+                "#[derive(Clone, Debug, PartialEq, Eq, Serialize)]\npub struct {type_name}"
+            )),
+            "{type_name} must retain the reviewed redacted value semantics"
+        );
+    }
+    assert!(
+        summary.contains(
+            "pub struct BatchCallSummary {\n    target: String,\n    value: String,\n    selector: Option<String>,\n    data_len: usize,\n}"
+        ),
+        "BatchCallSummary must keep exactly the reviewed private redacted fields"
+    );
+    assert!(
+        summary.contains(
+            "pub struct DepositWalletBatchSummary {\n    call_count: usize,\n    total_calldata_bytes: usize,\n    calls: Vec<BatchCallSummary>,\n    redaction: String,\n}"
+        ),
+        "DepositWalletBatchSummary must keep exactly the reviewed private redacted fields"
     );
     let route_block = enum_block(&ctf, "CtfRoute");
     let route_variants = route_block
@@ -324,6 +355,39 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         }
     }
 
+    for (type_name, fields) in [
+        (
+            "BatchCallSummary",
+            &["target", "value", "selector", "data_len"][..],
+        ),
+        (
+            "DepositWalletBatchSummary",
+            &[
+                "call_count",
+                "total_calldata_bytes",
+                "calls",
+                "redaction",
+            ][..],
+        ),
+    ] {
+        let block = struct_block(&summary, type_name);
+        for field in fields {
+            assert!(
+                block.contains(&format!("{field}:")),
+                "{type_name}::{field} must remain in the reviewed shape"
+            );
+            assert!(
+                !block.contains(&format!("pub {field}:"))
+                    && !block.contains(&format!("pub(crate) {field}:")),
+                "{type_name}::{field} must stay private"
+            );
+        }
+        assert!(
+            !block.contains("hash:"),
+            "{type_name} must not add a low-entropy calldata hash oracle"
+        );
+    }
+
     let input = struct_block(&config, "CalldataConfigInput");
     for field in [
         "chain_id",
@@ -367,6 +431,23 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         );
     }
 
+    for signature in [
+        "pub fn target(&self) -> &str",
+        "pub fn value(&self) -> &str",
+        "pub fn selector(&self) -> Option<&str>",
+        "pub fn data_len(&self) -> usize",
+        "pub fn call_count(&self) -> usize",
+        "pub fn total_calldata_bytes(&self) -> usize",
+        "pub fn calls(&self) -> &[BatchCallSummary]",
+        "pub fn redaction(&self) -> &str",
+        "pub fn summarize_batch_calls(calls: &[DepositWalletCall]) -> DepositWalletBatchSummary",
+    ] {
+        assert!(
+            summary.contains(signature),
+            "batch summary surface is missing signature {signature:?}"
+        );
+    }
+
     let try_new_signatures = function_signatures(&config, "pub fn try_new");
     assert_eq!(try_new_signatures.len(), 2);
     assert!(try_new_signatures.iter().any(|signature| {
@@ -402,6 +483,9 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         "build_merge_positions_call",
         "build_redeem_positions_call",
         "build_neg_risk_redeem_positions_call",
+        "summarize_batch_calls",
+        "BatchCallSummary",
+        "DepositWalletBatchSummary",
     ] {
         assert!(
             contains_identifier(reexport, symbol),
@@ -461,6 +545,12 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         Option<ethers::types::Address>,
     ) -> polymarket_relayer::Result<ethers::types::Address> =
         polymarket_relayer::CtfRoute::target;
+    let _summarize: fn(
+        &[polymarket_relayer::DepositWalletCall],
+    ) -> polymarket_relayer::DepositWalletBatchSummary =
+        polymarket_relayer::summarize_batch_calls;
+    let summary = polymarket_relayer::summarize_batch_calls(&[]);
+    let _calls: &[polymarket_relayer::BatchCallSummary] = summary.calls();
     let _adapter = polymarket_relayer::deposit_wallet::calldata::POLYGON_NEG_RISK_ADAPTER;
 
     assert!(

@@ -316,6 +316,62 @@ gate on unchanged source before considering live use. Each example above
 returns one independent call; none composes, signs, submits, or authorizes a
 batch.
 
+### WALLET batch composition and redacted review summary (PBRSDK-20)
+
+Compose only successfully built `DepositWalletCall` values, preserve their
+intended execution order, and create the shareable review summary before
+passing the same vector to the existing WALLET signing/execution boundary. A
+representative approval + split + redeem candidate is:
+
+```rust
+use ethers::types::{H256, U256};
+use polymarket_relayer::{
+    build_pusd_approval_call, build_redeem_positions_call,
+    build_split_position_call, polygon_calldata_config, summarize_batch_calls,
+    DepositWalletBatchSummary, DepositWalletCall, PusdAmount, Result,
+};
+
+fn reviewed_batch_candidate(
+    condition_id: H256,
+) -> Result<(Vec<DepositWalletCall>, DepositWalletBatchSummary)> {
+    let config = polygon_calldata_config()?;
+    let partition = [U256::from(1u64), U256::from(2u64)];
+    let calls = vec![
+        build_pusd_approval_call(
+            &config,
+            config.ctf().address(),
+            PusdAmount::unlimited(),
+        )?,
+        build_split_position_call(
+            &config,
+            condition_id,
+            &partition,
+            PusdAmount::from_whole_pusd(1)?,
+        )?,
+        build_redeem_positions_call(&config, condition_id, &partition)?,
+    ];
+    let summary = summarize_batch_calls(&calls);
+
+    Ok((calls, summary))
+}
+```
+
+`summarize_batch_calls` preserves the vector order and reports exact call/data
+counts, decimal value, a redacted target, and a selector only when data is
+longer than four bytes. It never reports full calldata, signatures, auth
+material, a full target, or a calldata hash. Empty data and an empty batch are
+valid summary inputs because this function observes rather than validates.
+Builder allowlist/unit/route checks and the existing WALLET request preflight
+remain authoritative; a failed builder must stop vector construction through
+`Result` before signing.
+
+The public request builder checks supported contract config, call count, total
+calldata size, derived wallet, and owner signature compatibility, but it
+intentionally does not decide wall-clock deadline freshness. Live consumers
+must continue through the clock-injected `execute_wallet_batch` / submit gate,
+which performs the deadline and fresh-nonce checks. This summary adds no submit
+authority and is not a substitute for `DepositWalletDryRunEvidence`.
+
 ### HTTP client surface
 
 The deposit-wallet HTTP client exposes construction, exactly three reviewed

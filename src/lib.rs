@@ -30,8 +30,9 @@ pub use deposit_wallet::calldata::{
     build_ctf_approval_for_all_call, build_merge_positions_call,
     build_neg_risk_redeem_positions_call, build_pusd_approval_call,
     build_redeem_positions_call, build_split_position_call, polygon_calldata_config,
-    CalldataConfigInput, CalldataSourceRef, CtfPositionAmount, CtfRoute,
-    DepositWalletCalldataConfig, PusdAmount, SourcedAddress,
+    summarize_batch_calls, BatchCallSummary, CalldataConfigInput, CalldataSourceRef,
+    CtfPositionAmount, CtfRoute, DepositWalletBatchSummary, DepositWalletCalldataConfig, PusdAmount,
+    SourcedAddress,
 };
 #[allow(deprecated)]
 pub use deposit_wallet::{

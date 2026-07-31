@@ -113,6 +113,21 @@
 - [ ] Legacy `src/operations` and `src/contracts.rs` remain unchanged compatibility surface and are explicitly forbidden in deposit-wallet WALLET batches.
 - [ ] No batch composition, prepareCondition, position-id calculation, signing, HTTP, CLOB synchronization, dependency, or live-capability claim is included.
 
+## WALLET Batch Composition And Summary (PBRSDK-20)
+
+- [ ] The external integration test composes all six PBRSDK-18/PBRSDK-19 builders and proves fixture-matching target, value, data, order, selector, and exact lengths.
+- [ ] `BatchCallSummary` and `DepositWalletBatchSummary` contain exactly the reviewed private fields and expose only read-only getters.
+- [ ] Targets are redacted, values and lengths are exact, call order is preserved, and the fixed omission marker is present in serialized and Debug output.
+- [ ] Full calldata, full target addresses, signatures, auth material, and whole-data hashes are absent; four-byte data exposes no selector, while five-byte data exposes only the route selector.
+- [ ] Empty data, mixed empty/non-empty data, and an empty batch summarize without panic or validation and retain exact counts and lengths.
+- [ ] Call-count and calldata-byte limits are triggered independently through `try_build_wallet_batch_request_with_signature` with distinct error substrings; private constants remain private and are not imported or value-pinned.
+- [ ] Wrong wallet, Polygon/Amoy config mismatch, unsupported config, and fixture non-owner signature all fail before submit; the signer error is specifically pinned.
+- [ ] A strict config that excludes CTF blocks the approval before batch construction, and the canonical approval passes the fixture-backed WALLET request success path.
+- [ ] The summary remains a private synchronous calldata child module with explicit three-symbol re-exports, no `Deserialize`, HTTP, legacy operation/contract reference, or extra dependency.
+- [ ] Deadline freshness is not claimed from the wall-clock-free request builder; existing clock-injected execute/submit gates remain authoritative.
+- [ ] ADR-0019 records the summary/dry-run separation, no-validation rule, low-entropy hash-oracle decision, exact empty-data disclosure contract, public-API integration-test rationale, rollback, and remaining live gates.
+- [ ] No fixture/provenance/source-matrix/wire-truth change, new builder/route, HTTP change, signing change, live call, actor orchestration, or live-readiness claim is included.
+
 ## Consumer Integration
 
 - [ ] Consumer imports are limited to `pm-adapters/relayer_http` or runtime wiring.

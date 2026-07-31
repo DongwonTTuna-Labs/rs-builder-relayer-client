@@ -30,8 +30,9 @@ work, use the reviewed fallible APIs such as
 `polygon_calldata_config`, `PusdAmount`, `build_pusd_approval_call`,
 `build_ctf_approval_for_all_call`, `CtfPositionAmount`, `CtfRoute`,
 `build_split_position_call`, `build_merge_positions_call`,
-`build_redeem_positions_call`, `build_neg_risk_redeem_positions_call`, and the
-documented request/response types re-exported from `polymarket_relayer`.
+`build_redeem_positions_call`, `build_neg_risk_redeem_positions_call`,
+`summarize_batch_calls`, `BatchCallSummary`, `DepositWalletBatchSummary`, and
+the documented request/response types re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
 two bounded transaction-polling methods, two deployment-lifecycle methods, one
@@ -65,8 +66,18 @@ redeem routes. Their route, selector, target, argument order, zero parent,
 units, value, and dynamic-array offsets are golden-tested. Unverified routes
 are absent from `CtfRoute`; the legacy `operations`/`contracts` paths are not a
 deposit-wallet fallback and retain two documented drift risks. These calldata
-rounds add no HTTP path, runtime config loading, batch composition, signing,
-submission, or live-readiness claim. Any route drift blocks the live gate.
+routes add no HTTP path, runtime config loading, signing, submission, or live-
+readiness claim. Any route drift blocks the live gate.
+PBRSDK-20 proves that all six reviewed builder outputs compose into one ordered
+candidate batch and adds a pure ordered review summary. Request-preflight
+compatibility is proven end to end for the fixture-backed canonical approval
+call; the resource, wallet, chain, and signer rejection paths are proven
+independently through the same public entry point.
+The summary reports redacted targets, decimal values, selectors only for data
+longer than four bytes, and exact lengths/counts; it omits full calldata, full
+targets, signatures, auth material, and calldata hashes. It does not validate
+or authorize the batch, and deadline freshness remains in the existing clock-
+injected execute/submit gates.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, `report_ambiguous_candidates`, both polling
