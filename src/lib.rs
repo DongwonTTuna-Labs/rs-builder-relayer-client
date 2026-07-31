@@ -26,6 +26,10 @@ pub mod types;
 pub use auth::{AuthMethod, BuilderConfig};
 pub use client::{RelayClient, TransactionResponseHandle};
 pub use direct::{DirectExecutor, DirectTxResult};
+pub use deposit_wallet::calldata::{
+    polygon_calldata_config, CalldataConfigInput, CalldataSourceRef,
+    DepositWalletCalldataConfig, SourcedAddress,
+};
 #[allow(deprecated)]
 pub use deposit_wallet::{
     build_wallet_create_request, build_wallet_nonce_request, deposit_wallet_contract_config,

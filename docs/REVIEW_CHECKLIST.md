@@ -69,6 +69,20 @@
 - [ ] conditional token approval calldata has a golden test.
 - [ ] merge/redeem calldata follows current adapter route and has golden tests.
 
+## Verified Calldata Configuration (PBRSDK-17)
+
+- [ ] Every configured address and the pUSD decimals value carries validated source metadata.
+- [ ] Only Polygon chain `137` is accepted; Amoy remains unsupported because no official Amoy pUSD address is in the reviewed wire truth.
+- [ ] pUSD, CTF, Standard Exchange, and Neg Risk Exchange match the pinned PBRSDK-17 values exactly by address bytes.
+- [ ] pUSD spender and CTF operator lists are non-empty reviewed subsets, and strict subsets are preserved without canonical expansion.
+- [ ] Zero addresses, duplicate entries, pUSD/CTF collision, and pUSD self-approval fail before builder use.
+- [ ] The adapter allowlist is empty until PBRSDK-19 verifies a deposit-wallet adapter route.
+- [ ] Source text enforces trim/non-empty, byte bounds, no control characters, and HTTPS-only URLs.
+- [ ] Config types expose `Serialize` but no `Deserialize`, environment loader, or file loader.
+- [ ] The calldata module is synchronous, contains no HTTP dependency, and explicitly re-exports the four types and canonical constructor.
+- [ ] Crate-root exports and every reviewed constructor/getter/helper signature are pinned by `tests/public_api_boundary_test.rs`.
+- [ ] No calldata encoder, ABI, selector, HTTP submit path, or live-capable behavior is added in PBRSDK-17.
+
 ## Consumer Integration
 
 - [ ] Consumer imports are limited to `pm-adapters/relayer_http` or runtime wiring.
