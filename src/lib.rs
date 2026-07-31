@@ -27,9 +27,11 @@ pub use auth::{AuthMethod, BuilderConfig};
 pub use client::{RelayClient, TransactionResponseHandle};
 pub use direct::{DirectExecutor, DirectTxResult};
 pub use deposit_wallet::calldata::{
-    build_ctf_approval_for_all_call, build_pusd_approval_call, polygon_calldata_config,
-    CalldataConfigInput, CalldataSourceRef, DepositWalletCalldataConfig, PusdAmount,
-    SourcedAddress,
+    build_ctf_approval_for_all_call, build_merge_positions_call,
+    build_neg_risk_redeem_positions_call, build_pusd_approval_call,
+    build_redeem_positions_call, build_split_position_call, polygon_calldata_config,
+    CalldataConfigInput, CalldataSourceRef, CtfPositionAmount, CtfRoute,
+    DepositWalletCalldataConfig, PusdAmount, SourcedAddress,
 };
 #[allow(deprecated)]
 pub use deposit_wallet::{

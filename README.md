@@ -28,8 +28,10 @@ work, use the reviewed fallible APIs such as
 `MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION`, `CalldataConfigInput`,
 `CalldataSourceRef`, `DepositWalletCalldataConfig`, `SourcedAddress`,
 `polygon_calldata_config`, `PusdAmount`, `build_pusd_approval_call`,
-`build_ctf_approval_for_all_call`, and the documented request/response types
-re-exported from `polymarket_relayer`.
+`build_ctf_approval_for_all_call`, `CtfPositionAmount`, `CtfRoute`,
+`build_split_position_call`, `build_merge_positions_call`,
+`build_redeem_positions_call`, `build_neg_risk_redeem_positions_call`, and the
+documented request/response types re-exported from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
 two bounded transaction-polling methods, two deployment-lifecycle methods, one
@@ -54,14 +56,17 @@ Artifact JSON retains the transaction id for operator recovery, while Debug
 and mutation-intent tracing use only its sanitized `sha3:0x...` token.
 PBRSDK-17 adds a synchronous, source-backed Polygon calldata configuration and
 approval allowlist gate. It validates all addresses and the pUSD decimals unit
-before builders can use them, preserves strict allowlist subsets, and keeps the
-adapter allowlist empty. PBRSDK-18 adds a non-zero, unit-explicit `PusdAmount`
-and pure pUSD `approve` / CTF `setApprovalForAll` call builders. Both builders
-take their targets and authorization policy from the supplied config; their
-selectors, arguments, zero value, and targets are fixture-tested, including a
-byte match against the recorded local pUSD approval call. Neither round adds an
-HTTP path, runtime config loading, batch composition, or live-readiness claim;
-PBRSDK-19 owns adapter-route verification.
+before builders can use them and preserves strict allowlist subsets. PBRSDK-18
+adds a non-zero, unit-explicit `PusdAmount` and pure pUSD `approve` / CTF
+`setApprovalForAll` call builders. PBRSDK-19 narrows the adapter allowlist to
+the source-pinned Polygon NegRiskAdapter (or an empty strict subset), adds the
+separate `CtfPositionAmount`, and exposes only four verified CTF split/merge/
+redeem routes. Their route, selector, target, argument order, zero parent,
+units, value, and dynamic-array offsets are golden-tested. Unverified routes
+are absent from `CtfRoute`; the legacy `operations`/`contracts` paths are not a
+deposit-wallet fallback and retain two documented drift risks. These calldata
+rounds add no HTTP path, runtime config loading, batch composition, signing,
+submission, or live-readiness claim. Any route drift blocks the live gate.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, `report_ambiguous_candidates`, both polling
@@ -227,6 +232,12 @@ hex = "0.4"
 ```
 
 ## Redeem Example
+
+The following section documents the preserved legacy Safe/Proxy surface only.
+Do not use its `operations` or `contracts` helpers in a deposit-wallet WALLET
+batch; use the four verified PBRSDK-19 builders described above. In particular,
+legacy merge/NegRisk redeem behavior is known to drift from current official
+route truth and is not a fallback.
 
 Add `CONDITION_ID=0x...` to your `.env`, then:
 

@@ -10,6 +10,7 @@ pub const POLYGON_PUSD: &str = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB";
 pub const POLYGON_CTF: &str = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045";
 pub const POLYGON_STANDARD_EXCHANGE: &str = "0xE111180000d2663C0091e4f400237545B87B996B";
 pub const POLYGON_NEG_RISK_EXCHANGE: &str = "0xe2222d279d744050d28e00520010520000310F59";
+pub const POLYGON_NEG_RISK_ADAPTER: &str = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296";
 pub const PUSD_DECIMALS: u8 = 6;
 
 const POLYGON_CHAIN_ID: u64 = 137;
@@ -24,6 +25,8 @@ const RUST_CLOB_SDK_SOURCE_NAME: &str = "Polymarket Rust CLOB SDK";
 const RUST_CLOB_SDK_COMMIT: &str = "3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb";
 const RUST_CLOB_SDK_UTILITIES_URL: &str =
     "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/clob/utilities.rs";
+const RUST_CLOB_SDK_LIB_URL: &str =
+    "https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/lib.rs";
 
 /// Source metadata required for every calldata address and decimals value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -173,6 +176,7 @@ impl DepositWalletCalldataConfig {
         let polygon_ctf = parse_embedded_address(POLYGON_CTF)?;
         let polygon_standard_exchange = parse_embedded_address(POLYGON_STANDARD_EXCHANGE)?;
         let polygon_neg_risk_exchange = parse_embedded_address(POLYGON_NEG_RISK_EXCHANGE)?;
+        let polygon_neg_risk_adapter = parse_embedded_address(POLYGON_NEG_RISK_ADAPTER)?;
 
         if input.pusd.address() != polygon_pusd {
             return Err(RelayerError::Other(
@@ -217,9 +221,14 @@ impl DepositWalletCalldataConfig {
                     .to_string(),
             ));
         }
-        if !input.adapter_allowlist.is_empty() {
+        let allowed_adapters = [polygon_neg_risk_adapter];
+        if input
+            .adapter_allowlist
+            .iter()
+            .any(|entry| !allowed_adapters.contains(&entry.address()))
+        {
             return Err(RelayerError::Other(
-                "calldata config adapter allowlist must remain empty until PBRSDK-19 verifies a route"
+                "calldata config adapter allowlist contains an address outside Polygon wire truth"
                     .to_string(),
             ));
         }
@@ -295,6 +304,11 @@ pub fn polygon_calldata_config() -> Result<DepositWalletCalldataConfig> {
         RUST_CLOB_SDK_COMMIT,
         RUST_CLOB_SDK_UTILITIES_URL,
     )?;
+    let adapter_source = CalldataSourceRef::try_new(
+        RUST_CLOB_SDK_SOURCE_NAME,
+        RUST_CLOB_SDK_COMMIT,
+        RUST_CLOB_SDK_LIB_URL,
+    )?;
 
     let pusd = sourced_embedded_address(POLYGON_PUSD, docs_source.clone())?;
     let ctf = sourced_embedded_address(POLYGON_CTF, docs_source.clone())?;
@@ -302,6 +316,8 @@ pub fn polygon_calldata_config() -> Result<DepositWalletCalldataConfig> {
         sourced_embedded_address(POLYGON_STANDARD_EXCHANGE, docs_source.clone())?;
     let neg_risk_exchange =
         sourced_embedded_address(POLYGON_NEG_RISK_EXCHANGE, docs_source)?;
+    let neg_risk_adapter =
+        sourced_embedded_address(POLYGON_NEG_RISK_ADAPTER, adapter_source)?;
 
     DepositWalletCalldataConfig::try_new(CalldataConfigInput {
         chain_id: POLYGON_CHAIN_ID,
@@ -315,7 +331,7 @@ pub fn polygon_calldata_config() -> Result<DepositWalletCalldataConfig> {
             neg_risk_exchange.clone(),
         ],
         ctf_operator_allowlist: vec![standard_exchange, neg_risk_exchange],
-        adapter_allowlist: Vec::new(),
+        adapter_allowlist: vec![neg_risk_adapter],
     })
 }
 
@@ -417,6 +433,7 @@ mod tests {
         let ctf = address(POLYGON_CTF);
         let standard_exchange = address(POLYGON_STANDARD_EXCHANGE);
         let neg_risk_exchange = address(POLYGON_NEG_RISK_EXCHANGE);
+        let neg_risk_adapter = address(POLYGON_NEG_RISK_ADAPTER);
         let outsider = arbitrary_address(1);
 
         assert_eq!(config.chain_id(), POLYGON_CHAIN_ID);
@@ -469,7 +486,15 @@ mod tests {
             );
         }
 
-        assert!(config.adapter_allowlist().is_empty());
+        let adapters = config.adapter_allowlist();
+        assert_eq!(adapters.len(), 1);
+        assert_eq!(adapters[0].address(), neg_risk_adapter);
+        assert_source(
+            adapters[0].source(),
+            RUST_CLOB_SDK_SOURCE_NAME,
+            RUST_CLOB_SDK_COMMIT,
+            RUST_CLOB_SDK_LIB_URL,
+        );
         assert!(config.is_allowed_pusd_spender(ctf));
         assert!(config.is_allowed_pusd_spender(standard_exchange));
         assert!(config.is_allowed_pusd_spender(neg_risk_exchange));
@@ -478,6 +503,7 @@ mod tests {
         assert!(config.is_allowed_ctf_operator(neg_risk_exchange));
         assert!(!config.is_allowed_ctf_operator(ctf));
         assert!(!config.is_allowed_ctf_operator(outsider));
+        assert!(config.is_allowed_adapter(neg_risk_adapter));
         assert!(!config.is_allowed_adapter(outsider));
     }
 
@@ -617,7 +643,7 @@ mod tests {
                 "calldata config pUSD decimals must match Polygon wire truth (6)",
                 "calldata config pUSD spender allowlist contains an address outside Polygon wire truth",
                 "calldata config CTF operator allowlist contains an address outside Polygon wire truth",
-                "calldata config adapter allowlist must remain empty until PBRSDK-19 verifies a route",
+                "calldata config adapter allowlist contains an address outside Polygon wire truth",
             ]
         );
         let distinct: HashSet<&str> = messages.iter().map(String::as_str).collect();

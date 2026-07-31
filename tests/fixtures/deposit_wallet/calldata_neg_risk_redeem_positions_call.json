@@ -1,0 +1,13 @@
+{
+  "route": "NegRiskAdapterRedeem",
+  "target": "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
+  "value": "0",
+  "selector": "0xdbeccb23",
+  "data": "0xdbeccb2311111111111111111111111111111111111111111111111111111111111111110000000000000000000000000000000000000000000000000000000000000040000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000f424000000000000000000000000000000000000000000000000000000000001e8480",
+  "conditionId": "0x1111111111111111111111111111111111111111111111111111111111111111",
+  "parentCollectionId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "amounts": ["1000000", "2000000"],
+  "collateral": "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
+  "adapter": "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
+  "source": "Official Rust CLOB SDK redeemPositions(bytes32,uint256[]) at https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/ctf/client.rs and Polygon NegRiskAdapter at https://github.com/Polymarket/rs-clob-client-v2/blob/3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb/src/lib.rs; selector 0xdbeccb23 is the first four bytes of keccak256(signature); amounts are CTF position-token quantities in 6-decimal collateral base units at the CTF 1:1 collateral ratio."
+}

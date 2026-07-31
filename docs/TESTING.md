@@ -128,6 +128,22 @@ pusd_amount_rejects_zero_and_converts_whole_units
 pusd_amount_serializes_decimal_base_units_with_decimals
 pusd_approval_call_rejects_zero_amount_from_unchecked_construction
 calldata_amount_keeps_base_units_private
+ctf_split_position_call_matches_fixture
+ctf_merge_positions_call_matches_fixture
+ctf_redeem_positions_call_matches_fixture
+neg_risk_redeem_positions_call_matches_fixture
+ctf_calls_encode_supplied_condition_partition_and_amount
+ctf_redeem_and_neg_risk_encode_supplied_index_sets_and_amounts
+ctf_builders_reject_invalid_partitions_and_index_sets
+neg_risk_redeem_rejects_adapter_outside_verified_allowlist
+neg_risk_redeem_respects_narrowed_adapter_allowlist
+ctf_position_amount_rejects_zero_and_serializes_decimal_base_units
+ctf_route_target_defines_every_adapter_combination
+ctf_route_selector_matches_verified_wire_truth
+ctf_builders_reject_zero_amount_from_unchecked_construction
+ctf_split_and_merge_reject_unlimited_amount
+neg_risk_redeem_accepts_duplicate_amounts
+calldata_position_keeps_base_units_private
 relayer_auth_address_not_used_as_owner_implicitly
 ambiguous_submit_timeout_does_not_duplicate_submit
 idless_submit_timeout_blocks_owner_until_manual_reconcile
@@ -167,6 +183,10 @@ tests/fixtures/
     wallet_submit_body.json
     calldata_pusd_approval_call.json
     calldata_ctf_approval_for_all_call.json
+    calldata_ctf_split_position_call.json
+    calldata_ctf_merge_positions_call.json
+    calldata_ctf_redeem_positions_call.json
+    calldata_neg_risk_redeem_positions_call.json
   relayer/
     transaction_states.json
 ```
@@ -397,20 +417,21 @@ unsupported chains, zero addresses, token collisions, duplicate entries,
 self-approval, and empty spender/operator lists fail before any builder can run.
 
 Each wire-truth binding has a distinct negative case: arbitrary pUSD, arbitrary
-CTF, decimals `18`, a non-reviewed spender, a non-reviewed operator, and any
-non-empty adapter list. Source tests cover empty, oversized, and control-bearing
-names and versions plus insecure, oversized, and control-bearing URLs. JSON
-tests require checksum addresses and source metadata. The config types derive
-`Serialize` only and must not expose `Deserialize`, environment loading, or file
-loading.
+CTF, decimals `18`, a non-reviewed spender, a non-reviewed operator, and an
+adapter outside the single PBRSDK-19 Polygon adapter truth. Empty adapter lists
+remain valid strict subsets. Source tests cover empty, oversized, and
+control-bearing names and versions plus insecure, oversized, and
+control-bearing URLs. JSON tests require checksum addresses and source metadata.
+The config types derive `Serialize` only and must not expose `Deserialize`,
+environment loading, or file loading.
 
 `tests/public_api_boundary_test.rs` pins all four config types, every reviewed
 config constructor/getter/helper signature, the five PBRSDK-17 crate-root
 exports, and the canonical constructor function type. It also rejects
 `reqwest` and public async functions anywhere in the calldata module. The
 PBRSDK-17 portion remains a local config/source audit with no HTTP test or
-encoding; PBRSDK-18 adds the separately gated approval encoding below. Neither
-round adds an adapter route or live request.
+encoding; PBRSDK-18 and PBRSDK-19 add the separately gated encoders below. None
+adds a live request.
 
 The required source hygiene checks remain match-zero gates:
 
@@ -455,8 +476,55 @@ The source matrix must require `SM-CALLDATA-PUSD-ADDR`,
 `SM-CALLDATA-CTF-EXCHANGES`, `SM-CALLDATA-PUSD-DECIMALS`, and
 `SM-CALLDATA-APPROVAL-ENCODING`; the non-recursive provenance audit must cover
 both new flat fixtures. This gate authorizes offline call construction only. It
-does not authorize split/merge/redeem, adapter routing, batch composition,
-signing, HTTP submission, or live execution.
+does not by itself authorize split/merge/redeem, adapter routing, batch
+composition, signing, HTTP submission, or live execution.
+
+## PBRSDK-19 CTF Route Calldata Gate
+
+The fifteen named module-local tests plus
+`calldata_position_keeps_base_units_private` are mandatory. Together they must
+prove:
+
+- the four golden fixtures match target, zero value, complete calldata, route,
+  selector, condition id, zero parent, route array, collateral, adapter, and
+  unit metadata exactly;
+- alternate non-repeating condition bytes and distinct split, merge, CTF
+  redeem, and NegRisk arrays appear at their measured ABI head/tail offsets,
+  and every result differs from its fixed fixture;
+- split/merge/redeem collateral is always the supplied config's pUSD address,
+  parent collection is zero, and CTF redeem encodes no amount;
+- partitions and index sets reject empty, zero, duplicate, and 65-entry input,
+  while 64 entries remain supported; NegRisk quantities reject only empty,
+  zero, and 65-entry input and explicitly accept duplicate quantities;
+- split/merge reject constructor-bypassing zero and `PusdAmount::unlimited()`,
+  while NegRisk independently rejects a constructor-bypassing zero
+  `CtfPositionAmount`;
+- every `CtfRoute` selector and every route/optional-adapter target combination
+  is closed and exact, including distinct missing, zero, and outside-allowlist
+  adapter errors;
+- a config narrowed to an empty adapter subset disables NegRisk redeem even
+  though the canonical config includes the reviewed adapter;
+- `CtfPositionAmount` retains one private `U256` field and manually serializes
+  decimal base units with `decimals = 6`.
+
+`tests/public_api_boundary_test.rs` pins both additive types, all four builder
+signatures, the public route methods, the six crate-root exports, the
+calldata-module adapter constant export, private `ctf`/`position` modules, and
+the exact three-line `CtfPositionAmount` field declaration. The combined
+calldata source must remain synchronous and contain no HTTP dependency,
+runtime `Deserialize`, `crate::operations`, or `crate::contracts` reference.
+The recursively aggregated non-test deposit-wallet HTTP production surface
+must also contain no `crate::operations` or `crate::contracts` reference.
+
+`SM-CALLDATA-CTF-ROUTES` and all four new flat fixtures are required by the
+source-matrix/provenance audits. That row records both observed legacy drifts.
+Any new address, signature, selector, argument, or unit drift blocks the live
+gate until the matrix, ADR, fixtures, implementation, and full unchanged-source
+evidence are reviewed again. The legacy public paths are not a fallback for a
+deposit-wallet WALLET batch. This gate authorizes only individual offline
+`DepositWalletCall` construction; batch composition, position-id calculation,
+condition preparation, signing, HTTP, CLOB synchronization, and live execution
+remain outside scope.
 
 ## Manual Live Gate
 

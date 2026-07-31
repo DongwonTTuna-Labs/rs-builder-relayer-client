@@ -190,11 +190,12 @@ fn reviewed_approval_targets(
 reviewed extension. It is not validated until
 `DepositWalletCalldataConfig::try_new` succeeds and must not cross the consumer
 adapter into domain, strategy, risk, or actor state. PBRSDK-17 supports only
-Polygon `137`, preserves strict allowlist subsets, and exposes an empty adapter
-allowlist. The PBRSDK-17 config boundary itself performs no ABI encoding or HTTP
-work. PBRSDK-18 supplies the approval encoders described below, while PBRSDK-19
-still owns adapter-route verification. Config serialization is for offline
-review only. There is no `Deserialize`, environment, or file-loading path.
+Polygon `137` and preserves strict allowlist subsets. ADR-0018 now permits the
+adapter list to be either empty or a subset containing only the source-pinned
+Polygon NegRiskAdapter; every other PBRSDK-17 binding remains unchanged. The
+config boundary itself performs no ABI encoding or HTTP work. Config
+serialization is for offline review only. There is no `Deserialize`,
+environment, or file-loading path.
 
 ### Unit-safe approval calldata builders (PBRSDK-18)
 
@@ -228,6 +229,92 @@ an unlimited-approval policy decision. CTF approval revocation is expressed by
 passing `false`; the operator must still be in the supplied config's verified
 allowlist. These functions only return `DepositWalletCall` values. They do not
 compose a batch, fetch a nonce, sign, submit, or authorize live execution.
+
+### Verified CTF split, merge, and redeem routes (PBRSDK-19)
+
+Only the four `CtfRoute` variants exposed by this crate have reviewed target,
+selector, argument, and unit evidence. Construct individual offline calls as
+follows:
+
+```rust
+use ethers::types::{Address, H256, U256};
+use polymarket_relayer::{
+    build_merge_positions_call, build_neg_risk_redeem_positions_call,
+    build_redeem_positions_call, build_split_position_call,
+    DepositWalletCall, DepositWalletCalldataConfig, CtfPositionAmount,
+    PusdAmount, Result,
+};
+
+fn split_call(
+    config: &DepositWalletCalldataConfig,
+    condition_id: H256,
+) -> Result<DepositWalletCall> {
+    build_split_position_call(
+        config,
+        condition_id,
+        &[U256::from(1u64), U256::from(2u64)],
+        PusdAmount::from_whole_pusd(1)?,
+    )
+}
+
+fn merge_call(
+    config: &DepositWalletCalldataConfig,
+    condition_id: H256,
+) -> Result<DepositWalletCall> {
+    build_merge_positions_call(
+        config,
+        condition_id,
+        &[U256::from(1u64), U256::from(2u64)],
+        PusdAmount::from_whole_pusd(1)?,
+    )
+}
+
+fn ctf_redeem_call(
+    config: &DepositWalletCalldataConfig,
+    condition_id: H256,
+) -> Result<DepositWalletCall> {
+    build_redeem_positions_call(
+        config,
+        condition_id,
+        &[U256::from(1u64), U256::from(2u64)],
+    )
+}
+
+fn neg_risk_redeem_call(
+    config: &DepositWalletCalldataConfig,
+    adapter: Address,
+    condition_id: H256,
+) -> Result<DepositWalletCall> {
+    build_neg_risk_redeem_positions_call(
+        config,
+        adapter,
+        condition_id,
+        &[
+            CtfPositionAmount::from_base_units(U256::from(1_000_000u64))?,
+            CtfPositionAmount::from_base_units(U256::from(2_000_000u64))?,
+        ],
+    )
+}
+```
+
+Split and merge amounts are six-decimal pUSD collateral base units and reject
+the approval-only unlimited representation. ConditionalTokens redeem has no
+amount argument and redeems the selected index sets in full. NegRisk amounts
+use `CtfPositionAmount`, not index sets, and equal quantities may repeat.
+`parentCollectionId` is internally fixed to zero; there is no caller override.
+An empty adapter subset intentionally disables the NegRisk builder.
+
+Deposit-wallet WALLET batches must never use `crate::operations` split/merge/
+redeem helpers or `crate::contracts` selectors. Those public legacy Safe/Proxy
+paths remain for compatibility, but one carries the stale merge selector
+`0xd37bf42e` and another places index sets into the NegRisk amounts argument.
+They are not an alternate route or fallback. If any reviewed address,
+signature, selector, argument order, or unit drifts, stop live enablement,
+record the discrepancy in `SM-CALLDATA-CTF-ROUTES`, revise ADR-0018 and all
+affected golden fixtures from reviewed official evidence, and rerun the full
+gate on unchanged source before considering live use. Each example above
+returns one independent call; none composes, signs, submits, or authorizes a
+batch.
 
 ### HTTP client surface
 
