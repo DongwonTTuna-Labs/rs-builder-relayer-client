@@ -67,7 +67,7 @@
 - [ ] No legacy USDC.e/direct CTF helper is used for current pUSD-native deposit-wallet operations without explicit review.
 - [ ] pUSD approval calldata has a golden test.
 - [ ] conditional token approval calldata has a golden test.
-- [ ] merge/redeem calldata follows current adapter route and has golden tests.
+- [ ] split/merge/redeem calldata follows only the four verified PBRSDK-19 routes and has golden tests.
 
 ## Verified Calldata Configuration (PBRSDK-17)
 
@@ -76,7 +76,7 @@
 - [ ] pUSD, CTF, Standard Exchange, and Neg Risk Exchange match the pinned PBRSDK-17 values exactly by address bytes.
 - [ ] pUSD spender and CTF operator lists are non-empty reviewed subsets, and strict subsets are preserved without canonical expansion.
 - [ ] Zero addresses, duplicate entries, pUSD/CTF collision, and pUSD self-approval fail before builder use.
-- [ ] The adapter allowlist is empty until PBRSDK-19 verifies a deposit-wallet adapter route.
+- [ ] The adapter allowlist is empty or contains only the source-pinned Polygon NegRiskAdapter; strict empty subsets remain authoritative.
 - [ ] Source text enforces trim/non-empty, byte bounds, no control characters, and HTTPS-only URLs.
 - [ ] Config types expose `Serialize` but no `Deserialize`, environment loader, or file loader.
 - [ ] The PBRSDK-17 config surface remains synchronous, contains no HTTP dependency, and explicitly re-exports its four types and canonical constructor.
@@ -95,7 +95,23 @@
 - [ ] The pUSD MAX call is byte-identical to the recorded local WALLET call, and both flat fixtures are covered by the provenance audit and `SM-CALLDATA-APPROVAL-ENCODING`.
 - [ ] CTF `approved = false` is supported as allowlisted revocation and encodes an all-zero boolean word.
 - [ ] `amount` and `approval` remain private synchronous modules with explicit exports and no `Deserialize`, HTTP, `crate::operations`, or `crate::contracts` path.
-- [ ] No split/merge/redeem, adapter route, batch composition, signing, submit path, dependency, or live-capability claim is included.
+- [ ] PBRSDK-18 itself contains no split/merge/redeem, adapter route, batch composition, signing, submit path, dependency, or live-capability claim.
+
+## Verified CTF Route Calldata (PBRSDK-19)
+
+- [ ] `CtfRoute` contains exactly the three ConditionalTokens routes plus NegRisk redeem; unsupported routes have no generic escape hatch.
+- [ ] Every builder gets its selector from `CtfRoute::selector` and target from `CtfRoute::target`; all route/optional-adapter combinations and exact errors are tested.
+- [ ] Selectors are exactly `0x72ce4275`, `0x9e7212ad`, `0x01b7037c`, and `0xdbeccb23`, and all four flat fixtures match complete calldata bytes.
+- [ ] ConditionalTokens calls target config CTF, take config pUSD collateral, fix parent collection to zero, and set call value to zero.
+- [ ] Split/merge take finite non-zero `PusdAmount`; CTF redeem has no amount; NegRisk redeem takes non-zero `CtfPositionAmount` quantities and allows duplicate quantities.
+- [ ] Partition/index-set empty, zero, duplicate, and 65-entry cases fail distinctly; 64 succeeds. NegRisk empty/65 fail, but duplicate amounts succeed.
+- [ ] Canonical adapter succeeds, zero/outside addresses fail distinctly, and an empty narrowed adapter subset disables the route.
+- [ ] Alternate condition/array/amount tests decompose each measured ABI offset and differ from the fixed fixture payload.
+- [ ] `position` and `ctf` remain private, synchronous modules with exact explicit exports and no `Deserialize`, HTTP, `crate::operations`, or `crate::contracts` reference.
+- [ ] The recursively aggregated non-test deposit-wallet HTTP surface also has no `crate::operations` or `crate::contracts` reference.
+- [ ] `SM-CALLDATA-CTF-ROUTES` and ADR-0018 record both legacy drift cases; fixture provenance covers all four route fixtures and records route-drift live blocking.
+- [ ] Legacy `src/operations` and `src/contracts.rs` remain unchanged compatibility surface and are explicitly forbidden in deposit-wallet WALLET batches.
+- [ ] No batch composition, prepareCondition, position-id calculation, signing, HTTP, CLOB synchronization, dependency, or live-capability claim is included.
 
 ## Consumer Integration
 

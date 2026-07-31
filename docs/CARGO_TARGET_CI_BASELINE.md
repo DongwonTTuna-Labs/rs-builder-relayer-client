@@ -198,7 +198,8 @@ constructors/getters/membership helpers, and the five crate-root exports. It
 also pins the canonical constructor function type and requires a synchronous
 module with no `reqwest`, public async function, or `Deserialize`. Canonical
 Polygon configuration is source-backed and wire-truth-bound, strict subsets
-remain strict, and the adapter allowlist remains empty pending PBRSDK-19.
+remain strict, and ADR-0018 later narrows the adapter list to an empty-or-single
+reviewed Polygon NegRiskAdapter subset without relaxing other bindings.
 
 PBRSDK-18 adds no Cargo target, dependency, feature, example, manifest entry,
 or HTTP module change. Production code adds only
@@ -225,6 +226,29 @@ contains no runtime deserialization or HTTP path, and cannot reference legacy
 the three PBRSDK-17 calldata truth rows plus
 `SM-CALLDATA-APPROVAL-ENCODING`.
 
+PBRSDK-19 adds no Cargo target, dependency, feature, example, manifest entry,
+HTTP module, live host call, mock venue, or bespoke harness. Production code
+adds only private `src/deposit_wallet/calldata/position.rs` and `ctf.rs`, their
+explicit module exports, six additive crate-root symbols, and the reviewed
+NegRiskAdapter config constant/subset. Existing amount, approval, HTTP,
+signing, request, legacy operation, and contract files remain unchanged.
+
+The four new flat JSON fixtures pin ConditionalTokens split, merge, and
+full-balance redeem plus NegRisk redeem. Module-local tests cover fixture bytes,
+alternate-input ABI offsets for all builders, array and amount boundaries,
+route-selector-target closure, canonical and narrowed adapter policy, unit
+serialization, duplicate NegRisk quantities, and defense-in-depth zero/
+unlimited guards. Existing `public_api_boundary_test` and
+`source_matrix_test` targets expand to the two new private modules, six root
+exports, exact position field shape, four fixture provenance rows, and
+`SM-CALLDATA-CTF-ROUTES`; no new integration target is created.
+
+PBRSDK-19 is offline call-construction evidence only. It does not compose a
+batch, calculate positions, prepare conditions, fetch a nonce, sign, submit,
+touch CLOB state, or authorize live execution. Both observed legacy route
+drifts remain unchanged but are documented as forbidden deposit-wallet paths;
+any further route drift blocks the live gate.
+
 These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -245,6 +269,8 @@ Implementation and review packets should include:
 - PBRSDK-17 source-matrix rows and calldata config boundary-test output,
 - PBRSDK-18 approval fixture, unit/allowlist, private-field, and
   `SM-CALLDATA-APPROVAL-ENCODING` evidence,
+- PBRSDK-19 four-route fixture/ABI-offset/negative tests, position-field and
+  route public-boundary output, and `SM-CALLDATA-CTF-ROUTES` drift evidence,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,

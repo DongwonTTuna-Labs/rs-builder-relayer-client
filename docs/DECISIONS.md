@@ -799,10 +799,11 @@ operator lists may contain only Standard Exchange and Neg Risk Exchange.
 Strict subsets are preserved exactly rather than expanded to the canonical
 set, so a consumer cannot gain authority it did not request.
 
-No official deposit-wallet adapter address is available in the reviewed
-source set. The adapter allowlist must therefore remain empty. PBRSDK-19 owns
-route verification and any later decision to relax that invariant; this ADR
-does not infer an adapter target or enable split, merge, or redeem behavior.
+No official deposit-wallet adapter address was available in the PBRSDK-17
+reviewed source set, so that round kept the adapter allowlist empty. ADR-0018
+later supersedes only that adapter clause with the source-pinned Polygon
+NegRiskAdapter subset rule. This ADR does not itself infer an adapter target or
+enable split, merge, or redeem behavior.
 
 The canonical `polygon_calldata_config()` function constructs the reviewed
 full allowlists and passes them through the same fallible validation path.
@@ -866,3 +867,72 @@ unchanged. Residual risks remain the separately recorded lack of a
 pUSD-specific official decimals document and the future policy choice around
 unlimited approvals. PBRSDK-19/PBRSDK-20 and later live gates must resolve
 their own route, composition, authorization, and rollback requirements.
+
+## ADR-0018: PBRSDK-19 Verified CTF Split, Merge, And Redeem Routes
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+The typed calldata surface contains exactly four verified routes:
+`ConditionalTokensSplit`, `ConditionalTokensMerge`,
+`ConditionalTokensRedeem`, and `NegRiskAdapterRedeem`. Unsupported or
+unreviewed routes are not variants of `CtfRoute`; there is no generic route
+escape hatch or status API. This closed enum is the failure boundary for an
+unsupported route. Each builder obtains its selector through
+`CtfRoute::selector` and its target through `CtfRoute::target`, so route,
+selector, target class, and adapter presence cannot drift independently.
+
+The authoritative source is the official Rust CLOB SDK commit
+`3ae1aae5e9ded38f984464c9fc0f307f8a9f41fb`. ConditionalTokens split, merge,
+and redeem target Polygon CTF
+`0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`; their selectors are respectively
+`0x72ce4275`, `0x9e7212ad`, and `0x01b7037c`. NegRisk redeem targets only the
+caller config's allowlisted Polygon NegRiskAdapter
+`0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296` with selector `0xdbeccb23`.
+ADR-0016's adapter-empty rule is narrowed only to `adapter_allowlist` being a
+subset of this one reviewed address. An empty subset remains valid and
+authoritative for consumers that disable adapter routes. No other PBRSDK-17
+wire-truth, structural, duplicate, zero, collision, spender, or operator
+invariant is relaxed.
+
+All ConditionalTokens routes take collateral only from `config.pusd()` and
+target only `config.ctf()`. Callers cannot supply a legacy USDC.e collateral
+address. `parentCollectionId` is fixed to zero because that is the only route
+reviewed for this round. Split and merge use non-zero, finite `PusdAmount`
+values in six-decimal collateral base units; `uint256::MAX` remains an approval
+representation and is rejected for these operations. CTF redeem has no amount
+argument and redeems the selected position sets in full. NegRisk redeem uses
+the separate `CtfPositionAmount` type; each amount is non-zero and represents a
+CTF outcome-position quantity at the CTF 1:1 collateral base-unit ratio.
+Partitions and index sets are non-empty, non-zero, unique, and at most 64
+entries. NegRisk amounts are non-empty and at most 64 entries, but duplicate
+quantities are valid because they are amounts rather than index identifiers.
+
+Four flat golden fixtures pin the target, zero value, selector, ABI bytes,
+condition id, zero parent, arrays, units, address, and source. Alternate-input
+tests decompose every route at its verified dynamic-array offsets so a fixed
+fixture payload cannot pass. Negative tests pin all exact errors, both adapter
+subset decisions, 64/65 boundaries, test-only zero invariant bypasses, and
+split/merge unlimited rejection. The source matrix row
+`SM-CALLDATA-CTF-ROUTES` records the same route contract and makes any address,
+signature, selector, argument, or unit drift a live-gate blocker.
+
+The review also found two concrete legacy drifts. `src/contracts.rs` publicly
+exposes stale merge selector `0xd37bf42e` rather than `0x9e7212ad`, and
+`src/operations/redeem.rs::redeem_neg_risk_positions(condition_id, index_sets)`
+places index sets into the NegRisk adapter's amounts argument. Those legacy
+Safe/Proxy-era public paths remain unchanged in this round to preserve the
+existing public API and warning-free frozen examples. They are not valid for a
+deposit-wallet WALLET batch. Source boundary tests prohibit the new calldata
+modules from referencing `crate::operations` or `crate::contracts`, and
+consumers must enforce the same separation. The remaining public legacy
+surface is an explicit residual risk until a separately scoped compatibility
+migration can remove it.
+
+This change builds individual offline `DepositWalletCall` values only. It does
+not compose a batch, prepare a condition, calculate a position id, fetch a
+nonce, sign, submit HTTP, synchronize CLOB state, or authorize live execution.
+Consumers migrate by selecting one of the four explicit builders and may roll
+back by ceasing to import the additive symbols or by narrowing the adapter
+allowlist to empty. Live enablement remains blocked until later composition,
+authorization, submit, reconciliation, and operator gates pass on unchanged
+source.

@@ -53,6 +53,12 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "TryBeginOutcome",
         "MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION",
         "try_build_wallet_batch_request_with_signature",
+        "CtfPositionAmount",
+        "CtfRoute",
+        "build_split_position_call",
+        "build_merge_positions_call",
+        "build_redeem_positions_call",
+        "build_neg_risk_redeem_positions_call",
     ] {
         assert!(
             contains_identifier(&lib, required),
@@ -74,7 +80,12 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         .expect("calldata approval source is readable");
     let config = fs::read_to_string("src/deposit_wallet/calldata/config.rs")
         .expect("calldata config source is readable");
-    let calldata_src = format!("{calldata_module}\n{amount}\n{approval}\n{config}");
+    let ctf = fs::read_to_string("src/deposit_wallet/calldata/ctf.rs")
+        .expect("calldata CTF source is readable");
+    let position = fs::read_to_string("src/deposit_wallet/calldata/position.rs")
+        .expect("calldata position source is readable");
+    let calldata_src =
+        format!("{calldata_module}\n{amount}\n{approval}\n{config}\n{ctf}\n{position}");
 
     assert_no_wildcard_reexports("src/deposit_wallet/calldata/mod.rs", &calldata_module);
     assert!(
@@ -84,8 +95,12 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
     assert!(
         calldata_module.contains("mod amount;")
             && calldata_module.contains("mod approval;")
+            && calldata_module.contains("mod ctf;")
+            && calldata_module.contains("mod position;")
             && !calldata_module.contains("pub mod amount;")
-            && !calldata_module.contains("pub mod approval;"),
+            && !calldata_module.contains("pub mod approval;")
+            && !calldata_module.contains("pub mod ctf;")
+            && !calldata_module.contains("pub mod position;"),
         "calldata implementations must remain private modules"
     );
     assert!(
@@ -95,6 +110,20 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
             ),
         "calldata module must explicitly re-export the reviewed PBRSDK-18 surface"
     );
+    for required in [
+        "pub use position::CtfPositionAmount;",
+        "build_merge_positions_call",
+        "build_neg_risk_redeem_positions_call",
+        "build_redeem_positions_call",
+        "build_split_position_call",
+        "CtfRoute",
+        "POLYGON_NEG_RISK_ADAPTER",
+    ] {
+        assert!(
+            calldata_module.contains(required),
+            "calldata module must explicitly re-export PBRSDK-19 symbol {required:?}"
+        );
+    }
     assert!(
         amount.contains("pub struct PusdAmount {\n    base_units: U256,\n}"),
         "PusdAmount must keep the exact reviewed private base-unit field shape"
@@ -104,6 +133,36 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
             "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]\npub struct PusdAmount"
         ),
         "PusdAmount must retain the reviewed value semantics without derived Debug or Serialize"
+    );
+    assert!(
+        position.contains("pub struct CtfPositionAmount {\n    base_units: U256,\n}"),
+        "CtfPositionAmount must keep the exact reviewed private base-unit field shape"
+    );
+    assert!(
+        position.contains(
+            "#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]\npub struct CtfPositionAmount"
+        ),
+        "CtfPositionAmount must retain reviewed value semantics without derived Debug or Serialize"
+    );
+    assert!(
+        ctf.contains("#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]\npub enum CtfRoute"),
+        "CtfRoute must enumerate only the reviewed serializable routes"
+    );
+    let route_block = enum_block(&ctf, "CtfRoute");
+    let route_variants = route_block
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_suffix(','))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        route_variants,
+        vec![
+            "ConditionalTokensSplit",
+            "ConditionalTokensMerge",
+            "ConditionalTokensRedeem",
+            "NegRiskAdapterRedeem",
+        ],
+        "CtfRoute must contain exactly the four verified routes"
     );
 
     for signature in [
@@ -145,6 +204,77 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         assert!(
             ctf_builder[0].contains(required),
             "CTF approval builder signature is missing {required:?}"
+        );
+    }
+
+    for (name, required) in [
+        (
+            "build_split_position_call",
+            &[
+                "config: &DepositWalletCalldataConfig",
+                "condition_id: H256",
+                "partition: &[U256]",
+                "amount: PusdAmount",
+                "Result<DepositWalletCall>",
+            ][..],
+        ),
+        (
+            "build_merge_positions_call",
+            &[
+                "config: &DepositWalletCalldataConfig",
+                "condition_id: H256",
+                "partition: &[U256]",
+                "amount: PusdAmount",
+                "Result<DepositWalletCall>",
+            ][..],
+        ),
+        (
+            "build_redeem_positions_call",
+            &[
+                "config: &DepositWalletCalldataConfig",
+                "condition_id: H256",
+                "index_sets: &[U256]",
+                "Result<DepositWalletCall>",
+            ][..],
+        ),
+        (
+            "build_neg_risk_redeem_positions_call",
+            &[
+                "config: &DepositWalletCalldataConfig",
+                "adapter: Address",
+                "condition_id: H256",
+                "amounts: &[CtfPositionAmount]",
+                "Result<DepositWalletCall>",
+            ][..],
+        ),
+    ] {
+        let signatures = function_signatures(&ctf, &format!("pub fn {name}"));
+        assert_eq!(signatures.len(), 1, "{name} must exist exactly once");
+        for expected in required {
+            assert!(
+                signatures[0].contains(expected),
+                "{name} signature is missing {expected:?}"
+            );
+        }
+    }
+
+    for signature in [
+        "pub fn from_base_units(base_units: U256) -> Result<Self>",
+        "pub fn base_units(&self) -> U256",
+        "pub fn decimals(&self) -> u8",
+    ] {
+        assert!(
+            position.contains(signature),
+            "CTF position amount surface is missing signature {signature:?}"
+        );
+    }
+    for signature in [
+        "pub fn selector(&self) -> [u8; 4]",
+        "pub fn target(\n        &self,\n        config: &DepositWalletCalldataConfig,\n        adapter: Option<Address>,\n    ) -> Result<Address>",
+    ] {
+        assert!(
+            ctf.contains(signature),
+            "CTF route surface is missing signature {signature:?}"
         );
     }
 
@@ -266,6 +396,12 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         "build_ctf_approval_for_all_call",
         "build_pusd_approval_call",
         "polygon_calldata_config",
+        "CtfPositionAmount",
+        "CtfRoute",
+        "build_split_position_call",
+        "build_merge_positions_call",
+        "build_redeem_positions_call",
+        "build_neg_risk_redeem_positions_call",
     ] {
         assert!(
             contains_identifier(reexport, symbol),
@@ -290,6 +426,42 @@ fn calldata_config_surface_is_explicit_validated_and_synchronous() {
         polymarket_relayer::build_ctf_approval_for_all_call;
     let amount = polymarket_relayer::PusdAmount::unlimited();
     assert_eq!(amount.decimals(), 6);
+    let _split: fn(
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        ethers::types::H256,
+        &[ethers::types::U256],
+        polymarket_relayer::PusdAmount,
+    ) -> polymarket_relayer::Result<polymarket_relayer::DepositWalletCall> =
+        polymarket_relayer::build_split_position_call;
+    let _merge: fn(
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        ethers::types::H256,
+        &[ethers::types::U256],
+        polymarket_relayer::PusdAmount,
+    ) -> polymarket_relayer::Result<polymarket_relayer::DepositWalletCall> =
+        polymarket_relayer::build_merge_positions_call;
+    let _redeem: fn(
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        ethers::types::H256,
+        &[ethers::types::U256],
+    ) -> polymarket_relayer::Result<polymarket_relayer::DepositWalletCall> =
+        polymarket_relayer::build_redeem_positions_call;
+    let _neg_risk: fn(
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        ethers::types::Address,
+        ethers::types::H256,
+        &[polymarket_relayer::CtfPositionAmount],
+    ) -> polymarket_relayer::Result<polymarket_relayer::DepositWalletCall> =
+        polymarket_relayer::build_neg_risk_redeem_positions_call;
+    let _selector: fn(&polymarket_relayer::CtfRoute) -> [u8; 4] =
+        polymarket_relayer::CtfRoute::selector;
+    let _target: fn(
+        &polymarket_relayer::CtfRoute,
+        &polymarket_relayer::DepositWalletCalldataConfig,
+        Option<ethers::types::Address>,
+    ) -> polymarket_relayer::Result<ethers::types::Address> =
+        polymarket_relayer::CtfRoute::target;
+    let _adapter = polymarket_relayer::deposit_wallet::calldata::POLYGON_NEG_RISK_ADAPTER;
 
     assert!(
         !calldata_src.contains("reqwest"),
@@ -322,6 +494,17 @@ fn calldata_amount_keeps_base_units_private() {
 }
 
 #[test]
+fn calldata_position_keeps_base_units_private() {
+    let position = fs::read_to_string("src/deposit_wallet/calldata/position.rs")
+        .expect("calldata position source is readable");
+
+    assert!(
+        position.contains("pub struct CtfPositionAmount {\n    base_units: U256,\n}"),
+        "CtfPositionAmount must keep the exact reviewed private base-unit field shape"
+    );
+}
+
+#[test]
 fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     let http =
         fs::read_to_string("src/deposit_wallet/http.rs").expect("HTTP module source is readable");
@@ -349,6 +532,11 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     let production_http_surface = production_http_surface(&http);
 
     assert_no_wildcard_reexports("src/deposit_wallet/http.rs", &http);
+    assert!(
+        !production_http_surface.contains("crate::operations")
+            && !production_http_surface.contains("crate::contracts"),
+        "deposit-wallet HTTP production modules must not reuse legacy operations or contract defaults"
+    );
     assert!(
         http.contains("pub use capability::RelayerReadPermit;"),
         "HTTP module must explicitly re-export RelayerReadPermit"
@@ -1358,6 +1546,19 @@ fn struct_block<'a>(source: &'a str, name: &str) -> &'a str {
     let end = rest
         .find("\n}\n")
         .unwrap_or_else(|| panic!("{name} struct should have a closing brace"));
+
+    &rest[..end]
+}
+
+fn enum_block<'a>(source: &'a str, name: &str) -> &'a str {
+    let needle = format!("pub enum {name}");
+    let start = source
+        .find(&needle)
+        .unwrap_or_else(|| panic!("{name} enum should exist"));
+    let rest = &source[start..];
+    let end = rest
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("{name} enum should have a closing brace"));
 
     &rest[..end]
 }
