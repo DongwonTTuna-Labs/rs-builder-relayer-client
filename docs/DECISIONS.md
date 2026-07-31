@@ -936,3 +936,100 @@ back by ceasing to import the additive symbols or by narrowing the adapter
 allowlist to empty. Live enablement remains blocked until later composition,
 authorization, submit, reconciliation, and operator gates pass on unchanged
 source.
+
+## ADR-0019: PBRSDK-20 WALLET Batch Composition And Redacted Summary
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+PBRSDK-20 permits the six already verified PBRSDK-18/PBRSDK-19 builder outputs
+to be placed, in caller-selected order, into one candidate `Vec<DepositWalletCall>`
+and passed through the existing public WALLET signing/request preflight. This
+narrows ADR-0018's individual-call-only boundary only for offline composition,
+review summary, and fixture-backed request compatibility. It does not add a
+builder or route, change any wire format, fetch a nonce, create a signature,
+submit HTTP, authorize live mutation, or change the legacy Safe/Proxy surface.
+
+`summarize_batch_calls` and `DepositWalletDryRunEvidence` remain separate
+because they have different stages and owners. The batch summary is a pure
+pre-permit view that a consumer can create while selecting candidate calls.
+Dry-run evidence belongs to the mutation client after its capability,
+identity, deadline, resource, signature, and request checks. The batch summary
+therefore neither duplicates nor replaces the payload-bound dry-run artifact,
+and dry-run evidence is not relaxed by this decision.
+
+The summary deliberately performs no validation. It accepts an empty batch,
+empty call data, and any other `DepositWalletCall` so observation cannot become
+an alternate signing policy. The existing
+`try_build_wallet_batch_request_with_signature` preflight remains authoritative
+for supported contract config, call count, total calldata bytes, derived
+wallet, signature shape, owner identity, and signature recovery. Its private
+resource constants and validator remain private; the external integration test
+exercises both limits only through that public entry point.
+
+`BatchCallSummary` contains exactly a redacted checksum target, decimal value,
+optional selector, and exact data length. `DepositWalletBatchSummary` contains
+the exact call count, exact sum of calldata bytes, order-preserving call
+summaries, and the fixed marker
+`full calldata and signatures are intentionally omitted`. Both types have
+private fields and read-only getters. Targets use the existing
+`0x1234...ABCD` convention. A selector is present only when `data.len() > 4`;
+when `data.len() <= 4` it is absent because four bytes would make the selector
+identical to the complete calldata. No signature, auth material, full target,
+payload bytes, or full calldata is stored.
+
+There is intentionally no calldata hash field. Calldata is often
+low-entropy. Once selector and exact length are known, a non-keyed hash becomes
+an enumeration oracle: a five-byte call has only 256 candidates for its final
+byte, and approval inputs may also have small effective search spaces when the
+spender allowlist and conventional amount are known. Matching candidates to a
+non-keyed hash can recover the original payload, making that commitment
+equivalent to disclosure for this shareable summary. This API gives up binding
+in favor of non-disclosure. If binding is later required, it must be handled in
+an access-controlled path rather than added to this summary.
+
+The precise empty-data disclosure contract is also fixed by this ADR:
+
+- Allowed disclosure is the call category: a reviewed route selector only
+  when `data.len() > 4`, or the fact that there is no exposed route. Exact
+  `data_len`, `total_calldata_bytes`, `call_count`, decimal `value`, and only a
+  redacted target are also allowed.
+- Forbidden disclosure is calldata payload bytes or a derivative that makes
+  them recoverable, including a whole-data non-keyed hash and a selector when
+  `data.len() <= 4`. Signatures, auth material, secrets, and full target
+  addresses are forbidden.
+- `data_len == 0` says that no payload exists; it does not expose payload
+  content. Reconstructing the zero-information empty value is tautological,
+  not recovery of a hidden parameter.
+- A summary is not literally replayable because it omits the full target and
+  execution also requires owner authorization. The material risk addressed
+  here is parameter disclosure, and empty data has no parameter.
+- The design intentionally exposes a route selector for data longer than four
+  bytes. Reporting that a call has no route or is a pure value transfer reveals
+  strictly less than that permitted route category.
+- Length bucketing would remove no practical payload disclosure while breaking
+  `total_calldata_bytes == sum(call.data.len())` and the summary's purpose of
+  finding unexpectedly large payloads. Exact per-call and total lengths are
+  therefore retained without an empty-data exception.
+
+The composition contract is tested from an external integration test crate,
+not a source-module unit test. That placement proves the crate-root public API
+is sufficient without widening a private helper. The test composes all six
+verified builders, locks call order and selectors, rejects replayable summary
+output, triggers the two resource limits independently, covers wallet/config/
+chain/signer failures, proves a narrowed wrong config prevents composition,
+and passes the fixture approval call through the public WALLET request builder
+to the serialized `calls[0]` shape.
+
+Deadline freshness remains outside this serialization/composition layer.
+`try_build_wallet_batch_request_with_signature` intentionally has no wall
+clock, so treating fixture deadlines as fresh here would be a false runtime
+claim. The actual deadline gate is the existing clock-injected execution and
+submit path in `http/execute.rs` and `http/submit.rs`, covered by
+`http/tests.rs`, and is unchanged.
+
+Rollback is additive: consumers can stop importing the three summary exports
+and stop composing PBRSDK-18/PBRSDK-19 calls. Existing builders, request APIs,
+HTTP behavior, fixtures, dependencies, and public signatures are unchanged.
+Residual live risks and gates remain those already assigned to nonce,
+authorization, submission, reconciliation, operator review, and unchanged-
+source live qualification.

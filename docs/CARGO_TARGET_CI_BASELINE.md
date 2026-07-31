@@ -249,6 +249,32 @@ touch CLOB state, or authorize live execution. Both observed legacy route
 drifts remain unchanged but are documented as forbidden deposit-wallet paths;
 any further route drift blocks the live gate.
 
+PBRSDK-20 adds exactly one Cargo integration-test target,
+`calldata_batch_composition_test`, from
+`tests/calldata_batch_composition_test.rs`. It adds no binary, example,
+benchmark, dependency, feature, manifest entry, HTTP target, live host call,
+mock venue, or bespoke harness. Production code adds only the private pure
+`src/deposit_wallet/calldata/summary.rs` module, its explicit module export, and
+the three additive crate-root symbols `summarize_batch_calls`,
+`BatchCallSummary`, and `DepositWalletBatchSummary`.
+
+The new integration target composes the existing six fixture-backed builders,
+audits redacted ordered summaries, reaches both private resource limits through
+the public request builder, checks wallet/config/chain/signer and narrowed-
+config failures, and proves the canonical approval call is compatible with the
+serialized WALLET request body. It reuses existing fixtures and dependencies;
+no fixture, provenance, or source-matrix file changes. The existing
+`public_api_boundary_test` target expands to the private summary module, exact
+private field blocks, getter/function signatures, three root exports, and the
+combined pure-calldata source audit.
+
+PBRSDK-20 is offline composition and serialization-preflight evidence only.
+The summary does not validate calls and deliberately contains no full
+calldata, signature, auth material, full target, or calldata hash. Deadline
+freshness remains in the existing clock-injected execution/submit tests. This
+target adds no nonce fetch, signing operation, submit, CLOB synchronization,
+actor orchestration, or live-execution authority.
+
 These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -271,6 +297,8 @@ Implementation and review packets should include:
   `SM-CALLDATA-APPROVAL-ENCODING` evidence,
 - PBRSDK-19 four-route fixture/ABI-offset/negative tests, position-field and
   route public-boundary output, and `SM-CALLDATA-CTF-ROUTES` drift evidence,
+- PBRSDK-20 six-builder composition, summary redaction/boundary/empty-input,
+  request-preflight negative/success, and summary public-boundary output,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,
