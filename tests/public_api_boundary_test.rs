@@ -62,6 +62,163 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
 }
 
 #[test]
+fn calldata_config_surface_is_explicit_validated_and_synchronous() {
+    let lib = fs::read_to_string("src/lib.rs").expect("crate root is readable");
+    let deposit_wallet = fs::read_to_string("src/deposit_wallet/mod.rs")
+        .expect("deposit_wallet module is readable");
+    let calldata_module = fs::read_to_string("src/deposit_wallet/calldata/mod.rs")
+        .expect("calldata module is readable");
+    let config = fs::read_to_string("src/deposit_wallet/calldata/config.rs")
+        .expect("calldata config source is readable");
+    let calldata_src = format!("{calldata_module}\n{config}");
+
+    assert_no_wildcard_reexports("src/deposit_wallet/calldata/mod.rs", &calldata_module);
+    assert!(
+        deposit_wallet.contains("pub mod calldata;"),
+        "deposit_wallet must expose the reviewed calldata module"
+    );
+
+    for type_name in [
+        "CalldataConfigInput",
+        "CalldataSourceRef",
+        "DepositWalletCalldataConfig",
+        "SourcedAddress",
+    ] {
+        assert!(
+            config.contains(&format!("pub struct {type_name}")),
+            "calldata config source is missing public type {type_name}"
+        );
+    }
+
+    for (type_name, fields) in [
+        (
+            "CalldataSourceRef",
+            &["source_name", "version_or_commit", "url"][..],
+        ),
+        ("SourcedAddress", &["address", "source"][..]),
+        (
+            "DepositWalletCalldataConfig",
+            &[
+                "chain_id",
+                "pusd",
+                "ctf",
+                "pusd_decimals",
+                "pusd_decimals_source",
+                "pusd_spender_allowlist",
+                "ctf_operator_allowlist",
+                "adapter_allowlist",
+            ][..],
+        ),
+    ] {
+        let block = struct_block(&config, type_name);
+        for field in fields {
+            assert!(
+                block.contains(&format!("{field}:")),
+                "{type_name}::{field} must remain in the reviewed shape"
+            );
+            assert!(
+                !block.contains(&format!("pub {field}:"))
+                    && !block.contains(&format!("pub(crate) {field}:")),
+                "{type_name}::{field} must stay private"
+            );
+        }
+    }
+
+    let input = struct_block(&config, "CalldataConfigInput");
+    for field in [
+        "chain_id",
+        "pusd",
+        "ctf",
+        "pusd_decimals",
+        "pusd_decimals_source",
+        "pusd_spender_allowlist",
+        "ctf_operator_allowlist",
+        "adapter_allowlist",
+    ] {
+        assert!(
+            input.contains(&format!("pub {field}:")),
+            "CalldataConfigInput::{field} must remain public input data"
+        );
+    }
+
+    for signature in [
+        "pub fn source_name(&self) -> &str",
+        "pub fn version_or_commit(&self) -> &str",
+        "pub fn url(&self) -> &str",
+        "pub fn new(address: Address, source: CalldataSourceRef) -> Self",
+        "pub fn address(&self) -> Address",
+        "pub fn source(&self) -> &CalldataSourceRef",
+        "pub fn chain_id(&self) -> u64",
+        "pub fn pusd(&self) -> &SourcedAddress",
+        "pub fn ctf(&self) -> &SourcedAddress",
+        "pub fn pusd_decimals(&self) -> u8",
+        "pub fn pusd_decimals_source(&self) -> &CalldataSourceRef",
+        "pub fn pusd_spender_allowlist(&self) -> &[SourcedAddress]",
+        "pub fn ctf_operator_allowlist(&self) -> &[SourcedAddress]",
+        "pub fn adapter_allowlist(&self) -> &[SourcedAddress]",
+        "pub fn is_allowed_pusd_spender(&self, address: Address) -> bool",
+        "pub fn is_allowed_ctf_operator(&self, address: Address) -> bool",
+        "pub fn is_allowed_adapter(&self, address: Address) -> bool",
+        "pub fn polygon_calldata_config() -> Result<DepositWalletCalldataConfig>",
+    ] {
+        assert!(
+            config.contains(signature),
+            "calldata config surface is missing signature {signature:?}"
+        );
+    }
+
+    let try_new_signatures = function_signatures(&config, "pub fn try_new");
+    assert_eq!(try_new_signatures.len(), 2);
+    assert!(try_new_signatures.iter().any(|signature| {
+        signature.contains("source_name: impl Into<String>")
+            && signature.contains("version_or_commit: impl Into<String>")
+            && signature.contains("url: impl Into<String>")
+            && signature.contains("Result<Self>")
+    }));
+    assert!(try_new_signatures.iter().any(|signature| {
+        signature.contains("input: CalldataConfigInput") && signature.contains("Result<Self>")
+    }));
+
+    let reexport_start = lib
+        .find("pub use deposit_wallet::calldata::{")
+        .expect("crate root must explicitly re-export calldata config symbols");
+    let reexport_rest = &lib[reexport_start..];
+    let reexport_end = reexport_rest
+        .find("};")
+        .expect("calldata config re-export must have a closing delimiter");
+    let reexport = &reexport_rest[..reexport_end];
+    for symbol in [
+        "CalldataConfigInput",
+        "CalldataSourceRef",
+        "DepositWalletCalldataConfig",
+        "SourcedAddress",
+        "polygon_calldata_config",
+    ] {
+        assert!(
+            contains_identifier(reexport, symbol),
+            "crate root calldata re-export is missing {symbol}"
+        );
+    }
+
+    let _f: fn() -> polymarket_relayer::Result<
+        polymarket_relayer::DepositWalletCalldataConfig,
+    > = polymarket_relayer::polygon_calldata_config;
+
+    assert!(
+        !calldata_src.contains("reqwest"),
+        "calldata config must not depend on HTTP"
+    );
+    assert!(
+        !calldata_src.contains("pub async fn"),
+        "calldata config must remain synchronous"
+    );
+    assert!(
+        !calldata_src.contains("Deserialize"),
+        "calldata config must not create a runtime deserialization path"
+    );
+}
+
+#[test]
 fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
     let http =
         fs::read_to_string("src/deposit_wallet/http.rs").expect("HTTP module source is readable");

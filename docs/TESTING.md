@@ -119,6 +119,14 @@ pusd_adapter_merge_redeem_calldata_matches_fixture
 relayer_auth_address_not_used_as_owner_implicitly
 ambiguous_submit_timeout_does_not_duplicate_submit
 idless_submit_timeout_blocks_owner_until_manual_reconcile
+canonical_polygon_config_exposes_reviewed_values_sources_and_membership
+strict_subsets_are_preserved_without_global_allowlist_expansion
+unsupported_chain_is_rejected
+structural_duplicates_collisions_zero_and_empty_lists_are_rejected
+every_wire_truth_binding_has_a_distinct_failure
+source_metadata_rejects_empty_oversized_control_and_insecure_values
+serialize_uses_checksum_addresses_and_includes_source_metadata
+calldata_config_surface_is_explicit_validated_and_synchronous
 ```
 
 ## Fixture Rules
@@ -369,12 +377,35 @@ declared `tracing-subscriber` dev dependency. PBRSDK-15 adds no fixture, Cargo
 target, dependency, mock venue, logging collector, metrics system, OTel stack,
 live host call, or credential.
 
+## PBRSDK-17 Verified Calldata Config Gate
+
+The pure synchronous config tests must prove the canonical Polygon addresses,
+six-decimal unit, and exact source metadata through public getters. They must
+also prove that strict allowlist subsets are preserved rather than expanded;
+unsupported chains, zero addresses, token collisions, duplicate entries,
+self-approval, and empty spender/operator lists fail before any builder can run.
+
+Each wire-truth binding has a distinct negative case: arbitrary pUSD, arbitrary
+CTF, decimals `18`, a non-reviewed spender, a non-reviewed operator, and any
+non-empty adapter list. Source tests cover empty, oversized, and control-bearing
+names and versions plus insecure, oversized, and control-bearing URLs. JSON
+tests require checksum addresses and source metadata. The config types derive
+`Serialize` only and must not expose `Deserialize`, environment loading, or file
+loading.
+
+`tests/public_api_boundary_test.rs` pins all four public types, every reviewed
+constructor/getter/helper signature, the five crate-root exports, and the
+canonical constructor function type. It also rejects `reqwest` and public async
+functions anywhere in the calldata module. These are local config and source
+audits only: PBRSDK-17 adds no HTTP test, fixture, calldata encoding, selector,
+ABI, adapter route, or live request.
+
 The required source hygiene checks remain match-zero gates:
 
 ```bash
 grep -rn "pub use .*::\*" src/
 grep -rn "dbg!\|println!" src/deposit_wallet/
-grep -rn "allow(" src/deposit_wallet/http.rs src/deposit_wallet/http/ --include=*.rs | grep -v "http/tests.rs"
+grep -rn "allow(" src/deposit_wallet/http.rs src/deposit_wallet/http/ src/deposit_wallet/calldata/ --include=*.rs | grep -v "http/tests.rs"
 ```
 
 ## Manual Live Gate

@@ -767,3 +767,52 @@ and inspect the actual locally submitted signature, calldata, and full body as
 forbidden sentinels. This is offline redaction and lifecycle evidence only; it
 does not qualify a durable store, production log collector, or live relayer
 execution.
+
+## ADR-0016: PBRSDK-17 Verified Calldata Config And Allowlist
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+Deposit-wallet calldata builders must not choose contract targets, approval
+spenders, operators, or collateral units from unverified caller input. The
+`DepositWalletCalldataConfig` constructor is therefore the only validation
+boundary for the future PBRSDK-18/PBRSDK-19 builders. Every address is carried
+as `SourcedAddress`, every source is a validated `CalldataSourceRef`, and the
+pUSD decimals value has its own source reference. Source names and versions are
+trimmed, non-empty, at most 256 bytes, and free of control characters. Source
+URLs are HTTPS-only, at most 512 bytes, and free of control characters.
+
+This config supports only Polygon chain `137`. Amoy is intentionally rejected
+because the reviewed wire truth does not provide an official Amoy pUSD
+address. The Polygon pUSD, CTF, Standard Exchange, and Neg Risk Exchange
+addresses are fixed to the values in `SM-CALLDATA-PUSD-ADDR` and
+`SM-CALLDATA-CTF-EXCHANGES`. pUSD collateral uses six decimals from
+`SM-CALLDATA-PUSD-DECIMALS`. The evidence is the official Rust CLOB SDK
+collateral constant and CTF example; there is no reviewed pUSD-specific
+decimals document, which remains an explicit residual risk.
+
+`CalldataConfigInput` is a public unvalidated DTO, not an alternate authority.
+`DepositWalletCalldataConfig::try_new` rejects zero addresses, token-address
+collisions, duplicate entries, pUSD self-approval, empty spender/operator
+lists, and every value outside the reviewed Polygon wire truth. Valid spender
+lists may contain only CTF, Standard Exchange, and Neg Risk Exchange. Valid CTF
+operator lists may contain only Standard Exchange and Neg Risk Exchange.
+Strict subsets are preserved exactly rather than expanded to the canonical
+set, so a consumer cannot gain authority it did not request.
+
+No official deposit-wallet adapter address is available in the reviewed
+source set. The adapter allowlist must therefore remain empty. PBRSDK-19 owns
+route verification and any later decision to relax that invariant; this ADR
+does not infer an adapter target or enable split, merge, or redeem behavior.
+
+The canonical `polygon_calldata_config()` function constructs the reviewed
+full allowlists and passes them through the same fallible validation path.
+Addresses and sources are serialized for offline review with checksum address
+format, but none of the config types implements `Deserialize`. There is no
+environment, file, or runtime config loading path that could bypass
+construction-time validation. The module is synchronous and has no HTTP
+dependency.
+
+This change adds source-backed configuration only. It does not encode calldata,
+select ABI methods, submit a wallet batch, change the HTTP layer, or authorize
+live execution. Consumers can roll back by ceasing to import the additive
+config surface; existing public APIs and request paths remain unchanged.

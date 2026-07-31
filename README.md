@@ -25,8 +25,10 @@ work, use the reviewed fallible APIs such as
 `OwnerMutationRegistry`, `MutationIntentLease`, `IntentGatedClient`,
 `ReconciliationDecision`, `ReconciliationEvidence`, `ReconciliationSummary`,
 `IntentReconcileOutcome`, `AmbiguousCandidate`, `AmbiguousCandidateReport`,
-`MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION`, and the documented request/response types
-re-exported from `polymarket_relayer`.
+`MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION`, `CalldataConfigInput`,
+`CalldataSourceRef`, `DepositWalletCalldataConfig`, `SourcedAddress`,
+`polygon_calldata_config`, and the documented request/response types re-exported
+from `polymarket_relayer`.
 
 The reviewed HTTP surface has three owner- and chain-scoped low-level reads,
 two bounded transaction-polling methods, two deployment-lifecycle methods, one
@@ -49,6 +51,12 @@ reconciliation free text is reduced to decision/UTF-8 byte lengths/time, and
 raw signatures, typed data, auth material, and full submit bodies are omitted.
 Artifact JSON retains the transaction id for operator recovery, while Debug
 and mutation-intent tracing use only its sanitized `sha3:0x...` token.
+PBRSDK-17 adds a synchronous, source-backed Polygon calldata configuration and
+approval allowlist gate. It validates all addresses and the pUSD decimals unit
+before later builders can use them, preserves strict allowlist subsets, and
+keeps the adapter allowlist empty. It adds no calldata encoding, HTTP path,
+runtime config loading, or live-readiness claim; PBRSDK-18/PBRSDK-19 own those
+later decisions.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, `report_ambiguous_candidates`, both polling

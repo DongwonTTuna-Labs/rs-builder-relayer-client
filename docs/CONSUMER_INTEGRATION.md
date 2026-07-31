@@ -77,6 +77,11 @@ DepositWalletReadiness
 RelayerReadPermit
 RelayerPollPolicy
 RelayerPollOutcome
+CalldataConfigInput
+CalldataSourceRef
+DepositWalletCalldataConfig
+SourcedAddress
+polygon_calldata_config
 RelayerMutationPermit
 RelayerMutationMode
 RelayerMutationOperation
@@ -154,6 +159,38 @@ cargo test --test public_api_boundary_test
 cargo doc --workspace --all-features --no-deps
 grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_request_with_signature\\|DepositWalletBatchRequest" -n src tests docs README.md
 ```
+
+### Verified calldata configuration (PBRSDK-17)
+
+The future calldata builders must receive a validated config rather than raw
+contract targets or global defaults. Normal Polygon consumers should use the
+canonical constructor and inspect only its getters:
+
+```rust
+use ethers::types::Address;
+use polymarket_relayer::{polygon_calldata_config, Result};
+
+fn reviewed_approval_targets(
+    spender: Address,
+    operator: Address,
+) -> Result<(bool, bool)> {
+    let config = polygon_calldata_config()?;
+
+    Ok((
+        config.is_allowed_pusd_spender(spender),
+        config.is_allowed_ctf_operator(operator),
+    ))
+}
+```
+
+`CalldataConfigInput` exists for explicit strict-subset construction and future
+reviewed extension. It is not validated until
+`DepositWalletCalldataConfig::try_new` succeeds and must not cross the consumer
+adapter into domain, strategy, risk, or actor state. PBRSDK-17 supports only
+Polygon `137`, preserves strict allowlist subsets, and exposes an empty adapter
+allowlist. It performs no ABI encoding or HTTP work; PBRSDK-18/PBRSDK-19 own
+those later gates. Config serialization is for offline review only. There is no
+`Deserialize`, environment, or file-loading path.
 
 ### HTTP client surface
 

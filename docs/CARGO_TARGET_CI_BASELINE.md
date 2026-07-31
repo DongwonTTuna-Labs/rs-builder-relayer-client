@@ -186,6 +186,20 @@ The PBRSDK-15 evidence is offline only. The in-memory writer is a test sink,
 not a production logging system, and the artifact export does not qualify a
 durable store or authorize live traffic.
 
+PBRSDK-17 adds no Cargo target, dependency, feature, example, fixture, manifest
+entry, or HTTP module change. Production code is limited to
+`src/deposit_wallet/calldata/mod.rs` and `config.rs`, plus explicit module and
+crate-root exports. Its tests are module-local config tests and the existing
+public boundary target; there is no mock venue, network call, environment/file
+loader, credential, or live host dependency.
+
+The PBRSDK-17 boundary audit pins the four public types, all reviewed
+constructors/getters/membership helpers, and the five crate-root exports. It
+also pins the canonical constructor function type and requires a synchronous
+module with no `reqwest`, public async function, or `Deserialize`. Canonical
+Polygon configuration is source-backed and wire-truth-bound, strict subsets
+remain strict, and the adapter allowlist remains empty pending PBRSDK-19.
+
 This audit is offline only. It does not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -201,6 +215,9 @@ Implementation and review packets should include:
 - `git diff --check` output,
 - `cargo doc --workspace --all-features --no-deps` output,
 - CLOB absence and public re-export grep/import audit output,
+- match-zero output for wildcard re-exports, deposit-wallet debug printing,
+  and production/calldata `allow(` attributes,
+- PBRSDK-17 source-matrix rows and calldata config boundary-test output,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,
