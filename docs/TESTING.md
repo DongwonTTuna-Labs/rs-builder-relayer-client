@@ -661,6 +661,45 @@ consumer-owned PBRSDK-22b must separately test the exclusive
 adapter mappings. CLOB funder/POLY_1271 wiring, consumer code, HTTP behavior,
 wire truth, and live execution remain outside this gate.
 
+## PBRSDK-23a Behavior-Based No-CLOB Source Gate
+
+`tests/no_clob_surface_test.rs` is a mandatory offline integration target. It
+must prove:
+
+- every `.rs` file under `src/` is recursively discovered, sorted for stable
+  diagnostics, and audited, with at least 40 files required before the
+  repository assertion can pass;
+- the complete reviewed forbidden-marker list is matched case-insensitively
+  without removing underscores or normalizing separators;
+- the `signature_type`, `/orders`, and `rs-clob-client-v2` exceptions are
+  limited to their reviewed paths and exact 8/4/1/2 occurrence counts, with
+  every allowed file present and non-empty for that marker;
+- the sole `/orders` occurrence in `src/auth/builder.rs` remains after the
+  first `#[cfg(test)]` occurrence;
+- all reviewed order/post/sign/cancel/book/price/balance-allowance function
+  names remain absent after an `fn` token regardless of visibility, `async`,
+  repeated Rust `Pattern_White_Space`, non-documenting line comments,
+  nested/repeated block comments, mixed trivia, or an optional raw-identifier
+  `r#` prefix;
+- the whitespace predicate exactly enumerates and independently mutation-tests
+  `U+0009` through `U+000D`, `U+0020`, `U+0085`, `U+200E`, `U+200F`, `U+2028`,
+  and `U+2029`; it does not use `char::is_whitespace()`, which would miss the
+  Rust lexer separators `U+200E` and `U+200F`;
+- `post_order_v2` remains outside the exact-name match because `_` continues
+  the audit's reviewed underscore/alphanumeric end-boundary check; longer Rust
+  identifiers using non-alphanumeric XID continuation marks may be
+  conservatively rejected, which is a false positive rather than a trivia
+  bypass;
+- the forbidden-marker and function-name lists retain their minimum sizes;
+- each one-change in-memory mutation returns exactly its expected structured
+  violation, and the longer-identifier positive case returns no violation.
+
+The existing path-based CLOB module/example test remains a separate cheap first
+defense. This gate mechanically checks only the specified vocabulary and
+function signatures in `src/`; it does not prove all possible CLOB code absent,
+inspect macro/build-script output, inspect dependencies, qualify consumer CLOB
+wiring, or authorize a live call.
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.

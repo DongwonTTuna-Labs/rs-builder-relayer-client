@@ -161,6 +161,9 @@ PBRSDK-24/25 durable-store and live operator gates remain separate.
 Do not treat this crate as a CLOB order/sign/cancel/post SDK. CLOB
 order/sign/cancel/post behavior remains out of this crate and belongs in the
 official Polymarket Rust CLOB SDK plus the consumer CLOB adapter.
+`tests/no_clob_surface_test.rs` mechanically audits the documented marker and
+function-name subset across every `src/**/*.rs` file while pinning only the
+documented exceptions by path and occurrence count.
 
 The removed infallible `build_wallet_batch_request_with_signature` helper is
 not part of the public integration surface. Consumers must migrate to the

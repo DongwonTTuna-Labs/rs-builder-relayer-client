@@ -29,6 +29,7 @@ submit bodies.
 | integration test | `deposit_wallet_test` | `tests/deposit_wallet_test.rs` | tracked | offline fixture test | keep |
 | integration test | `integration_test` | `tests/integration_test.rs` | tracked | offline calldata test | keep |
 | integration test | `mutation_rollback_boundary_test` | `tests/mutation_rollback_boundary_test.rs` | added by PBRSDK-22a | pre-I/O rollback/read-capability boundary only | keep offline; no server or live call |
+| integration test | `no_clob_surface_test` | `tests/no_clob_surface_test.rs` | added by PBRSDK-23a | offline source-marker audit; no host call | keep |
 | integration test | `operations_test` | `tests/operations_test.rs` | tracked | offline calldata test | keep |
 | integration test | `source_matrix_test` | `tests/source_matrix_test.rs` | tracked | offline provenance test | keep |
 | integration test | `public_api_boundary_test` | `tests/public_api_boundary_test.rs` | tracked | offline public API and docs boundary audit | keep |
@@ -309,6 +310,21 @@ existing public signature, HTTP behavior, CLOB/POLY_1271 behavior, or live
 authority. Exclusive consumer adapter imports, fork-DTO-free consumer
 port/domain types, adapter tests, and CLOB funder wiring belong to PBRSDK-22b.
 
+PBRSDK-23a adds one auto-discovered integration-test target,
+`no_clob_surface_test`, without a `Cargo.toml` target declaration. It adds no
+dependency, feature, fixture, binary, example, benchmark, production source,
+host call, mock venue, credential, or live authority. The target recursively
+reads the existing `src/**/*.rs` corpus in memory and uses only the standard
+library.
+
+Its Proof Scope is deliberately limited to the absence of the specified CLOB-
+specific markers and function signatures in `src/`, except for three
+path-and-occurrence-count-pinned compatibility/provenance markers. It does not
+prove all CLOB code absent and does not cover renamed implementations, macro or
+build-script output, external-crate behavior, consumer funder/POLY_1271 wiring,
+or confirmed-only balance synchronization. Synthetic mutations validate the
+same audit function without adding or changing a fixture.
+
 These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -336,6 +352,9 @@ Implementation and review packets should include:
 - PBRSDK-22a six identity unit tests, two pre-I/O rollback/read-capability
   integration tests, six-symbol/private-field/no-coercion public-boundary
   output, and `SM-IDENTITY-SEPARATION`,
+- PBRSDK-23a recursive `src/` marker/function audit output, frozen conditional-
+  exception counts and `/orders` test-region assertion, plus each exact
+  synthetic mutation result and the longer-identifier positive boundary,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,
