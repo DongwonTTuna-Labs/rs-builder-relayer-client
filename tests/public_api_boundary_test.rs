@@ -1,6 +1,281 @@
 use std::fs;
 use std::path::Path;
 
+use ethers::types::Address;
+use polymarket_relayer::{
+    deposit_wallet_contract_config, DepositWalletAddress, DepositWalletIdentityConfig,
+    DepositWalletOwner, RelayerAuthIdentity,
+};
+
+macro_rules! assert_not_impl {
+    ($t:ty, $($tr:tt)+) => {
+        const _: fn() = || {
+            trait AmbiguousIfImpl<A> { fn some_item() {} }
+            impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+            impl<T: ?Sized + $($tr)+> AmbiguousIfImpl<u8> for T {}
+            let _ = <$t as AmbiguousIfImpl<_>>::some_item;
+        };
+    };
+}
+
+assert_not_impl!(RelayerAuthIdentity, std::fmt::Display);
+assert_not_impl!(RelayerAuthIdentity, serde::Serialize);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    for<'de> serde::Deserialize<'de>
+);
+assert_not_impl!(RelayerAuthIdentity, serde::Deserialize<'static>);
+assert_not_impl!(RelayerAuthIdentity, std::ops::Deref);
+
+assert_not_impl!(DepositWalletOwner, std::fmt::Display);
+assert_not_impl!(DepositWalletOwner, serde::Serialize);
+assert_not_impl!(
+    DepositWalletOwner,
+    for<'de> serde::Deserialize<'de>
+);
+assert_not_impl!(DepositWalletOwner, serde::Deserialize<'static>);
+assert_not_impl!(DepositWalletOwner, std::ops::Deref);
+
+assert_not_impl!(DepositWalletAddress, std::fmt::Display);
+assert_not_impl!(DepositWalletAddress, serde::Serialize);
+assert_not_impl!(
+    DepositWalletAddress,
+    for<'de> serde::Deserialize<'de>
+);
+assert_not_impl!(DepositWalletAddress, serde::Deserialize<'static>);
+assert_not_impl!(DepositWalletAddress, std::ops::Deref);
+
+assert_not_impl!(DepositWalletIdentityConfig, serde::Serialize);
+assert_not_impl!(
+    DepositWalletIdentityConfig,
+    for<'de> serde::Deserialize<'de>
+);
+assert_not_impl!(
+    DepositWalletIdentityConfig,
+    serde::Deserialize<'static>
+);
+assert_not_impl!(DepositWalletIdentityConfig, std::fmt::Display);
+assert_not_impl!(DepositWalletIdentityConfig, std::ops::Deref);
+
+assert_not_impl!(
+    DepositWalletAddress,
+    std::convert::From<DepositWalletOwner>
+);
+assert_not_impl!(
+    DepositWalletAddress,
+    std::convert::From<RelayerAuthIdentity>
+);
+assert_not_impl!(
+    DepositWalletOwner,
+    std::convert::From<DepositWalletAddress>
+);
+assert_not_impl!(
+    DepositWalletOwner,
+    std::convert::From<RelayerAuthIdentity>
+);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    std::convert::From<DepositWalletOwner>
+);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    std::convert::From<DepositWalletAddress>
+);
+
+assert_not_impl!(
+    DepositWalletAddress,
+    std::convert::Into<DepositWalletOwner>
+);
+assert_not_impl!(
+    DepositWalletAddress,
+    std::convert::Into<RelayerAuthIdentity>
+);
+assert_not_impl!(
+    DepositWalletOwner,
+    std::convert::Into<DepositWalletAddress>
+);
+assert_not_impl!(
+    DepositWalletOwner,
+    std::convert::Into<RelayerAuthIdentity>
+);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    std::convert::Into<DepositWalletOwner>
+);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    std::convert::Into<DepositWalletAddress>
+);
+
+assert_not_impl!(
+    DepositWalletAddress,
+    std::convert::From<&'static DepositWalletOwner>
+);
+assert_not_impl!(
+    DepositWalletAddress,
+    std::convert::From<&'static RelayerAuthIdentity>
+);
+assert_not_impl!(
+    DepositWalletOwner,
+    std::convert::From<&'static DepositWalletAddress>
+);
+assert_not_impl!(
+    DepositWalletOwner,
+    std::convert::From<&'static RelayerAuthIdentity>
+);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    std::convert::From<&'static DepositWalletOwner>
+);
+assert_not_impl!(
+    RelayerAuthIdentity,
+    std::convert::From<&'static DepositWalletAddress>
+);
+
+assert_not_impl!(
+    &'static DepositWalletAddress,
+    std::convert::Into<DepositWalletOwner>
+);
+assert_not_impl!(
+    &'static DepositWalletAddress,
+    std::convert::Into<RelayerAuthIdentity>
+);
+assert_not_impl!(
+    &'static DepositWalletOwner,
+    std::convert::Into<DepositWalletAddress>
+);
+assert_not_impl!(
+    &'static DepositWalletOwner,
+    std::convert::Into<RelayerAuthIdentity>
+);
+assert_not_impl!(
+    &'static RelayerAuthIdentity,
+    std::convert::Into<DepositWalletOwner>
+);
+assert_not_impl!(
+    &'static RelayerAuthIdentity,
+    std::convert::Into<DepositWalletAddress>
+);
+
+#[test]
+fn identity_redaction_is_pinned_on_the_normal_library_artifact() {
+    let auth_address = Address::from_slice(&[0x11; 20]);
+    let owner_address = Address::from_slice(&[0x22; 20]);
+    let standalone_wallet_address = Address::from_slice(&[0x33; 20]);
+    let config_owner_address: Address =
+        "0x6e0c80c90ea6c15917308F820Eac91Ce2724B5b5".parse().unwrap();
+    let config_wallet_address: Address =
+        "0x069F89dAEfbaDdF5B6639Dc34D73E59cCCBC63De".parse().unwrap();
+    let contract_config = deposit_wallet_contract_config(137).unwrap();
+    let config = DepositWalletIdentityConfig::try_new(
+        RelayerAuthIdentity::new(auth_address),
+        DepositWalletOwner::new(config_owner_address),
+        DepositWalletAddress::new(config_wallet_address),
+        contract_config,
+    )
+    .unwrap();
+    let summary = config.summary();
+
+    let auth = RelayerAuthIdentity::new(auth_address);
+    let owner = DepositWalletOwner::new(owner_address);
+    let standalone_wallet = DepositWalletAddress::new(standalone_wallet_address);
+    let auth_debug = format!("{auth:?}");
+    let auth_debug_alternate = format!("{auth:#?}");
+    let owner_debug = format!("{owner:?}");
+    let owner_debug_alternate = format!("{owner:#?}");
+    let wallet_debug = format!("{standalone_wallet:?}");
+    let wallet_debug_alternate = format!("{standalone_wallet:#?}");
+    let config_debug = format!("{config:?}");
+    let config_debug_alternate = format!("{config:#?}");
+    let summary_debug = format!("{summary:?}");
+    let summary_debug_alternate = format!("{summary:#?}");
+    let summary_json = serde_json::to_string(&summary).unwrap();
+
+    assert_eq!(auth_debug, r#"RelayerAuthIdentity("0x1111...1111")"#);
+    assert_eq!(
+        auth_debug_alternate,
+        r#"RelayerAuthIdentity(
+    "0x1111...1111",
+)"#
+    );
+    assert_eq!(owner_debug, r#"DepositWalletOwner("0x2222...2222")"#);
+    assert_eq!(
+        owner_debug_alternate,
+        r#"DepositWalletOwner(
+    "0x2222...2222",
+)"#
+    );
+    assert_eq!(
+        wallet_debug,
+        r#"DepositWalletAddress("0x3333...3333")"#
+    );
+    assert_eq!(
+        wallet_debug_alternate,
+        r#"DepositWalletAddress(
+    "0x3333...3333",
+)"#
+    );
+    assert_eq!(
+        config_debug,
+        r#"DepositWalletIdentityConfig { auth_identity: "0x1111...1111", owner: "0x6e0c...B5b5", deposit_wallet: "0x069F...63De" }"#
+    );
+    assert_eq!(
+        config_debug_alternate,
+        r#"DepositWalletIdentityConfig {
+    auth_identity: "0x1111...1111",
+    owner: "0x6e0c...B5b5",
+    deposit_wallet: "0x069F...63De",
+}"#
+    );
+    assert_eq!(
+        summary_debug,
+        r#"IdentityConfigSummary { auth_identity: "0x1111...1111", owner: "0x6e0c...B5b5", deposit_wallet: "0x069F...63De", overlaps: [], redaction: "full identity addresses are intentionally redacted" }"#
+    );
+    assert_eq!(
+        summary_debug_alternate,
+        r#"IdentityConfigSummary {
+    auth_identity: "0x1111...1111",
+    owner: "0x6e0c...B5b5",
+    deposit_wallet: "0x069F...63De",
+    overlaps: [],
+    redaction: "full identity addresses are intentionally redacted",
+}"#
+    );
+    assert_eq!(
+        summary_json,
+        r#"{"auth_identity":"0x1111...1111","owner":"0x6e0c...B5b5","deposit_wallet":"0x069F...63De","overlaps":[],"redaction":"full identity addresses are intentionally redacted"}"#
+    );
+
+    let inspected_outputs = [
+        auth_debug.as_str(),
+        auth_debug_alternate.as_str(),
+        owner_debug.as_str(),
+        owner_debug_alternate.as_str(),
+        wallet_debug.as_str(),
+        wallet_debug_alternate.as_str(),
+        config_debug.as_str(),
+        config_debug_alternate.as_str(),
+        summary_debug.as_str(),
+        summary_debug_alternate.as_str(),
+        summary_json.as_str(),
+    ];
+    for forbidden in [
+        "0x1111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222",
+        "0x3333333333333333333333333333333333333333",
+        "e2c07404b8c1df4c46226425cac68c28d27a766bbddce62309f36724839b22c0",
+        "efda2c2822100aaf94fb77c3765831ce37fc3c02cbc11603dd6ffa9c0d25ec55",
+        "2ab0a4443bbea3fbe4d0e1503d11ff1367842fb0c8b28a5c8550f27599a40751",
+        "3e52d38afc818492f352a9e01ab9de98dcaab3d6e46c6a62367c4e9ce56d0187",
+        "37d95e0aa71e34defa88b4c43498bc8b90207e31ad0ef4aa6f5bea78bd25a1ab",
+        "fd05d543fd7c68c3811c333778ec2ca116a8e03edfa4deeee24117234f64a12c",
+    ] {
+        for output in &inspected_outputs {
+            assert!(!output.contains(forbidden));
+        }
+    }
+}
+
 #[test]
 fn crate_root_keeps_reviewed_deposit_wallet_surface() {
     let lib = fs::read_to_string("src/lib.rs").expect("crate root is readable");
@@ -21,6 +296,12 @@ fn crate_root_keeps_reviewed_deposit_wallet_surface() {
         "DepositWalletDeploymentPolicy",
         "DepositWalletDeploymentStatus",
         "DepositWalletReadiness",
+        "RelayerAuthIdentity",
+        "DepositWalletOwner",
+        "DepositWalletAddress",
+        "DepositWalletIdentityConfig",
+        "IdentityOverlap",
+        "IdentityConfigSummary",
         "DepositWalletRequestContext",
         "DepositWalletCall",
         "DepositWalletDryRunEvidence",
@@ -1302,6 +1583,13 @@ fn http_client_exposes_only_the_reviewed_read_and_mutation_methods() {
             "the complete production HTTP implementation must not expose mutation reactivation: {forbidden}"
         );
     }
+    for forbidden in ["pub fn set_mutation", "pub async fn set_mutation"] {
+        assert_eq!(
+            production_http_surface.matches(forbidden).count(),
+            0,
+            "the complete production HTTP implementation must not expose mutation state setters: {forbidden}"
+        );
+    }
 
     for required in [
         "pub struct RelayerMutationPermit",
@@ -1362,6 +1650,12 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
         "DepositWalletDeploymentStatus",
         "DepositWalletDryRunEvidence",
         "DepositWalletReadiness",
+        "RelayerAuthIdentity",
+        "DepositWalletOwner",
+        "DepositWalletAddress",
+        "DepositWalletIdentityConfig",
+        "IdentityOverlap",
+        "IdentityConfigSummary",
         "DepositWalletSubmitReceipt",
         "DryRunCallSummary",
         "RelayerMutationMode",
@@ -1404,6 +1698,154 @@ fn deposit_wallet_exports_are_explicit_and_not_clob_or_legacy_execute_paths() {
             "deposit_wallet module must not add CLOB SDK public surface: {forbidden}"
         );
     }
+}
+
+#[test]
+fn identity_config_surface_is_explicit_private_and_non_coercing() {
+    let module = fs::read_to_string("src/deposit_wallet/mod.rs")
+        .expect("deposit_wallet module is readable");
+    let identity = fs::read_to_string("src/deposit_wallet/identity.rs")
+        .expect("identity source is readable");
+    let auth = fs::read_to_string("src/deposit_wallet/http/auth.rs")
+        .expect("relayer auth source is readable");
+    let repository_source = rust_sources_under(Path::new("src"));
+
+    assert!(
+        module.contains("mod identity;") && !module.contains("pub mod identity;"),
+        "identity implementation must remain a private module"
+    );
+    assert_eq!(
+        identity.matches("cfg(not(test))").count(),
+        0,
+        "identity fields and redaction must not diverge in non-test artifacts"
+    );
+    assert!(
+        identity.contains("fn _identity_config_summary_field_shape_is_pinned("),
+        "the every-build summary field-shape pin must remain present"
+    );
+    assert_eq!(
+        repository_source.matches("impl From<").count(),
+        0,
+        "the complete production source must not add literal impl From conversions"
+    );
+    for forbidden in ["::From<", "::Into<"] {
+        assert_eq!(
+            repository_source.matches(forbidden).count(),
+            0,
+            "the complete production source must not add fully qualified {forbidden} conversions"
+        );
+    }
+    for forbidden in [
+        "impl Into<",
+        "impl Deref",
+        "impl fmt::Display",
+        "Deserialize",
+    ] {
+        assert_eq!(
+            identity.matches(forbidden).count(),
+            0,
+            "identity boundary must not contain {forbidden}"
+        );
+    }
+
+    for exact_private_tuple in [
+        "pub struct RelayerAuthIdentity(Address);",
+        "pub struct DepositWalletOwner(Address);",
+        "pub struct DepositWalletAddress(Address);",
+    ] {
+        assert!(
+            identity.contains(exact_private_tuple),
+            "identity tuple field must remain private: {exact_private_tuple}"
+        );
+    }
+
+    for type_name in [
+        "RelayerAuthIdentity",
+        "DepositWalletOwner",
+        "DepositWalletAddress",
+    ] {
+        let attributes = derive_attributes_for_struct(&identity, type_name);
+        assert!(
+            !attributes.contains("Debug")
+                && !attributes.contains("Serialize")
+                && !attributes.contains("Deserialize"),
+            "{type_name} must use manual redacted Debug and must not be a wire DTO"
+        );
+        assert!(
+            identity.contains(&format!("impl fmt::Debug for {type_name}")),
+            "{type_name} must retain manual redacted Debug"
+        );
+        assert!(
+            !identity.contains(&format!("Serialize for {type_name}")),
+            "{type_name} must not become a serializable wire DTO"
+        );
+    }
+
+    let config = struct_block(&identity, "DepositWalletIdentityConfig");
+    for field in ["auth_identity", "owner", "deposit_wallet"] {
+        assert!(
+            config.contains(&format!("    {field}:")),
+            "DepositWalletIdentityConfig::{field} must exist"
+        );
+        assert!(
+            !config.contains(&format!("pub {field}:")),
+            "DepositWalletIdentityConfig::{field} must stay private"
+        );
+    }
+    let config_attributes =
+        derive_attributes_for_struct(&identity, "DepositWalletIdentityConfig");
+    assert!(
+        !config_attributes.contains("Debug")
+            && !config_attributes.contains("Serialize")
+            && !config_attributes.contains("Deserialize")
+            && !identity.contains("Serialize for DepositWalletIdentityConfig")
+            && identity.contains("impl fmt::Debug for DepositWalletIdentityConfig"),
+        "identity config must retain manual redacted Debug and remain outside the wire DTO surface"
+    );
+
+    let summary = struct_block(&identity, "IdentityConfigSummary");
+    for field in [
+        "auth_identity",
+        "owner",
+        "deposit_wallet",
+        "overlaps",
+        "redaction",
+    ] {
+        assert!(
+            summary.contains(&format!("    {field}:")),
+            "IdentityConfigSummary::{field} must exist"
+        );
+        assert!(
+            !summary.contains(&format!("pub {field}:")),
+            "IdentityConfigSummary::{field} must stay private"
+        );
+    }
+    let summary_attributes = derive_attributes_for_struct(&identity, "IdentityConfigSummary");
+    assert!(
+        summary_attributes.contains("Serialize") && summary_attributes.contains("Debug"),
+        "identity summary must remain the redacted serializable observation DTO"
+    );
+
+    for required in [
+        "pub fn try_new(",
+        "pub fn auth_identity(&self)",
+        "pub fn owner(&self)",
+        "pub fn deposit_wallet(&self)",
+        "pub fn overlaps(&self)",
+        "pub fn summary(&self)",
+        "pub fn request_context(&self)",
+        "pub fn as_key(&self)",
+    ] {
+        assert!(
+            identity.contains(required),
+            "identity config surface is missing {required}"
+        );
+    }
+    assert!(
+        auth.contains("pub fn from_identity(")
+            && auth.contains("identity: crate::deposit_wallet::RelayerAuthIdentity"),
+        "RelayerKeyAuth must expose the additive typed identity constructor"
+    );
 }
 
 #[test]
@@ -1689,6 +2131,31 @@ fn append_production_rust_sources(directory: &Path, surface: &mut String) {
             &fs::read_to_string(&path).unwrap_or_else(|_| {
                 panic!("production HTTP source is readable: {}", path.display())
             }),
+        );
+    }
+}
+
+fn rust_sources_under(directory: &Path) -> String {
+    let mut source = String::new();
+    append_all_rust_sources(directory, &mut source);
+    source
+}
+
+fn append_all_rust_sources(directory: &Path, source: &mut String) {
+    for entry in fs::read_dir(directory).expect("Rust source directory is readable") {
+        let path = entry.expect("Rust source entry is readable").path();
+        if path.is_dir() {
+            append_all_rust_sources(&path, source);
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+
+        source.push('\n');
+        source.push_str(
+            &fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("Rust source is readable: {}", path.display())),
         );
     }
 }

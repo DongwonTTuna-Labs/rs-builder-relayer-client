@@ -162,7 +162,7 @@ Migration:
 
 - consumers importing the removed infallible helper must move to
   `try_build_wallet_batch_request_with_signature` or the validated
-  `SignedDepositWalletBatch` flow;
+  `deposit_wallet::SignedDepositWalletBatch` flow;
 - consumer domain, strategy, risk, and actor crates must depend on their local
   port types rather than this crate's DTOs;
 - CLOB trading integrations must stay in the official Rust CLOB SDK adapter.
@@ -1033,3 +1033,135 @@ HTTP behavior, fixtures, dependencies, and public signatures are unchanged.
 Residual live risks and gates remain those already assigned to nonce,
 authorization, submission, reconciliation, operator review, and unchanged-
 source live qualification.
+
+## ADR-0020: PBRSDK-22a Typed Identity Boundary And Read-Only Rollback Evidence
+
+Status: accepted for the additive `0.2.0` deposit-wallet surface.
+
+PBRSDK-22a adds an opt-in configuration boundary for the three addresses that
+must not be conflated: the relayer API-key authentication identity, the EOA
+that owns the deposit wallet and signs WALLET batches, and the deployed deposit
+wallet contract that is also the CLOB funder. `RelayerAuthIdentity`,
+`DepositWalletOwner`, and `DepositWalletAddress` are distinct private-field
+newtypes, and `DepositWalletIdentityConfig` requires each role explicitly.
+Consequently, swapping these values is a type error only on paths that use the
+new identity config boundary. Existing raw-`Address` constructors, request
+types, public fields, and function signatures remain unchanged, so this ADR
+does not claim crate-wide type enforcement.
+
+Each newtype exposes only explicit `new` and `address` methods. The design
+forbids cross-role `From`/`Into`, `Deref`, and `Display`: an implicit conversion
+would erase the role distinction, while `Display` would create an easy
+full-address logging path. The design also keeps the identity newtypes and
+config outside the serializable wire DTO surface. Their manual `Debug`
+implementations use the existing checksum-prefix/suffix redaction. The
+implementation module remains private while the six reviewed types are
+explicitly re-exported from `deposit_wallet` and the crate root. The exact
+mechanically checked subset of these rules is listed under Proof Scope below.
+
+`DepositWalletIdentityConfig::try_new` rejects any zero identity as
+`RelayerError::InvalidAddress` before attempting derivation. This order is
+part of the contract: deriving from a zero owner can return a non-zero-looking
+address, so derivation-first validation could misclassify an unset owner as a
+relationship failure. After all three non-zero checks, the constructor derives
+the wallet from the owner and supplied contract config and requires an exact
+match. A mismatch is `RelayerError::Signing` because the individual addresses
+are well formed but the owner-to-wallet signing relationship is invalid.
+
+Address equality is observed, not rejected. `IdentityOverlap` reports all
+equal pairs in the fixed order auth/owner, auth/wallet, owner/wallet, and
+`as_key` fixes their stable external keys. Equality may be an explicit
+operator configuration, and whether to reject it belongs to higher-level
+policy. The owner-to-wallet derivation invariant still applies independently.
+
+`IdentityConfigSummary` is the only serializable identity observation type.
+Its design contract is five private fields containing three redacted
+addresses, stable overlap keys, and the fixed marker
+`full identity addresses are intentionally redacted`, with neither a full
+address nor an address hash stored. As in ADR-0019, a non-keyed hash can become
+a confirmation oracle when the deployment context or address allowlist is
+known, so this shareable summary favors non-disclosure over binding. The
+mechanical evidence for this contract is deliberately narrower and follows.
+
+### Proof Scope
+
+The following properties are compile-time claims with enumerated evidence:
+
+- **Compile-time negative trait assertions:** all six cross-role directions
+  are checked separately for owned `From`, owned direct `Into`,
+  `From<&'static Source>`, and `&'static Source: Into<Destination>`, for 24
+  assertions total. These are distinct trait instantiations; proving one does
+  not prove another. Same-type `Into<Self>` is not asserted because reflexive
+  `From<T> for T` supplies it.
+- **Compile-time negative trait assertions:** each of the three newtypes and
+  `DepositWalletIdentityConfig` is checked for absence of `Display`, `Deref`,
+  and `Serialize`, plus both `for<'de> Deserialize<'de>` and the exact
+  `Deserialize<'static>` instantiation.
+- **Every-build compile-time field pin:** the unconditional, non-`cfg`
+  `_identity_config_summary_field_shape_is_pinned` function exhaustively
+  destructures the five named private `IdentityConfigSummary` fields without
+  `..`. Adding a field, including a `#[serde(skip)]` field restricted to a
+  non-test artifact, therefore produces E0027 in that build configuration.
+
+Other reviewed properties use narrower evidence and are not compile-time
+claims:
+
+- **Production-artifact integration exact assertions:** the three newtypes,
+  config, and summary have complete literal expectations for both `{:?}` and
+  `{:#?}`, and the summary JSON has a complete literal expectation. The
+  integration target links the normal library artifact, so a test-only
+  representation cannot satisfy this evidence. The expectations do not call
+  the production redaction helper as their oracle.
+- **Fixed sentinel assertions:** the reviewed outputs omit the listed raw
+  lowercase addresses and six listed address/checksum-string hashes. This
+  defends only those specific encodings; uppercase, base64, and decimal
+  byte-array representations are not detected by these sentinels.
+- **Source audit:** recursive `src/` checks retain the literal and fully
+  qualified conversion-pattern defense, and `identity.rs` contains zero
+  `cfg(not(test))` strings. Alias syntax can bypass literal search, so source
+  audit is defense in depth and does not replace the compile-time assertions.
+
+The proof scope explicitly excludes `&mut` receiver-based conversions; no
+negative assertion is made for them. Implementations generated by macros or
+build scripts and extensions supplied by external crates are also outside the
+documented proof scope. Accordingly, this ADR does not claim that every
+possible conversion or identity-disclosure path is sealed.
+
+Compatibility is additive. `DepositWalletIdentityConfig::request_context`
+creates the existing public `DepositWalletRequestContext`, and
+`RelayerKeyAuth::from_identity` delegates to the unchanged
+`RelayerKeyAuth::new`. These adapters deliberately return to raw `Address` at
+the legacy boundary. Existing callers therefore compile unchanged, while new
+consumer wiring can validate and keep the three roles distinct until that
+boundary.
+
+Rollback evidence is also additive and offline. The external
+`mutation_rollback_boundary_test` constructs the existing production-host URL
+value but starts no server and performs no network round trip. After
+`disable_mutation`, a valid Live WALLET-CREATE permit is rejected by the
+mutation predicate and fixed disabled-latch message before dispatch. On the
+same disabled client, owner-mismatched and chain-mismatched read permits still
+reach their independent read-only validation predicates before dispatch.
+`public_api_boundary_test` continues to prove that no public
+`enable_mutation` path exists and additionally forbids public `set_mutation*`
+paths across the complete production HTTP source.
+
+A successful network-backed read assertion is intentionally outside this
+external integration target. The public URL type accepts only the production
+host, the repository has no external-integration loopback precedent, and
+`Cargo.toml` plus dev-dependencies are frozen for this round. Adding a public
+test transport, dependency, or bespoke server would widen the architecture to
+duplicate evidence already present in `src/deposit_wallet/http/tests.rs`,
+where loopback tests cover all three successful read methods and the rollback
+latch preserving reads. The new test therefore proves pre-I/O rollback and
+read-capability boundaries without making a live-read claim.
+
+PBRSDK-22a is the fork-owned portion only. The consumer-owned PBRSDK-22b must
+separately prove that only `pm-adapters/relayer_http` imports this fork, that
+consumer port/domain types expose no fork DTOs, and that adapter tests preserve
+the mapping. No consumer code, CLOB/POLY_1271 behavior, wire format, HTTP
+behavior, dependency, fixture, credential, or live call changes here. Rollback
+for the additive identity surface is to stop constructing the new config and
+continue using the unchanged legacy entry points; live enablement remains
+blocked until the consumer adapter, CLOB funder separation, and operator gates
+pass.

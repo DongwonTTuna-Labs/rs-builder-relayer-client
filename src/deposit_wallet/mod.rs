@@ -9,6 +9,7 @@ pub mod address;
 pub mod calldata;
 pub mod config;
 pub mod http;
+mod identity;
 pub mod nonce;
 pub mod requests;
 pub mod signing;
@@ -32,6 +33,10 @@ pub use http::{
     RelayerMutationMode, RelayerMutationOperation, RelayerMutationPermit, RelayerPollOutcome,
     RelayerPollPolicy, RelayerReadPermit, RelayerSubmitOutcome, TryBeginOutcome,
     MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION,
+};
+pub use identity::{
+    DepositWalletAddress, DepositWalletIdentityConfig, DepositWalletOwner, IdentityConfigSummary,
+    IdentityOverlap, RelayerAuthIdentity,
 };
 pub use nonce::{build_wallet_nonce_request, WalletNonceRequest};
 #[allow(deprecated)]

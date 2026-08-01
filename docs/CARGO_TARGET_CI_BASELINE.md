@@ -22,10 +22,13 @@ submit bodies.
 | example | `diagnose_nonce` | `examples/diagnose_nonce.rs` | tracked | none in normal run; offline-safe body verified | keep fixture hash diagnostic |
 | integration test | `auth_test` | `tests/auth_test.rs` | tracked | offline test | keep |
 | integration test | `builder_test` | `tests/builder_test.rs` | tracked | offline test | keep |
+| integration test | `calldata_batch_composition_test` | `tests/calldata_batch_composition_test.rs` | tracked | offline composition and request-preflight test | keep |
+| integration test | `ci_contract_test` | `tests/ci_contract_test.rs` | tracked | offline repository-contract test | keep |
 | integration test | `client_test` | `tests/client_test.rs` | tracked | offline test | keep |
 | integration test | `deposit_wallet_signing_test` | `tests/deposit_wallet_signing_test.rs` | tracked | offline fixture test | keep |
 | integration test | `deposit_wallet_test` | `tests/deposit_wallet_test.rs` | tracked | offline fixture test | keep |
 | integration test | `integration_test` | `tests/integration_test.rs` | tracked | offline calldata test | keep |
+| integration test | `mutation_rollback_boundary_test` | `tests/mutation_rollback_boundary_test.rs` | added by PBRSDK-22a | pre-I/O rollback/read-capability boundary only | keep offline; no server or live call |
 | integration test | `operations_test` | `tests/operations_test.rs` | tracked | offline calldata test | keep |
 | integration test | `source_matrix_test` | `tests/source_matrix_test.rs` | tracked | offline provenance test | keep |
 | integration test | `public_api_boundary_test` | `tests/public_api_boundary_test.rs` | tracked | offline public API and docs boundary audit | keep |
@@ -275,6 +278,37 @@ freshness remains in the existing clock-injected execution/submit tests. This
 target adds no nonce fetch, signing operation, submit, CLOB synchronization,
 actor orchestration, or live-execution authority.
 
+PBRSDK-22a adds exactly one Cargo integration-test target,
+`mutation_rollback_boundary_test`, from
+`tests/mutation_rollback_boundary_test.rs`. It adds no binary, example,
+benchmark, dependency, feature, manifest entry, fixture, HTTP implementation,
+live credential, mock venue, public test transport, or bespoke harness.
+Production code adds only the private
+`src/deposit_wallet/identity.rs` config boundary, its six explicit re-exports,
+and the additive `RelayerKeyAuth::from_identity` constructor.
+
+The new target starts no server and makes no timing assertion. Its production
+URL value is constructed but every awaited operation is rejected before
+network dispatch: the disabled mutation latch rejects a valid Live
+WALLET-CREATE permit, and the same disabled client still applies owner- and
+chain-mismatched read-permit checks. Successful read round trips remain in the
+existing internal loopback tests and are not duplicated by widening the public
+test API.
+
+Six module-local identity tests cover zero-check ordering, owner-derived wallet
+validation, additive request-context construction, overlap ordering/keys, and
+redacted Debug/summary serialization. The existing
+`public_api_boundary_test` target expands to pin the six crate-root exports,
+private identity module/fields, complete-tree no-`From` rule, prohibited
+identity coercion/display/deserialization traits, additive auth adapter, and
+absence of public `set_mutation*` reactivation paths. `SM-IDENTITY-SEPARATION`
+records the local design authority and unchanged live block.
+
+PBRSDK-22a is offline fork-boundary evidence only. It changes no wire format,
+existing public signature, HTTP behavior, CLOB/POLY_1271 behavior, or live
+authority. Exclusive consumer adapter imports, fork-DTO-free consumer
+port/domain types, adapter tests, and CLOB funder wiring belong to PBRSDK-22b.
+
 These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
@@ -299,6 +333,9 @@ Implementation and review packets should include:
   route public-boundary output, and `SM-CALLDATA-CTF-ROUTES` drift evidence,
 - PBRSDK-20 six-builder composition, summary redaction/boundary/empty-input,
   request-preflight negative/success, and summary public-boundary output,
+- PBRSDK-22a six identity unit tests, two pre-I/O rollback/read-capability
+  integration tests, six-symbol/private-field/no-coercion public-boundary
+  output, and `SM-IDENTITY-SEPARATION`,
 - confirmation that logs and artifacts contain no secrets, auth headers, raw
   production signatures, private endpoints, funded-wallet data, or replayable
   production submit bodies,
