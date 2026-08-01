@@ -128,6 +128,25 @@
 - [ ] ADR-0019 records the summary/dry-run separation, no-validation rule, low-entropy hash-oracle decision, exact empty-data disclosure contract, public-API integration-test rationale, rollback, and remaining live gates.
 - [ ] No fixture/provenance/source-matrix/wire-truth change, new builder/route, HTTP change, signing change, live call, actor orchestration, or live-readiness claim is included.
 
+## Typed Identity And Rollback Boundary (PBRSDK-22a)
+
+- [ ] `RelayerAuthIdentity`, `DepositWalletOwner`, and `DepositWalletAddress` have private tuple fields, explicit `new`/`address` methods, and manual redacted Debug.
+- [ ] `DepositWalletIdentityConfig::try_new` checks all three zero addresses before derivation and reports `InvalidAddress`; a non-zero owner-derived wallet mismatch reports `Signing`.
+- [ ] Identity equality is never a policy rejection; `overlaps()` returns every equal pair in enum order and `IdentityOverlap::as_key()` fixes all three reviewed keys.
+- [ ] **Every-build compile-time field pin:** the non-`cfg` summary-shape helper destructures exactly the five named private fields without `..`, so an added field, including `#[serde(skip)]` under `cfg(not(test))`, produces E0027 in that configuration.
+- [ ] **Compile-time negative trait assertions:** all three identity newtypes and the config lack `Display`, `Deref`, `Serialize`, HRTB `Deserialize`, and exact `Deserialize<'static>`.
+- [ ] **Compile-time negative trait assertions:** owned `From`, owned direct `Into`, `From<&'static _>`, and `&'static _: Into<_>` cover all six cross-role directions, for 24 assertions. Same-type `Into<Self>` is excluded by reflexive `From`, and `&mut` receivers are explicitly outside the guaranteed matrix.
+- [ ] **Production-artifact integration exact assertions:** both Debug formats for the three newtypes/config/summary and the complete summary JSON equal fixed literals rather than production-helper-generated expectations.
+- [ ] **Fixed sentinel assertions:** the reviewed normal-artifact outputs omit only the listed lowercase raw addresses and six listed hashes; uppercase, base64, and decimal byte-array encodings are not claimed covered.
+- [ ] **Source audit:** recursive `src/` conversion-pattern checks and zero `cfg(not(test))` strings in `identity.rs` remain defense in depth, not a substitute for compile-time assertions; macro/build-script output and external-crate extensions remain outside scope.
+- [ ] `request_context()` and `RelayerKeyAuth::from_identity()` are additive adapters; all existing raw-address public fields, constructors, and signatures remain unchanged.
+- [ ] The identity implementation module is private while all six reviewed types are explicitly re-exported from `deposit_wallet` and the crate root.
+- [ ] The rollback integration target starts no server, makes no live call or timing assertion, and proves disabled Live mutation plus independent owner/chain read-permit rejection through typed predicates and fixed message fragments.
+- [ ] The public source audit retains no `enable_mutation` path and finds no public `set_mutation*` path across the complete production HTTP surface.
+- [ ] Successful read round trips remain covered by existing internal loopback tests; no public test transport, dev-dependency, mock venue, or bespoke harness is added.
+- [ ] ADR-0020 limits type-error claims to the new identity config boundary and assigns exclusive adapter imports, fork-DTO-free consumer ports/domain, adapter tests, and CLOB funder/POLY_1271 wiring to PBRSDK-22b.
+- [ ] `SM-IDENTITY-SEPARATION` contains all 12 required columns, records fork-local authority, and retains the consumer/operator live block.
+
 ## Consumer Integration
 
 - [ ] Consumer imports are limited to `pm-adapters/relayer_http` or runtime wiring.
@@ -191,6 +210,7 @@
 - [ ] `MutationIntentStore`, `TryBeginOutcome`, `InMemoryMutationIntentStore`, `MutationIntentRecord`, `MutationIntentStatus`, `OwnerMutationRegistry`, `MutationIntentLease`, and `IntentGatedClient` are explicitly re-exported at all three public boundaries.
 - [ ] `ReconciliationDecision`, `ReconciliationEvidence`, `IntentReconcileOutcome`, `AmbiguousCandidate`, and `AmbiguousCandidateReport` are explicitly re-exported at all three public boundaries with private fields and reviewed getters.
 - [ ] `MutationIntentAuditArtifact`, `ReconciliationSummary`, and `MUTATION_AUDIT_ARTIFACT_SCHEMA_VERSION` are explicitly re-exported at all three public boundaries; the schema constant and `export_audit_artifact` signature remain pinned.
+- [ ] The six PBRSDK-22a identity types are explicitly re-exported at crate root; their private modules/fields remain source-audited, while the documented trait matrix is enforced by compile-time negative assertions.
 - [ ] `reconcile_manually`, `adopt_transaction`, `reconcile_by_polling`, and `report_ambiguous_candidates` retain their reviewed owner/epoch/evidence/policy/permit/cancel signatures.
 - [ ] The store surface has no generic `save`; begin generation is store-issued atomically and every later write is epoch/revision CAS with overflow fail-closed.
 - [ ] `record_poll_outcome` and `record_terminal_failure` both require an explicit polled transaction id and cannot resolve a mismatched or non-Submitted record.

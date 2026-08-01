@@ -16,6 +16,8 @@ work, use the reviewed fallible APIs such as
 `RelayerReadPermit`, `DepositWalletRequestContext`, `DepositWalletCall`,
 `DepositWalletDeploymentPolicy`, `DepositWalletDeploymentStatus`,
 `DepositWalletReadiness`, `RelayerPollPolicy`, `RelayerPollOutcome`,
+`RelayerAuthIdentity`, `DepositWalletOwner`, `DepositWalletAddress`,
+`DepositWalletIdentityConfig`, `IdentityOverlap`, `IdentityConfigSummary`,
 `RelayerKeyAuth`, `RelayerMutationPermit`, `RelayerMutationMode`,
 `RelayerMutationOperation`, `RelayerSubmitOutcome`,
 `DepositWalletDryRunEvidence`, `DryRunCallSummary`,
@@ -78,6 +80,22 @@ longer than four bytes, and exact lengths/counts; it omits full calldata, full
 targets, signatures, auth material, and calldata hashes. It does not validate
 or authorize the batch, and deadline freshness remains in the existing clock-
 injected execute/submit gates.
+PBRSDK-22a adds an opt-in typed boundary for relayer authentication identity,
+deposit-wallet owner signer, and deposit-wallet/CLOB-funder address.
+`DepositWalletIdentityConfig::try_new` rejects zero values before validating
+the owner-derived wallet relationship; equal roles are reported through
+ordered `IdentityOverlap` observations rather than rejected. Its serializable
+summary contains only redacted addresses, stable overlap keys, and a fixed
+redaction marker, with no full address or address hash.
+`request_context` and `RelayerKeyAuth::from_identity` are additive adapters to
+the unchanged raw-address APIs. Identity swapping is therefore a type error
+only while callers remain inside the new identity config boundary, not across
+the entire compatibility surface. The offline
+`mutation_rollback_boundary_test` proves that the one-way disabled latch blocks
+Live mutation before dispatch while owner/chain read-permit validation remains
+active; it starts no server and makes no successful network-read or live claim.
+Exclusive consumer adapter imports, fork-DTO-free port/domain types, adapter
+mapping tests, and CLOB funder/POLY_1271 wiring remain PBRSDK-22b consumer work.
 `RelayerReadPermit` is required for
 `is_deposit_wallet_deployed`, `get_wallet_nonce`, and
 `get_transaction_for_owner`, `report_ambiguous_candidates`, both polling

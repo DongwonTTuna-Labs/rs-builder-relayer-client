@@ -17,6 +17,13 @@ impl RelayerKeyAuth {
         })
     }
 
+    pub fn from_identity(
+        api_key: impl Into<String>,
+        identity: crate::deposit_wallet::RelayerAuthIdentity,
+    ) -> Result<Self> {
+        Self::new(api_key, identity.address())
+    }
+
     pub fn api_key_address(&self) -> Address {
         self.api_key_address
     }

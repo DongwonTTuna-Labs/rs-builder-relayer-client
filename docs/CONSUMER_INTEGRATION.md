@@ -104,12 +104,18 @@ DepositWalletDryRunEvidence
 DepositWalletSubmitReceipt
 DryRunCallSummary
 DepositWalletCall
+RelayerAuthIdentity
+DepositWalletOwner
+DepositWalletAddress
+DepositWalletIdentityConfig
+IdentityOverlap
+IdentityConfigSummary
 RelayerKeyAuth
 DepositWalletRequestContext
 DepositWalletCreateRequest
 WalletNonceRequest
 RelayerTransactionState
-SignedDepositWalletBatch
+deposit_wallet::SignedDepositWalletBatch
 RelayerSubmitResponse
 DepositWalletTransactionReceipt
 derive_deposit_wallet_address
@@ -127,7 +133,8 @@ construction surface. It is intentionally not re-exported from the crate root;
 its submit-body fields remain crate-private. Consumers that need to submit a
 WALLET batch must obtain it from
 `try_build_wallet_batch_request_with_signature` or from the validated
-`SignedDepositWalletBatch` flow inside the relayer adapter boundary.
+`deposit_wallet::SignedDepositWalletBatch` flow inside the relayer adapter
+boundary. `SignedDepositWalletBatch` is not a crate-root re-export.
 
 Legacy Safe/Proxy APIs such as `RelayClient`, `AuthMethod`, `DirectExecutor`,
 and `operations::*` remain available as upstream compatibility/reference
@@ -137,7 +144,7 @@ production flows.
 
 WALLET submit request construction must use the fallible
 `try_build_wallet_batch_request_with_signature` API or the validated
-`SignedDepositWalletBatch` flow. The old infallible
+`deposit_wallet::SignedDepositWalletBatch` flow. The old infallible
 `build_wallet_batch_request_with_signature` helper is intentionally not part of
 the public integration surface because it cannot report signer, config,
 derived-wallet, signature-shape, or resource-limit failures.
@@ -371,6 +378,79 @@ intentionally does not decide wall-clock deadline freshness. Live consumers
 must continue through the clock-injected `execute_wallet_batch` / submit gate,
 which performs the deadline and fresh-nonce checks. This summary adds no submit
 authority and is not a substitute for `DepositWalletDryRunEvidence`.
+
+### Typed identity configuration boundary (PBRSDK-22a)
+
+Construct the three roles separately, derive the deposit wallet from the owner
+and reviewed contract config, and validate the relationship before creating
+the existing auth/request objects:
+
+```rust
+use ethers::types::Address;
+use polymarket_relayer::{
+    deposit_wallet_contract_config, derive_deposit_wallet_address,
+    DepositWalletAddress, DepositWalletIdentityConfig, DepositWalletOwner,
+    DepositWalletRequestContext, IdentityConfigSummary, RelayerAuthIdentity,
+    RelayerKeyAuth, Result,
+};
+
+fn identity_config(
+    api_key: impl Into<String>,
+    relayer_api_key_address: Address,
+    owner_signer_address: Address,
+) -> Result<(
+    DepositWalletIdentityConfig,
+    RelayerKeyAuth,
+    DepositWalletRequestContext,
+    IdentityConfigSummary,
+)> {
+    let contracts = deposit_wallet_contract_config(137)?;
+    let deposit_wallet =
+        derive_deposit_wallet_address(owner_signer_address, contracts)?;
+
+    let identities = DepositWalletIdentityConfig::try_new(
+        RelayerAuthIdentity::new(relayer_api_key_address),
+        DepositWalletOwner::new(owner_signer_address),
+        DepositWalletAddress::new(deposit_wallet),
+        contracts,
+    )?;
+    let auth = RelayerKeyAuth::from_identity(api_key, identities.auth_identity())?;
+    let request_context = identities.request_context();
+    let summary = identities.summary();
+
+    Ok((identities, auth, request_context, summary))
+}
+```
+
+`try_new` rejects zero addresses before derivation and rejects a deposit wallet
+that is not derived from the supplied owner and contract config. It does not
+reject equal identities; inspect `overlaps()` or the summary and apply the
+operator's policy above this crate. A fully separated redacted summary has this
+shape:
+
+```json
+{
+  "auth_identity": "0x1234...ABCD",
+  "owner": "0x5678...EF01",
+  "deposit_wallet": "0x9aBC...2345",
+  "overlaps": [],
+  "redaction": "full identity addresses are intentionally redacted"
+}
+```
+
+The summary contains neither full addresses nor address hashes and is the
+shareable observation surface. The newtypes expose explicit `address()`
+getters, and `request_context()` plus `from_identity()` return to the existing
+raw-address APIs for compatibility. Therefore identity swapping becomes a type
+error only on code paths that keep values inside this new config boundary; it
+is not a crate-wide guarantee while the additive legacy signatures remain.
+
+This fork-owned PBRSDK-22a change does not satisfy the consumer-owned
+PBRSDK-22b acceptance criteria. The consumer repository must separately prove
+that only `pm-adapters/relayer_http` imports this fork, that `RelayerPort` and
+consumer domain/application types expose no fork DTO, and that adapter mapping
+tests preserve those boundaries. CLOB funder/POLY_1271 wiring also remains in
+the consumer repository and outside this change.
 
 ### HTTP client surface
 
