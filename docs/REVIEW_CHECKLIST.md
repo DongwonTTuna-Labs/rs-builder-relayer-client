@@ -218,5 +218,6 @@
 - [ ] `DepositWalletBatchRequest` remains a validated output type, not a public construction surface with public submit-body fields.
 - [ ] Legacy Safe/Proxy APIs stay reference/compatibility surface and are not reused for deposit-wallet `WALLET-CREATE` or `WALLET` flows without wire-level proof.
 - [ ] CLOB order/sign/cancel/post behavior remains out of this crate; no CLOB module, example, public import, or order-posting API is added here.
+- [ ] `tests/no_clob_surface_test.rs` recursively audits every `src/**/*.rs` file for the reviewed CLOB markers and function declarations, with only the exact path/count-pinned exceptions and `/orders` test-region check documented by ADR-0021.
 - [ ] Boundary grep audit is attached to the PR evidence:
   `grep -R "pub use .*::\\*\\|pub mod clob\\|pub use clob\\|build_wallet_batch_request_with_signature\\|DepositWalletBatchRequest" -n src tests docs README.md`

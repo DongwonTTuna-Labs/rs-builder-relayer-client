@@ -1165,3 +1165,108 @@ for the additive identity surface is to stop constructing the new config and
 continue using the unchanged legacy entry points; live enablement remains
 blocked until the consumer adapter, CLOB funder separation, and operator gates
 pass.
+
+## ADR-0021: PBRSDK-23a Behavior-Based No-CLOB Source Audit
+
+Status: accepted for the fork-owned offline boundary gate.
+
+The existing `repository_does_not_grow_clob_sdk_modules_or_examples` test is a
+useful path-based first defense, but it rejects only a fixed set of module and
+example names. An order implementation placed in `src/trading.rs`, or embedded
+in an existing module, would avoid those names and pass. PBRSDK-23a therefore
+retains that test and adds `tests/no_clob_surface_test.rs` as a behavior-based
+source audit over every recursively discovered Rust file under `src/`. A
+minimum corpus size of 40 prevents an empty or accidentally narrowed scan from
+passing; the current corpus is discovered rather than hard-coded.
+
+The audit case-insensitively rejects the reviewed CLOB-specific order,
+signature, quote, balance, and cancellation markers. It also rejects `fn`
+tokens followed by any of the reviewed order/post/sign/cancel/book/price/
+balance-allowance function names, independent of visibility, `async`, repeated
+spaces, or line breaks. Private helpers are in scope. After an independent
+`fn` token, the scanner repeatedly skips Rust `Pattern_White_Space`,
+non-documenting line comments, and nested block comments, then accepts an
+optional raw-identifier `r#` prefix before comparing the function name. The
+matched name must still end at a character outside the audit's conservative
+underscore-or-Unicode-alphanumeric boundary instead of relying on an exact
+`pub fn` substring. Consequently, `fn post_order_v2()` is intentionally not
+matched because the underscore continues the reviewed identifier boundary.
+
+Three existing markers require conditional exceptions, not file exemptions:
+
+| Marker | Allowed source and frozen count | Reason |
+| --- | --- | --- |
+| `signature_type` | `src/types.rs` (8), `src/direct.rs` (4) | Existing relayer wallet abstraction values 0/1/2, unrelated to CLOB order signing and part of the legacy public API |
+| `/orders` | `src/auth/builder.rs` (1) | HMAC reference vector under `#[cfg(test)]`; its first occurrence must remain after the file's first `#[cfg(test)]` |
+| `rs-clob-client-v2` | `src/deposit_wallet/calldata/config.rs` (2) | Source citations for reviewed calldata constants |
+
+Each listed file must exist, contain its marker, and retain the exact count.
+The same marker in any other `src/` file, including a case-only variant, is a
+violation. This preserves the legitimate compatibility and provenance text
+without allowing the rest of an approved file to bypass the audit.
+
+The audit implementation returns a structured list of all violations. Its
+repository test and its synthetic negative tests call the same pure `audit`
+function. Each mutation test first proves that the real in-memory `src/`
+baseline is clean, then applies exactly one in-memory change and requires the
+exact expected violation. The cases cover conditional occurrence counts and
+test-region placement, forbidden signature markers, visibility/spacing,
+repeated and nested comment trivia, mixed trivia, and raw identifiers. A
+separate positive boundary case pins the longer-identifier behavior described
+above. The disk corpus is never mutated.
+
+### Proof Scope
+
+The mechanical claim is limited to this: the specified markers and function
+signatures do not appear anywhere in recursively collected `src/**/*.rs`,
+apart from the path-and-count-pinned conditional occurrences above. It does
+not prove that CLOB code is absent. An implementation that avoids the reviewed
+vocabulary, generated code from macros or build scripts, and CLOB behavior
+supplied by an external crate are outside this proof.
+
+The function-declaration whitespace predicate exactly enumerates Rust's
+language-level `Pattern_White_Space` set: `U+0009` through `U+000D`, `U+0020`,
+`U+0085`, `U+200E`, `U+200F`, `U+2028`, and `U+2029`. It deliberately does not
+use `char::is_whitespace()`, which implements Unicode `White_Space` and omits
+the Rust lexer separators `U+200E` and `U+200F`. This language set is finite
+and every member is independently mutation-tested. Together with repeated
+non-documenting line comments, nested/repeated block comments, mixed trivia,
+and raw identifiers, exact enumeration closes the lexical-trivia bypass class
+for the reviewed exact-name function declarations. Remaining bypasses require
+a renamed implementation, macro/build-script generation, or CLOB behavior
+from an external crate, all of which remain explicitly outside this proof.
+This closed-trivia claim does not claim exact Rust XID classification: a longer
+identifier using a non-alphanumeric XID continuation mark can be conservatively
+flagged. That is a false positive, not a trivia-based bypass.
+
+The audit scope is `src/` only. Documentation is intentionally outside it;
+for example, `POLY_1271` appears in `docs/` to describe consumer obligations.
+Marker matching does not distinguish code, comments, or string literals, so
+all three fail identically. This chooses conservative false positives over a
+comment/string escape. Matching is ASCII case-insensitive but does not remove
+underscores or otherwise normalize separators. `POLY1271`, `Poly1271`, and
+`SignatureType` are consequently explicit forbidden entries rather than
+depending on separator normalization.
+
+There is a narrow structural reinforcement for the deposit-wallet client.
+`DepositWalletRelayerClient` production URLs pass through
+`DepositWalletRelayerUrl::parse`, which fixes the host to
+`relayer-v2.polymarket.com`, accepts only a root base path with no query or
+fragment, and constructs request URLs from crate-internal paths passed to
+`endpoint(path)`. Those production request paths are crate-internal constants.
+This reinforcement applies only to the deposit-wallet
+client. Legacy `RelayClient::set_url` in `src/client.rs` has no host allowlist,
+accepts an arbitrary base URL, and constructs paths as strings. This ADR
+therefore does not claim that the crate as a whole cannot call a CLOB endpoint.
+
+Conditional exceptions freeze occurrence counts and, for `/orders`, position
+after the first `#[cfg(test)]`; they do not freeze complete source snippets.
+Keeping the same count while replacing the meaning of an existing occurrence
+with order code is therefore outside the audit. Complete snippet pinning was
+intentionally rejected because its refactoring fragility outweighs the value
+against that implausible count-preserving replacement scenario.
+
+PBRSDK-23a changes no production source, public API, wire format, dependency,
+fixture, consumer adapter, or live behavior. The consumer-owned PBRSDK-23b must
+separately prove funder wiring, `POLY_1271` separation, fork-DTO absence in the
+CLOB layer, and confirmed-only balance synchronization.
