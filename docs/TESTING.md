@@ -700,6 +700,30 @@ function signatures in `src/`; it does not prove all possible CLOB code absent,
 inspect macro/build-script output, inspect dependencies, qualify consumer CLOB
 wiring, or authorize a live call.
 
+## PBRSDK-26 Manual Live Gate Runbook Gate
+
+`tests/live_gate_runbook_test.rs` is a mandatory offline integration target for
+`docs/MANUAL_LIVE_GATE_RUNBOOK.md`. It requires the ten runbook section titles,
+all seven stop-condition labels, six exact operator-approval gate markers, and
+the design-document backlink. Its pure audit returns structured violations,
+first passes against the real documents, and then proves exact
+one-change/one-violation behavior for a removed heading, a removed
+`missing transactionID` label, and an inserted complete-address shape. Longer
+hex runs are classified once at the longest matching threshold.
+
+The secret-shape check is intentionally limited to `0x`/`0X`-prefixed ASCII
+hex runs plus the specified PEM and bearer-token literal markers in the new
+runbook. It does not detect unprefixed 40-hex values, UUID-shaped keys, or
+base64 values and does not prove that every possible secret is absent. This
+gate adds no dependency, harness, credential, host call, live submit, or
+production-source change.
+
+The existing [Manual Live Gate](#manual-live-gate) remains the broader
+fork/consumer evidence policy. PBRSDK-26 does not duplicate it: the new runbook
+starts only after the ten-item design checklist is complete and supplies the
+operator approval, stop, rollback, and redacted PR-evidence procedure for the
+first tiny-value deposit-wallet relayer validation.
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.

@@ -340,3 +340,5 @@ On timeout:
 - [ ] forked crate dependency pinned by commit SHA or vendored source;
 - [ ] `RelayerPermit` cannot be created in read-only, dry-run, or cancel-only modes;
 - [ ] operator has reviewed redacted payload summaries.
+
+After every item above is checked, follow `MANUAL_LIVE_GATE_RUNBOOK.md`.
