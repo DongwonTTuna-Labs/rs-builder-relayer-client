@@ -217,9 +217,11 @@ impl DepositWalletDryRunEvidence {
                 DryRunCallSummary {
                     target: redacted_address(call.target),
                     value: call.value.to_string(),
-                    selector: data
-                        .get(..4)
-                        .map(|selector| format!("0x{}", hex::encode(selector))),
+                    // A four-byte calldata is entirely reproduced by its own
+                    // selector, so the selector is withheld at that boundary.
+                    // `get(..4)` would expose it, since it succeeds at len == 4.
+                    selector: (data.len() > 4)
+                        .then(|| format!("0x{}", hex::encode(&data[..4]))),
                     data_len: data.len(),
                 }
             })
@@ -368,4 +370,73 @@ pub enum RelayerSubmitOutcome {
 
 pub(super) fn payload_keccak256(body: &[u8]) -> String {
     format!("0x{}", hex::encode(keccak256(body)))
+}
+
+#[cfg(test)]
+mod selector_boundary_tests {
+    use super::*;
+    use crate::deposit_wallet::types::{DepositWalletCall, DepositWalletParams};
+    use ethers::types::{Address, Bytes, U256};
+
+    fn request_with_call_data(data: Vec<u8>) -> DepositWalletBatchRequest {
+        DepositWalletBatchRequest {
+            tx_type: "WALLET".to_string(),
+            from_address: Address::from_low_u64_be(1),
+            to: Address::from_low_u64_be(2),
+            nonce: U256::from(7u64),
+            signature: "0xsig".to_string(),
+            deposit_wallet_params: DepositWalletParams {
+                deposit_wallet: Address::from_low_u64_be(3),
+                deadline: U256::from(99u64),
+                calls: vec![DepositWalletCall {
+                    target: Address::from_low_u64_be(4),
+                    value: U256::zero(),
+                    data: Bytes::from(data),
+                }],
+            },
+        }
+    }
+
+    fn permit() -> RelayerMutationPermit {
+        RelayerMutationPermit::try_new(
+            RelayerMutationMode::DryRun,
+            RelayerMutationOperation::WalletBatch,
+            Address::from_low_u64_be(1),
+            137,
+            4_102_444_800,
+            "evidence-ref",
+            "operator-approval-ref",
+        )
+        .expect("permit is valid")
+    }
+
+    /// A four-byte calldata is entirely reproduced by its own selector, so the
+    /// selector must be withheld at that boundary.
+    #[test]
+    fn four_byte_calldata_does_not_leak_through_selector() {
+        let request = request_with_call_data(vec![0xde, 0xad, 0xbe, 0xef]);
+        let evidence =
+            DepositWalletDryRunEvidence::for_wallet_batch(&permit(), 137, &request, b"body");
+
+        let summary = &evidence.calls()[0];
+        assert_eq!(summary.selector(), None);
+        assert_eq!(summary.data_len(), 4);
+
+        let json = serde_json::to_string(&evidence).expect("evidence serializes");
+        assert!(!json.contains("deadbeef"));
+    }
+
+    #[test]
+    fn five_byte_calldata_still_exposes_its_selector() {
+        let request = request_with_call_data(vec![0xde, 0xad, 0xbe, 0xef, 0x01]);
+        let evidence =
+            DepositWalletDryRunEvidence::for_wallet_batch(&permit(), 137, &request, b"body");
+
+        let summary = &evidence.calls()[0];
+        assert_eq!(summary.selector(), Some("0xdeadbeef"));
+        assert_eq!(summary.data_len(), 5);
+
+        let json = serde_json::to_string(&evidence).expect("evidence serializes");
+        assert!(!json.contains("deadbeef01"));
+    }
 }
