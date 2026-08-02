@@ -153,6 +153,7 @@
 - [ ] No fork-specific DTO leaks into consumer domain/strategy/risk/actor state.
 - [ ] Official Rust CLOB SDK remains responsible for CLOB order path.
 - [ ] Live relayer mutation remains gated until all fork acceptance tests and operator approval are recorded.
+- [ ] PBRSDK-26's `MANUAL_LIVE_GATE_RUNBOOK.md` passes its offline audit, starts after all 10 design prerequisites, records GATE 1–6 and all seven stop conditions, limits rollback to one client and its clones, preserves read-only observation, requires full reapproval for a new live-enabled client, and maps redacted PR evidence to PBRSDK-24 schema v1 without any live call.
 - [ ] Consumer-impacting changes document migration path, rollback path, and any unavailable rollback condition.
 - [ ] New public relayer APIs document their production capability boundary, including any method that is intentionally disabled for production URLs.
 - [ ] Low-level public reads remain limited to `GET /deployed`, `GET /nonce`, and `GET /transaction`; the gated report adds only permit-first, query-free `GET /transactions`, and mutation still reaches only the two reviewed permit-bound primitive `POST /submit` methods.

@@ -177,6 +177,7 @@ Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/
 
 - `docs/FORKED_RELAYER_CRATE.md`: fork policy and target API surface.
 - `docs/DEPOSIT_WALLET_RELAYER_DESIGN.md`: deposit-wallet relayer design.
+- `docs/MANUAL_LIVE_GATE_RUNBOOK.md`: operator-controlled first live validation procedure.
 - `docs/SECURITY.md`: secret/signing/supply-chain rules.
 - `docs/TESTING.md`: required fixture and acceptance tests.
 - `docs/CONSUMER_INTEGRATION.md`: dependency and adapter boundary rules.

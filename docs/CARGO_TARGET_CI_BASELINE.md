@@ -28,6 +28,7 @@ submit bodies.
 | integration test | `deposit_wallet_signing_test` | `tests/deposit_wallet_signing_test.rs` | tracked | offline fixture test | keep |
 | integration test | `deposit_wallet_test` | `tests/deposit_wallet_test.rs` | tracked | offline fixture test | keep |
 | integration test | `integration_test` | `tests/integration_test.rs` | tracked | offline calldata test | keep |
+| integration test | `live_gate_runbook_test` | `tests/live_gate_runbook_test.rs` | added by PBRSDK-26 | offline runbook and secret-shape audit; no host call | keep |
 | integration test | `mutation_rollback_boundary_test` | `tests/mutation_rollback_boundary_test.rs` | added by PBRSDK-22a | pre-I/O rollback/read-capability boundary only | keep offline; no server or live call |
 | integration test | `no_clob_surface_test` | `tests/no_clob_surface_test.rs` | added by PBRSDK-23a | offline source-marker audit; no host call | keep |
 | integration test | `operations_test` | `tests/operations_test.rs` | tracked | offline calldata test | keep |
@@ -324,6 +325,21 @@ prove all CLOB code absent and does not cover renamed implementations, macro or
 build-script output, external-crate behavior, consumer funder/POLY_1271 wiring,
 or confirmed-only balance synchronization. Synthetic mutations validate the
 same audit function without adding or changing a fixture.
+
+PBRSDK-26 adds one auto-discovered integration-test target,
+`live_gate_runbook_test`, from `tests/live_gate_runbook_test.rs`, without a
+`Cargo.toml` declaration. It uses only the standard library, reads the new
+manual runbook and the existing deposit-wallet design, and makes no host or
+live call. Its pure audit requires the ten runbook sections, seven stop
+conditions, six exact approval gates, and the design backlink, then checks the
+runbook for the specified secret-shaped values. Exact synthetic mutations pin
+one-change/one-violation behavior and longest-threshold hex classification.
+
+This PBRSDK-26 target adds no dependency, fixture, binary, example, benchmark,
+production source, credential, submit path, or live authority. Its shape audit
+cannot detect unprefixed 40-hex values, UUID-shaped keys, or base64 values and
+does not prove that all secrets are absent. The runbook is an operator
+procedure for PBRSDK-27, not live validation evidence.
 
 These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
