@@ -724,6 +724,57 @@ starts only after the ten-item design checklist is complete and supplies the
 operator approval, stop, rollback, and redacted PR-evidence procedure for the
 first tiny-value deposit-wallet relayer validation.
 
+## PBRSDK-27 Live Validation Decision Gate
+
+`tests/live_validation_decision_test.rs` is a mandatory offline integration
+target for `docs/LIVE_VALIDATION_DECISION.md`. Its pure audit parses the
+document once with `pulldown-cmark` and table support, then checks one exact
+lifecycle marker, an allowlist containing every permitted rendered H2,
+status-specific section presence and absence, the canonical `## Decision`
+sentence, and the exact `Field` / `Value` / `Redaction` header plus fixed,
+ordered 14-row operator-evidence table. Code-block text is non-normative for
+those structural rules. The secret-shape scan separately checks the complete
+raw document, including code blocks.
+
+The record is limited to the Markdown grammar it actually uses: paragraphs,
+headings, lists, code blocks, tables, inline code, and the single-line status
+marker HTML comment. It permits exactly one first-line H1 followed only by
+allowlisted H2 sections, rejects H3 through H6, and rejects nested lists while
+flushing every list item independently. Headings and tables must be top-level
+blocks; a heading or table inside a list item or table cell produces
+`HeadingInContainer` or `TableInContainer` and cannot create or populate an H2
+section. Raw HTML, images, links, emphasis, and every other unapproved tag or
+leaf event produce `UnsupportedConstruct`; unsupported container contents
+cannot supply canonical Decision text or evidence values. This allowlist makes
+unknown syntax an explicit audit failure rather than a silently interpreted
+alternative rendering.
+
+The expected Decision sentence must be an exact top-level paragraph in its H2
+section, never a list item. The other lifecycle sentences are searched across
+all rendered text outside code blocks: paragraphs, list items, every heading,
+and all Field, Value, and Redaction table cells. No uncollected rendered context
+may silently carry a conflicting lifecycle statement.
+
+The real document must pass before any mutation test runs. Synthetic mutations
+cover missing, duplicate, malformed, and unknown markers; ATX and setext H2,
+unexpected and duplicate sections, indented and fenced code blocks, HTML
+comments, raw HTML, inline HTML, images, and conditional-section drift;
+middle or repeated H1, deep headings, nested lists, and conflicting lifecycle
+sentences in headings and table cells; headings and tables nested in container
+blocks, and Decision text substituted with a list item;
+independent and full-supersede Decision mismatches; missing evidence labels;
+header and row-order drift; status-specific Value-cell rules; and the specified
+prefixed-hex, PEM, and bearer-prefix shapes. Hex runs are classified once at
+the longest applicable threshold.
+
+This audit verifies schema consistency, not the factual truth of prose,
+blockers, external evidence, or filled observations. It does not compare the
+README and does not detect unprefixed hexadecimal, UUID, or base64 forms. It
+uses the test-only `pulldown-cmark` dev-dependency, which brings `unicase`
+transitively and does not propagate to consumers. It adds no credential, host
+call, live submit, CI live test, production dependency, or production-source
+change.
+
 ## Manual Live Gate
 
 Live relayer checks are operator-gated only. CI must not require production relayer secrets.

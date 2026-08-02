@@ -1284,3 +1284,101 @@ PBRSDK-23a changes no production source, public API, wire format, dependency,
 fixture, consumer adapter, or live behavior. The consumer-owned PBRSDK-23b must
 separately prove funder wiring, `POLY_1271` separation, fork-DTO absence in the
 CLOB layer, and confirmed-only balance synchronization.
+
+## ADR-0022: PBRSDK-27 Lifecycle-Truth Live Validation Decision Record
+
+Decision:
+
+```text
+Record the unapproved live-validation outcome as a blocked lifecycle fact and
+mechanically bind that status to one canonical Decision sentence, the
+status-specific sections, and the fixed operator-evidence table. Do not run a
+live submit or create production mutation authority without operator approval.
+```
+
+A decision record cannot establish its own validity through prose. A stale
+claim that no request was sent is operationally dangerous after a later live
+attempt, so `tests/live_validation_decision_test.rs` treats a disagreement
+between lifecycle status and the canonical Decision sentence as a structured
+failure. It also checks the designated status-specific section and evidence
+table schema through the same CommonMark parser used to interpret the rendered
+document. The audit intentionally does not claim that all surrounding prose is
+factually consistent; that broader claim would exceed what the mechanical
+rules inspect.
+
+Document structure audits must use the same interpretation model as the
+document renderer. Hand-written approximations split what readers see from
+what the audit checks, and enumeration did not close that gap: trailing heading
+spaces, tab-separated headings, indented fences and HTML comments, and setext
+headings each produced an empty violation list in four consecutive rounds.
+PBRSDK-27 therefore parses the document once with `pulldown-cmark`, builds H2,
+paragraph, HTML, code-block, and table-aware evidence, and applies the frozen
+rules to that structured view. Secret-shape scanning remains deliberately
+separate and covers the complete raw source, including code blocks.
+
+The parser and current CommonMark wording still diverge on tab-separated ATX
+closing hashes. The audit does not add another heading normalization to chase
+that boundary. Instead, every rendered H2 must match the frozen section-name
+allowlist. Known sections can then be required, forbidden, or duplicated by
+status, while every other H2 fails as `UnexpectedSection`. The safety rule is
+allow known structures, not attempt to enumerate every unsafe spelling.
+
+CommonMark still permits effectively unbounded rendered forms through raw HTML,
+images, and other container or inline syntax. Five consecutive bypass rounds—
+trailing spaces; tabs; indented fences and HTML comments; setext headings; and
+raw HTML and images—each demonstrated that chasing individual spellings leaves
+another silent-pass path. The audit therefore constrains this record to the
+narrow grammar it actually uses: paragraphs, headings, lists, code blocks,
+tables, inline code, and the single-line status-marker HTML comment. All other
+tags and leaf events, including raw HTML, images, links, and emphasis, fail as
+`UnsupportedConstruct` rather than being interpreted. Unknown syntax now fails
+explicitly instead of passing silently.
+
+The syntax allowlist alone was still insufficient because allowed constructs
+could be composed into new gaps: a middle H1 moved canonical text out of its H2
+section, nested tight-list items reassembled one sentence across item
+boundaries, and headings or table cells hid a conflicting lifecycle sentence.
+The grammar is therefore narrowed to the record's observed shape—one first-line
+H1, allowlisted H2 sections, and unnested lists—and each item boundary flushes
+its text independently. The conflicting-status check now covers all rendered
+text outside code blocks, including paragraphs and list items, every heading,
+and every table cell. With partial collection, every uncollected rendering
+context becomes a bypass path.
+
+Complete text collection is still insufficient if block-container ancestry is
+discarded. A middle H1 and an H2 inside a list item are two forms of the same
+defect: content that renders under a different block hierarchy can be assigned
+to one global audit section. Audited headings and tables must therefore begin
+at the expected top-level nesting position; a heading or table inside a list
+item or table cell is rejected and cannot create or populate a section. The
+canonical Decision must likewise come from a top-level paragraph, while list
+item text remains visible only to the rendered-text conflict scan.
+
+The schema status records lifecycle truth, not success. `blocked` means no
+mutation request was sent, `stopped` means execution began but confirmation
+was not observed, and `executed` means confirmation was observed. This keeps
+the ambiguous but honest case—where a request was sent and confirmation was
+not observed—inside the schema. If status instead represented success, that
+case would fit no truthful category and would pressure the recorder to make a
+false statement. Post-confirmation balance, allowance, and rollback outcomes
+remain in the final-verdict and rollback-state fields rather than changing the
+lifecycle status.
+
+Consequences:
+
+- the current record is `blocked` because no operator approval record exists,
+  required approved runtime inputs were not supplied, and the runbook's
+  tiny-value bounds remain blank;
+- the operator-evidence table retains the exact `Field` / `Value` / `Redaction`
+  header and exactly 14 ordered fields, and all current Value cells remain
+  `UNFILLED`;
+- superseding the record requires the marker, canonical Decision sentence,
+  conditional sections, and status-specific evidence values to change
+  together;
+- the offline audit scans only the specified document shapes and limited
+  secret patterns, and does not prove prose truth, external-evidence hygiene,
+  or live relayer behavior;
+- this decision adds only the test-scoped `pulldown-cmark` dev-dependency and
+  its transitive `unicase` package; it adds no live call, production permit,
+  production-source change, public API change, production dependency, or CI
+  live test.

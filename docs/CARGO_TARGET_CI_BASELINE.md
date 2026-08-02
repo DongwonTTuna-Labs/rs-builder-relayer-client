@@ -341,6 +341,14 @@ cannot detect unprefixed 40-hex values, UUID-shaped keys, or base64 values and
 does not prove that all secrets are absent. The runbook is an operator
 procedure for PBRSDK-27, not live validation evidence.
 
+PBRSDK-27 adds the auto-discovered `live_validation_decision_test` integration
+target and the test-only `pulldown-cmark` dev-dependency. Its lock graph adds
+`pulldown-cmark` and transitive `unicase`; neither is a production dependency
+or propagated consumer requirement. The target parses only the repository's
+decision Markdown, performs offline structural and secret-shape audits, and
+adds no fixture, binary, example, benchmark, production source, credential,
+submit path, host call, or live authority.
+
 These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
