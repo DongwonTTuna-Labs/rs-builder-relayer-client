@@ -20,6 +20,8 @@ routine bot operations. Those remain governed by the consumer repository's
 only for the deposit-wallet relayer live gate. PBRSDK-27 owns execution of this
 procedure. PBRSDK-26 performs no live call.
 
+PBRSDK-27 lifecycle status record: `docs/LIVE_VALIDATION_DECISION.md` (`blocked`, `stopped`, `executed`).
+
 ## Preconditions
 
 Do not start this procedure until all 10 items in

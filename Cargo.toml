@@ -36,6 +36,7 @@ polymarket-client-sdk = { version = "0.4", features = ["data"] }
 rust_decimal = "1.36"
 dotenvy = "0.15"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 
 [[example]]
 name = "setup_wallet"
