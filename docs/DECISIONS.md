@@ -977,6 +977,20 @@ when `data.len() <= 4` it is absent because four bytes would make the selector
 identical to the complete calldata. No signature, auth material, full target,
 payload bytes, or full calldata is stored.
 
+The same boundary now applies to `DryRunCallSummary` in the mutation dry-run
+path. That code predates this ADR and used `data.get(..4)`, which succeeds at
+`len == 4` and therefore published the whole calldata as a "selector". The
+defect was reachable through the shipped dry-run evidence path and through the
+consumer adapter that forwards these summaries, so it was not hypothetical.
+The rule is now stated once and enforced in both places, each with a four-byte
+and a five-byte regression test; reverting either site fails its own test.
+
+The lesson is recorded deliberately: this ADR fixed the rule for one summary
+type while an equivalent type in another module kept the old behaviour. A
+confidentiality rule stated for one representation has to be applied to every
+representation of the same data, and the audit for it belongs with the rule
+rather than with the site that happened to be edited first.
+
 There is intentionally no calldata hash field. Calldata is often
 low-entropy. Once selector and exact length are known, a non-keyed hash becomes
 an enumeration oracle: a five-byte call has only 256 candidates for its final
