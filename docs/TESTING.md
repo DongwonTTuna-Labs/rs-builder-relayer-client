@@ -847,6 +847,14 @@ set with the ignore set, fixes both workflow run lines, requires
 three license files to be non-empty. This is the load-bearing committed-state
 check; an earlier unit test cannot repair those inputs before it runs.
 
+The preflight also requires the index and the working tree to agree on every
+tracked path, and rejects any directory below the root that is its own
+repository. Both cover the whole tree rather than a named set of audited paths,
+because `README.md` and every `src/**` file are read from disk by
+`tests/public_api_boundary_test.rs`, `tests/source_matrix_test.rs`, and
+`tests/no_clob_surface_test.rs`, and no such set named them. Run the preflight
+after staging: an unstaged edit anywhere is a disagreement, which is the point.
+
 The Rust audit retains the manifest, workflow, license, and schema checks for
 review visibility. It also requires all six release-provenance sections, one
 exact accepted-advisory section, and one parsed table under that H2. The table
