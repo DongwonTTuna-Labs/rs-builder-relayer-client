@@ -114,15 +114,20 @@ register is derived.
   and one that exists only through the environment fails closed. System and
   global git config are excluded for the same reason: neither is recorded in
   the tree being audited, and both can set attributes and filters that change
-  what git reports about it. Side-effecting local git callbacks are disabled
-  per command: `core.fsmonitor` and `core.hooksPath` are overridden on every
-  call. Repository-local config stays, and two of its settings name programs
-  git runs inside these commands. A `post-index-change` hook, or a
-  `core.fsmonitor` command, executes while `git write-tree` writes the index:
-  the command returns the tree it had already read while the callback replaces
-  `.git/index`, so the default index `git commit` reads is no longer the tree
-  that was audited. Overriding both per command settles them at the moment of
-  use, which reading them first and refusing would not. `git replace` installs a
+  what git reports about it. Repository-local config stays, and several of its
+  settings name programs git runs inside these commands, so the ones that can
+  are neutralised rather than trusted. `core.fsmonitor` and `core.hooksPath`
+  are overridden on every call: a `core.fsmonitor` command runs on an index
+  refresh and a `post-index-change` hook runs whenever git writes the index,
+  and either can replace `.git/index` after `git write-tree` has returned the
+  tree it already read, leaving every later comparison checking the captured
+  tree against the matching working copy while the default index `git commit`
+  reads holds something else. `GIT_NO_LAZY_FETCH` closes the same door from a
+  third direction: in a partial clone, reading an object the local store lacks
+  makes git fetch it, and that transport runs `core.sshCommand` from the same
+  local config with the same opportunity. Overriding at the moment of use is
+  what settles these; reading the settings first and refusing would leave the
+  window between the check and the command. `git replace` installs a
   ref that most commands apply transparently, so `git ls-tree` can be made to
   answer with a reviewed tree while the index builds, and the commit records, a
   different one; replacement refs are not pushed, so a consumer would receive

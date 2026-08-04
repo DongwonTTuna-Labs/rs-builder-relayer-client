@@ -3838,15 +3838,147 @@ fn preflight_rejects_a_repository_that_exists_only_in_the_environment() {
     fs::rename(&moved, repository.path(".git")).expect("git directory returns for cleanup");
 }
 
+/// A directory outside the working tree, for callback scripts and index copies
+/// that must not become uncommitted files in the repository under audit.
+struct OutsideTree {
+    root: PathBuf,
+}
+
+impl OutsideTree {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "pbrsdk28-outside-{}-{}",
+            std::process::id(),
+            SYNTHETIC_REPOSITORY_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).expect("directory outside the working tree is created");
+        Self { root }
+    }
+
+    fn path(&self, relative: &str) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    fn install_executable(&self, relative: &str, script: &str) -> PathBuf {
+        let path = self.path(relative);
+        fs::write(&path, script).expect("callback script is written");
+        let mut mode = fs::metadata(&path)
+            .expect("callback metadata is readable")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        fs::set_permissions(&path, mode).expect("callback becomes executable");
+        path
+    }
+}
+
+impl Drop for OutsideTree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Reads the tree the default index would produce, with the callbacks and
+/// routing this script fixes, so the reading itself cannot disturb the answer.
+fn default_index_tree(repository: &SyntheticRepository) -> String {
+    let output = Command::new("git")
+        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+        .arg("write-tree")
+        .current_dir(repository.path("."))
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .output()
+        .expect("git write-tree runs for the synthetic repository");
+    assert!(
+        output.status.success(),
+        "git write-tree must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// In a partial clone, reading an object the local store lacks makes git fetch
+/// it, and that transport runs `core.sshCommand` from repository-local config.
+/// The callback replaces `.git/index` while `git ls-tree` walks the tree that
+/// `git write-tree` already returned, so every later comparison comes out clean
+/// and the default index `git commit` reads holds something else.
+#[test]
+fn preflight_fetches_nothing_that_would_run_a_local_transport_command() {
+    let repository = SyntheticRepository::new();
+    let outside = OutsideTree::new();
+
+    let reviewed_index = outside.path("reviewed.index");
+    fs::copy(repository.path(".git/index"), &reviewed_index)
+        .expect("reviewed index is kept outside the tree");
+    fs::write(repository.path("docs/accepted-advisories.toml"), "# hostile\n")
+        .expect("hostile register is written");
+    git(&repository, &["add", "docs/accepted-advisories.toml"]);
+    let hostile_index = outside.path("hostile.index");
+    fs::copy(repository.path(".git/index"), &hostile_index)
+        .expect("hostile index is kept outside the tree");
+    fs::copy(&reviewed_index, repository.path(".git/index"))
+        .expect("the default index returns to the reviewed tree");
+    git(&repository, &["checkout", "--", "docs/accepted-advisories.toml"]);
+
+    let sentinel = outside.path("transport-ran");
+    let transport = outside.install_executable(
+        "ssh.sh",
+        &format!(
+            "#!/bin/sh\ntouch {sentinel}\ncp {hostile} {index}\nexit 1\n",
+            sentinel = sentinel.display(),
+            hostile = hostile_index.display(),
+            index = repository.path(".git/index").display(),
+        ),
+    );
+
+    // A tree object the commit references, removed from the local store, is
+    // what makes git reach for the promisor remote.
+    let subtree = {
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD^{tree}:docs"])
+            .current_dir(repository.path("."))
+            .output()
+            .expect("git rev-parse runs for the synthetic repository");
+        assert!(output.status.success(), "the docs tree must resolve");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    let before = default_index_tree(&repository);
+
+    for (key, value) in [
+        ("core.sshCommand", transport.to_str().unwrap()),
+        ("remote.origin.url", "ssh://example.invalid/repository"),
+        ("remote.origin.promisor", "true"),
+        ("remote.origin.partialclonefilter", "blob:none"),
+        ("extensions.partialClone", "origin"),
+        ("core.repositoryformatversion", "1"),
+    ] {
+        git(&repository, &["config", key, value]);
+    }
+    fs::remove_file(repository.path(&format!(".git/objects/{}/{}", &subtree[..2], &subtree[2..])))
+        .expect("the docs tree object leaves the local store");
+
+    run_preflight(&repository);
+
+    assert!(
+        !sentinel.exists(),
+        "a lazy fetch must not run the local transport command during the preflight"
+    );
+    assert_eq!(
+        before,
+        default_index_tree(&repository),
+        "the default index must still hold the tree the preflight audited"
+    );
+}
+
 /// Repository-local config names programs git runs inside the commands the
-/// preflight issues. A `post-index-change` hook, or a `core.fsmonitor` command,
-/// executes while `git write-tree` writes the index: the command returns the
-/// tree it had already read while the callback replaces `.git/index`, so the
-/// default index `git commit` reads is no longer the tree that was audited.
+/// preflight issues. A `core.fsmonitor` command runs on an index refresh and
+/// can replace `.git/index` while `git write-tree` returns the tree it already
+/// read, so the default index `git commit` reads is no longer the audited one.
+///
+/// `post-index-change` and a relocated `core.hooksPath` are covered too. Those
+/// two do not fire from this command set in every git version, so they are not
+/// on their own evidence that the override works; the assertion below that the
+/// override beats repository-local config is what holds them.
 #[test]
 fn preflight_runs_no_local_git_callback_that_could_swap_the_index() {
-    // `core.hooksPath` is exercised as well, because a local one relocates the
-    // same hook to a directory outside the tree.
     for setting in ["post-index-change", "core.fsmonitor", "core.hooksPath"] {
         let repository = SyntheticRepository::new();
         fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
@@ -3927,6 +4059,19 @@ fn preflight_runs_no_local_git_callback_that_could_swap_the_index() {
             neutral(&["write-tree"]),
             "{setting} must leave the default index holding the audited tree"
         );
+
+        // The two hook variants do not fire from the preflight's command set
+        // in every git version, so the assertions above can pass without the
+        // override existing. This one cannot: it reads what git resolves the
+        // setting to under the same flags the preflight passes, against a
+        // repository-local value that would otherwise win.
+        if setting != "core.fsmonitor" {
+            assert_eq!(
+                neutral(&["config", "--get", "core.hooksPath"]),
+                "/dev/null",
+                "{setting} must be overridden by the config the preflight passes"
+            );
+        }
     }
 }
 

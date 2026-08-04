@@ -63,20 +63,27 @@ GIT_ENV = {
 GIT_ENV.update(
     {
         "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
     }
 )
 
-# Repository-local config stays, and two of its settings name programs git runs
-# inside the commands below. A `post-index-change` hook, or a `core.fsmonitor`
-# command, executes while `git write-tree` writes the index: the command
-# returns the reviewed tree it had already read, the callback replaces
-# `.git/index` with another one, and the comparisons that follow check the
-# captured tree against the working copy and find nothing. The default index
-# `git commit` reads is then not the tree this script audited. Overriding both
-# per command also settles them at the moment of use, which reading them first
-# and refusing would not.
+# Repository-local config stays after the environment is cleaned, and several
+# of its settings name programs git runs inside the commands below. A
+# `core.fsmonitor` command runs on an index refresh, and a `post-index-change`
+# hook runs whenever git writes the index; either can replace `.git/index`
+# after `git write-tree` has returned the tree it already read, leaving every
+# comparison that follows checking the captured tree against the matching
+# working copy while the default index `git commit` reads holds something else.
+# Overriding both per command settles them at the moment of use, which reading
+# them first and refusing would not.
+#
+# `GIT_NO_LAZY_FETCH` above closes the same door from a third direction. In a
+# partial clone, `ls-tree` reaching an object the local store lacks makes git
+# fetch it, and that transport runs `core.sshCommand` from this same local
+# config, with the same opportunity to swap the index. Refusing to fetch makes
+# the command fail instead.
 GIT_SAFE_CONFIG = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}")
 
 
