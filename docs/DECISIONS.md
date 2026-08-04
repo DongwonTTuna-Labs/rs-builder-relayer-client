@@ -1382,3 +1382,144 @@ Consequences:
   its transitive `unicase` package; it adds no live call, production permit,
   production-source change, public API change, production dependency, or CI
   live test.
+
+## ADR-0023: PBRSDK-28 Release Provenance And Dependency Audit Contract
+
+Decision:
+
+```text
+Disable package publication mechanically, retain an explicit native-TLS
+backend when reducing ethers features, and keep the accepted-risk register
+exactly synchronized with cargo-audit configuration through an offline audit.
+```
+
+A documented publishing prohibition is policy text until the package manifest
+enforces it. This fork therefore sets `publish = false`; it remains an internal
+path or commit-SHA-pinned dependency rather than a crates.io release candidate.
+
+Dependency feature reduction cannot be judged safe from graph size or passing
+tests. The rejected draft used only `default-features = false`, which removed
+TLS from ethers-providers' reqwest 0.11 path while all 369 tests still passed
+because none opened a socket. Feature removal must be reviewed by asking what
+capability disappears and inspecting the feature graph directly. The adopted
+manifest pairs `default-features = false` with `features = ["openssl"]`, and
+the offline audit structurally rejects the TLS-free draft shape. That manifest
+check does not prove the final unified graph or a successful HTTPS connection.
+
+The feature change moves `src/direct.rs` and middleware-internal reqwest 0.11
+from rustls/webpki roots to platform native TLS. On Linux this is OpenSSL; on
+Windows it is SChannel; on Apple platforms it is Security Framework. TLS
+policy, proxy integration, certificate handling, and errors may therefore
+change as well as trust anchors. A system CA bundle is newly required for
+direct-only consumers that did not already exercise the reqwest 0.12 relayer
+path.
+
+An accepted-risk register and its tool configuration are both misleading when
+they disagree. `docs/accepted-advisories.toml` and `.cargo/audit.toml` must
+contain the same duplicate-free advisory-ID set, and the
+`docs/RELEASE_PROVENANCE.md` table must render every canonical field in the
+same order.
+Because cargo-audit exits successfully for unmaintained notices by default,
+both local and scheduled/manual audit execution use
+`cargo audit --deny warnings`. The separate workflow is deliberately not a PR
+gate: contributor-controlled Cargo configuration must not execute in a job
+whose checkout action receives an implicit `GITHUB_TOKEN`. It does not
+reference repository secrets, sets checkout `persist-credentials: false`, and
+runs only on schedule or trusted manual dispatch. New PR dependency risk is
+therefore detected by that workflow on the next scheduled or manual run, not
+as a contemporaneous pull-request check.
+
+A document audit must interpret the document the same way it is rendered.
+PBRSDK-27 reached that conclusion over six review rounds, but the first
+PBRSDK-28 audit returned to hand-written pipe-line matching and reproduced the
+same class of bypass: a row hidden inside an HTML comment could authorize a
+cargo-audit ignore without appearing in the rendered table. The lesson did not
+transfer merely because it existed in another test file. This audit therefore
+uses `pulldown-cmark` with tables enabled and accepts advisory rows only from
+the parsed table in the parsed `Accepted advisories` H2 section; fenced code
+and HTML comments cannot contribute rows.
+
+A parser transition must cover the entire audited document. Parsing only the
+table while leaving section and claim checks on raw Markdown preserved those
+unchecked representations as bypass paths: a fenced raw H2 could satisfy a
+required-section scan, and inline emphasis could split a rendered claim across
+raw substrings. PBRSDK-27 had already reached the complete rule of one parsed
+view plus a closed syntax allowlist, but the new audit carried over only the
+table half and repeated the sequence. The release-provenance audit now derives
+headings, table cells, and rendered claim text from one CommonMark pass and
+rejects images, links, raw HTML, and other unapproved constructs together with
+their descendant text.
+
+An exception becomes a bypass path: the exemption intended to permit a
+negated quotation applied to its whole text block and therefore also admitted
+an explicit positive claim beside it. The document now avoids the prohibited
+phrase, allowing the audit to remove the exception entirely.
+
+An audit of a structured format must use that format's parser. The same defect
+class recurred across Markdown, TOML, and YAML in this campaign when raw lines
+or substrings were mistaken for rendered or semantic structure. Invisible
+format characters add a related boundary: they are not necessarily Unicode
+`White_Space`, so `trim` cannot remove them even when rendered output conceals
+the difference. A fixed invisible/control denylist was attempted first, but
+later counterexamples showed that classifying visual blankness that way cannot
+close the boundary. The audit now fixes the complete accepted character set.
+
+Checking whether a value is present gives only a partial guarantee, which
+documentation can easily overstate as a complete one. Closed schemas and exact
+value comparison now bind the audit config, workflow keys, action commit SHAs,
+and audit command to the reviewed contract. Defense is likewise multiple only
+when its evidence is independent; two checks calling the same predicate are
+one defense with two call sites. The earlier General Category and
+Default-Ignorable denylist still could not define visual blankness, so the
+closed character alphabet replaces it rather than extending it again.
+
+"Invisible" is not a Unicode property. A denylist was successively bypassed by
+U+200B, U+2063, and U+2800, so the provenance contract now closes the character
+alphabet to printable ASCII, line feed, and U+2192. New Unicode characters are
+rejected until an explicit review widens that set. Exact command text is also
+insufficient when a lower interpretation layer can intercept it: a repository
+Cargo alias can redefine `cargo audit`. The audit therefore closes `.cargo/`
+to the sole reviewed `audit.toml` entry as well as fixing the workflow command.
+
+An audit is not a value-repair layer. Silently removing rejected rendered
+characters normalized an ASCII CommonMark character reference into an accepted
+advisory ID, making the normalization itself a bypass. The allowlist now checks
+both source and parser-rendered text and fails without rewriting either value.
+Command text, Cargo aliases, and rustup toolchain selection are distinct
+interpretation layers: closing the command and alias layers still left a root
+`rust-toolchain.toml` `path` override able to replace the executables. The
+toolchain file therefore has its own closed schema and explicit path ban.
+
+A tool cannot bind the bootstrap inputs that determine whether that tool runs.
+`rust-toolchain.toml`, repository Cargo configuration, and Cargo automatic
+target discovery all act before an integration-test audit can execute; a fake
+toolchain, target runner, or disabled `autotests` flag can therefore bypass a
+check implemented only inside Cargo. The build-integrity boundary moves outside
+Cargo to a file-only Python `tomllib` preflight that must run before the first
+Cargo command.
+
+Moving a boundary outward exposes the next interpretation layer. The concrete
+sequence in this ticket was command text, Cargo alias, the `.cargo/` directory,
+`rust-toolchain.toml`, Cargo bootstrap and target discovery, then Python module
+resolution. Python normally searches the script directory before the standard
+library, so a repository `tomllib.py` could execute before the preflight. The
+workflow now uses isolated mode and separately closes `scripts/`. This sequence
+is not treated as infinite: the contract stops where repository-controlled
+files no longer participate, at the `python3` interpreter binary selected by
+the runner's `PATH`. Recording that stopping point and why it is outside the
+repository threat model is part of the contract.
+
+A human-readable format should not be the canonical input when enforcing it
+would require two independent interpretations of that format. The earlier
+design made both Python and Rust interpret the Markdown advisory table, and
+their disagreement recreated the hidden-row bypass already fixed in the first
+round. The canonical register is now machine-readable TOML; Python parses that
+single source before Cargo, while Rust proves that the CommonMark table is only
+an exact ordered rendering. Reducing the canonical interpretation to one
+structured format removes the parser disagreement as an authorization path.
+
+The register remains a snapshot because this repository does not track
+`Cargo.lock`. Consumer workspaces own authoritative resolution, pinning, audit,
+and rollback evidence. ID-wide ignores do not validate current path, version,
+reachability, or rationale, so every dependency or advisory change requires a
+fresh review rather than relying on set equality alone.

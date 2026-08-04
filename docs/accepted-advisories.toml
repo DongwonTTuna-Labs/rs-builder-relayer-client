@@ -1,0 +1,58 @@
+# Canonical accepted-advisory register. The Markdown table in
+# RELEASE_PROVENANCE.md is a rendering of this file, not the other way round.
+
+[[advisory]]
+id = "RUSTSEC-2025-0009"
+crate = "ring 0.16.20"
+path = "ethers 2.0.14 → ethers-providers 2.0.14 → jsonwebtoken 8.3.0 → ring 0.16.20"
+scope = "shipped"
+rationale = "Legacy transitive provider dependency; this crate does not directly call jsonwebtoken or ring, and transitive reachability is not established by this record."
+re-review = "Re-review when ethers, ethers-providers, jsonwebtoken, or ring changes; when direct use is added; or when reachability evidence changes."
+
+[[advisory]]
+id = "RUSTSEC-2025-0010"
+crate = "ring 0.16.20"
+path = "ethers 2.0.14 → ethers-providers 2.0.14 → jsonwebtoken 8.3.0 → ring 0.16.20"
+scope = "shipped"
+rationale = "Unmaintained legacy transitive provider dependency retained for the current public compatibility surface."
+re-review = "Re-review when the ethers provider stack is upgraded or replaced, or when ring is used directly."
+
+[[advisory]]
+id = "RUSTSEC-2024-0388"
+crate = "derivative 2.2.0"
+path = "polymarket-client-sdk 0.4.4 (dev) → alloy 1.8.3 → alloy-primitives 1.6.1 → ruint 1.20.0 → optional ark-ff 0.3.0/0.4.2 lock edges → derivative 2.2.0"
+scope = "dev-only"
+rationale = "cargo-audit scans the lock entry even though the optional ark-ff edge is not in the active target graph; the owning root is test-only."
+re-review = "Re-review when polymarket-client-sdk, alloy, ruint, or the consumer lock changes, or if the package enters a shipped graph."
+
+[[advisory]]
+id = "RUSTSEC-2025-0057"
+crate = "fxhash 0.2.1"
+path = "ethers 2.0.14 → ethers-providers 2.0.14 → hashers 1.0.1 → fxhash 0.2.1"
+scope = "shipped"
+rationale = "Unmaintained transitive hashing dependency; this crate does not call fxhash directly."
+re-review = "Re-review when ethers-providers or hashers changes, or when fxhash is used directly."
+
+[[advisory]]
+id = "RUSTSEC-2024-0384"
+crate = "instant 0.1.13"
+path = "ethers 2.0.14 → ethers-middleware 2.0.14 or ethers-providers 2.0.14 → instant 0.1.13"
+scope = "shipped"
+rationale = "Unmaintained transitive timing dependency retained by the current ethers stack; this crate does not call it directly."
+re-review = "Re-review when ethers middleware/providers changes or when instant is used directly."
+
+[[advisory]]
+id = "RUSTSEC-2024-0436"
+crate = "paste 1.0.15"
+path = "polymarket-client-sdk 0.4.4 (dev) → alloy 1.8.3 → alloy-primitives 1.6.1 → paste 1.0.15"
+scope = "dev-only"
+rationale = "Unmaintained proc-macro enters through the test-only official SDK comparison dependency."
+re-review = "Re-review when polymarket-client-sdk or alloy changes, or if paste enters a shipped graph."
+
+[[advisory]]
+id = "RUSTSEC-2025-0134"
+crate = "rustls-pemfile 1.0.4"
+path = "ethers 2.0.14 → ethers-providers 2.0.14 or ethers-middleware 2.0.14 → reqwest 0.11.27 → rustls-pemfile 1.0.4"
+scope = "shipped"
+rationale = "Unmaintained transitive PEM parser remains in the reqwest 0.11 package graph; this crate does not parse PEM with it directly."
+re-review = "Re-review when ethers or reqwest 0.11 changes, or when PEM parsing becomes direct behavior."

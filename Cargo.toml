@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ["polymarket", "relayer", "gasless", "ethereum", "polygon"]
 categories = ["api-bindings"]
 repository = "https://git.dongwontuna.net/DongwonTTuna-Labs/rs-builder-relayer-client"
+publish = false
 
 [lib]
 name = "polymarket_relayer"
@@ -19,7 +20,7 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 secrecy = "0.10"
-ethers = { version = "2", features = ["abigen"] }
+ethers = { version = "2", default-features = false, features = ["openssl"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
@@ -37,6 +38,8 @@ rust_decimal = "1.36"
 dotenvy = "0.15"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pulldown-cmark = { version = "0.13.4", default-features = false }
+toml = "1.1.4"
+yaml-rust2 = "0.11.0"
 
 [[example]]
 name = "setup_wallet"

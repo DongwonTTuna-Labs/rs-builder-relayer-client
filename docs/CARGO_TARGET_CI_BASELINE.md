@@ -34,6 +34,8 @@ submit bodies.
 | integration test | `operations_test` | `tests/operations_test.rs` | tracked | offline calldata test | keep |
 | integration test | `source_matrix_test` | `tests/source_matrix_test.rs` | tracked | offline provenance test | keep |
 | integration test | `public_api_boundary_test` | `tests/public_api_boundary_test.rs` | tracked | offline public API and docs boundary audit | keep |
+| integration test | `release_provenance_test` | `tests/release_provenance_test.rs` | added by PBRSDK-28 | offline manifest, license, provenance, and advisory-register audit; no host call | keep |
+| pre-Cargo script | `preflight_build_integrity` | `scripts/preflight_build_integrity.py` | added by PBRSDK-28 | file-only bootstrap integrity check; no subprocess or network call | run before every Cargo gate |
 
 No stale declared Cargo target was found in the current baseline. If a future
 target is added, it must map to a tracked file or document a restore, removal,
@@ -61,6 +63,22 @@ The workflow enforces:
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `cargo test --workspace --all-features`
 - `cargo build --workspace --all-targets --all-features`
+
+The separate `.github/workflows/security-audit.yml` is not a pull-request gate.
+It runs only on schedule or trusted manual dispatch, sets checkout
+`persist-credentials: false`, runs
+`test ! -L scripts && test ! -L scripts/preflight_build_integrity.py && python3 -I scripts/preflight_build_integrity.py`
+before installing a Cargo tool, and then executes
+`rm -f Cargo.lock && cargo audit --deny warnings`.
+Consequently, a dependency introduced by a pull request is detected by this
+workflow on the next scheduled or manual run rather than during that PR.
+
+The file-only preflight parses the canonical
+`docs/accepted-advisories.toml` register and closed `.cargo/audit.toml` schema,
+binds both exact workflow run lines, verifies the manifest publication and
+ethers TLS fields, and requires all three license files to be non-empty before
+the first Cargo invocation. The integration test separately proves that the
+CommonMark advisory table is an exact ordered rendering of the TOML register.
 
 The existing Grimoire workflow remains separate. Rust validation does not
 depend on Grimoire secrets, live relayer credentials, private endpoints,
@@ -353,10 +371,34 @@ These audits are offline only. They do not authorize live relayer mutation, CLOB
 trading, wallet deployment, order placement, production credentials, private
 endpoints, funded-wallet data, or replayable submit bodies.
 
+PBRSDK-28 adds the auto-discovered `release_provenance_test` integration target.
+Because Cargo cannot prove that its own executable, runner, and automatic test
+discovery were not replaced before that target starts, PBRSDK-28 also adds the
+file-only Python preflight and orders it immediately after checkout in the
+scheduled/manual security workflow. The preflight uses `tomllib` to validate
+the root toolchain file and Cargo manifest, closes `.cargo/` to `audit.toml`,
+requires Cargo auto-discovery to remain enabled, and requires the integration
+test source to exist before the first Cargo invocation.
+
+Its pure audit structurally checks the package publishing flag and the inline
+`[dependencies].ethers` entry, including the required explicit OpenSSL TLS
+backend. It also checks non-empty license/notice files, the six provenance
+sections, and the one rendered accepted-advisory table through
+`pulldown-cmark`. Parsed rows enforce the exact header, six non-empty cells,
+RUSTSEC-shaped first cells, and exact register equality after document/config
+duplicate rejection. HTML comments, fenced code, prose, and other sections
+cannot supply hidden rows. Synthetic mutations use the same audit function and
+the target performs no network call.
+
+The audit guarantees only the reviewed repository shapes. In particular,
+explicit manifest TLS selection does not establish the complete resolved or
+consumer-unified feature graph and does not perform an HTTPS connection.
+
 ## Evidence Requirements
 
 Implementation and review packets should include:
 
+- `python3 -I scripts/preflight_build_integrity.py`
 - this target audit,
 - `tests/public_api_boundary_test.rs` output,
 - final local command output or equivalent CI evidence,

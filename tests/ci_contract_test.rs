@@ -74,6 +74,34 @@ fn rust_validation_workflow_enforces_required_pr_gates_without_secrets() {
 }
 
 #[test]
+fn security_audit_runs_only_on_trusted_triggers_without_persisted_checkout_credentials() {
+    let workflow = fs::read_to_string(".github/workflows/security-audit.yml")
+        .expect("security audit workflow is readable");
+
+    for required in [
+        "schedule:",
+        "workflow_dispatch:",
+        "permissions:",
+        "contents: read",
+        "persist-credentials: false",
+        "python3 -I scripts/preflight_build_integrity.py",
+        "taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60",
+        "tool: cargo-audit@0.22.2",
+        "fallback: none",
+        "cargo audit --deny warnings",
+    ] {
+        assert!(workflow.contains(required), "workflow must include {required}");
+    }
+
+    for forbidden in ["pull_request:", "secrets."] {
+        assert!(
+            !workflow.contains(forbidden),
+            "security audit workflow must not include {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn examples_remain_offline_safe() {
     let manifest = fs::read_to_string("Cargo.toml").expect("Cargo.toml is readable");
 

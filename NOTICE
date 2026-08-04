@@ -1,0 +1,22 @@
+rs-builder-relayer-client
+
+This repository is a derivative work of:
+
+  OrderBookTrade/rs-builder-relayer-client
+
+Recorded upstream provenance:
+
+  Upstream HEAD: a2306c8
+  Merge-base: 521ab0b
+  Fork difference at the recorded measurement: 133 files, +33,880 / -1,319
+
+The original author listed in the upstream Cargo.toml authors field is:
+
+  baice <libaice147@gmail.com>
+
+The fork organization is:
+
+  DongwonTTuna-Labs
+
+This notice records attribution and derivative-work provenance. It does not
+assign a copyright year or name any additional copyright holder.
