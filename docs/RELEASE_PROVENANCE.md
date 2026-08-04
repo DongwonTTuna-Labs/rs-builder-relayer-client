@@ -67,6 +67,10 @@ guarantee the dependency graph of every consumer.
 
 ## Accepted advisories
 
+The last row was added on 2026-08-04, after the snapshot above, when an
+advisory-database update reported RUSTSEC-2026-0235 against a lock entry that
+was already present. The dependency graph did not change; the database did.
+
 The canonical register is `docs/accepted-advisories.toml`. The table below is
 an exact rendering of that machine-readable file, not the source from which the
 register is derived.
@@ -80,6 +84,7 @@ register is derived.
 | RUSTSEC-2024-0384 | instant 0.1.13 | ethers 2.0.14 → ethers-middleware 2.0.14 or ethers-providers 2.0.14 → instant 0.1.13 | shipped | Unmaintained transitive timing dependency retained by the current ethers stack; this crate does not call it directly. | Re-review when ethers middleware/providers changes or when instant is used directly. |
 | RUSTSEC-2024-0436 | paste 1.0.15 | polymarket-client-sdk 0.4.4 (dev) → alloy 1.8.3 → alloy-primitives 1.6.1 → paste 1.0.15 | dev-only | Unmaintained proc-macro enters through the test-only official SDK comparison dependency. | Re-review when polymarket-client-sdk or alloy changes, or if paste enters a shipped graph. |
 | RUSTSEC-2025-0134 | rustls-pemfile 1.0.4 | ethers 2.0.14 → ethers-providers 2.0.14 or ethers-middleware 2.0.14 → reqwest 0.11.27 → rustls-pemfile 1.0.4 | shipped | Unmaintained transitive PEM parser remains in the reqwest 0.11 package graph; this crate does not parse PEM with it directly. | Re-review when ethers or reqwest 0.11 changes, or when PEM parsing becomes direct behavior. |
+| RUSTSEC-2026-0235 | rkyv 0.7.46 | rust_decimal 1.42.1 (dev, direct and through polymarket-client-sdk 0.4.4) → optional rkyv 0.7.46 lock edge | dev-only | cargo-audit scans the lock entry even though rkyv appears in no build graph; cargo tree reports it for neither normal nor dev edges on any target, and rust_decimal 1.42.1 is the latest release, so no upgrade removes the lock entry. | Re-review when rust_decimal or polymarket-client-sdk changes, when rust_decimal adopts rkyv 0.8, or if rkyv enters a build graph. |
 
 ## What this record does not prove
 
