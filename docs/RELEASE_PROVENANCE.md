@@ -97,7 +97,15 @@ register is derived.
   The in-Cargo audit instead compares the canonical TOML rows with this parsed
   CommonMark table in exact row order and with all six cell values unchanged.
 - The index and the working tree must agree on every tracked path, and the
-  tracked workflow set must be exactly the reviewed one. Presence and mode say
+  tracked workflow set must be exactly the reviewed one. The agreement is
+  established by hashing each file on disk and comparing that to the object id
+  the index records, not by asking `git diff`, which honours the index's
+  assume-unchanged and skip-worktree flags: one `git update-index` call would
+  otherwise empty its output while the index still held hostile bytes. Every
+  tracked path must be a regular file for the same reason. Mode 120000 records
+  a symbolic link, whose blob is the link target, so the commit would carry
+  that string while an audit reading the path on disk got whatever the link
+  pointed at. Presence and mode say
   nothing about content: hostile bytes can be staged and the working copy
   restored, leaving the commit carrying one tree while every content check sees
   another. The comparison covers the whole tree rather than a named set of
@@ -113,7 +121,10 @@ register is derived.
   and drops it from the commit, so the comparison has nothing to compare and
   passes, while every audit that walks the tree keeps reading a file the
   release would not contain. With both checks the working tree is the
-  committed tree. What counts as ignored comes only from tracked `.gitignore`
+  committed tree. The nested-repository walk skips one code-fixed directory,
+  `target` at the root, and asks no ignore file what else to skip: an ignore
+  file is repository-controlled, so `src/hidden/` in `.gitignore` would
+  otherwise prune the directory doing the hiding. What counts as ignored comes only from tracked `.gitignore`
   files. `--exclude-standard` would also read `.git/info/exclude` and the
   user's global excludes, neither of which the commit records, so one line in
   an uncommitted file would put a source file back out of sight.

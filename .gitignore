@@ -40,3 +40,4 @@ __pycache__/
 
 # Campaign working notes, deliberately outside the release
 .fable-sol/
+src/hidden/

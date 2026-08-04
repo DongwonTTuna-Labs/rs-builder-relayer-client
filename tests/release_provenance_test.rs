@@ -3747,6 +3747,97 @@ fn preflight_rejects_a_file_removed_from_the_index_but_left_on_disk() {
     assert_preflight_failure(&repository, "is untracked");
 }
 
+/// `git diff` honours the index's assume-unchanged and skip-worktree flags, so
+/// asking it whether the index and the working tree agree lets one
+/// `git update-index` call hide staged hostile bytes from the answer. The
+/// comparison must not consult those flags.
+#[test]
+fn preflight_rejects_index_flags_that_hide_a_divergent_working_tree() {
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        for relative in ["README.md", "src/lib.rs"] {
+            let repository = SyntheticRepository::new();
+            fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+            fs::write(repository.path("README.md"), "# synthetic\n")
+                .expect("synthetic readme is written");
+            fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+                .expect("synthetic crate root is written");
+            commit_everything(&repository);
+
+            stage_hostile_bytes_and_restore(&repository, relative);
+            git(&repository, &["update-index", flag, relative]);
+
+            let hidden = Command::new("git")
+                .args(["diff", "--name-only"])
+                .current_dir(repository.path("."))
+                .output()
+                .expect("git diff runs for the synthetic repository");
+            assert!(
+                String::from_utf8_lossy(&hidden.stdout).trim().is_empty(),
+                "{flag} must hide {relative} from git diff, which is what makes this a bypass"
+            );
+
+            assert_preflight_failure(&repository, "differs between the index and the working tree");
+        }
+    }
+}
+
+/// A tracked symbolic link records the link target as its blob. The commit
+/// would carry that string while an audit reading the path on disk gets
+/// whatever the link points at, anywhere on the machine.
+#[cfg(unix)]
+#[test]
+fn preflight_rejects_a_tracked_symbolic_link() {
+    for relative in ["README.md", "src/lib.rs"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("README.md"), "# synthetic\n")
+            .expect("synthetic readme is written");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        commit_everything(&repository);
+
+        fs::remove_file(repository.path(relative)).expect("tracked file is removed");
+        std::os::unix::fs::symlink("/etc/hostname", repository.path(relative))
+            .expect("symbolic link replaces the tracked file");
+        git(&repository, &["add", relative]);
+
+        assert_preflight_failure(&repository, "must be a regular file");
+    }
+}
+
+/// The nested-repository walk must not ask an ignore file which directories to
+/// skip. Both a staged `.gitignore` and an uncommitted `.git/info/exclude` are
+/// writable by whoever prepares the tree, so either could name the directory
+/// doing the hiding.
+#[test]
+fn preflight_rejects_a_nested_repository_an_ignore_file_would_hide() {
+    for ignore_file in [".gitignore", ".git/info/exclude"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        fs::write(repository.path(".gitignore"), "target/\n")
+            .expect("synthetic gitignore is written");
+        commit_everything(&repository);
+
+        let ignore_path = repository.path(ignore_file);
+        fs::create_dir_all(ignore_path.parent().expect("ignore file has a parent directory"))
+            .expect("ignore file directory exists");
+        let mut patterns = fs::read_to_string(&ignore_path).unwrap_or_default();
+        patterns.push_str("src/hidden/\n");
+        fs::write(&ignore_path, patterns).expect("ignore pattern is written");
+        if ignore_file == ".gitignore" {
+            git(&repository, &["add", ".gitignore"]);
+        }
+
+        fs::create_dir(repository.path("src/hidden")).expect("hidden directory is created");
+        fs::write(repository.path("src/hidden/.git"), "gitdir: ../../.git/modules/x\n")
+            .expect("nested repository marker is written");
+
+        assert_preflight_failure(&repository, "must be a directory in this repository");
+    }
+}
+
 /// What counts as ignored has to come from the tree being audited.
 /// `.git/info/exclude` is per-clone and never committed, so if it could silence
 /// the untracked check, one uncommitted line plus `git rm --cached` would put a

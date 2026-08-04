@@ -857,9 +857,13 @@ untracked unignored file, because agreement between the index and the working
 tree says nothing about a file the index does not hold: `git rm --cached` drops
 a file from the commit and leaves it on disk for every tree-walking audit to
 keep reading. Ignore patterns come only from tracked `.gitignore` files, so an
-uncommitted `.git/info/exclude` entry cannot silence that check. Run the
-preflight after staging; an unstaged edit or an unadded file anywhere is a
-disagreement, which is the point.
+uncommitted `.git/info/exclude` entry cannot silence that check. Agreement is
+established by hashing each file on disk against the object id the index
+records, because `git diff` honours assume-unchanged and skip-worktree; every
+tracked path must be a regular file, since a tracked symbolic link puts the
+audited bytes outside the repository. Run the preflight after staging; an
+unstaged edit or an unadded file anywhere is a disagreement, which is the
+point.
 
 The Rust audit retains the manifest, workflow, license, and schema checks for
 review visibility. It also requires all six release-provenance sections, one

@@ -17,6 +17,15 @@ from typing import Any
 # and neither is recorded in the tree this script audits.
 COMMITTED_EXCLUDES = "--exclude-per-directory=.gitignore"
 
+REGULAR_FILE_MODES = {"100644", "100755"}
+
+# The nested-repository walk skips exactly this directory, at the root only.
+# Walking `target/` costs more than every other check combined and it holds no
+# tracked content. The exception is fixed here rather than taken from an ignore
+# file: an ignore file is repository-controlled, so `src/hidden/` in
+# `.gitignore` would otherwise prune a nested repository out of the walk.
+PRUNED_ROOT_DIRECTORIES = {"target"}
+
 ALLOWED_TOOLCHAIN_KEYS = {"channel", "components", "targets", "profile"}
 PINNED_TOOLCHAIN_CHANNEL = "1.95.0"
 
@@ -278,12 +287,13 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
             errors.append(f"git ls-files must succeed for audited paths: {error}")
         else:
             recorded: dict[str, str] = {}
+            objects: dict[str, str] = {}
             for line in listing.splitlines():
                 metadata, _, path_name = line.partition("\t")
                 fields = metadata.split()
                 if len(fields) != 3:
                     continue
-                mode, _object_id, stage = fields
+                mode, object_id, stage = fields
                 if mode == "160000":
                     errors.append(
                         f"{path_name} is recorded as a gitlink; audited paths must be "
@@ -294,6 +304,7 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
                     errors.append(f"{path_name} is recorded at merge stage {stage}")
                     continue
                 recorded[path_name] = mode
+                objects[path_name] = object_id
 
             # Every check above this point reads the working tree, but what
             # GitHub Actions runs is the committed tree. `git rm --cached`
@@ -324,22 +335,67 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
             # audited inputs has to be extended whenever a test starts reading
             # a new file, and nothing makes that happen. Whole-tree agreement
             # needs no list and covers files not yet written.
-            try:
-                divergent = subprocess.run(
-                    ["git", "diff", "--name-only"],
-                    cwd=root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout.split()
-            except (OSError, subprocess.CalledProcessError) as error:
-                errors.append(f"git diff must succeed for audited paths: {error}")
-            else:
-                for relative in sorted(divergent):
+            #
+            # The comparison does not go through `git diff`, which honours the
+            # index's assume-unchanged and skip-worktree flags. One
+            # `git update-index --assume-unchanged README.md` empties its
+            # output while the index still holds hostile bytes and the audit
+            # still reads the restored working copy. Hashing the file on disk
+            # and comparing that to the recorded object id consults no flag.
+            comparable = []
+            for relative in sorted(recorded):
+                mode = recorded[relative]
+                if mode not in REGULAR_FILE_MODES:
+                    # Mode 120000 records a symbolic link, whose blob is the
+                    # link target. The commit would carry that string while an
+                    # audit reading the path on disk gets whatever the link
+                    # points at, anywhere on the machine.
                     errors.append(
-                        f"{relative} differs between the index and the working tree; "
-                        "the audited bytes must be the bytes that get committed"
+                        f"{relative} is recorded with mode {mode}; every tracked path "
+                        "must be a regular file, so that what an audit reads on disk "
+                        "is what the commit carries"
                     )
+                    continue
+                path = root / relative
+                if path.is_symlink():
+                    errors.append(
+                        f"{relative} is tracked as a regular file but is a symbolic "
+                        "link in the working tree"
+                    )
+                    continue
+                if not path.is_file():
+                    errors.append(
+                        f"{relative} is tracked but is not a regular file in the "
+                        "working tree"
+                    )
+                    continue
+                comparable.append(relative)
+
+            if comparable:
+                try:
+                    hashed = subprocess.run(
+                        ["git", "hash-object", "--", *comparable],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    ).stdout.split()
+                except (OSError, subprocess.CalledProcessError) as error:
+                    errors.append(f"git hash-object must succeed for tracked paths: {error}")
+                else:
+                    if len(hashed) != len(comparable):
+                        errors.append(
+                            "git hash-object must return one hash per tracked path; "
+                            f"asked for {len(comparable)} and received {len(hashed)}"
+                        )
+                    else:
+                        for relative, digest in zip(comparable, hashed):
+                            if digest != objects[relative]:
+                                errors.append(
+                                    f"{relative} differs between the index and the "
+                                    "working tree; the audited bytes must be the bytes "
+                                    "that get committed"
+                                )
 
             # Agreement between the index and the working tree says nothing
             # about a file the index does not hold at all. `git rm --cached
@@ -392,38 +448,6 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
     check_no_nested_repositories(root, errors)
 
 
-def ignored_directories(root: Path) -> set[str]:
-    """Directories git excludes, so the walk below can skip them.
-
-    These hold nothing that gets committed, and `target/` alone holds enough
-    files to make an exhaustive walk cost more than every other check
-    combined. Where git cannot answer, nothing is excluded and the walk is
-    exhaustive, which is the safe direction.
-
-    The patterns come only from tracked `.gitignore` files, never from
-    `.git/info/exclude` or the user's global excludes, so what this audit
-    treats as outside the release is recorded in the release.
-    """
-    try:
-        listing = subprocess.run(
-            [
-                "git",
-                "ls-files",
-                "--others",
-                "--ignored",
-                COMMITTED_EXCLUDES,
-                "--directory",
-            ],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return set()
-    return {line.rstrip("/") for line in listing.splitlines() if line.endswith("/")}
-
-
 def check_no_nested_repositories(root: Path, errors: list[str]) -> None:
     """Reject any directory below the root that is its own repository.
 
@@ -434,9 +458,10 @@ def check_no_nested_repositories(root: Path, errors: list[str]) -> None:
     `src` was never in it even though the boundary, source-matrix, and
     no-CLOB-surface tests read `src/**` from disk. This check has to hold
     without an index, so it reads the tree instead of asking git what it
-    tracks.
+    tracks, and it asks no ignore file which directories to skip, because a
+    repository-controlled ignore file could name the directory doing the
+    hiding.
     """
-    excluded = ignored_directories(root)
     pending = [root]
     while pending:
         current = pending.pop()
@@ -459,7 +484,7 @@ def check_no_nested_repositories(root: Path, errors: list[str]) -> None:
                 continue
             if entry.is_symlink() or not entry.is_dir():
                 continue
-            if entry.relative_to(root).as_posix() in excluded:
+            if current == root and entry.name in PRUNED_ROOT_DIRECTORIES:
                 continue
             pending.append(entry)
 
