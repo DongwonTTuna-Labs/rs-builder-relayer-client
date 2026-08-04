@@ -3805,26 +3805,15 @@ fn preflight_rejects_a_candidate_tree_a_replacement_ref_would_substitute() {
     assert_preflight_failure(&repository, "refs/replace/");
 }
 
-/// Git metadata can live outside the working tree. With `GIT_DIR` and
-/// `GIT_WORK_TREE` set the repository is fully functional and the root holds no
-/// `.git` entry, so testing for that entry skipped every committed-state check
-/// and reported success.
+/// A repository that exists only through `GIT_DIR` and `GIT_WORK_TREE` is one
+/// the caller chose, not one found in the tree. The preflight binds the tree it
+/// is run against, so it must fail rather than audit whatever the environment
+/// points at.
 #[test]
-fn preflight_rejects_a_working_tree_whose_git_metadata_lives_elsewhere() {
+fn preflight_rejects_a_repository_that_exists_only_in_the_environment() {
     let repository = SyntheticRepository::new();
-    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
-    commit_everything(&repository);
-
-    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
-    git(&repository, &["add", "README.md"]);
-    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
-
     let moved = repository.path(".git-elsewhere");
     fs::rename(repository.path(".git"), &moved).expect("git directory moves out of the root");
-    assert!(
-        !repository.path(".git").exists(),
-        "the root must hold no .git entry, which is what made the check skip"
-    );
 
     let output = Command::new("python3")
         .arg("-I")
@@ -3837,16 +3826,111 @@ fn preflight_rejects_a_working_tree_whose_git_metadata_lives_elsewhere() {
 
     assert!(
         !output.status.success(),
-        "an external git directory must not exempt the committed-state checks"
+        "an environment-only repository must not be audited as if it were the tree"
     );
     assert!(
         String::from_utf8_lossy(&output.stderr)
-            .contains("differs between the candidate commit tree and the working tree"),
-        "preflight must compare the candidate tree: {}",
+            .contains("must run inside the git working tree it audits"),
+        "preflight must say why it stopped: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
     fs::rename(&moved, repository.path(".git")).expect("git directory returns for cleanup");
+}
+
+/// `GIT_INDEX_FILE` names the index every authority command reads. Inheriting
+/// it let the caller hand the audit a reviewed index while the default one held
+/// the bytes `git commit` would record.
+#[test]
+fn preflight_audits_the_default_index_not_one_the_caller_names() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    let decoy = repository.path(".git-reviewed-index");
+    fs::copy(repository.path(".git/index"), &decoy).expect("reviewed index is kept aside");
+
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
+
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/preflight_build_integrity.py"))
+        .current_dir(repository.path("."))
+        .env("GIT_INDEX_FILE", &decoy)
+        .output()
+        .expect("python3 must execute the build-integrity preflight");
+
+    assert!(
+        !output.status.success(),
+        "a caller-named index must not become the audited authority"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("differs between the candidate commit tree and the working tree"),
+        "preflight must compare the default index: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::remove_file(&decoy).expect("decoy index is removed for cleanup");
+}
+
+/// The same routing works through a whole decoy repository: leave the real
+/// `.git` holding hostile bytes and point `GIT_DIR` and `GIT_WORK_TREE` at a
+/// reviewed one outside the tree.
+#[test]
+fn preflight_audits_the_repository_in_the_tree_not_a_decoy_gitdir() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    let decoy_root = std::env::temp_dir().join(format!(
+        "pbrsdk28-decoy-{}-{}",
+        std::process::id(),
+        SYNTHETIC_REPOSITORY_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&decoy_root).expect("decoy repository directory is created");
+    let decoy_git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&decoy_root)
+            .output()
+            .expect("git runs for the decoy repository");
+        assert!(
+            output.status.success(),
+            "git {args:?} must succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    decoy_git(&["init", "-q", "."]);
+    decoy_git(&["config", "user.email", "decoy@example.invalid"]);
+    decoy_git(&["config", "user.name", "decoy"]);
+
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
+
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/preflight_build_integrity.py"))
+        .current_dir(repository.path("."))
+        .env("GIT_DIR", decoy_root.join(".git"))
+        .env("GIT_WORK_TREE", repository.path("."))
+        .output()
+        .expect("python3 must execute the build-integrity preflight");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = fs::remove_dir_all(&decoy_root);
+
+    assert!(
+        !output.status.success(),
+        "a decoy gitdir must not become the audited authority"
+    );
+    assert!(
+        stderr.contains("differs between the candidate commit tree and the working tree"),
+        "preflight must compare the repository in the tree: {stderr}"
+    );
 }
 
 /// `git hash-object` applies the clean filters and end-of-line conversion that

@@ -848,8 +848,9 @@ three license files to be non-empty. This is the load-bearing committed-state
 check; an earlier unit test cannot repair those inputs before it runs.
 
 The preflight also requires the working tree to be exactly the tree that would
-be committed. The authority is `git write-tree` read with `GIT_NO_REPLACE_OBJECTS` set, not
-the index listing, because `git add -N` records an entry the listing reports and
+be committed. The authority is `git write-tree`, read from the repository's canonical
+metadata and default index with every `GIT_*` variable dropped, not the index
+listing, because `git add -N` records an entry the listing reports and
 the tree omits, and because `git replace` can make plain `git ls-tree` answer
 with one tree while the commit records another. A repository is identified by
 `git rev-parse --show-toplevel` rather than by a `.git` entry at the root, and

@@ -102,8 +102,19 @@ register is derived.
   pins, is the committed tree. The two can be made to differ in ways that leave
   the working copy looking ordinary, and each one lets a local test run report
   on bytes the release does not carry.
-- The authority is `git write-tree`, the tree `git commit` would use, read with
-  `GIT_NO_REPLACE_OBJECTS` set, not the index listing. `git replace` installs a
+- The authority is `git write-tree`, read from the repository's canonical
+  metadata and default index with every `GIT_*` variable dropped from the
+  environment, not the index listing. Inheriting those variables let the caller
+  choose what the audit read: `GIT_INDEX_FILE` alone points `write-tree` at a
+  reviewed index while the default one holds the bytes `git commit` will
+  record, and `GIT_DIR` with `GIT_WORK_TREE` points the whole authority at a
+  decoy repository. `git rev-parse --show-toplevel` catches neither, because it
+  proves which working tree was selected and not which gitdir or index. With
+  the variables gone the repository is found the way every other tool finds it,
+  and one that exists only through the environment fails closed. System and
+  global git config are excluded for the same reason: neither is recorded in
+  the tree being audited, and both can set attributes and filters that change
+  what git reports about it. `git replace` installs a
   ref that most commands apply transparently, so `git ls-tree` can be made to
   answer with a reviewed tree while the index builds, and the commit records, a
   different one; replacement refs are not pushed, so a consumer would receive

@@ -35,11 +35,38 @@ UNCOMMITTED_FILES = {
     ".claude/settings.local.json",  # per-developer tool settings
 }
 
-# `git replace` installs a ref that most commands apply transparently, so
-# `git ls-tree` can be made to answer with a reviewed tree while the index
-# builds, and `git commit` records, a different one. Replacement refs are not
-# pushed by default, so a consumer would receive the unsubstituted tree.
-GIT_ENV = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"}
+# Every `GIT_*` variable is dropped rather than inherited, and only what this
+# script needs is set back. Inheriting them let the caller choose which
+# repository and which index the audit read: `GIT_INDEX_FILE=/tmp/reviewed.index`
+# alone makes `write-tree` build a reviewed tree while the default index holds
+# the bytes `git commit` will record, and `GIT_DIR` with `GIT_WORK_TREE` points
+# the whole authority at a decoy repository. `git rev-parse --show-toplevel`
+# does not catch either, because it proves which working tree was selected and
+# not which gitdir or index. With the variables gone, the repository is found
+# the way every other tool finds it, from the `.git` directory or gitfile in
+# the tree, and a repository that exists only through the environment fails
+# closed.
+#
+# `GIT_NO_REPLACE_OBJECTS` is set because `git replace` installs a ref that
+# most commands apply transparently, so `git ls-tree` can otherwise be made to
+# answer with a reviewed tree while the index builds, and `git commit` records,
+# a different one. Replacement refs are not pushed by default, so a consumer
+# would receive the unsubstituted tree. Dropping `GIT_REPLACE_REF_BASE` in the
+# same sweep keeps the `refs/replace/` scan below looking where git looks.
+#
+# System and global config are excluded too: neither is recorded in the tree
+# being audited, and both can set attributes and filters that change what git
+# reports about it.
+GIT_ENV = {
+    key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+}
+GIT_ENV.update(
+    {
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+)
 
 ALLOWED_TOOLCHAIN_KEYS = {"channel", "components", "targets", "profile"}
 PINNED_TOOLCHAIN_CHANNEL = "1.95.0"
@@ -551,9 +578,10 @@ def walk_repository_files(root: Path, errors: list[str]) -> list[Path]:
                         "repository, not a submodule"
                     )
                 continue
-            # The kind is settled before the exclusion, so that a name in
-            # either set cannot exempt a symbolic link or anything else the
-            # set did not mean.
+            # The kind is settled before the exclusion, so a name in either
+            # set cannot exempt a symbolic link. The file set exempts regular
+            # files only, so a FIFO or socket left under one of those names is
+            # still reported rather than passed over.
             if entry.is_symlink():
                 files.append(entry)
                 continue
@@ -561,7 +589,7 @@ def walk_repository_files(root: Path, errors: list[str]) -> list[Path]:
             if entry.is_dir():
                 if relative not in UNCOMMITTED_DIRECTORIES:
                     pending.append(entry)
-            elif relative not in UNCOMMITTED_FILES:
+            elif not (entry.is_file() and relative in UNCOMMITTED_FILES):
                 files.append(entry)
     return files
 
