@@ -1560,7 +1560,13 @@ impl SyntheticRepository {
         ] {
             fs::write(root.join(path), contents).expect("synthetic license file is written");
         }
-        Self { root }
+        // The preflight binds the committed tree, so it now requires a git
+        // working tree and fails closed without one. Every synthetic
+        // repository therefore starts as a committed baseline, and each
+        // mutation below is a departure from it.
+        let repository = Self { root };
+        commit_everything(&repository);
+        repository
     }
 
     fn path(&self, relative: &str) -> PathBuf {
@@ -3435,6 +3441,7 @@ fn preflight_does_not_parse_hidden_markdown_table_rows() {
         ),
     )
     .expect("synthetic hidden Markdown row is written");
+    commit_everything(&repository);
 
     let output = run_preflight(&repository);
     assert!(
@@ -3597,7 +3604,7 @@ fn preflight_rejects_an_audited_path_recorded_as_a_gitlink() {
     git(&["config", "user.email", "synthetic@example.invalid"]);
     git(&["config", "user.name", "synthetic"]);
     git(&["add", "-A"]);
-    git(&["commit", "-qm", "synthetic"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "synthetic"]);
 
     let head = git(&["rev-parse", "HEAD"]);
     git(&["rm", "-r", "--cached", "-q", ".github"]);
@@ -3637,7 +3644,7 @@ fn preflight_rejects_an_untracked_audit_input() {
     git(&["config", "user.email", "synthetic@example.invalid"]);
     git(&["config", "user.name", "synthetic"]);
     git(&["add", "-A"]);
-    git(&["commit", "-qm", "synthetic"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "synthetic"]);
     git(&["rm", "--cached", "-q", ".github/workflows/security-audit.yml"]);
 
     assert!(
@@ -3664,12 +3671,14 @@ fn git(repository: &SyntheticRepository, args: &[&str]) {
     );
 }
 
+/// Commits everything present. Safe to call again after `new`, which already
+/// committed a baseline, so a test that adds files can commit them too.
 fn commit_everything(repository: &SyntheticRepository) {
     git(repository, &["init", "-q", "."]);
     git(repository, &["config", "user.email", "synthetic@example.invalid"]);
     git(repository, &["config", "user.name", "synthetic"]);
     git(repository, &["add", "-A"]);
-    git(repository, &["commit", "-qm", "synthetic"]);
+    git(repository, &["commit", "-q", "--allow-empty", "-m", "synthetic"]);
 }
 
 /// Stages hostile bytes and restores the working copy, so the commit carries
@@ -3688,7 +3697,10 @@ fn preflight_rejects_an_index_that_diverges_from_the_working_tree() {
     commit_everything(&repository);
     stage_hostile_bytes_and_restore(&repository, ".github/workflows/security-audit.yml");
 
-    assert_preflight_failure(&repository, "differs between the index and the working tree");
+    assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
 }
 
 /// The comparison covers every tracked path rather than a named set, so it has
@@ -3715,7 +3727,10 @@ fn preflight_rejects_worktree_divergence_outside_any_named_audit_path() {
         );
 
         stage_hostile_bytes_and_restore(&repository, relative);
-        assert_preflight_failure(&repository, "differs between the index and the working tree");
+        assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
     }
 }
 
@@ -3745,6 +3760,93 @@ fn preflight_rejects_a_file_removed_from_the_index_but_left_on_disk() {
     );
 
     assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// `git replace` installs a ref that most commands apply transparently, so
+/// `git ls-tree` answers with a reviewed tree while the index builds, and
+/// `git commit` records, a different one. Replacement refs are not pushed by
+/// default, so a consumer would receive the tree the preflight never read.
+#[test]
+fn preflight_rejects_a_candidate_tree_a_replacement_ref_would_substitute() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    let read = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repository.path("."))
+            .output()
+            .expect("git runs for the synthetic repository");
+        assert!(
+            output.status.success(),
+            "git {args:?} must succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+
+    let reviewed = read(&["write-tree"]);
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    let hostile = read(&["write-tree"]);
+    assert_ne!(reviewed, hostile, "the two trees must differ for this to be a bypass");
+
+    git(&repository, &["replace", "-f", &hostile, &reviewed]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
+
+    let substituted = read(&["ls-tree", "-r", &hostile]);
+    let actual = read(&["--no-replace-objects", "ls-tree", "-r", &hostile]);
+    assert_ne!(
+        substituted, actual,
+        "plain ls-tree must answer with the reviewed tree while the real one differs"
+    );
+
+    assert_preflight_failure(&repository, "refs/replace/");
+}
+
+/// Git metadata can live outside the working tree. With `GIT_DIR` and
+/// `GIT_WORK_TREE` set the repository is fully functional and the root holds no
+/// `.git` entry, so testing for that entry skipped every committed-state check
+/// and reported success.
+#[test]
+fn preflight_rejects_a_working_tree_whose_git_metadata_lives_elsewhere() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
+
+    let moved = repository.path(".git-elsewhere");
+    fs::rename(repository.path(".git"), &moved).expect("git directory moves out of the root");
+    assert!(
+        !repository.path(".git").exists(),
+        "the root must hold no .git entry, which is what made the check skip"
+    );
+
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/preflight_build_integrity.py"))
+        .current_dir(repository.path("."))
+        .env("GIT_DIR", &moved)
+        .env("GIT_WORK_TREE", repository.path("."))
+        .output()
+        .expect("python3 must execute the build-integrity preflight");
+
+    assert!(
+        !output.status.success(),
+        "an external git directory must not exempt the committed-state checks"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("differs between the candidate commit tree and the working tree"),
+        "preflight must compare the candidate tree: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::rename(&moved, repository.path(".git")).expect("git directory returns for cleanup");
 }
 
 /// `git hash-object` applies the clean filters and end-of-line conversion that
@@ -3778,7 +3880,10 @@ fn preflight_rejects_working_tree_bytes_a_clean_filter_would_normalize() {
         "the filter must change the hash, which is what makes this a bypass"
     );
 
-    assert_preflight_failure(&repository, "differs between the index and the working tree");
+    assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
 }
 
 /// `git ls-files --others` answers from `.gitignore` files found in the working
@@ -3912,7 +4017,10 @@ fn preflight_rejects_index_flags_that_hide_a_divergent_working_tree() {
                 "{flag} must hide {relative} from git diff, which is what makes this a bypass"
             );
 
-            assert_preflight_failure(&repository, "differs between the index and the working tree");
+            assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
         }
     }
 }

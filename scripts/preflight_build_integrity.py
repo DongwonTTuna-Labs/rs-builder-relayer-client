@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 import subprocess
 import sys
 import tomllib
@@ -22,14 +24,22 @@ REGULAR_FILE_MODES = {"100644", "100755"}
 # whoever removes every file under `src/` also removes `src/` from anything
 # derived. A path listed here is one a reviewer can see is not audited, and
 # adding to the list is a change to the file this check hashes.
-UNCOMMITTED_PATHS = {
+UNCOMMITTED_DIRECTORIES = {
     "target",  # cargo build output
-    "Cargo.lock",  # deliberately untracked; docs/RELEASE_PROVENANCE.md says why
     ".fable-sol",  # working notes kept outside the release
     ".pytest_cache",  # pytest cache
     "setup",  # local tooling checkout, not release content
+}
+UNCOMMITTED_FILES = {
+    "Cargo.lock",  # deliberately untracked; docs/RELEASE_PROVENANCE.md says why
     ".claude/settings.local.json",  # per-developer tool settings
 }
+
+# `git replace` installs a ref that most commands apply transparently, so
+# `git ls-tree` can be made to answer with a reviewed tree while the index
+# builds, and `git commit` records, a different one. Replacement refs are not
+# pushed by default, so a consumer would receive the unsubstituted tree.
+GIT_ENV = {**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"}
 
 ALLOWED_TOOLCHAIN_KEYS = {"channel", "components", "targets", "profile"}
 PINNED_TOOLCHAIN_CHANNEL = "1.95.0"
@@ -281,12 +291,21 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
     being audited in the first place.
     """
     try:
+        replacements = subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname)", "refs/replace/"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=GIT_ENV,
+        ).stdout.split()
         tree = subprocess.run(
             ["git", "write-tree"],
             cwd=root,
             capture_output=True,
             text=True,
             check=True,
+            env=GIT_ENV,
         ).stdout.strip()
         listing = subprocess.run(
             ["git", "ls-tree", "-r", "-z", "--full-tree", tree],
@@ -294,10 +313,20 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
             capture_output=True,
             text=True,
             check=True,
+            env=GIT_ENV,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         errors.append(f"git must produce the candidate commit tree: {error}")
         return None
+
+    # `GIT_NO_REPLACE_OBJECTS` above already makes these calls read the real
+    # objects. Their presence is still refused, because every other tool in the
+    # repository would read the substitution.
+    for refname in sorted(replacements):
+        errors.append(
+            f"{refname} exists; a replacement ref makes git answer with one tree "
+            "while the commit records another"
+        )
 
     entries: dict[str, tuple[str, str]] = {}
     for record in listing.split("\0"):
@@ -322,7 +351,31 @@ def check_committed_tree(root: Path, errors: list[str]) -> None:
     ordinary, and each one lets a local `cargo test` report on bytes the
     release does not carry.
     """
-    if not (root / ".git").exists():
+    # Not `(root / ".git").exists()`. Git metadata can live elsewhere: with
+    # `GIT_DIR` and `GIT_WORK_TREE` set, the repository is fully functional and
+    # the root holds no `.git` entry, so that test skipped every check below
+    # and reported success. Ask git where its working tree is instead, and stop
+    # with an error when it cannot say.
+    try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+            env=GIT_ENV,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        errors.append(
+            "this preflight must run inside the git working tree it audits, "
+            f"because the committed tree is what it binds: {error}"
+        )
+        return
+    if Path(toplevel).resolve() != root.resolve():
+        errors.append(
+            f"this preflight must run at the git working-tree root; git reports "
+            f"{toplevel} and this run is in {root}"
+        )
         return
 
     entries = committed_tree_entries(root, errors)
@@ -383,7 +436,7 @@ def check_committed_tree(root: Path, errors: list[str]) -> None:
         # The mode is part of the tree. `git update-index --chmod=-x` records
         # 100644 for a file left executable on disk, so a script a local run
         # can execute loses its bit in a fresh checkout.
-        executable = bool(path.stat().st_mode & 0o111)
+        executable = bool(path.stat().st_mode & stat.S_IXUSR)
         if executable != (mode == "100755"):
             errors.append(
                 f"{relative} is recorded with mode {mode} but is "
@@ -406,6 +459,7 @@ def check_committed_tree(root: Path, errors: list[str]) -> None:
                 capture_output=True,
                 text=True,
                 check=True,
+                env=GIT_ENV,
             ).stdout.split()
         except (OSError, subprocess.CalledProcessError) as error:
             errors.append(f"git hash-object must succeed for committed paths: {error}")
@@ -419,9 +473,9 @@ def check_committed_tree(root: Path, errors: list[str]) -> None:
                 for relative, digest in zip(comparable, hashed):
                     if digest != entries[relative][1]:
                         errors.append(
-                            f"{relative} differs between the index and the working "
-                            "tree; the audited bytes must be the bytes that get "
-                            "committed"
+                            f"{relative} differs between the candidate commit "
+                            "tree and the working tree; the audited bytes must be "
+                            "the bytes that get committed"
                         )
 
     # The comparison above covers only paths the tree holds. A file on disk and
@@ -497,14 +551,17 @@ def walk_repository_files(root: Path, errors: list[str]) -> list[Path]:
                         "repository, not a submodule"
                     )
                 continue
-            if entry.relative_to(root).as_posix() in UNCOMMITTED_PATHS:
-                continue
+            # The kind is settled before the exclusion, so that a name in
+            # either set cannot exempt a symbolic link or anything else the
+            # set did not mean.
             if entry.is_symlink():
                 files.append(entry)
                 continue
+            relative = entry.relative_to(root).as_posix()
             if entry.is_dir():
-                pending.append(entry)
-            else:
+                if relative not in UNCOMMITTED_DIRECTORIES:
+                    pending.append(entry)
+            elif relative not in UNCOMMITTED_FILES:
                 files.append(entry)
     return files
 
@@ -800,7 +857,6 @@ def main() -> int:
     root = Path.cwd()
     errors: list[str] = []
     check_committed_tree(root, errors)
-    walk_repository_files(root, errors)
     check_no_symlinks(root, errors)
     check_no_build_scripts(root, errors)
     check_no_local_path_dependencies(root, errors)

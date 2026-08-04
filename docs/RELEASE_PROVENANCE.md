@@ -102,8 +102,14 @@ register is derived.
   pins, is the committed tree. The two can be made to differ in ways that leave
   the working copy looking ordinary, and each one lets a local test run report
   on bytes the release does not carry.
-- The authority is `git write-tree`, the tree `git commit` would use, not the
-  index listing. `git add -N ghost` records an index entry that the listing
+- The authority is `git write-tree`, the tree `git commit` would use, read with
+  `GIT_NO_REPLACE_OBJECTS` set, not the index listing. `git replace` installs a
+  ref that most commands apply transparently, so `git ls-tree` can be made to
+  answer with a reviewed tree while the index builds, and the commit records, a
+  different one; replacement refs are not pushed, so a consumer would receive
+  the tree that was never read. Any ref under `refs/replace/` is refused
+  outright as well, because every other tool in the repository would read the
+  substitution. `git add -N ghost` records an index entry that the listing
   reports and the tree omits, so a file that never reaches the commit satisfied
   every comparison keyed on the listing. `write-tree` also refuses an index
   with unmerged entries.
@@ -132,8 +138,13 @@ register is derived.
   set from the tree fails the same way, because whoever removes every file
   under `src/` also removes `src/` from anything derived from it.
 - The nested-repository walk reads the tree rather than asking git what it
-  tracks, so it holds without an index, and it asks no ignore file which
-  directories to skip.
+  tracks, and it asks no ignore file which directories to skip.
+- Whether this is a repository is decided by `git rev-parse --show-toplevel`,
+  not by a `.git` entry at the root, and the preflight fails when git cannot
+  answer or answers with a different directory. Git metadata can live
+  elsewhere: with `GIT_DIR` and `GIT_WORK_TREE` set the repository is fully
+  functional and the root holds no `.git` entry, so testing for that entry
+  skipped every check above and reported success.
 - Every workflow file is pinned by SHA-256 digest in the preflight, and the
   `.github/workflows` directory is closed to its reviewed set. Any workflow in
   this repository can stop the audit from running: one granted
