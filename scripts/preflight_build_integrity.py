@@ -351,6 +351,33 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
     Asking git does not widen the trust base, because git produced the tree
     being audited in the first place.
     """
+    # A content filter is a program git runs while `git write-tree` refreshes
+    # the index, with the same chance to replace `.git/index` as a hook. It
+    # cannot be overridden per command the way `core.fsmonitor` can, because
+    # the driver names are arbitrary, so a repository that configures one is
+    # refused before the tree is built. Refusing the driver closes the shape:
+    # without one, an attributes file selects nothing. This repository declares
+    # no filters, so the refusal costs nothing here.
+    try:
+        drivers = run_git(root, "config", "--name-only", "--get-regexp", r"^filter\.")
+    except subprocess.CalledProcessError as error:
+        # `--get-regexp` exits 1 when nothing matches, which is the normal case.
+        if error.returncode != 1:
+            errors.append(f"git config must be readable: {error}")
+            return None
+        drivers = ""
+    except OSError as error:
+        errors.append(f"git config must be readable: {error}")
+        return None
+    configured = sorted(set(drivers.split()))
+    if configured:
+        for name in configured:
+            errors.append(
+                f"{name} configures a content filter; git runs it while refreshing "
+                "the index, so the tree cannot be built without executing it"
+            )
+        return None
+
     try:
         replacements = run_git(
             root, "for-each-ref", "--format=%(refname)", "refs/replace/"

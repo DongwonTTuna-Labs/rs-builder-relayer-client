@@ -3895,6 +3895,55 @@ fn default_index_tree(repository: &SyntheticRepository) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// Repository-local config names programs in more places than the two the
+/// preflight overrides. This pins that none of the others is reachable from the
+/// commands it runs, so that a new command, or a git that widens one of these,
+/// is caught here rather than by the next review.
+#[test]
+fn preflight_reaches_no_other_local_config_that_names_a_program() {
+    let repository = SyntheticRepository::new();
+    let outside = OutsideTree::new();
+
+    let settings = [
+        ("core.pager", "pager"),
+        ("core.alternateRefsCommand", "alternate-refs"),
+        ("diff.audited.textconv", "textconv"),
+        ("filter.audited.clean", "clean-filter"),
+        ("filter.audited.smudge", "smudge-filter"),
+        ("remote.origin.uploadpack", "upload-pack"),
+        ("core.gitProxy", "proxy"),
+        ("credential.helper", "credential-helper"),
+    ];
+    for (key, name) in settings {
+        let script = outside.install_executable(
+            &format!("{name}.sh"),
+            &format!("#!/bin/sh\ntouch {}\n", outside.path(name).display()),
+        );
+        git(&repository, &["config", key, script.to_str().unwrap()]);
+    }
+    fs::write(
+        repository.path(".gitattributes"),
+        "docs/accepted-advisories.toml filter=audited diff=audited\n",
+    )
+    .expect("synthetic attributes are written");
+    commit_everything(&repository);
+
+    // Committing applies the clean filter itself, so the baseline is taken
+    // after the setup and immediately before the run being measured.
+    for (_, name) in settings {
+        let _ = fs::remove_file(outside.path(name));
+    }
+
+    run_preflight(&repository);
+
+    for (key, name) in settings {
+        assert!(
+            !outside.path(name).exists(),
+            "{key} must not be reachable from the commands the preflight runs"
+        );
+    }
+}
+
 /// In a partial clone, reading an object the local store lacks makes git fetch
 /// it, and that transport runs `core.sshCommand` from repository-local config.
 /// The callback replaces `.git/index` while `git ls-tree` walks the tree that

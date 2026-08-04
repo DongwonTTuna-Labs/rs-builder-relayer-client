@@ -127,7 +127,12 @@ register is derived.
   makes git fetch it, and that transport runs `core.sshCommand` from the same
   local config with the same opportunity. Overriding at the moment of use is
   what settles these; reading the settings first and refusing would leave the
-  window between the check and the command. `git replace` installs a
+  window between the check and the command. A content filter is the one that
+  cannot be overridden, because driver names are arbitrary, and git runs it
+  while `git write-tree` refreshes the index. A repository that configures any
+  `filter.*` driver is therefore refused before the tree is built. Refusing the
+  driver closes the shape rather than a spelling: without one, an attributes
+  file selects nothing. This repository declares no filters. `git replace` installs a
   ref that most commands apply transparently, so `git ls-tree` can be made to
   answer with a reviewed tree while the index builds, and the commit records, a
   different one; replacement refs are not pushed, so a consumer would receive
