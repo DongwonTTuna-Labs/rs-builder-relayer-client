@@ -1560,7 +1560,13 @@ impl SyntheticRepository {
         ] {
             fs::write(root.join(path), contents).expect("synthetic license file is written");
         }
-        Self { root }
+        // The preflight binds the committed tree, so it now requires a git
+        // working tree and fails closed without one. Every synthetic
+        // repository therefore starts as a committed baseline, and each
+        // mutation below is a departure from it.
+        let repository = Self { root };
+        commit_everything(&repository);
+        repository
     }
 
     fn path(&self, relative: &str) -> PathBuf {
@@ -3435,6 +3441,7 @@ fn preflight_does_not_parse_hidden_markdown_table_rows() {
         ),
     )
     .expect("synthetic hidden Markdown row is written");
+    commit_everything(&repository);
 
     let output = run_preflight(&repository);
     assert!(
@@ -3597,7 +3604,7 @@ fn preflight_rejects_an_audited_path_recorded_as_a_gitlink() {
     git(&["config", "user.email", "synthetic@example.invalid"]);
     git(&["config", "user.name", "synthetic"]);
     git(&["add", "-A"]);
-    git(&["commit", "-qm", "synthetic"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "synthetic"]);
 
     let head = git(&["rev-parse", "HEAD"]);
     git(&["rm", "-r", "--cached", "-q", ".github"]);
@@ -3637,7 +3644,7 @@ fn preflight_rejects_an_untracked_audit_input() {
     git(&["config", "user.email", "synthetic@example.invalid"]);
     git(&["config", "user.name", "synthetic"]);
     git(&["add", "-A"]);
-    git(&["commit", "-qm", "synthetic"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "synthetic"]);
     git(&["rm", "--cached", "-q", ".github/workflows/security-audit.yml"]);
 
     assert!(
@@ -3651,16 +3658,124 @@ fn preflight_rejects_an_untracked_audit_input() {
 /// checks reads the working tree, so malicious bytes can be staged and the
 /// working copy restored: the commit carries one tree while every check sees
 /// another.
+fn git(repository: &SyntheticRepository, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git runs for the synthetic repository");
+    assert!(
+        output.status.success(),
+        "git {args:?} must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Commits everything present. Safe to call again after `new`, which already
+/// committed a baseline, so a test that adds files can commit them too.
+fn commit_everything(repository: &SyntheticRepository) {
+    git(repository, &["init", "-q", "."]);
+    git(repository, &["config", "user.email", "synthetic@example.invalid"]);
+    git(repository, &["config", "user.name", "synthetic"]);
+    git(repository, &["add", "-A"]);
+    git(repository, &["commit", "-q", "--allow-empty", "-m", "synthetic"]);
+}
+
+/// Stages hostile bytes and restores the working copy, so the commit carries
+/// one tree while every content check reads another.
+fn stage_hostile_bytes_and_restore(repository: &SyntheticRepository, relative: &str) {
+    let path = repository.path(relative);
+    let reviewed = fs::read_to_string(&path).expect("reviewed file is readable");
+    fs::write(&path, "hostile\n").expect("hostile bytes are written");
+    git(repository, &["add", relative]);
+    fs::write(&path, &reviewed).expect("reviewed file is restored");
+}
+
 #[test]
 fn preflight_rejects_an_index_that_diverges_from_the_working_tree() {
     let repository = SyntheticRepository::new();
-    let root = repository.path(".");
-    let workflow = repository.path(".github/workflows/security-audit.yml");
+    commit_everything(&repository);
+    stage_hostile_bytes_and_restore(&repository, ".github/workflows/security-audit.yml");
 
-    let git = |args: &[&str]| {
+    assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
+}
+
+/// The comparison covers every tracked path rather than a named set, so it has
+/// to reject divergence in files no such set ever mentioned. `README.md` and
+/// `src/**` are read from disk by the boundary, source-matrix, and
+/// no-CLOB-surface tests; while the comparison named its paths, those audits
+/// could read bytes the commit does not carry.
+#[test]
+fn preflight_rejects_worktree_divergence_outside_any_named_audit_path() {
+    for relative in ["README.md", "src/lib.rs"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("README.md"), "# synthetic\n")
+            .expect("synthetic readme is written");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        commit_everything(&repository);
+
+        let output = run_preflight(&repository);
+        assert!(
+            output.status.success(),
+            "an agreeing tree must pass before divergence is introduced: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        stage_hostile_bytes_and_restore(&repository, relative);
+        assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
+    }
+}
+
+/// Index/worktree agreement says nothing about a file the index does not hold.
+/// `git rm --cached` removes a file from the commit and leaves it on disk, so
+/// the comparison has nothing to compare while every audit that walks the tree
+/// keeps reading a file the release would not contain.
+#[test]
+fn preflight_rejects_a_file_removed_from_the_index_but_left_on_disk() {
+    let repository = SyntheticRepository::new();
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+        .expect("synthetic crate root is written");
+    commit_everything(&repository);
+
+    let output = run_preflight(&repository);
+    assert!(
+        output.status.success(),
+        "a tracked tree must pass before the file is removed from the index: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
+    assert!(
+        repository.path("src/lib.rs").is_file(),
+        "the working copy must survive, which is what makes this a bypass"
+    );
+
+    assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// `git replace` installs a ref that most commands apply transparently, so
+/// `git ls-tree` answers with a reviewed tree while the index builds, and
+/// `git commit` records, a different one. Replacement refs are not pushed by
+/// default, so a consumer would receive the tree the preflight never read.
+#[test]
+fn preflight_rejects_a_candidate_tree_a_replacement_ref_would_substitute() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    let read = |args: &[&str]| {
         let output = Command::new("git")
             .args(args)
-            .current_dir(&root)
+            .current_dir(repository.path("."))
             .output()
             .expect("git runs for the synthetic repository");
         assert!(
@@ -3668,19 +3783,722 @@ fn preflight_rejects_an_index_that_diverges_from_the_working_tree() {
             "git {args:?} must succeed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
     };
 
-    git(&["init", "-q", "."]);
-    git(&["config", "user.email", "synthetic@example.invalid"]);
-    git(&["config", "user.name", "synthetic"]);
-    git(&["add", "-A"]);
-    git(&["commit", "-qm", "synthetic"]);
+    let reviewed = read(&["write-tree"]);
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    let hostile = read(&["write-tree"]);
+    assert_ne!(reviewed, hostile, "the two trees must differ for this to be a bypass");
 
-    let reviewed = fs::read_to_string(&workflow).expect("reviewed workflow is readable");
-    fs::write(&workflow, "name: Security audit\non: {}\njobs: {}\n")
-        .expect("hostile workflow is written");
-    git(&["add", ".github/workflows/security-audit.yml"]);
-    fs::write(&workflow, &reviewed).expect("reviewed workflow is restored");
+    git(&repository, &["replace", "-f", &hostile, &reviewed]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
 
-    assert_preflight_failure(&repository, "differs between the index and the working tree");
+    let substituted = read(&["ls-tree", "-r", &hostile]);
+    let actual = read(&["--no-replace-objects", "ls-tree", "-r", &hostile]);
+    assert_ne!(
+        substituted, actual,
+        "plain ls-tree must answer with the reviewed tree while the real one differs"
+    );
+
+    assert_preflight_failure(&repository, "refs/replace/");
+}
+
+/// A repository that exists only through `GIT_DIR` and `GIT_WORK_TREE` is one
+/// the caller chose, not one found in the tree. The preflight binds the tree it
+/// is run against, so it must fail rather than audit whatever the environment
+/// points at.
+#[test]
+fn preflight_rejects_a_repository_that_exists_only_in_the_environment() {
+    let repository = SyntheticRepository::new();
+    let moved = repository.path(".git-elsewhere");
+    fs::rename(repository.path(".git"), &moved).expect("git directory moves out of the root");
+
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/preflight_build_integrity.py"))
+        .current_dir(repository.path("."))
+        .env("GIT_DIR", &moved)
+        .env("GIT_WORK_TREE", repository.path("."))
+        .output()
+        .expect("python3 must execute the build-integrity preflight");
+
+    assert!(
+        !output.status.success(),
+        "an environment-only repository must not be audited as if it were the tree"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("must run inside the git working tree it audits"),
+        "preflight must say why it stopped: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::rename(&moved, repository.path(".git")).expect("git directory returns for cleanup");
+}
+
+/// A directory outside the working tree, for callback scripts and index copies
+/// that must not become uncommitted files in the repository under audit.
+struct OutsideTree {
+    root: PathBuf,
+}
+
+impl OutsideTree {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "pbrsdk28-outside-{}-{}",
+            std::process::id(),
+            SYNTHETIC_REPOSITORY_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&root).expect("directory outside the working tree is created");
+        Self { root }
+    }
+
+    fn path(&self, relative: &str) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    fn install_executable(&self, relative: &str, script: &str) -> PathBuf {
+        let path = self.path(relative);
+        fs::write(&path, script).expect("callback script is written");
+        let mut mode = fs::metadata(&path)
+            .expect("callback metadata is readable")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        fs::set_permissions(&path, mode).expect("callback becomes executable");
+        path
+    }
+}
+
+impl Drop for OutsideTree {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Reads the tree the default index would produce, with the callbacks and
+/// routing this script fixes, so the reading itself cannot disturb the answer.
+fn default_index_tree(repository: &SyntheticRepository) -> String {
+    let output = Command::new("git")
+        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+        .arg("write-tree")
+        .current_dir(repository.path("."))
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .output()
+        .expect("git write-tree runs for the synthetic repository");
+    assert!(
+        output.status.success(),
+        "git write-tree must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Repository-local config names programs in more places than the two the
+/// preflight overrides. This pins that none of the others is reachable from the
+/// commands it runs, so that a new command, or a git that widens one of these,
+/// is caught here rather than by the next review.
+#[test]
+fn preflight_reaches_no_other_local_config_that_names_a_program() {
+    let repository = SyntheticRepository::new();
+    let outside = OutsideTree::new();
+
+    let settings = [
+        ("core.pager", "pager"),
+        ("core.alternateRefsCommand", "alternate-refs"),
+        ("diff.audited.textconv", "textconv"),
+        ("filter.audited.clean", "clean-filter"),
+        ("filter.audited.smudge", "smudge-filter"),
+        ("remote.origin.uploadpack", "upload-pack"),
+        ("core.gitProxy", "proxy"),
+        ("credential.helper", "credential-helper"),
+    ];
+    for (key, name) in settings {
+        let script = outside.install_executable(
+            &format!("{name}.sh"),
+            &format!("#!/bin/sh\ntouch {}\n", outside.path(name).display()),
+        );
+        git(&repository, &["config", key, script.to_str().unwrap()]);
+    }
+    fs::write(
+        repository.path(".gitattributes"),
+        "docs/accepted-advisories.toml filter=audited diff=audited\n",
+    )
+    .expect("synthetic attributes are written");
+    commit_everything(&repository);
+
+    // Committing applies the clean filter itself, so the baseline is taken
+    // after the setup and immediately before the run being measured.
+    for (_, name) in settings {
+        let _ = fs::remove_file(outside.path(name));
+    }
+
+    run_preflight(&repository);
+
+    for (key, name) in settings {
+        assert!(
+            !outside.path(name).exists(),
+            "{key} must not be reachable from the commands the preflight runs"
+        );
+    }
+}
+
+/// In a partial clone, reading an object the local store lacks makes git fetch
+/// it, and that transport runs `core.sshCommand` from repository-local config.
+/// The callback replaces `.git/index` while `git ls-tree` walks the tree that
+/// `git write-tree` already returned, so every later comparison comes out clean
+/// and the default index `git commit` reads holds something else.
+#[test]
+fn preflight_fetches_nothing_that_would_run_a_local_transport_command() {
+    let repository = SyntheticRepository::new();
+    let outside = OutsideTree::new();
+
+    let reviewed_index = outside.path("reviewed.index");
+    fs::copy(repository.path(".git/index"), &reviewed_index)
+        .expect("reviewed index is kept outside the tree");
+    fs::write(repository.path("docs/accepted-advisories.toml"), "# hostile\n")
+        .expect("hostile register is written");
+    git(&repository, &["add", "docs/accepted-advisories.toml"]);
+    let hostile_index = outside.path("hostile.index");
+    fs::copy(repository.path(".git/index"), &hostile_index)
+        .expect("hostile index is kept outside the tree");
+    fs::copy(&reviewed_index, repository.path(".git/index"))
+        .expect("the default index returns to the reviewed tree");
+    git(&repository, &["checkout", "--", "docs/accepted-advisories.toml"]);
+
+    let sentinel = outside.path("transport-ran");
+    let transport = outside.install_executable(
+        "ssh.sh",
+        &format!(
+            "#!/bin/sh\ntouch {sentinel}\ncp {hostile} {index}\nexit 1\n",
+            sentinel = sentinel.display(),
+            hostile = hostile_index.display(),
+            index = repository.path(".git/index").display(),
+        ),
+    );
+
+    // A tree object the commit references, removed from the local store, is
+    // what makes git reach for the promisor remote.
+    let subtree = {
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD^{tree}:docs"])
+            .current_dir(repository.path("."))
+            .output()
+            .expect("git rev-parse runs for the synthetic repository");
+        assert!(output.status.success(), "the docs tree must resolve");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    let before = default_index_tree(&repository);
+
+    for (key, value) in [
+        ("core.sshCommand", transport.to_str().unwrap()),
+        ("remote.origin.url", "ssh://example.invalid/repository"),
+        ("remote.origin.promisor", "true"),
+        ("remote.origin.partialclonefilter", "blob:none"),
+        ("extensions.partialClone", "origin"),
+        ("core.repositoryformatversion", "1"),
+    ] {
+        git(&repository, &["config", key, value]);
+    }
+    fs::remove_file(repository.path(&format!(".git/objects/{}/{}", &subtree[..2], &subtree[2..])))
+        .expect("the docs tree object leaves the local store");
+
+    run_preflight(&repository);
+
+    assert!(
+        !sentinel.exists(),
+        "a lazy fetch must not run the local transport command during the preflight"
+    );
+    assert_eq!(
+        before,
+        default_index_tree(&repository),
+        "the default index must still hold the tree the preflight audited"
+    );
+}
+
+/// Repository-local config names programs git runs inside the commands the
+/// preflight issues. A `core.fsmonitor` command runs on an index refresh and
+/// can replace `.git/index` while `git write-tree` returns the tree it already
+/// read, so the default index `git commit` reads is no longer the audited one.
+///
+/// `post-index-change` and a relocated `core.hooksPath` are covered too. Those
+/// two do not fire from this command set in every git version, so they are not
+/// on their own evidence that the override works; the assertion below that the
+/// override beats repository-local config is what holds them.
+#[test]
+fn preflight_runs_no_local_git_callback_that_could_swap_the_index() {
+    for setting in ["post-index-change", "core.fsmonitor", "core.hooksPath"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("src/lib.rs"), "// reviewed\n")
+            .expect("reviewed source is written");
+        commit_everything(&repository);
+
+        let reviewed_index = repository.path(".git-reviewed-index");
+        fs::copy(repository.path(".git/index"), &reviewed_index)
+            .expect("reviewed index is kept aside");
+        fs::write(repository.path("src/lib.rs"), "// hostile\n")
+            .expect("hostile source is written");
+        git(&repository, &["add", "src/lib.rs"]);
+        let hostile_index = repository.path(".git-hostile-index");
+        fs::copy(repository.path(".git/index"), &hostile_index)
+            .expect("hostile index is kept aside");
+        fs::copy(&reviewed_index, repository.path(".git/index"))
+            .expect("the default index returns to the reviewed tree");
+        fs::write(repository.path("src/lib.rs"), "// reviewed\n")
+            .expect("working copy returns to the reviewed source");
+
+        let sentinel = repository.path(".git-callback-ran");
+        let script = format!(
+            "#!/bin/sh\ntouch {sentinel}\ncp {hostile} {index}\n",
+            sentinel = sentinel.display(),
+            hostile = hostile_index.display(),
+            index = repository.path(".git/index").display(),
+        );
+        let installed = match setting {
+            "post-index-change" => repository.path(".git/hooks/post-index-change"),
+            "core.hooksPath" => {
+                let elsewhere = repository.path(".git-hooks-elsewhere");
+                fs::create_dir(&elsewhere).expect("external hook directory is created");
+                git(&repository, &["config", "core.hooksPath", elsewhere.to_str().unwrap()]);
+                elsewhere.join("post-index-change")
+            }
+            _ => {
+                let command = repository.path(".git-fsmonitor");
+                git(&repository, &["config", "core.fsmonitor", command.to_str().unwrap()]);
+                command
+            }
+        };
+        fs::write(&installed, &script).expect("callback script is written");
+        let mut mode = fs::metadata(&installed)
+            .expect("callback metadata is readable")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        fs::set_permissions(&installed, mode).expect("callback becomes executable");
+
+        let neutral = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+                .args(args)
+                .current_dir(repository.path("."))
+                .output()
+                .expect("git runs for the synthetic repository");
+            assert!(
+                output.status.success(),
+                "git {args:?} must succeed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+
+        let before = neutral(&["write-tree"]);
+        // Invalidate the cache tree so that write-tree has an index to write.
+        fs::write(repository.path("src/lib.rs"), "// reviewed\n")
+            .expect("working copy is rewritten to disturb the cache tree");
+
+        run_preflight(&repository);
+
+        assert!(
+            !sentinel.exists(),
+            "{setting} must not run during the preflight; the callback left its sentinel"
+        );
+        assert_eq!(
+            before,
+            neutral(&["write-tree"]),
+            "{setting} must leave the default index holding the audited tree"
+        );
+
+        // The two hook variants do not fire from the preflight's command set
+        // in every git version, so the assertions above can pass without the
+        // override existing. This one cannot: it reads what git resolves the
+        // setting to under the same flags the preflight passes, against a
+        // repository-local value that would otherwise win.
+        if setting != "core.fsmonitor" {
+            assert_eq!(
+                neutral(&["config", "--get", "core.hooksPath"]),
+                "/dev/null",
+                "{setting} must be overridden by the config the preflight passes"
+            );
+        }
+    }
+}
+
+/// `GIT_INDEX_FILE` names the index every authority command reads. Inheriting
+/// it let the caller hand the audit a reviewed index while the default one held
+/// the bytes `git commit` would record.
+#[test]
+fn preflight_audits_the_default_index_not_one_the_caller_names() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    let decoy = repository.path(".git-reviewed-index");
+    fs::copy(repository.path(".git/index"), &decoy).expect("reviewed index is kept aside");
+
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
+
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/preflight_build_integrity.py"))
+        .current_dir(repository.path("."))
+        .env("GIT_INDEX_FILE", &decoy)
+        .output()
+        .expect("python3 must execute the build-integrity preflight");
+
+    assert!(
+        !output.status.success(),
+        "a caller-named index must not become the audited authority"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("differs between the candidate commit tree and the working tree"),
+        "preflight must compare the default index: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::remove_file(&decoy).expect("decoy index is removed for cleanup");
+}
+
+/// The same routing works through a whole decoy repository: leave the real
+/// `.git` holding hostile bytes and point `GIT_DIR` and `GIT_WORK_TREE` at a
+/// reviewed one outside the tree.
+#[test]
+fn preflight_audits_the_repository_in_the_tree_not_a_decoy_gitdir() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("reviewed readme is written");
+    commit_everything(&repository);
+
+    let decoy_root = std::env::temp_dir().join(format!(
+        "pbrsdk28-decoy-{}-{}",
+        std::process::id(),
+        SYNTHETIC_REPOSITORY_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&decoy_root).expect("decoy repository directory is created");
+    let decoy_git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&decoy_root)
+            .output()
+            .expect("git runs for the decoy repository");
+        assert!(
+            output.status.success(),
+            "git {args:?} must succeed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    decoy_git(&["init", "-q", "."]);
+    decoy_git(&["config", "user.email", "decoy@example.invalid"]);
+    decoy_git(&["config", "user.name", "decoy"]);
+
+    fs::write(repository.path("README.md"), "# hostile\n").expect("hostile readme is written");
+    git(&repository, &["add", "README.md"]);
+    fs::write(repository.path("README.md"), "# reviewed\n").expect("working copy is restored");
+
+    let output = Command::new("python3")
+        .arg("-I")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/preflight_build_integrity.py"))
+        .current_dir(repository.path("."))
+        .env("GIT_DIR", decoy_root.join(".git"))
+        .env("GIT_WORK_TREE", repository.path("."))
+        .output()
+        .expect("python3 must execute the build-integrity preflight");
+
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = fs::remove_dir_all(&decoy_root);
+
+    assert!(
+        !output.status.success(),
+        "a decoy gitdir must not become the audited authority"
+    );
+    assert!(
+        stderr.contains("differs between the candidate commit tree and the working tree"),
+        "preflight must compare the repository in the tree: {stderr}"
+    );
+}
+
+/// `git hash-object` applies the clean filters and end-of-line conversion that
+/// attributes select, so comparing its output to the recorded object id proves
+/// only that the filtered forms agree. One tracked `.gitattributes` line makes
+/// `$Id: anything $` on disk hash to the same object as `$Id$` in the tree.
+#[test]
+fn preflight_rejects_working_tree_bytes_a_clean_filter_would_normalize() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path(".gitattributes"), "README.md ident\n")
+        .expect("synthetic attributes are written");
+    fs::write(repository.path("README.md"), "$Id$\n").expect("synthetic readme is written");
+    commit_everything(&repository);
+
+    fs::write(repository.path("README.md"), "$Id: PASS $\n")
+        .expect("filtered working copy is written");
+
+    let filtered = Command::new("git")
+        .args(["hash-object", "--", "README.md"])
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git hash-object runs for the synthetic repository");
+    let raw = Command::new("git")
+        .args(["hash-object", "--no-filters", "--", "README.md"])
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git hash-object runs for the synthetic repository");
+    assert_ne!(
+        String::from_utf8_lossy(&filtered.stdout),
+        String::from_utf8_lossy(&raw.stdout),
+        "the filter must change the hash, which is what makes this a bypass"
+    );
+
+    assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
+}
+
+/// `git ls-files --others` answers from `.gitignore` files found in the working
+/// tree, tracked or not, so an ignore entry can hide a file the commit does not
+/// carry while every audit that walks the repository keeps reading it.
+#[test]
+fn preflight_rejects_a_file_an_ignore_entry_would_hide() {
+    // A staged ignore line plus `git rm --cached`, and an untracked nested
+    // ignore file that hides itself along with its siblings.
+    for nested in [false, true] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        fs::write(repository.path(".gitignore"), "target/\n")
+            .expect("synthetic gitignore is written");
+        commit_everything(&repository);
+
+        git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
+        if nested {
+            fs::write(repository.path("src/.gitignore"), "*\n")
+                .expect("nested ignore file is written");
+        } else {
+            fs::write(repository.path(".gitignore"), "target/\nsrc/lib.rs\n")
+                .expect("ignore entry is written");
+            git(&repository, &["add", ".gitignore"]);
+        }
+
+        let hidden = Command::new("git")
+            .args(["ls-files", "--others", "--exclude-per-directory=.gitignore"])
+            .current_dir(repository.path("."))
+            .output()
+            .expect("git ls-files runs for the synthetic repository");
+        assert!(
+            String::from_utf8_lossy(&hidden.stdout).trim().is_empty(),
+            "the ignore entry must empty the untracked listing, which is the bypass"
+        );
+        assert!(
+            repository.path("src/lib.rs").is_file(),
+            "the working copy must survive for an audit to keep reading it"
+        );
+
+        assert_preflight_failure(&repository, "is not in the committed tree");
+    }
+}
+
+/// `git add -N` records an index entry that `git ls-files --stage` reports and
+/// `git write-tree` omits, so a file that never reaches the commit satisfied
+/// every comparison keyed on the index listing.
+#[test]
+fn preflight_rejects_an_intent_to_add_entry_absent_from_the_commit() {
+    let repository = SyntheticRepository::new();
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+        .expect("synthetic crate root is written");
+    commit_everything(&repository);
+
+    fs::write(repository.path("src/ghost.rs"), "").expect("empty marker file is written");
+    git(&repository, &["add", "-N", "src/ghost.rs"]);
+
+    let staged = Command::new("git")
+        .args(["ls-files", "--stage", "src/ghost.rs"])
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git ls-files runs for the synthetic repository");
+    assert!(
+        !String::from_utf8_lossy(&staged.stdout).trim().is_empty(),
+        "the index listing must report the entry, which is what made it look committed"
+    );
+
+    assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// The mode is part of the tree. `git update-index --chmod` records one
+/// executable bit while the working copy carries the other, so a script a local
+/// run can execute loses its bit in a fresh checkout, or gains one.
+#[test]
+fn preflight_rejects_an_executable_bit_that_disagrees_with_the_commit() {
+    for recorded_executable in [false, true] {
+        let repository = SyntheticRepository::new();
+        fs::write(repository.path("helper.sh"), "#!/bin/sh\n")
+            .expect("synthetic helper is written");
+        commit_everything(&repository);
+
+        let (chmod, expected) = if recorded_executable {
+            ("--chmod=+x", "is not executable in the working tree")
+        } else {
+            ("--chmod=-x", "is executable in the working tree")
+        };
+        if !recorded_executable {
+            git(&repository, &["update-index", "--chmod=+x", "helper.sh"]);
+            let mut mode = fs::metadata(repository.path("helper.sh"))
+                .expect("helper metadata is readable")
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+            fs::set_permissions(repository.path("helper.sh"), mode)
+                .expect("helper becomes executable on disk");
+        }
+        git(&repository, &["update-index", chmod, "helper.sh"]);
+
+        assert_preflight_failure(&repository, expected);
+    }
+}
+
+/// `git diff` honours the index's assume-unchanged and skip-worktree flags, so
+/// asking it whether the index and the working tree agree lets one
+/// `git update-index` call hide staged hostile bytes from the answer. The
+/// comparison must not consult those flags.
+#[test]
+fn preflight_rejects_index_flags_that_hide_a_divergent_working_tree() {
+    for flag in ["--assume-unchanged", "--skip-worktree"] {
+        for relative in ["README.md", "src/lib.rs"] {
+            let repository = SyntheticRepository::new();
+            fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+            fs::write(repository.path("README.md"), "# synthetic\n")
+                .expect("synthetic readme is written");
+            fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+                .expect("synthetic crate root is written");
+            commit_everything(&repository);
+
+            stage_hostile_bytes_and_restore(&repository, relative);
+            git(&repository, &["update-index", flag, relative]);
+
+            let hidden = Command::new("git")
+                .args(["diff", "--name-only"])
+                .current_dir(repository.path("."))
+                .output()
+                .expect("git diff runs for the synthetic repository");
+            assert!(
+                String::from_utf8_lossy(&hidden.stdout).trim().is_empty(),
+                "{flag} must hide {relative} from git diff, which is what makes this a bypass"
+            );
+
+            assert_preflight_failure(
+                &repository,
+                "differs between the candidate commit tree and the working tree",
+            );
+        }
+    }
+}
+
+/// A tracked symbolic link records the link target as its blob. The commit
+/// would carry that string while an audit reading the path on disk gets
+/// whatever the link points at, anywhere on the machine.
+#[cfg(unix)]
+#[test]
+fn preflight_rejects_a_tracked_symbolic_link() {
+    for relative in ["README.md", "src/lib.rs"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("README.md"), "# synthetic\n")
+            .expect("synthetic readme is written");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        commit_everything(&repository);
+
+        fs::remove_file(repository.path(relative)).expect("tracked file is removed");
+        std::os::unix::fs::symlink("/etc/hostname", repository.path(relative))
+            .expect("symbolic link replaces the tracked file");
+        git(&repository, &["add", relative]);
+
+        assert_preflight_failure(&repository, "must be a regular file");
+    }
+}
+
+/// The nested-repository walk must not ask an ignore file which directories to
+/// skip. Both a staged `.gitignore` and an uncommitted `.git/info/exclude` are
+/// writable by whoever prepares the tree, so either could name the directory
+/// doing the hiding.
+#[test]
+fn preflight_rejects_a_nested_repository_an_ignore_file_would_hide() {
+    for ignore_file in [".gitignore", ".git/info/exclude"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        fs::write(repository.path(".gitignore"), "target/\n")
+            .expect("synthetic gitignore is written");
+        commit_everything(&repository);
+
+        let ignore_path = repository.path(ignore_file);
+        fs::create_dir_all(ignore_path.parent().expect("ignore file has a parent directory"))
+            .expect("ignore file directory exists");
+        let mut patterns = fs::read_to_string(&ignore_path).unwrap_or_default();
+        patterns.push_str("src/hidden/\n");
+        fs::write(&ignore_path, patterns).expect("ignore pattern is written");
+        if ignore_file == ".gitignore" {
+            git(&repository, &["add", ".gitignore"]);
+        }
+
+        fs::create_dir(repository.path("src/hidden")).expect("hidden directory is created");
+        fs::write(repository.path("src/hidden/.git"), "gitdir: ../../.git/modules/x\n")
+            .expect("nested repository marker is written");
+
+        assert_preflight_failure(&repository, "must be a directory in this repository");
+    }
+}
+
+/// What counts as ignored has to come from the tree being audited.
+/// `.git/info/exclude` is per-clone and never committed, so if it could silence
+/// the untracked check, one uncommitted line plus `git rm --cached` would put a
+/// source file back out of sight while the release stopped carrying it.
+#[test]
+fn preflight_rejects_a_file_hidden_by_an_uncommitted_exclude_file() {
+    let repository = SyntheticRepository::new();
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+        .expect("synthetic crate root is written");
+    commit_everything(&repository);
+
+    let exclude = repository.path(".git/info/exclude");
+    fs::create_dir_all(exclude.parent().expect("exclude file has a parent directory"))
+        .expect("synthetic git info directory exists");
+    let mut patterns = fs::read_to_string(&exclude).unwrap_or_default();
+    patterns.push_str("src/lib.rs\n");
+    fs::write(&exclude, patterns).expect("uncommitted exclude pattern is written");
+    git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
+
+    assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// A file that was never added is equally absent from the commit.
+#[test]
+fn preflight_rejects_an_untracked_file_the_commit_would_not_carry() {
+    let repository = SyntheticRepository::new();
+    commit_everything(&repository);
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// never added\n")
+        .expect("untracked source file is written");
+
+    assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// The nested-repository check walks the tree rather than a named set of
+/// directories, so `src` is covered even though no such set listed it.
+#[test]
+fn preflight_rejects_a_nested_repository_outside_any_named_audit_directory() {
+    for marker in ["src/.git", "docs/nested/.git"] {
+        let repository = SyntheticRepository::new();
+        let path = repository.path(marker);
+        fs::create_dir_all(path.parent().expect("marker has a parent directory"))
+            .expect("synthetic nested directory is created");
+        fs::write(path, "gitdir: ../.git/modules/x\n")
+            .expect("synthetic submodule marker is written");
+
+        assert_preflight_failure(&repository, "must be a directory in this repository");
+    }
 }

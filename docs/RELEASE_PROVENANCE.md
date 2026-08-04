@@ -67,6 +67,10 @@ guarantee the dependency graph of every consumer.
 
 ## Accepted advisories
 
+The last row was added on 2026-08-04, after the snapshot above, when an
+advisory-database update reported RUSTSEC-2026-0235 against a lock entry that
+was already present. The dependency graph did not change; the database did.
+
 The canonical register is `docs/accepted-advisories.toml`. The table below is
 an exact rendering of that machine-readable file, not the source from which the
 register is derived.
@@ -80,9 +84,21 @@ register is derived.
 | RUSTSEC-2024-0384 | instant 0.1.13 | ethers 2.0.14 → ethers-middleware 2.0.14 or ethers-providers 2.0.14 → instant 0.1.13 | shipped | Unmaintained transitive timing dependency retained by the current ethers stack; this crate does not call it directly. | Re-review when ethers middleware/providers changes or when instant is used directly. |
 | RUSTSEC-2024-0436 | paste 1.0.15 | polymarket-client-sdk 0.4.4 (dev) → alloy 1.8.3 → alloy-primitives 1.6.1 → paste 1.0.15 | dev-only | Unmaintained proc-macro enters through the test-only official SDK comparison dependency. | Re-review when polymarket-client-sdk or alloy changes, or if paste enters a shipped graph. |
 | RUSTSEC-2025-0134 | rustls-pemfile 1.0.4 | ethers 2.0.14 → ethers-providers 2.0.14 or ethers-middleware 2.0.14 → reqwest 0.11.27 → rustls-pemfile 1.0.4 | shipped | Unmaintained transitive PEM parser remains in the reqwest 0.11 package graph; this crate does not parse PEM with it directly. | Re-review when ethers or reqwest 0.11 changes, or when PEM parsing becomes direct behavior. |
+| RUSTSEC-2026-0235 | rkyv 0.7.46 | rust_decimal 1.42.1 (dev, direct and through polymarket-client-sdk 0.4.4) → optional rkyv 0.7.46 lock edge | dev-only | cargo-audit scans the lock entry even though rkyv appears in no build graph; cargo tree reports it for neither normal nor dev edges on any target, and rust_decimal 1.42.1 is the latest release, so no upgrade removes the lock entry. | Re-review when rust_decimal or polymarket-client-sdk changes, when rust_decimal adopts rkyv 0.8, or if rkyv enters a build graph. |
 
 ## What this record does not prove
 
+- The preflight's subject is the agreement between what a local verification run
+  reads and what the commit carries. Every check below it exists so that
+  "the tests passed" describes the release. It is not a defence against someone
+  who already controls the repository: an attacker who can write `.git/config`,
+  the index, or the working tree can also land a commit, and no check run from
+  inside that repository can outrank them. What the checks do is make the
+  divergence visible rather than silent, whether it came from a mistake, a tool,
+  or a deliberate edit, so that a reviewer reading the pull request is reading
+  the same bytes the audit read. Reviews of this script are best aimed at that
+  boundary; hardening past it buys assurance the surrounding trust model does
+  not support.
 - This is a point-in-time snapshot. `Cargo.lock` is not tracked, so this
   repository alone cannot reproduce it; the authoritative lock is the
   consumer workspace's lock.
@@ -96,21 +112,84 @@ register is derived.
   The pre-Cargo comparison makes that recovery unable to authorize an ignore.
   The in-Cargo audit instead compares the canonical TOML rows with this parsed
   CommonMark table in exact row order and with all six cell values unchanged.
-- The index and the working tree must agree on every audited path, and the
-  tracked workflow set must be exactly the reviewed one. Presence and mode say
-  nothing about content: hostile bytes can be staged and the working copy
-  restored, leaving the commit carrying one tree while every content check sees
-  another.
-- Audited files must be tracked regular content at merge stage 0. Every other
-  check reads the working tree, but what GitHub Actions runs is the committed
-  tree, and `git rm --cached` removes a file from that tree while leaving it in
-  place. Audited paths must not be gitlinks either. Replacing `.github` with
-  a gitlink leaves a working tree that looks ordinary -- right files, right
-  bytes, no `.git` marker and no `.gitmodules` -- while the parent commit tree
-  holds no workflow blobs for Actions to find. Only the recorded mode differs,
-  so the preflight asks `git ls-files --stage` for it. That does not widen the
-  trust base: `git` produced the tree being audited. A repository without a
-  `.git` directory has no gitlink to record, and the check is skipped there.
+- The working tree must be exactly the tree that would be committed, and the
+  tracked workflow set must be exactly the reviewed one. Every other check here
+  reads the working tree, but what GitHub Actions runs, and what a consumer
+  pins, is the committed tree. The two can be made to differ in ways that leave
+  the working copy looking ordinary, and each one lets a local test run report
+  on bytes the release does not carry.
+- The authority is `git write-tree`, read from the repository's canonical
+  metadata and default index with every `GIT_*` variable dropped from the
+  environment, not the index listing. Inheriting those variables let the caller
+  choose what the audit read: `GIT_INDEX_FILE` alone points `write-tree` at a
+  reviewed index while the default one holds the bytes `git commit` will
+  record, and `GIT_DIR` with `GIT_WORK_TREE` points the whole authority at a
+  decoy repository. `git rev-parse --show-toplevel` catches neither, because it
+  proves which working tree was selected and not which gitdir or index. With
+  the variables gone the repository is found the way every other tool finds it,
+  and one that exists only through the environment fails closed. System and
+  global git config are excluded for the same reason: neither is recorded in
+  the tree being audited, and both can set attributes and filters that change
+  what git reports about it. Repository-local config stays, and several of its
+  settings name programs git runs inside these commands, so the ones that can
+  are neutralised rather than trusted. `core.fsmonitor` and `core.hooksPath`
+  are overridden on every call: a `core.fsmonitor` command runs on an index
+  refresh and a `post-index-change` hook runs whenever git writes the index,
+  and either can replace `.git/index` after `git write-tree` has returned the
+  tree it already read, leaving every later comparison checking the captured
+  tree against the matching working copy while the default index `git commit`
+  reads holds something else. `GIT_NO_LAZY_FETCH` closes the same door from a
+  third direction: in a partial clone, reading an object the local store lacks
+  makes git fetch it, and that transport runs `core.sshCommand` from the same
+  local config with the same opportunity. Overriding at the moment of use is
+  what settles these; reading the settings first and refusing would leave the
+  window between the check and the command. A content filter is the one that
+  cannot be overridden, because driver names are arbitrary, and git runs it
+  while `git write-tree` refreshes the index. A repository that configures any
+  `filter.*` driver is therefore refused before the tree is built. Refusing the
+  driver closes the shape rather than a spelling: without one, an attributes
+  file selects nothing. This repository declares no filters. `git replace` installs a
+  ref that most commands apply transparently, so `git ls-tree` can be made to
+  answer with a reviewed tree while the index builds, and the commit records, a
+  different one; replacement refs are not pushed, so a consumer would receive
+  the tree that was never read. Any ref under `refs/replace/` is refused
+  outright as well, because every other tool in the repository would read the
+  substitution. `git add -N ghost` records an index entry that the listing
+  reports and the tree omits, so a file that never reaches the commit satisfied
+  every comparison keyed on the listing. `write-tree` also refuses an index
+  with unmerged entries.
+- Content is compared by hashing each file on disk with
+  `git hash-object --no-filters` against the object id the tree records. Not
+  `git diff`, which honours the index's assume-unchanged and skip-worktree
+  flags: one `git update-index` call empties its output while the index holds
+  other bytes. Not plain `git hash-object` either, which applies the clean
+  filters and end-of-line conversion that attributes select, so one tracked
+  `.gitattributes` line marking a file `ident` makes `$Id: anything $` on disk
+  hash to the same object as `$Id$` in the tree.
+- Every path in the tree must be a regular file, and its executable bit must
+  match the recorded mode. Mode 160000 is a gitlink: replacing `.github` with
+  one leaves a working tree that looks ordinary while the commit holds no
+  workflow blobs for Actions to find. Mode 120000 is a symbolic link, whose
+  blob is the link target, so the commit would carry that string while an audit
+  reading the path on disk got whatever the link pointed at.
+  `git update-index --chmod=-x` records 100644 for a file left executable on
+  disk, so a script a local run can execute loses its bit in a fresh checkout.
+- Every file on disk must be in that tree, apart from a set named in
+  `scripts/preflight_build_integrity.py` itself. The set is not read from an
+  ignore file: `git ls-files --others` answers from `.gitignore` files found in
+  the working tree, tracked or not, so a staged `src/lib.rs` ignore line plus
+  `git rm --cached`, or an untracked `src/.gitignore` holding `*`, both empty
+  its output while the file stays on disk for every audit to read. Deriving the
+  set from the tree fails the same way, because whoever removes every file
+  under `src/` also removes `src/` from anything derived from it.
+- The nested-repository walk reads the tree rather than asking git what it
+  tracks, and it asks no ignore file which directories to skip.
+- Whether this is a repository is decided by `git rev-parse --show-toplevel`,
+  not by a `.git` entry at the root, and the preflight fails when git cannot
+  answer or answers with a different directory. Git metadata can live
+  elsewhere: with `GIT_DIR` and `GIT_WORK_TREE` set the repository is fully
+  functional and the root holds no `.git` entry, so testing for that entry
+  skipped every check above and reported success.
 - Every workflow file is pinned by SHA-256 digest in the preflight, and the
   `.github/workflows` directory is closed to its reviewed set. Any workflow in
   this repository can stop the audit from running: one granted

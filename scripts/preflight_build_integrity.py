@@ -4,13 +4,103 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any
 
+
+REGULAR_FILE_MODES = {"100644", "100755"}
+
+# Everything in the working tree has to be in the commit except these. The set
+# is fixed here, in the audited script, rather than read from an ignore file:
+# `git ls-files --others` answers from `.gitignore` files found in the working
+# tree, tracked or not, so an ignore entry can hide the very file being kept
+# out of the release. Deriving the set from the tree fails the same way, since
+# whoever removes every file under `src/` also removes `src/` from anything
+# derived. A path listed here is one a reviewer can see is not audited, and
+# adding to the list is a change to the file this check hashes.
+UNCOMMITTED_DIRECTORIES = {
+    "target",  # cargo build output
+    ".fable-sol",  # working notes kept outside the release
+    ".pytest_cache",  # pytest cache
+    "setup",  # local tooling checkout, not release content
+}
+UNCOMMITTED_FILES = {
+    "Cargo.lock",  # deliberately untracked; docs/RELEASE_PROVENANCE.md says why
+    ".claude/settings.local.json",  # per-developer tool settings
+}
+
+# Every `GIT_*` variable is dropped rather than inherited, and only what this
+# script needs is set back. Inheriting them let the caller choose which
+# repository and which index the audit read: `GIT_INDEX_FILE=/tmp/reviewed.index`
+# alone makes `write-tree` build a reviewed tree while the default index holds
+# the bytes `git commit` will record, and `GIT_DIR` with `GIT_WORK_TREE` points
+# the whole authority at a decoy repository. `git rev-parse --show-toplevel`
+# does not catch either, because it proves which working tree was selected and
+# not which gitdir or index. With the variables gone, the repository is found
+# the way every other tool finds it, from the `.git` directory or gitfile in
+# the tree, and a repository that exists only through the environment fails
+# closed.
+#
+# `GIT_NO_REPLACE_OBJECTS` is set because `git replace` installs a ref that
+# most commands apply transparently, so `git ls-tree` can otherwise be made to
+# answer with a reviewed tree while the index builds, and `git commit` records,
+# a different one. Replacement refs are not pushed by default, so a consumer
+# would receive the unsubstituted tree. Dropping `GIT_REPLACE_REF_BASE` in the
+# same sweep keeps the `refs/replace/` scan below looking where git looks.
+#
+# System and global config are excluded too: neither is recorded in the tree
+# being audited, and both can set attributes and filters that change what git
+# reports about it.
+GIT_ENV = {
+    key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+}
+GIT_ENV.update(
+    {
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+)
+
+# Repository-local config stays after the environment is cleaned, and several
+# of its settings name programs git runs inside the commands below. A
+# `core.fsmonitor` command runs on an index refresh, and a `post-index-change`
+# hook runs whenever git writes the index; either can replace `.git/index`
+# after `git write-tree` has returned the tree it already read, leaving every
+# comparison that follows checking the captured tree against the matching
+# working copy while the default index `git commit` reads holds something else.
+# Overriding both per command settles them at the moment of use, which reading
+# them first and refusing would not.
+#
+# `GIT_NO_LAZY_FETCH` above closes the same door from a third direction. In a
+# partial clone, `ls-tree` reaching an object the local store lacks makes git
+# fetch it, and that transport runs `core.sshCommand` from this same local
+# config, with the same opportunity to swap the index. Refusing to fetch makes
+# the command fail instead.
+GIT_SAFE_CONFIG = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}")
+
+
+def run_git(root: Path, *args: str) -> str:
+    """Run one git command with the routing and callbacks this script fixes.
+
+    Every git call goes through here so that adding one cannot quietly leave
+    the overrides off.
+    """
+    return subprocess.run(
+        ["git", *GIT_SAFE_CONFIG, *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=GIT_ENV,
+    ).stdout
 
 ALLOWED_TOOLCHAIN_KEYS = {"channel", "components", "targets", "profile"}
 PINNED_TOOLCHAIN_CHANNEL = "1.95.0"
@@ -221,15 +311,6 @@ TRACKED_AUDIT_INPUTS = (
     "tests/release_provenance_test.rs",
 )
 
-AUDITED_DIRECTORIES = (
-    ".github",
-    ".github/workflows",
-    ".cargo",
-    "scripts",
-    "docs",
-    "tests",
-)
-
 SYMLINK_FORBIDDEN_PATHS = (
     ".github",
     ".github/workflows",
@@ -257,116 +338,312 @@ SYMLINK_FORBIDDEN_PATHS = (
 BUILD_SCRIPT_KEYS = ("build", "metabuild")
 
 
-def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
-    """Reject an audited directory recorded as a gitlink.
+def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str, str]] | None:
+    """Return (mode, object id) for every path the commit would carry.
 
-    Replacing `.github` with a gitlink leaves a working tree that looks
-    ordinary -- right directory, right file names, right bytes -- while the
-    parent repository's commit tree holds no workflow blobs at all, so GitHub
-    Actions finds nothing to run. `git update-index --cacheinfo 160000` does
-    exactly that without leaving a `.git` entry or a `.gitmodules` file, so
-    reading the working tree cannot detect it; the recorded mode has to be
-    read. Asking `git` for it does not widen the trust base, because `git`
-    produced the tree being audited in the first place.
+    The authority is `git write-tree`, which builds the tree `git commit`
+    would use, not `git ls-files --stage`, which lists the index. The two
+    differ: `git add -N ghost` records an index entry that the listing shows
+    and the tree omits, so a file that never reaches the commit passed every
+    comparison keyed on the listing. `write-tree` also refuses an index with
+    unmerged entries, which the stage column used to be checked for by hand.
+
+    Asking git does not widen the trust base, because git produced the tree
+    being audited in the first place.
     """
-    if (root / ".git").exists():
+    # A content filter is a program git runs while `git write-tree` refreshes
+    # the index, with the same chance to replace `.git/index` as a hook. It
+    # cannot be overridden per command the way `core.fsmonitor` can, because
+    # the driver names are arbitrary, so a repository that configures one is
+    # refused before the tree is built. Refusing the driver closes the shape:
+    # without one, an attributes file selects nothing. This repository declares
+    # no filters, so the refusal costs nothing here.
+    #
+    # Refusing is a check on state rather than an override at the moment of
+    # use, so the answer is read again after the tree is built. A driver that
+    # appeared in between would have run, and this is what notices.
+    configured = configured_filter_drivers(root, errors)
+    if configured is None:
+        return None
+    if configured:
+        for name in configured:
+            errors.append(
+                f"{name} configures a content filter; git runs it while refreshing "
+                "the index, so the tree cannot be built without executing it"
+            )
+        return None
+
+    try:
+        replacements = run_git(
+            root, "for-each-ref", "--format=%(refname)", "refs/replace/"
+        ).split()
+        tree = run_git(root, "write-tree").strip()
+        listing = run_git(root, "ls-tree", "-r", "-z", "--full-tree", tree)
+    except (OSError, subprocess.CalledProcessError) as error:
+        errors.append(f"git must produce the candidate commit tree: {error}")
+        return None
+
+    # `GIT_NO_REPLACE_OBJECTS` above already makes these calls read the real
+    # objects. Their presence is still refused, because every other tool in the
+    # repository would read the substitution.
+    for refname in sorted(replacements):
+        errors.append(
+            f"{refname} exists; a replacement ref makes git answer with one tree "
+            "while the commit records another"
+        )
+
+    appeared = configured_filter_drivers(root, errors)
+    if appeared is None:
+        return None
+    for name in appeared:
+        errors.append(
+            f"{name} was configured while the candidate tree was being built; a "
+            "content filter that appears mid-run has already been executed"
+        )
+    if appeared:
+        return None
+
+    entries: dict[str, tuple[str, str]] = {}
+    for record in listing.split("\0"):
+        if not record:
+            continue
+        metadata, _, path_name = record.partition("\t")
+        fields = metadata.split()
+        if len(fields) != 3:
+            errors.append(f"git ls-tree produced an unreadable record: {record!r}")
+            continue
+        mode, _kind, object_id = fields
+        entries[path_name] = (mode, object_id)
+    return entries
+
+
+def configured_filter_drivers(root: Path, errors: list[str]) -> list[str] | None:
+    """Names of every configured content-filter driver, or None if git failed."""
+    try:
+        drivers = run_git(root, "config", "--name-only", "--get-regexp", r"^filter\.")
+    except subprocess.CalledProcessError as error:
+        # `--get-regexp` exits 1 when nothing matches, which is the normal case.
+        if error.returncode != 1:
+            errors.append(f"git config must be readable: {error}")
+            return None
+        drivers = ""
+    except OSError as error:
+        errors.append(f"git config must be readable: {error}")
+        return None
+    return sorted(set(drivers.split()))
+
+
+def check_committed_tree(root: Path, errors: list[str]) -> None:
+    """Require the working tree to be exactly the tree that would be committed.
+
+    Every other check in this script reads the working tree, but what GitHub
+    Actions runs is the committed tree, and so is what a consumer pins. The
+    two can be made to differ in ways that leave the working copy looking
+    ordinary, and each one lets a local `cargo test` report on bytes the
+    release does not carry.
+    """
+    # Not `(root / ".git").exists()`. Git metadata can live elsewhere: with
+    # `GIT_DIR` and `GIT_WORK_TREE` set, the repository is fully functional and
+    # the root holds no `.git` entry, so that test skipped every check below
+    # and reported success. Ask git where its working tree is instead, and stop
+    # with an error when it cannot say.
+    try:
+        toplevel = run_git(root, "rev-parse", "--show-toplevel").strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        errors.append(
+            "this preflight must run inside the git working tree it audits, "
+            f"because the committed tree is what it binds: {error}"
+        )
+        return
+    if Path(toplevel).resolve() != root.resolve():
+        errors.append(
+            f"this preflight must run at the git working-tree root; git reports "
+            f"{toplevel} and this run is in {root}"
+        )
+        return
+
+    entries = committed_tree_entries(root, errors)
+    if entries is None:
+        return
+
+    recorded = {path_name: mode for path_name, (mode, _) in entries.items()}
+
+    # `git rm --cached` removes a file from the tree while leaving it in
+    # place, so each audited input has to be confirmed present as regular
+    # content.
+    for relative in TRACKED_AUDIT_INPUTS:
+        mode = recorded.get(relative)
+        if mode is None:
+            errors.append(
+                f"{relative} must be tracked in this repository; "
+                "an untracked file is absent from the committed tree"
+            )
+        elif mode not in REGULAR_FILE_MODES:
+            errors.append(
+                f"{relative} must be recorded as a regular file; found mode {mode}"
+            )
+
+    comparable = []
+    for relative in sorted(entries):
+        mode, _object_id = entries[relative]
+        if mode not in REGULAR_FILE_MODES:
+            # Mode 160000 is a gitlink: replacing `.github` with one leaves a
+            # working tree that looks ordinary while the commit holds no
+            # workflow blobs for Actions to find. Mode 120000 is a symbolic
+            # link, whose blob is the link target, so the commit would carry
+            # that string while an audit reading the path on disk gets
+            # whatever the link points at, anywhere on the machine.
+            detail = (
+                "recorded as a gitlink"
+                if mode == "160000"
+                else f"recorded with mode {mode}"
+            )
+            errors.append(
+                f"{relative} is {detail}; every path in the committed tree must be "
+                "a regular file, so that what an audit reads on disk is what the "
+                "commit carries"
+            )
+            continue
+        path = root / relative
+        if path.is_symlink():
+            errors.append(
+                f"{relative} is committed as a regular file but is a symbolic "
+                "link in the working tree"
+            )
+            continue
+        if not path.is_file():
+            errors.append(
+                f"{relative} is in the committed tree but is not a regular file "
+                "in the working tree"
+            )
+            continue
+        # The mode is part of the tree. `git update-index --chmod=-x` records
+        # 100644 for a file left executable on disk, so a script a local run
+        # can execute loses its bit in a fresh checkout.
+        executable = bool(path.stat().st_mode & stat.S_IXUSR)
+        if executable != (mode == "100755"):
+            errors.append(
+                f"{relative} is recorded with mode {mode} but is "
+                f"{'executable' if executable else 'not executable'} in the working tree"
+            )
+            continue
+        comparable.append(relative)
+
+    if comparable:
+        # `--no-filters` is required, not optional. `git hash-object` applies
+        # the clean filters and end-of-line conversion that attributes select,
+        # so a single tracked `.gitattributes` line marking a file `ident`
+        # makes `$Id: anything $` on disk hash to the same object as `$Id$` in
+        # the tree. The comparison has to be over raw bytes, and no external
+        # filter program should run during a preflight.
         try:
-            listing = subprocess.run(
-                ["git", "ls-files", "--stage", "--", *AUDITED_DIRECTORIES, *TRACKED_AUDIT_INPUTS],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout
+            hashed = run_git(
+                root, "hash-object", "--no-filters", "--", *comparable
+            ).split()
         except (OSError, subprocess.CalledProcessError) as error:
-            errors.append(f"git ls-files must succeed for audited paths: {error}")
+            errors.append(f"git hash-object must succeed for committed paths: {error}")
         else:
-            recorded: dict[str, str] = {}
-            for line in listing.splitlines():
-                metadata, _, path_name = line.partition("\t")
-                fields = metadata.split()
-                if len(fields) != 3:
-                    continue
-                mode, _object_id, stage = fields
-                if mode == "160000":
-                    errors.append(
-                        f"{path_name} is recorded as a gitlink; audited paths must be "
-                        "tracked content in this repository"
-                    )
-                    continue
-                if stage != "0":
-                    errors.append(f"{path_name} is recorded at merge stage {stage}")
-                    continue
-                recorded[path_name] = mode
-
-            # Every check above this point reads the working tree, but what
-            # GitHub Actions runs is the committed tree. `git rm --cached`
-            # leaves the file in place while removing it from that tree, so
-            # each audited file has to be confirmed as tracked regular content.
-            for relative in TRACKED_AUDIT_INPUTS:
-                mode = recorded.get(relative)
-                if mode is None:
-                    errors.append(
-                        f"{relative} must be tracked in this repository; "
-                        "an untracked file is absent from the committed tree"
-                    )
-                elif mode not in {"100644", "100755"}:
-                    errors.append(
-                        f"{relative} must be recorded as a regular file; found mode {mode}"
-                    )
-
-            # Presence and mode still say nothing about content. Everything
-            # after this point reads the working tree, so malicious bytes can
-            # be staged and the working copy restored: the commit carries one
-            # tree and every check sees another. Ask git whether the two agree.
-            try:
-                divergent = subprocess.run(
-                    [
-                        "git",
-                        "diff",
-                        "--name-only",
-                        "--",
-                        *AUDITED_DIRECTORIES,
-                        *TRACKED_AUDIT_INPUTS,
-                    ],
-                    cwd=root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                ).stdout.split()
-            except (OSError, subprocess.CalledProcessError) as error:
-                errors.append(f"git diff must succeed for audited paths: {error}")
-            else:
-                for relative in sorted(divergent):
-                    errors.append(
-                        f"{relative} differs between the index and the working tree; "
-                        "the audited bytes must be the bytes that get committed"
-                    )
-
-            workflow_entries = sorted(
-                name
-                for name in recorded
-                if name.startswith(".github/workflows/")
-            )
-            expected_entries = sorted(
-                f".github/workflows/{name}" for name in REVIEWED_WORKFLOW_SHA256
-            )
-            if workflow_entries != expected_entries:
+            if len(hashed) != len(comparable):
                 errors.append(
-                    f"tracked workflow entries must be exactly {expected_entries}; "
-                    f"found {workflow_entries}"
+                    "git hash-object must return one hash per committed path; "
+                    f"asked for {len(comparable)} and received {len(hashed)}"
                 )
+            else:
+                for relative, digest in zip(comparable, hashed):
+                    if digest != entries[relative][1]:
+                        errors.append(
+                            f"{relative} differs between the candidate commit "
+                            "tree and the working tree; the audited bytes must be "
+                            "the bytes that get committed"
+                        )
 
+    # The comparison above covers only paths the tree holds. A file on disk and
+    # absent from the tree is read by every audit that walks the repository and
+    # is missing from the release, so the walk decides this, not
+    # `git ls-files --others`. That listing answers from `.gitignore` files
+    # found in the working tree, tracked or not: a staged `src/lib.rs` ignore
+    # line plus `git rm --cached`, or an untracked `src/.gitignore` holding
+    # `*`, both empty its output while the file stays on disk.
+    #
+    for path in sorted(walk_repository_files(root, errors)):
+        relative = path.relative_to(root).as_posix()
+        if relative in entries:
+            continue
+        errors.append(
+            f"{relative} is not in the committed tree; a file the release does "
+            "not carry is still read by everything that walks this repository. "
+            f"Commit it, remove it, or name it in {Path(__file__).name}"
+        )
+
+    workflow_entries = sorted(
+        name for name in entries if name.startswith(".github/workflows/")
+    )
+    expected_entries = sorted(
+        f".github/workflows/{name}" for name in REVIEWED_WORKFLOW_SHA256
+    )
+    if workflow_entries != expected_entries:
+        errors.append(
+            f"tracked workflow entries must be exactly {expected_entries}; "
+            f"found {workflow_entries}"
+        )
+
+
+def walk_repository_files(root: Path, errors: list[str]) -> list[Path]:
+    """Walk the repository, rejecting nested repositories, and return its files.
+
+    A nested `.git` makes a directory a repository of its own, so the parent
+    commit can carry none of its contents while the working tree looks whole.
+    The directories are walked rather than named. A named set had to be
+    extended by hand for every new audited directory, and nothing forced that;
+    `src` was never in it even though the boundary, source-matrix, and
+    no-CLOB-surface tests read `src/**` from disk.
+
+    Nothing here asks an ignore file what to skip. An ignore file is part of
+    the working tree and writable by whoever prepares it, tracked or not, so
+    it could name the very directory doing the hiding. The skipped paths are
+    fixed below instead, where a reviewer sees them.
+
+    This walk must also hold without an index, so it reads the tree rather
+    than asking git what it tracks.
+    """
     if (root / ".gitmodules").exists():
         errors.append(".gitmodules is forbidden; an audited path must not be a submodule")
 
-    for relative in AUDITED_DIRECTORIES:
-        nested = root / relative / ".git"
-        if nested.exists():
-            errors.append(
-                f"{relative}/.git exists; {relative} must be a directory in this "
-                "repository, not a submodule"
-            )
+    files: list[Path] = []
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError as error:
+            errors.append(f"{current} must be a readable directory: {error}")
+            continue
+        for entry in entries:
+            # A submodule records `.git` as a file holding `gitdir: ...`, not
+            # as a directory, so the name is checked before anything narrows
+            # the entry to directories.
+            if entry.name == ".git":
+                if current != root:
+                    relative = current.relative_to(root).as_posix()
+                    errors.append(
+                        f"{relative}/.git exists; {relative} must be a directory in this "
+                        "repository, not a submodule"
+                    )
+                continue
+            # The kind is settled before the exclusion, so a name in either
+            # set cannot exempt a symbolic link. The file set exempts regular
+            # files only, so a FIFO or socket left under one of those names is
+            # still reported rather than passed over.
+            if entry.is_symlink():
+                files.append(entry)
+                continue
+            relative = entry.relative_to(root).as_posix()
+            if entry.is_dir():
+                if relative not in UNCOMMITTED_DIRECTORIES:
+                    pending.append(entry)
+            elif not (entry.is_file() and relative in UNCOMMITTED_FILES):
+                files.append(entry)
+    return files
 
 
 def check_no_symlinks(root: Path, errors: list[str]) -> None:
@@ -659,7 +936,7 @@ def check_license_files(root: Path, errors: list[str]) -> None:
 def main() -> int:
     root = Path.cwd()
     errors: list[str] = []
-    check_no_nested_git_repositories(root, errors)
+    check_committed_tree(root, errors)
     check_no_symlinks(root, errors)
     check_no_build_scripts(root, errors)
     check_no_local_path_dependencies(root, errors)

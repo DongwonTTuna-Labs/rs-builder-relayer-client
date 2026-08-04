@@ -847,6 +847,26 @@ set with the ignore set, fixes both workflow run lines, requires
 three license files to be non-empty. This is the load-bearing committed-state
 check; an earlier unit test cannot repair those inputs before it runs.
 
+The preflight also requires the working tree to be exactly the tree that would
+be committed. The authority is `git write-tree`, read from the repository's canonical
+metadata and default index with every `GIT_*` variable dropped, lazy fetching
+refused, and `core.fsmonitor` and `core.hooksPath` overridden per command, not
+the index listing, because `git add -N` records an entry the listing reports and
+the tree omits, and because `git replace` can make plain `git ls-tree` answer
+with one tree while the commit records another. A repository is identified by
+`git rev-parse --show-toplevel` rather than by a `.git` entry at the root, and
+the preflight fails when git cannot answer. Content is
+compared by hashing each file with `git hash-object --no-filters` against the
+recorded object id, because `git diff` honours assume-unchanged and
+skip-worktree and plain `git hash-object` applies attribute-selected clean
+filters. Every tracked path must be a regular file whose executable bit matches
+its mode, and every file on disk must be in the tree apart from a set named in
+the preflight script itself rather than in an ignore file. `README.md` and every
+`src/**` file are read from disk by `tests/public_api_boundary_test.rs`,
+`tests/source_matrix_test.rs`, and `tests/no_clob_surface_test.rs`, and no named
+set of audited paths mentioned them. Run the preflight after staging; anything
+unstaged or unadded is a disagreement, which is the point.
+
 The Rust audit retains the manifest, workflow, license, and schema checks for
 review visibility. It also requires all six release-provenance sections, one
 exact accepted-advisory section, and one parsed table under that H2. The table

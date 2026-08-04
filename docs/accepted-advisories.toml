@@ -56,3 +56,12 @@ path = "ethers 2.0.14 → ethers-providers 2.0.14 or ethers-middleware 2.0.14 �
 scope = "shipped"
 rationale = "Unmaintained transitive PEM parser remains in the reqwest 0.11 package graph; this crate does not parse PEM with it directly."
 re-review = "Re-review when ethers or reqwest 0.11 changes, or when PEM parsing becomes direct behavior."
+
+[[advisory]]
+id = "RUSTSEC-2026-0235"
+crate = "rkyv 0.7.46"
+path = "rust_decimal 1.42.1 (dev, direct and through polymarket-client-sdk 0.4.4) → optional rkyv 0.7.46 lock edge"
+scope = "dev-only"
+rationale = "cargo-audit scans the lock entry even though rkyv appears in no build graph; cargo tree reports it for neither normal nor dev edges on any target, and rust_decimal 1.42.1 is the latest release, so no upgrade removes the lock entry."
+re-review = "Re-review when rust_decimal or polymarket-client-sdk changes, when rust_decimal adopts rkyv 0.8, or if rkyv enters a build graph."
+

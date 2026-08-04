@@ -9,6 +9,21 @@ deposit-wallet relayer surface is added in focused, audited PRs.
 
 Release provenance, dependency posture, accepted advisories, and consumer rollback are recorded in [`docs/RELEASE_PROVENANCE.md`](docs/RELEASE_PROVENANCE.md).
 
+## Feature Status
+
+These six capabilities are at different stages. They are listed separately because
+each is proven by a different kind of evidence, and a claim that holds for one does
+not carry to the next.
+
+| Capability | Status | What the evidence is | What it is not |
+| --- | --- | --- | --- |
+| Signing and request builders | Fixture-proven offline | EIP-712 batch, `WALLET-CREATE` and `WALLET` bodies, nonce and deployed-check requests are byte-compared against fixtures derived from pinned official TypeScript/Python SDK source and Polymarket docs. Each fixture's authority and sanitizer status is recorded in [`tests/fixtures/deposit_wallet/PROVENANCE.md`](tests/fixtures/deposit_wallet/PROVENANCE.md). | Not proof against a recorded live relayer response. No fixture is a production signature or a replayable submit body. |
+| HTTP transport | Real HTTP implemented, loopback-tested, mutation default-denied; not live-validated | Reads, polling and deployment lifecycle run over real HTTP behind read permits. Submit paths exist and are exercised against loopback servers. | Not enabled by default. A client built the ordinary way rejects `submit_wallet_create` and `submit_signed_wallet_batch` before any socket is opened; only `new_with_mutation_enabled` lifts that, and `disable_mutation` is one-way for the instance and its clones. |
+| Calldata builders | Fixture-proven offline, allowlist-bound | pUSD approval, CTF operator approval, and the CTF/NegRisk split, merge and redeem routes are golden-tested; selectors are calculated independently from the signatures, and addresses come from a reviewed verified-configuration allowlist. | Calldata grants no submit authority. Route drift against the official SDK blocks the live gate and requires a newly reviewed fixture. |
+| Consumer adapter | Consumer-owned; the integration contract is documented here | [`docs/CONSUMER_INTEGRATION.md`](docs/CONSUMER_INTEGRATION.md) states the contract: only the consumer's `pm-adapters/relayer_http` may import this crate, it must implement the `RelayerPort` declared in `pm-ports`, and it must pin this crate by commit SHA. | The adapter is in another repository, and so is the test that enforces the single-importer rule. Nothing here proves the consumer follows the contract; that evidence has to come from the consumer commit. |
+| Dry run | Available | A dry-run mutation permit returns `RelayerSubmitOutcome::DryRun` evidence describing the request. No dry run sends the mutation `POST`. The submit primitives open no socket at all, pinned by `dry_run_builds_redacted_create_and_batch_evidence_without_http`; `execute_wallet_batch` first performs the permitted read-only nonce `GET`, pinned at exactly one request by `intent_gated_dry_run_reads_nonce_without_creating_a_lease`. | "Dry run" does not mean offline. Dry-run evidence is not a relayer acknowledgement: it shows what would be sent, not what the relayer would do with it. A dry run also takes no intent lease and writes no intent record, so it does not appear in the mutation audit artifact, which covers live attempts. |
+| Live gate | Documented, never executed | [`docs/MANUAL_LIVE_GATE_RUNBOOK.md`](docs/MANUAL_LIVE_GATE_RUNBOOK.md) defines the operator-controlled procedure, and every step of it is mechanically audited. | Live validation was not performed. The decision record in [`docs/LIVE_VALIDATION_DECISION.md`](docs/LIVE_VALIDATION_DECISION.md) is `blocked`, its fourteen evidence rows are unfilled, and no relayer mutation request has been sent from this fork. |
+
 ## Reviewed 0.2.0 Public API Boundary
 
 The crate root is the consumer-facing integration surface. For deposit-wallet
@@ -182,6 +197,13 @@ Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/
 - `docs/MANUAL_LIVE_GATE_RUNBOOK.md`: operator-controlled first live validation procedure.
 - `docs/LIVE_VALIDATION_DECISION.md`: live validation status, currently `blocked` —
   no relayer mutation request was sent.
+- `docs/RELEASE_PROVENANCE.md`: what this fork changed against upstream, its
+  dependency posture, and what the record does not prove.
+- `docs/accepted-advisories.toml`: the accepted-advisory register. This file is the
+  canonical form; the table in `docs/RELEASE_PROVENANCE.md` renders it and
+  `.cargo/audit.toml` must ignore exactly its advisory ids.
+- `scripts/preflight_build_integrity.py`: build-integrity checks that run before any
+  Cargo command, so that what decides whether the audit runs is itself audited.
 - `docs/SECURITY.md`: secret/signing/supply-chain rules.
 - `docs/TESTING.md`: required fixture and acceptance tests.
 - `docs/CONSUMER_INTEGRATION.md`: dependency and adapter boundary rules.
