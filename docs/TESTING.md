@@ -831,3 +831,33 @@ not replace the durable-store restart or live execution gates.
 `STATE_MINED` may be recorded as pending evidence, but it must not satisfy the
 manual live gate. Wallet deployment or wallet-action effects become usable only
 after `STATE_CONFIRMED`.
+
+## PBRSDK-28 Release Provenance Audit
+
+`tests/release_provenance_test.rs` is an offline repository-contract audit. It
+separates file loading from a pure audit function, proves the real files are
+clean before every synthetic mutation, and requires each mutation target to
+occur exactly once before replacement.
+
+Before Cargo starts, `python3 -I scripts/preflight_build_integrity.py` parses
+the manifest, `docs/accepted-advisories.toml`, and `.cargo/audit.toml` with
+`tomllib`. It closes both advisory schemas, compares the canonical register ID
+set with the ignore set, fixes both workflow run lines, requires
+`publish = false` and the ethers `openssl` feature shape, and requires the
+three license files to be non-empty. This is the load-bearing committed-state
+check; an earlier unit test cannot repair those inputs before it runs.
+
+The Rust audit retains the manifest, workflow, license, and schema checks for
+review visibility. It also requires all six release-provenance sections, one
+exact accepted-advisory section, and one parsed table under that H2. The table
+is interpreted with `pulldown-cmark` and `ENABLE_TABLES`, matching the renderer
+rather than scanning pipe-shaped lines. The parsed header and every ordered
+six-cell row must exactly equal the canonical TOML register. HTML comments,
+fenced code, prose, and other sections cannot contribute an accepted row.
+Inline-code IDs are accepted because CommonMark renders their code text as the
+cell value.
+
+Positive vulnerability-overclaim phrases are rejected, while an explicit
+statement that the record does not make such a claim remains allowed. This
+test makes no network call and does not prove the resolved TLS backend count,
+consumer feature unification, advisory reachability, or HTTPS connectivity.

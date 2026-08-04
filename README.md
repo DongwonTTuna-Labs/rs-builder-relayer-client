@@ -7,6 +7,8 @@ This fork is not an official Polymarket SDK. It preserves the upstream
 Safe/Proxy implementation as legacy reference code while the reviewed
 deposit-wallet relayer surface is added in focused, audited PRs.
 
+Release provenance, dependency posture, accepted advisories, and consumer rollback are recorded in [`docs/RELEASE_PROVENANCE.md`](docs/RELEASE_PROVENANCE.md).
+
 ## Reviewed 0.2.0 Public API Boundary
 
 The crate root is the consumer-facing integration surface. For deposit-wallet
