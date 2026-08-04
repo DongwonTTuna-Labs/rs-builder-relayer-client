@@ -114,7 +114,15 @@ register is derived.
   and one that exists only through the environment fails closed. System and
   global git config are excluded for the same reason: neither is recorded in
   the tree being audited, and both can set attributes and filters that change
-  what git reports about it. `git replace` installs a
+  what git reports about it. Side-effecting local git callbacks are disabled
+  per command: `core.fsmonitor` and `core.hooksPath` are overridden on every
+  call. Repository-local config stays, and two of its settings name programs
+  git runs inside these commands. A `post-index-change` hook, or a
+  `core.fsmonitor` command, executes while `git write-tree` writes the index:
+  the command returns the tree it had already read while the callback replaces
+  `.git/index`, so the default index `git commit` reads is no longer the tree
+  that was audited. Overriding both per command settles them at the moment of
+  use, which reading them first and refusing would not. `git replace` installs a
   ref that most commands apply transparently, so `git ls-tree` can be made to
   answer with a reviewed tree while the index builds, and the commit records, a
   different one; replacement refs are not pushed, so a consumer would receive

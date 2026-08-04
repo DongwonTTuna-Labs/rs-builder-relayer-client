@@ -68,6 +68,33 @@ GIT_ENV.update(
     }
 )
 
+# Repository-local config stays, and two of its settings name programs git runs
+# inside the commands below. A `post-index-change` hook, or a `core.fsmonitor`
+# command, executes while `git write-tree` writes the index: the command
+# returns the reviewed tree it had already read, the callback replaces
+# `.git/index` with another one, and the comparisons that follow check the
+# captured tree against the working copy and find nothing. The default index
+# `git commit` reads is then not the tree this script audited. Overriding both
+# per command also settles them at the moment of use, which reading them first
+# and refusing would not.
+GIT_SAFE_CONFIG = ("-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}")
+
+
+def run_git(root: Path, *args: str) -> str:
+    """Run one git command with the routing and callbacks this script fixes.
+
+    Every git call goes through here so that adding one cannot quietly leave
+    the overrides off.
+    """
+    return subprocess.run(
+        ["git", *GIT_SAFE_CONFIG, *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+        env=GIT_ENV,
+    ).stdout
+
 ALLOWED_TOOLCHAIN_KEYS = {"channel", "components", "targets", "profile"}
 PINNED_TOOLCHAIN_CHANNEL = "1.95.0"
 
@@ -318,30 +345,11 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
     being audited in the first place.
     """
     try:
-        replacements = subprocess.run(
-            ["git", "for-each-ref", "--format=%(refname)", "refs/replace/"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-            env=GIT_ENV,
-        ).stdout.split()
-        tree = subprocess.run(
-            ["git", "write-tree"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-            env=GIT_ENV,
-        ).stdout.strip()
-        listing = subprocess.run(
-            ["git", "ls-tree", "-r", "-z", "--full-tree", tree],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-            env=GIT_ENV,
-        ).stdout
+        replacements = run_git(
+            root, "for-each-ref", "--format=%(refname)", "refs/replace/"
+        ).split()
+        tree = run_git(root, "write-tree").strip()
+        listing = run_git(root, "ls-tree", "-r", "-z", "--full-tree", tree)
     except (OSError, subprocess.CalledProcessError) as error:
         errors.append(f"git must produce the candidate commit tree: {error}")
         return None
@@ -384,14 +392,7 @@ def check_committed_tree(root: Path, errors: list[str]) -> None:
     # and reported success. Ask git where its working tree is instead, and stop
     # with an error when it cannot say.
     try:
-        toplevel = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-            env=GIT_ENV,
-        ).stdout.strip()
+        toplevel = run_git(root, "rev-parse", "--show-toplevel").strip()
     except (OSError, subprocess.CalledProcessError) as error:
         errors.append(
             "this preflight must run inside the git working tree it audits, "
@@ -480,14 +481,9 @@ def check_committed_tree(root: Path, errors: list[str]) -> None:
         # the tree. The comparison has to be over raw bytes, and no external
         # filter program should run during a preflight.
         try:
-            hashed = subprocess.run(
-                ["git", "hash-object", "--no-filters", "--", *comparable],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=True,
-                env=GIT_ENV,
-            ).stdout.split()
+            hashed = run_git(
+                root, "hash-object", "--no-filters", "--", *comparable
+            ).split()
         except (OSError, subprocess.CalledProcessError) as error:
             errors.append(f"git hash-object must succeed for committed paths: {error}")
         else:

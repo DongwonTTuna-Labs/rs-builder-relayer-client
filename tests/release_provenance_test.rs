@@ -3838,6 +3838,98 @@ fn preflight_rejects_a_repository_that_exists_only_in_the_environment() {
     fs::rename(&moved, repository.path(".git")).expect("git directory returns for cleanup");
 }
 
+/// Repository-local config names programs git runs inside the commands the
+/// preflight issues. A `post-index-change` hook, or a `core.fsmonitor` command,
+/// executes while `git write-tree` writes the index: the command returns the
+/// tree it had already read while the callback replaces `.git/index`, so the
+/// default index `git commit` reads is no longer the tree that was audited.
+#[test]
+fn preflight_runs_no_local_git_callback_that_could_swap_the_index() {
+    // `core.hooksPath` is exercised as well, because a local one relocates the
+    // same hook to a directory outside the tree.
+    for setting in ["post-index-change", "core.fsmonitor", "core.hooksPath"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("src/lib.rs"), "// reviewed\n")
+            .expect("reviewed source is written");
+        commit_everything(&repository);
+
+        let reviewed_index = repository.path(".git-reviewed-index");
+        fs::copy(repository.path(".git/index"), &reviewed_index)
+            .expect("reviewed index is kept aside");
+        fs::write(repository.path("src/lib.rs"), "// hostile\n")
+            .expect("hostile source is written");
+        git(&repository, &["add", "src/lib.rs"]);
+        let hostile_index = repository.path(".git-hostile-index");
+        fs::copy(repository.path(".git/index"), &hostile_index)
+            .expect("hostile index is kept aside");
+        fs::copy(&reviewed_index, repository.path(".git/index"))
+            .expect("the default index returns to the reviewed tree");
+        fs::write(repository.path("src/lib.rs"), "// reviewed\n")
+            .expect("working copy returns to the reviewed source");
+
+        let sentinel = repository.path(".git-callback-ran");
+        let script = format!(
+            "#!/bin/sh\ntouch {sentinel}\ncp {hostile} {index}\n",
+            sentinel = sentinel.display(),
+            hostile = hostile_index.display(),
+            index = repository.path(".git/index").display(),
+        );
+        let installed = match setting {
+            "post-index-change" => repository.path(".git/hooks/post-index-change"),
+            "core.hooksPath" => {
+                let elsewhere = repository.path(".git-hooks-elsewhere");
+                fs::create_dir(&elsewhere).expect("external hook directory is created");
+                git(&repository, &["config", "core.hooksPath", elsewhere.to_str().unwrap()]);
+                elsewhere.join("post-index-change")
+            }
+            _ => {
+                let command = repository.path(".git-fsmonitor");
+                git(&repository, &["config", "core.fsmonitor", command.to_str().unwrap()]);
+                command
+            }
+        };
+        fs::write(&installed, &script).expect("callback script is written");
+        let mut mode = fs::metadata(&installed)
+            .expect("callback metadata is readable")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+        fs::set_permissions(&installed, mode).expect("callback becomes executable");
+
+        let neutral = |args: &[&str]| {
+            let output = Command::new("git")
+                .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"])
+                .args(args)
+                .current_dir(repository.path("."))
+                .output()
+                .expect("git runs for the synthetic repository");
+            assert!(
+                output.status.success(),
+                "git {args:?} must succeed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+
+        let before = neutral(&["write-tree"]);
+        // Invalidate the cache tree so that write-tree has an index to write.
+        fs::write(repository.path("src/lib.rs"), "// reviewed\n")
+            .expect("working copy is rewritten to disturb the cache tree");
+
+        run_preflight(&repository);
+
+        assert!(
+            !sentinel.exists(),
+            "{setting} must not run during the preflight; the callback left its sentinel"
+        );
+        assert_eq!(
+            before,
+            neutral(&["write-tree"]),
+            "{setting} must leave the default index holding the audited tree"
+        );
+    }
+}
+
 /// `GIT_INDEX_FILE` names the index every authority command reads. Inheriting
 /// it let the caller hand the audit a reviewed index while the default one held
 /// the bytes `git commit` would record.
