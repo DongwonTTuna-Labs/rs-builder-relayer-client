@@ -358,18 +358,13 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
     # refused before the tree is built. Refusing the driver closes the shape:
     # without one, an attributes file selects nothing. This repository declares
     # no filters, so the refusal costs nothing here.
-    try:
-        drivers = run_git(root, "config", "--name-only", "--get-regexp", r"^filter\.")
-    except subprocess.CalledProcessError as error:
-        # `--get-regexp` exits 1 when nothing matches, which is the normal case.
-        if error.returncode != 1:
-            errors.append(f"git config must be readable: {error}")
-            return None
-        drivers = ""
-    except OSError as error:
-        errors.append(f"git config must be readable: {error}")
+    #
+    # Refusing is a check on state rather than an override at the moment of
+    # use, so the answer is read again after the tree is built. A driver that
+    # appeared in between would have run, and this is what notices.
+    configured = configured_filter_drivers(root, errors)
+    if configured is None:
         return None
-    configured = sorted(set(drivers.split()))
     if configured:
         for name in configured:
             errors.append(
@@ -397,6 +392,17 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
             "while the commit records another"
         )
 
+    appeared = configured_filter_drivers(root, errors)
+    if appeared is None:
+        return None
+    for name in appeared:
+        errors.append(
+            f"{name} was configured while the candidate tree was being built; a "
+            "content filter that appears mid-run has already been executed"
+        )
+    if appeared:
+        return None
+
     entries: dict[str, tuple[str, str]] = {}
     for record in listing.split("\0"):
         if not record:
@@ -409,6 +415,22 @@ def committed_tree_entries(root: Path, errors: list[str]) -> dict[str, tuple[str
         mode, _kind, object_id = fields
         entries[path_name] = (mode, object_id)
     return entries
+
+
+def configured_filter_drivers(root: Path, errors: list[str]) -> list[str] | None:
+    """Names of every configured content-filter driver, or None if git failed."""
+    try:
+        drivers = run_git(root, "config", "--name-only", "--get-regexp", r"^filter\.")
+    except subprocess.CalledProcessError as error:
+        # `--get-regexp` exits 1 when nothing matches, which is the normal case.
+        if error.returncode != 1:
+            errors.append(f"git config must be readable: {error}")
+            return None
+        drivers = ""
+    except OSError as error:
+        errors.append(f"git config must be readable: {error}")
+        return None
+    return sorted(set(drivers.split()))
 
 
 def check_committed_tree(root: Path, errors: list[str]) -> None:
