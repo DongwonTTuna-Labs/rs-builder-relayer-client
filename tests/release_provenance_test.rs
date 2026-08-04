@@ -3719,6 +3719,46 @@ fn preflight_rejects_worktree_divergence_outside_any_named_audit_path() {
     }
 }
 
+/// Index/worktree agreement says nothing about a file the index does not hold.
+/// `git rm --cached` removes a file from the commit and leaves it on disk, so
+/// the comparison has nothing to compare while every audit that walks the tree
+/// keeps reading a file the release would not contain.
+#[test]
+fn preflight_rejects_a_file_removed_from_the_index_but_left_on_disk() {
+    let repository = SyntheticRepository::new();
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+        .expect("synthetic crate root is written");
+    commit_everything(&repository);
+
+    let output = run_preflight(&repository);
+    assert!(
+        output.status.success(),
+        "a tracked tree must pass before the file is removed from the index: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
+    assert!(
+        repository.path("src/lib.rs").is_file(),
+        "the working copy must survive, which is what makes this a bypass"
+    );
+
+    assert_preflight_failure(&repository, "is untracked");
+}
+
+/// A file that was never added is equally absent from the commit.
+#[test]
+fn preflight_rejects_an_untracked_file_the_commit_would_not_carry() {
+    let repository = SyntheticRepository::new();
+    commit_everything(&repository);
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// never added\n")
+        .expect("untracked source file is written");
+
+    assert_preflight_failure(&repository, "is untracked");
+}
+
 /// The nested-repository check walks the tree rather than a named set of
 /// directories, so `src` is covered even though no such set listed it.
 #[test]

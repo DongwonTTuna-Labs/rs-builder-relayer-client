@@ -852,8 +852,12 @@ tracked path, and rejects any directory below the root that is its own
 repository. Both cover the whole tree rather than a named set of audited paths,
 because `README.md` and every `src/**` file are read from disk by
 `tests/public_api_boundary_test.rs`, `tests/source_matrix_test.rs`, and
-`tests/no_clob_surface_test.rs`, and no such set named them. Run the preflight
-after staging: an unstaged edit anywhere is a disagreement, which is the point.
+`tests/no_clob_surface_test.rs`, and no such set named them. It also rejects any
+untracked unignored file, because agreement between the index and the working
+tree says nothing about a file the index does not hold: `git rm --cached` drops
+a file from the commit and leaves it on disk for every tree-walking audit to
+keep reading. Run the preflight after staging; an unstaged edit or an unadded
+file anywhere is a disagreement, which is the point.
 
 The Rust audit retains the manifest, workflow, license, and schema checks for
 review visibility. It also requires all six release-provenance sections, one

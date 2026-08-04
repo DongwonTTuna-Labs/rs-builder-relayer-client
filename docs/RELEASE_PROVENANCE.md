@@ -107,6 +107,13 @@ register is derived.
   bytes the commit does not carry. A list also has to grow whenever a test
   starts reading a new file, and nothing forces that. Whole-tree agreement
   needs no list and covers files not yet written.
+- No unignored path may be untracked. Agreement between the index and the
+  working tree says nothing about a file the index does not hold at all.
+  `git rm --cached src/deposit_wallet/http/submit.rs` leaves the file on disk
+  and drops it from the commit, so the comparison has nothing to compare and
+  passes, while every audit that walks the tree keeps reading a file the
+  release would not contain. With both checks the working tree is the
+  committed tree.
 - Audited files must be tracked regular content at merge stage 0. Every other
   check reads the working tree, but what GitHub Actions runs is the committed
   tree, and `git rm --cached` removes a file from that tree while leaving it in

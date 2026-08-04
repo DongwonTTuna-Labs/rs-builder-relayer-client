@@ -336,6 +336,31 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
                         "the audited bytes must be the bytes that get committed"
                     )
 
+            # Agreement between the index and the working tree says nothing
+            # about a file the index does not hold at all. `git rm --cached
+            # src/deposit_wallet/http/submit.rs` leaves the file on disk and
+            # removes it from the commit; the comparison above has nothing to
+            # compare, so it passes, and every audit that walks `src/` from
+            # disk keeps reading a file the release does not contain. Requiring
+            # no untracked, unignored file closes that: with both checks, the
+            # working tree is the committed tree.
+            try:
+                untracked = subprocess.run(
+                    ["git", "ls-files", "--others", "--exclude-standard"],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.split()
+            except (OSError, subprocess.CalledProcessError) as error:
+                errors.append(f"git ls-files must succeed for untracked paths: {error}")
+            else:
+                for relative in sorted(untracked):
+                    errors.append(
+                        f"{relative} is untracked; a file the index does not hold is "
+                        "absent from the committed tree while every check still reads it"
+                    )
+
             workflow_entries = sorted(
                 name
                 for name in recorded
