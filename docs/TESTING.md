@@ -847,23 +847,19 @@ set with the ignore set, fixes both workflow run lines, requires
 three license files to be non-empty. This is the load-bearing committed-state
 check; an earlier unit test cannot repair those inputs before it runs.
 
-The preflight also requires the index and the working tree to agree on every
-tracked path, and rejects any directory below the root that is its own
-repository. Both cover the whole tree rather than a named set of audited paths,
-because `README.md` and every `src/**` file are read from disk by
-`tests/public_api_boundary_test.rs`, `tests/source_matrix_test.rs`, and
-`tests/no_clob_surface_test.rs`, and no such set named them. It also rejects any
-untracked unignored file, because agreement between the index and the working
-tree says nothing about a file the index does not hold: `git rm --cached` drops
-a file from the commit and leaves it on disk for every tree-walking audit to
-keep reading. Ignore patterns come only from tracked `.gitignore` files, so an
-uncommitted `.git/info/exclude` entry cannot silence that check. Agreement is
-established by hashing each file on disk against the object id the index
-records, because `git diff` honours assume-unchanged and skip-worktree; every
-tracked path must be a regular file, since a tracked symbolic link puts the
-audited bytes outside the repository. Run the preflight after staging; an
-unstaged edit or an unadded file anywhere is a disagreement, which is the
-point.
+The preflight also requires the working tree to be exactly the tree that would
+be committed. The authority is `git write-tree`, not the index listing, because
+`git add -N` records an entry the listing reports and the tree omits. Content is
+compared by hashing each file with `git hash-object --no-filters` against the
+recorded object id, because `git diff` honours assume-unchanged and
+skip-worktree and plain `git hash-object` applies attribute-selected clean
+filters. Every tracked path must be a regular file whose executable bit matches
+its mode, and every file on disk must be in the tree apart from a set named in
+the preflight script itself rather than in an ignore file. `README.md` and every
+`src/**` file are read from disk by `tests/public_api_boundary_test.rs`,
+`tests/source_matrix_test.rs`, and `tests/no_clob_surface_test.rs`, and no named
+set of audited paths mentioned them. Run the preflight after staging; anything
+unstaged or unadded is a disagreement, which is the point.
 
 The Rust audit retains the manifest, workflow, license, and schema checks for
 review visibility. It also requires all six release-provenance sections, one

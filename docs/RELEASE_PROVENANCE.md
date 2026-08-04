@@ -96,48 +96,44 @@ register is derived.
   The pre-Cargo comparison makes that recovery unable to authorize an ignore.
   The in-Cargo audit instead compares the canonical TOML rows with this parsed
   CommonMark table in exact row order and with all six cell values unchanged.
-- The index and the working tree must agree on every tracked path, and the
-  tracked workflow set must be exactly the reviewed one. The agreement is
-  established by hashing each file on disk and comparing that to the object id
-  the index records, not by asking `git diff`, which honours the index's
-  assume-unchanged and skip-worktree flags: one `git update-index` call would
-  otherwise empty its output while the index still held hostile bytes. Every
-  tracked path must be a regular file for the same reason. Mode 120000 records
-  a symbolic link, whose blob is the link target, so the commit would carry
-  that string while an audit reading the path on disk got whatever the link
-  pointed at. Presence and mode say
-  nothing about content: hostile bytes can be staged and the working copy
-  restored, leaving the commit carrying one tree while every content check sees
-  another. The comparison covers the whole tree rather than a named set of
-  audited paths. A named set was wrong twice over: `README.md` and every
-  `src/**` file are read from disk by the boundary, source-matrix, and
-  no-CLOB-surface tests, and neither was named, so those audits could read
-  bytes the commit does not carry. A list also has to grow whenever a test
-  starts reading a new file, and nothing forces that. Whole-tree agreement
-  needs no list and covers files not yet written.
-- No unignored path may be untracked. Agreement between the index and the
-  working tree says nothing about a file the index does not hold at all.
-  `git rm --cached src/deposit_wallet/http/submit.rs` leaves the file on disk
-  and drops it from the commit, so the comparison has nothing to compare and
-  passes, while every audit that walks the tree keeps reading a file the
-  release would not contain. With both checks the working tree is the
-  committed tree. The nested-repository walk skips one code-fixed directory,
-  `target` at the root, and asks no ignore file what else to skip: an ignore
-  file is repository-controlled, so `src/hidden/` in `.gitignore` would
-  otherwise prune the directory doing the hiding. What counts as ignored comes only from tracked `.gitignore`
-  files. `--exclude-standard` would also read `.git/info/exclude` and the
-  user's global excludes, neither of which the commit records, so one line in
-  an uncommitted file would put a source file back out of sight.
-- Audited files must be tracked regular content at merge stage 0. Every other
-  check reads the working tree, but what GitHub Actions runs is the committed
-  tree, and `git rm --cached` removes a file from that tree while leaving it in
-  place. Audited paths must not be gitlinks either. Replacing `.github` with
-  a gitlink leaves a working tree that looks ordinary -- right files, right
-  bytes, no `.git` marker and no `.gitmodules` -- while the parent commit tree
-  holds no workflow blobs for Actions to find. Only the recorded mode differs,
-  so the preflight asks `git ls-files --stage` for it. That does not widen the
-  trust base: `git` produced the tree being audited. A repository without a
-  `.git` directory has no gitlink to record, and the check is skipped there.
+- The working tree must be exactly the tree that would be committed, and the
+  tracked workflow set must be exactly the reviewed one. Every other check here
+  reads the working tree, but what GitHub Actions runs, and what a consumer
+  pins, is the committed tree. The two can be made to differ in ways that leave
+  the working copy looking ordinary, and each one lets a local test run report
+  on bytes the release does not carry.
+- The authority is `git write-tree`, the tree `git commit` would use, not the
+  index listing. `git add -N ghost` records an index entry that the listing
+  reports and the tree omits, so a file that never reaches the commit satisfied
+  every comparison keyed on the listing. `write-tree` also refuses an index
+  with unmerged entries.
+- Content is compared by hashing each file on disk with
+  `git hash-object --no-filters` against the object id the tree records. Not
+  `git diff`, which honours the index's assume-unchanged and skip-worktree
+  flags: one `git update-index` call empties its output while the index holds
+  other bytes. Not plain `git hash-object` either, which applies the clean
+  filters and end-of-line conversion that attributes select, so one tracked
+  `.gitattributes` line marking a file `ident` makes `$Id: anything $` on disk
+  hash to the same object as `$Id$` in the tree.
+- Every path in the tree must be a regular file, and its executable bit must
+  match the recorded mode. Mode 160000 is a gitlink: replacing `.github` with
+  one leaves a working tree that looks ordinary while the commit holds no
+  workflow blobs for Actions to find. Mode 120000 is a symbolic link, whose
+  blob is the link target, so the commit would carry that string while an audit
+  reading the path on disk got whatever the link pointed at.
+  `git update-index --chmod=-x` records 100644 for a file left executable on
+  disk, so a script a local run can execute loses its bit in a fresh checkout.
+- Every file on disk must be in that tree, apart from a set named in
+  `scripts/preflight_build_integrity.py` itself. The set is not read from an
+  ignore file: `git ls-files --others` answers from `.gitignore` files found in
+  the working tree, tracked or not, so a staged `src/lib.rs` ignore line plus
+  `git rm --cached`, or an untracked `src/.gitignore` holding `*`, both empty
+  its output while the file stays on disk for every audit to read. Deriving the
+  set from the tree fails the same way, because whoever removes every file
+  under `src/` also removes `src/` from anything derived from it.
+- The nested-repository walk reads the tree rather than asking git what it
+  tracks, so it holds without an index, and it asks no ignore file which
+  directories to skip.
 - Every workflow file is pinned by SHA-256 digest in the preflight, and the
   `.github/workflows` directory is closed to its reviewed set. Any workflow in
   this repository can stop the audit from running: one granted

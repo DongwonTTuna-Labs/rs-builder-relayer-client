@@ -3744,7 +3744,143 @@ fn preflight_rejects_a_file_removed_from_the_index_but_left_on_disk() {
         "the working copy must survive, which is what makes this a bypass"
     );
 
-    assert_preflight_failure(&repository, "is untracked");
+    assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// `git hash-object` applies the clean filters and end-of-line conversion that
+/// attributes select, so comparing its output to the recorded object id proves
+/// only that the filtered forms agree. One tracked `.gitattributes` line makes
+/// `$Id: anything $` on disk hash to the same object as `$Id$` in the tree.
+#[test]
+fn preflight_rejects_working_tree_bytes_a_clean_filter_would_normalize() {
+    let repository = SyntheticRepository::new();
+    fs::write(repository.path(".gitattributes"), "README.md ident\n")
+        .expect("synthetic attributes are written");
+    fs::write(repository.path("README.md"), "$Id$\n").expect("synthetic readme is written");
+    commit_everything(&repository);
+
+    fs::write(repository.path("README.md"), "$Id: PASS $\n")
+        .expect("filtered working copy is written");
+
+    let filtered = Command::new("git")
+        .args(["hash-object", "--", "README.md"])
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git hash-object runs for the synthetic repository");
+    let raw = Command::new("git")
+        .args(["hash-object", "--no-filters", "--", "README.md"])
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git hash-object runs for the synthetic repository");
+    assert_ne!(
+        String::from_utf8_lossy(&filtered.stdout),
+        String::from_utf8_lossy(&raw.stdout),
+        "the filter must change the hash, which is what makes this a bypass"
+    );
+
+    assert_preflight_failure(&repository, "differs between the index and the working tree");
+}
+
+/// `git ls-files --others` answers from `.gitignore` files found in the working
+/// tree, tracked or not, so an ignore entry can hide a file the commit does not
+/// carry while every audit that walks the repository keeps reading it.
+#[test]
+fn preflight_rejects_a_file_an_ignore_entry_would_hide() {
+    // A staged ignore line plus `git rm --cached`, and an untracked nested
+    // ignore file that hides itself along with its siblings.
+    for nested in [false, true] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        fs::write(repository.path(".gitignore"), "target/\n")
+            .expect("synthetic gitignore is written");
+        commit_everything(&repository);
+
+        git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
+        if nested {
+            fs::write(repository.path("src/.gitignore"), "*\n")
+                .expect("nested ignore file is written");
+        } else {
+            fs::write(repository.path(".gitignore"), "target/\nsrc/lib.rs\n")
+                .expect("ignore entry is written");
+            git(&repository, &["add", ".gitignore"]);
+        }
+
+        let hidden = Command::new("git")
+            .args(["ls-files", "--others", "--exclude-per-directory=.gitignore"])
+            .current_dir(repository.path("."))
+            .output()
+            .expect("git ls-files runs for the synthetic repository");
+        assert!(
+            String::from_utf8_lossy(&hidden.stdout).trim().is_empty(),
+            "the ignore entry must empty the untracked listing, which is the bypass"
+        );
+        assert!(
+            repository.path("src/lib.rs").is_file(),
+            "the working copy must survive for an audit to keep reading it"
+        );
+
+        assert_preflight_failure(&repository, "is not in the committed tree");
+    }
+}
+
+/// `git add -N` records an index entry that `git ls-files --stage` reports and
+/// `git write-tree` omits, so a file that never reaches the commit satisfied
+/// every comparison keyed on the index listing.
+#[test]
+fn preflight_rejects_an_intent_to_add_entry_absent_from_the_commit() {
+    let repository = SyntheticRepository::new();
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+        .expect("synthetic crate root is written");
+    commit_everything(&repository);
+
+    fs::write(repository.path("src/ghost.rs"), "").expect("empty marker file is written");
+    git(&repository, &["add", "-N", "src/ghost.rs"]);
+
+    let staged = Command::new("git")
+        .args(["ls-files", "--stage", "src/ghost.rs"])
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git ls-files runs for the synthetic repository");
+    assert!(
+        !String::from_utf8_lossy(&staged.stdout).trim().is_empty(),
+        "the index listing must report the entry, which is what made it look committed"
+    );
+
+    assert_preflight_failure(&repository, "is not in the committed tree");
+}
+
+/// The mode is part of the tree. `git update-index --chmod` records one
+/// executable bit while the working copy carries the other, so a script a local
+/// run can execute loses its bit in a fresh checkout, or gains one.
+#[test]
+fn preflight_rejects_an_executable_bit_that_disagrees_with_the_commit() {
+    for recorded_executable in [false, true] {
+        let repository = SyntheticRepository::new();
+        fs::write(repository.path("helper.sh"), "#!/bin/sh\n")
+            .expect("synthetic helper is written");
+        commit_everything(&repository);
+
+        let (chmod, expected) = if recorded_executable {
+            ("--chmod=+x", "is not executable in the working tree")
+        } else {
+            ("--chmod=-x", "is executable in the working tree")
+        };
+        if !recorded_executable {
+            git(&repository, &["update-index", "--chmod=+x", "helper.sh"]);
+            let mut mode = fs::metadata(repository.path("helper.sh"))
+                .expect("helper metadata is readable")
+                .permissions();
+            std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
+            fs::set_permissions(repository.path("helper.sh"), mode)
+                .expect("helper becomes executable on disk");
+        }
+        git(&repository, &["update-index", chmod, "helper.sh"]);
+
+        assert_preflight_failure(&repository, expected);
+    }
 }
 
 /// `git diff` honours the index's assume-unchanged and skip-worktree flags, so
@@ -3858,7 +3994,7 @@ fn preflight_rejects_a_file_hidden_by_an_uncommitted_exclude_file() {
     fs::write(&exclude, patterns).expect("uncommitted exclude pattern is written");
     git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
 
-    assert_preflight_failure(&repository, "is untracked");
+    assert_preflight_failure(&repository, "is not in the committed tree");
 }
 
 /// A file that was never added is equally absent from the commit.
@@ -3870,7 +4006,7 @@ fn preflight_rejects_an_untracked_file_the_commit_would_not_carry() {
     fs::write(repository.path("src/lib.rs"), "// never added\n")
         .expect("untracked source file is written");
 
-    assert_preflight_failure(&repository, "is untracked");
+    assert_preflight_failure(&repository, "is not in the committed tree");
 }
 
 /// The nested-repository check walks the tree rather than a named set of
