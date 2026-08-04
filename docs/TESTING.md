@@ -856,8 +856,10 @@ because `README.md` and every `src/**` file are read from disk by
 untracked unignored file, because agreement between the index and the working
 tree says nothing about a file the index does not hold: `git rm --cached` drops
 a file from the commit and leaves it on disk for every tree-walking audit to
-keep reading. Run the preflight after staging; an unstaged edit or an unadded
-file anywhere is a disagreement, which is the point.
+keep reading. Ignore patterns come only from tracked `.gitignore` files, so an
+uncommitted `.git/info/exclude` entry cannot silence that check. Run the
+preflight after staging; an unstaged edit or an unadded file anywhere is a
+disagreement, which is the point.
 
 The Rust audit retains the manifest, workflow, license, and schema checks for
 review visibility. It also requires all six release-provenance sections, one

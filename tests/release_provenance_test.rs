@@ -3747,6 +3747,29 @@ fn preflight_rejects_a_file_removed_from_the_index_but_left_on_disk() {
     assert_preflight_failure(&repository, "is untracked");
 }
 
+/// What counts as ignored has to come from the tree being audited.
+/// `.git/info/exclude` is per-clone and never committed, so if it could silence
+/// the untracked check, one uncommitted line plus `git rm --cached` would put a
+/// source file back out of sight while the release stopped carrying it.
+#[test]
+fn preflight_rejects_a_file_hidden_by_an_uncommitted_exclude_file() {
+    let repository = SyntheticRepository::new();
+    fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+    fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+        .expect("synthetic crate root is written");
+    commit_everything(&repository);
+
+    let exclude = repository.path(".git/info/exclude");
+    fs::create_dir_all(exclude.parent().expect("exclude file has a parent directory"))
+        .expect("synthetic git info directory exists");
+    let mut patterns = fs::read_to_string(&exclude).unwrap_or_default();
+    patterns.push_str("src/lib.rs\n");
+    fs::write(&exclude, patterns).expect("uncommitted exclude pattern is written");
+    git(&repository, &["rm", "--cached", "-q", "src/lib.rs"]);
+
+    assert_preflight_failure(&repository, "is untracked");
+}
+
 /// A file that was never added is equally absent from the commit.
 #[test]
 fn preflight_rejects_an_untracked_file_the_commit_would_not_carry() {

@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 
+# Ignore patterns must come from files the commit carries. `--exclude-standard`
+# would additionally read `.git/info/exclude` and the user's global excludes,
+# and neither is recorded in the tree this script audits.
+COMMITTED_EXCLUDES = "--exclude-per-directory=.gitignore"
+
 ALLOWED_TOOLCHAIN_KEYS = {"channel", "components", "targets", "profile"}
 PINNED_TOOLCHAIN_CHANNEL = "1.95.0"
 
@@ -344,9 +349,15 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
             # disk keeps reading a file the release does not contain. Requiring
             # no untracked, unignored file closes that: with both checks, the
             # working tree is the committed tree.
+            #
+            # What counts as ignored has to come from the tree being audited.
+            # `--exclude-standard` also reads `.git/info/exclude` and the
+            # user's global excludes file, neither of which the commit records,
+            # so one line in an uncommitted file plus `git rm --cached` puts a
+            # source file back out of sight.
             try:
                 untracked = subprocess.run(
-                    ["git", "ls-files", "--others", "--exclude-standard"],
+                    ["git", "ls-files", "--others", COMMITTED_EXCLUDES],
                     cwd=root,
                     capture_output=True,
                     text=True,
@@ -388,6 +399,10 @@ def ignored_directories(root: Path) -> set[str]:
     files to make an exhaustive walk cost more than every other check
     combined. Where git cannot answer, nothing is excluded and the walk is
     exhaustive, which is the safe direction.
+
+    The patterns come only from tracked `.gitignore` files, never from
+    `.git/info/exclude` or the user's global excludes, so what this audit
+    treats as outside the release is recorded in the release.
     """
     try:
         listing = subprocess.run(
@@ -396,7 +411,7 @@ def ignored_directories(root: Path) -> set[str]:
                 "ls-files",
                 "--others",
                 "--ignored",
-                "--exclude-standard",
+                COMMITTED_EXCLUDES,
                 "--directory",
             ],
             cwd=root,

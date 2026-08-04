@@ -113,7 +113,10 @@ register is derived.
   and drops it from the commit, so the comparison has nothing to compare and
   passes, while every audit that walks the tree keeps reading a file the
   release would not contain. With both checks the working tree is the
-  committed tree.
+  committed tree. What counts as ignored comes only from tracked `.gitignore`
+  files. `--exclude-standard` would also read `.git/info/exclude` and the
+  user's global excludes, neither of which the commit records, so one line in
+  an uncommitted file would put a source file back out of sight.
 - Audited files must be tracked regular content at merge stage 0. Every other
   check reads the working tree, but what GitHub Actions runs is the committed
   tree, and `git rm --cached` removes a file from that tree while leaving it in

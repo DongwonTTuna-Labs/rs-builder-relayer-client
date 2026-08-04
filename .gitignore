@@ -37,3 +37,6 @@ __pycache__/
 
 # Claude Code
 .claude/
+
+# Campaign working notes, deliberately outside the release
+.fable-sol/
