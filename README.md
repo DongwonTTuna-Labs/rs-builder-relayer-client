@@ -199,6 +199,8 @@ Rust SDK for [Polymarket's gasless relayer](https://docs.polymarket.com/trading/
   no relayer mutation request was sent.
 - `docs/RELEASE_PROVENANCE.md`: what this fork changed against upstream, its
   dependency posture, and what the record does not prove.
+- `docs/FINAL_AUDIT_PACKET.md`: the final audit packet, linking each
+  non-negotiable requirement to its evidence and stating what remains open.
 - `docs/accepted-advisories.toml`: the accepted-advisory register. This file is the
   canonical form; the table in `docs/RELEASE_PROVENANCE.md` renders it and
   `.cargo/audit.toml` must ignore exactly its advisory ids.
