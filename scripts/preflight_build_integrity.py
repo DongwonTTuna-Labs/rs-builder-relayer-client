@@ -221,15 +221,6 @@ TRACKED_AUDIT_INPUTS = (
     "tests/release_provenance_test.rs",
 )
 
-AUDITED_DIRECTORIES = (
-    ".github",
-    ".github/workflows",
-    ".cargo",
-    "scripts",
-    "docs",
-    "tests",
-)
-
 SYMLINK_FORBIDDEN_PATHS = (
     ".github",
     ".github/workflows",
@@ -272,7 +263,7 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
     if (root / ".git").exists():
         try:
             listing = subprocess.run(
-                ["git", "ls-files", "--stage", "--", *AUDITED_DIRECTORIES, *TRACKED_AUDIT_INPUTS],
+                ["git", "ls-files", "--stage"],
                 cwd=root,
                 capture_output=True,
                 text=True,
@@ -319,16 +310,18 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
             # after this point reads the working tree, so malicious bytes can
             # be staged and the working copy restored: the commit carries one
             # tree and every check sees another. Ask git whether the two agree.
+            #
+            # This asks about every tracked path, not a named set. Naming the
+            # audited paths was wrong twice over: `README.md` and every
+            # `src/**` file are read from disk by the boundary, source-matrix,
+            # and no-CLOB-surface tests, and none of them was named, so those
+            # audits could read bytes the commit does not carry. A list of
+            # audited inputs has to be extended whenever a test starts reading
+            # a new file, and nothing makes that happen. Whole-tree agreement
+            # needs no list and covers files not yet written.
             try:
                 divergent = subprocess.run(
-                    [
-                        "git",
-                        "diff",
-                        "--name-only",
-                        "--",
-                        *AUDITED_DIRECTORIES,
-                        *TRACKED_AUDIT_INPUTS,
-                    ],
+                    ["git", "diff", "--name-only"],
                     cwd=root,
                     capture_output=True,
                     text=True,
@@ -360,13 +353,75 @@ def check_no_nested_git_repositories(root: Path, errors: list[str]) -> None:
     if (root / ".gitmodules").exists():
         errors.append(".gitmodules is forbidden; an audited path must not be a submodule")
 
-    for relative in AUDITED_DIRECTORIES:
-        nested = root / relative / ".git"
-        if nested.exists():
-            errors.append(
-                f"{relative}/.git exists; {relative} must be a directory in this "
-                "repository, not a submodule"
-            )
+    check_no_nested_repositories(root, errors)
+
+
+def ignored_directories(root: Path) -> set[str]:
+    """Directories git excludes, so the walk below can skip them.
+
+    These hold nothing that gets committed, and `target/` alone holds enough
+    files to make an exhaustive walk cost more than every other check
+    combined. Where git cannot answer, nothing is excluded and the walk is
+    exhaustive, which is the safe direction.
+    """
+    try:
+        listing = subprocess.run(
+            [
+                "git",
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    return {line.rstrip("/") for line in listing.splitlines() if line.endswith("/")}
+
+
+def check_no_nested_repositories(root: Path, errors: list[str]) -> None:
+    """Reject any directory below the root that is its own repository.
+
+    A nested `.git` makes a directory a repository of its own, so the parent
+    commit can carry none of its contents while the working tree looks whole.
+    The directories are walked rather than named. A named set had to be
+    extended by hand for every new audited directory, and nothing forced that;
+    `src` was never in it even though the boundary, source-matrix, and
+    no-CLOB-surface tests read `src/**` from disk. This check has to hold
+    without an index, so it reads the tree instead of asking git what it
+    tracks.
+    """
+    excluded = ignored_directories(root)
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError as error:
+            errors.append(f"{current} must be a readable directory: {error}")
+            continue
+        for entry in entries:
+            # A submodule records `.git` as a file holding `gitdir: ...`, not
+            # as a directory, so the name is checked before anything narrows
+            # the entry to directories.
+            if entry.name == ".git":
+                if current != root:
+                    relative = current.relative_to(root).as_posix()
+                    errors.append(
+                        f"{relative}/.git exists; {relative} must be a directory in this "
+                        "repository, not a submodule"
+                    )
+                continue
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            if entry.relative_to(root).as_posix() in excluded:
+                continue
+            pending.append(entry)
 
 
 def check_no_symlinks(root: Path, errors: list[str]) -> None:

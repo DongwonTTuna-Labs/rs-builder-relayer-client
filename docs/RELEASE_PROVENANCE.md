@@ -96,11 +96,17 @@ register is derived.
   The pre-Cargo comparison makes that recovery unable to authorize an ignore.
   The in-Cargo audit instead compares the canonical TOML rows with this parsed
   CommonMark table in exact row order and with all six cell values unchanged.
-- The index and the working tree must agree on every audited path, and the
+- The index and the working tree must agree on every tracked path, and the
   tracked workflow set must be exactly the reviewed one. Presence and mode say
   nothing about content: hostile bytes can be staged and the working copy
   restored, leaving the commit carrying one tree while every content check sees
-  another.
+  another. The comparison covers the whole tree rather than a named set of
+  audited paths. A named set was wrong twice over: `README.md` and every
+  `src/**` file are read from disk by the boundary, source-matrix, and
+  no-CLOB-surface tests, and neither was named, so those audits could read
+  bytes the commit does not carry. A list also has to grow whenever a test
+  starts reading a new file, and nothing forces that. Whole-tree agreement
+  needs no list and covers files not yet written.
 - Audited files must be tracked regular content at merge stage 0. Every other
   check reads the working tree, but what GitHub Actions runs is the committed
   tree, and `git rm --cached` removes a file from that tree while leaving it in

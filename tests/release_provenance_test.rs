@@ -3651,36 +3651,86 @@ fn preflight_rejects_an_untracked_audit_input() {
 /// checks reads the working tree, so malicious bytes can be staged and the
 /// working copy restored: the commit carries one tree while every check sees
 /// another.
+fn git(repository: &SyntheticRepository, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repository.path("."))
+        .output()
+        .expect("git runs for the synthetic repository");
+    assert!(
+        output.status.success(),
+        "git {args:?} must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn commit_everything(repository: &SyntheticRepository) {
+    git(repository, &["init", "-q", "."]);
+    git(repository, &["config", "user.email", "synthetic@example.invalid"]);
+    git(repository, &["config", "user.name", "synthetic"]);
+    git(repository, &["add", "-A"]);
+    git(repository, &["commit", "-qm", "synthetic"]);
+}
+
+/// Stages hostile bytes and restores the working copy, so the commit carries
+/// one tree while every content check reads another.
+fn stage_hostile_bytes_and_restore(repository: &SyntheticRepository, relative: &str) {
+    let path = repository.path(relative);
+    let reviewed = fs::read_to_string(&path).expect("reviewed file is readable");
+    fs::write(&path, "hostile\n").expect("hostile bytes are written");
+    git(repository, &["add", relative]);
+    fs::write(&path, &reviewed).expect("reviewed file is restored");
+}
+
 #[test]
 fn preflight_rejects_an_index_that_diverges_from_the_working_tree() {
     let repository = SyntheticRepository::new();
-    let root = repository.path(".");
-    let workflow = repository.path(".github/workflows/security-audit.yml");
-
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&root)
-            .output()
-            .expect("git runs for the synthetic repository");
-        assert!(
-            output.status.success(),
-            "git {args:?} must succeed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-
-    git(&["init", "-q", "."]);
-    git(&["config", "user.email", "synthetic@example.invalid"]);
-    git(&["config", "user.name", "synthetic"]);
-    git(&["add", "-A"]);
-    git(&["commit", "-qm", "synthetic"]);
-
-    let reviewed = fs::read_to_string(&workflow).expect("reviewed workflow is readable");
-    fs::write(&workflow, "name: Security audit\non: {}\njobs: {}\n")
-        .expect("hostile workflow is written");
-    git(&["add", ".github/workflows/security-audit.yml"]);
-    fs::write(&workflow, &reviewed).expect("reviewed workflow is restored");
+    commit_everything(&repository);
+    stage_hostile_bytes_and_restore(&repository, ".github/workflows/security-audit.yml");
 
     assert_preflight_failure(&repository, "differs between the index and the working tree");
+}
+
+/// The comparison covers every tracked path rather than a named set, so it has
+/// to reject divergence in files no such set ever mentioned. `README.md` and
+/// `src/**` are read from disk by the boundary, source-matrix, and
+/// no-CLOB-surface tests; while the comparison named its paths, those audits
+/// could read bytes the commit does not carry.
+#[test]
+fn preflight_rejects_worktree_divergence_outside_any_named_audit_path() {
+    for relative in ["README.md", "src/lib.rs"] {
+        let repository = SyntheticRepository::new();
+        fs::create_dir(repository.path("src")).expect("synthetic src directory is created");
+        fs::write(repository.path("README.md"), "# synthetic\n")
+            .expect("synthetic readme is written");
+        fs::write(repository.path("src/lib.rs"), "// synthetic\n")
+            .expect("synthetic crate root is written");
+        commit_everything(&repository);
+
+        let output = run_preflight(&repository);
+        assert!(
+            output.status.success(),
+            "an agreeing tree must pass before divergence is introduced: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        stage_hostile_bytes_and_restore(&repository, relative);
+        assert_preflight_failure(&repository, "differs between the index and the working tree");
+    }
+}
+
+/// The nested-repository check walks the tree rather than a named set of
+/// directories, so `src` is covered even though no such set listed it.
+#[test]
+fn preflight_rejects_a_nested_repository_outside_any_named_audit_directory() {
+    for marker in ["src/.git", "docs/nested/.git"] {
+        let repository = SyntheticRepository::new();
+        let path = repository.path(marker);
+        fs::create_dir_all(path.parent().expect("marker has a parent directory"))
+            .expect("synthetic nested directory is created");
+        fs::write(path, "gitdir: ../.git/modules/x\n")
+            .expect("synthetic submodule marker is written");
+
+        assert_preflight_failure(&repository, "must be a directory in this repository");
+    }
 }

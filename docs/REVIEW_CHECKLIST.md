@@ -8,6 +8,11 @@
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes.
 - [ ] `cargo test --workspace --all-features` passes.
 - [ ] `git diff --check` passes.
+- [ ] `python3 -I scripts/preflight_build_integrity.py` passes, run before any Cargo
+      command. It binds what decides whether the audit runs at all, so a later run
+      proves less.
+- [ ] `cargo audit --deny warnings` passes. Without the flag, unmaintained
+      advisories exit zero and the accepted-advisory register stops being load-bearing.
 - [ ] Any exception to repo rules is justified by documented no-viable-alternative evidence, not convenience.
 - [ ] Any rule exception documents failed alternatives, the underlying limitation, consumer impact, and migration/rollback path.
 - [ ] Claims in the PR body are backed by command output, fixture evidence, official SDK/doc comparison, or explicitly marked residual risk.
@@ -192,6 +197,41 @@
 - [ ] Registry resolved events are emitted only after CAS `Ok(true)` and lease events only after successful persistence; stale/no-op transitions emit no false resolution.
 - [ ] Sentinel regression covers all reviewed public Debug types, artifact JSON, success/failure errors, captured async tracing, actual local signature/calldata/body, and malicious persisted reconciliation/state text.
 - [ ] No dependency, metric, OTel path, collector, live request, credential, or new harness was added for observability.
+
+## Manual Live Gate Runbook (PBRSDK-26)
+
+- [ ] `tests/live_gate_runbook_test.rs` passes.
+- [ ] Every approval gate in `docs/MANUAL_LIVE_GATE_RUNBOOK.md` still requires a
+      recorded operator decision; no gate authorizes a later one.
+- [ ] Each stop condition terminates into rollback rather than a retry, and none
+      permits a duplicate submit.
+- [ ] The rollback section still scopes the mutation latch to the active client and
+      its clones, and still says persistence rests on deployment policy rather than
+      on the type system.
+
+## Live Validation Decision (PBRSDK-27)
+
+- [ ] `tests/live_validation_decision_test.rs` passes.
+- [ ] The lifecycle marker in `docs/LIVE_VALIDATION_DECISION.md` agrees with the
+      canonical Decision sentence and with the status-specific sections.
+- [ ] Every evidence Value cell matches the recorded status; a superseding record
+      changes the marker and the cells together.
+- [ ] No document claims a live validation that the record does not show.
+
+## Release Provenance (PBRSDK-28)
+
+- [ ] `tests/release_provenance_test.rs` passes.
+- [ ] `docs/accepted-advisories.toml` is the register; the Markdown table in
+      `docs/RELEASE_PROVENANCE.md` renders it, and `.cargo/audit.toml` ignores
+      exactly its advisory ids.
+- [ ] Any new accepted advisory records crate, path, scope, rationale, and a
+      re-review condition. An ignore without those is not reviewed.
+- [ ] `Cargo.toml` keeps `publish = false` and an `ethers` entry that names a TLS
+      backend alongside `default-features = false`.
+- [ ] Workflow edits update the digests in `scripts/preflight_build_integrity.py`;
+      the reviewed workflow set is closed.
+- [ ] `docs/RELEASE_PROVENANCE.md` stays inside its character allowlist: printable
+      ASCII, newline, and the arrow. An em dash fails the audit.
 
 ## Public API Boundary
 
