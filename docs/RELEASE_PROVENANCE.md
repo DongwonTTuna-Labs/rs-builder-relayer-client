@@ -88,6 +88,17 @@ register is derived.
 
 ## What this record does not prove
 
+- The preflight's subject is the agreement between what a local verification run
+  reads and what the commit carries. Every check below it exists so that
+  "the tests passed" describes the release. It is not a defence against someone
+  who already controls the repository: an attacker who can write `.git/config`,
+  the index, or the working tree can also land a commit, and no check run from
+  inside that repository can outrank them. What the checks do is make the
+  divergence visible rather than silent, whether it came from a mistake, a tool,
+  or a deliberate edit, so that a reviewer reading the pull request is reading
+  the same bytes the audit read. Reviews of this script are best aimed at that
+  boundary; hardening past it buys assurance the surrounding trust model does
+  not support.
 - This is a point-in-time snapshot. `Cargo.lock` is not tracked, so this
   repository alone cannot reproduce it; the authoritative lock is the
   consumer workspace's lock.
