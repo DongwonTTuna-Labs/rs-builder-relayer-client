@@ -428,6 +428,16 @@ fn validate_batch_resource_limits(batch: &DepositWalletBatchToSign) -> Result<()
 pub(crate) fn validate_deposit_wallet_batch_resource_limits(
     calls: &[DepositWalletCall],
 ) -> Result<()> {
+    // A batch with no calls still signs, still submits, and still consumes the
+    // owner's nonce. The relayer may well accept it, leaving a confirmed
+    // transaction that did nothing and a nonce that later work has to account
+    // for. There is no caller for whom that is the intended outcome.
+    if calls.is_empty() {
+        return Err(RelayerError::Signing(
+            "deposit wallet batch must contain at least one call".to_string(),
+        ));
+    }
+
     if calls.len() > MAX_DEPOSIT_WALLET_BATCH_CALLS {
         return Err(RelayerError::Signing(format!(
             "deposit wallet batch call count exceeds maximum of {MAX_DEPOSIT_WALLET_BATCH_CALLS}"

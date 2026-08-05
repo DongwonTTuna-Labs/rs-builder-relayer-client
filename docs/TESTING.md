@@ -2,6 +2,10 @@
 
 ## Minimum Commands
 
+`cargo fmt --all --check` is in the list below for parity with CI, but
+`rustfmt.toml` sets `disable_all_formatting`, so it exits zero without checking
+anything. It is not formatting evidence.
+
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -64,6 +68,7 @@ execute_wallet_batch_rejects_signer_identity_before_nonce_read
 execute_wallet_batch_prevalidates_mutation_and_read_permits_before_http
 execute_wallet_batch_rejects_expired_deadline_before_nonce_read
 execute_wallet_batch_rejects_wrong_wallet_before_nonce_read
+execute_wallet_batch_rejects_an_empty_batch_before_nonce_read
 execute_wallet_batch_rejects_oversized_batch_before_nonce_read
 execute_wallet_batch_preserves_submit_api_error_without_duplicate_post
 execute_wallet_batch_classifies_submit_disconnect_for_reconciliation

@@ -71,6 +71,64 @@ fn rust_validation_workflow_enforces_required_pr_gates_without_secrets() {
         !workflow.contains("secrets."),
         "rust validation workflow must not reference GitHub secrets"
     );
+
+    // A pull request supplies the code every step after checkout runs, so the
+    // checkout itself must be a reviewed commit and must leave no credential
+    // behind, and the preflight must decide whether the tree is auditable
+    // before a toolchain or Cargo command touches it.
+    assert!(
+        !workflow.contains("actions/checkout@v"),
+        "checkout must be pinned to a commit, not a movable tag"
+    );
+    assert!(
+        workflow.contains("persist-credentials: false"),
+        "checkout must not leave a credential for later steps to reach"
+    );
+
+    let preflight = workflow
+        .find("python3 -I scripts/preflight_build_integrity.py")
+        .expect("workflow must run the build-integrity preflight");
+    for later in ["rustup ", "cargo "] {
+        let first = workflow.find(later).expect("workflow must run {later}");
+        assert!(
+            preflight < first,
+            "the preflight must run before the first `{later}` command"
+        );
+    }
+
+    // On a fresh checkout a bare `git diff --check` compares the working tree
+    // with itself and passes whatever the pull request contains.
+    assert!(
+        workflow.contains("git diff --check ${{ github.event.pull_request.base.sha }}..."),
+        "the whitespace check must name the base and head it compares"
+    );
+}
+
+/// A reusable workflow that receives secrets executes code this repository does
+/// not hold. Pinning this file's digest says nothing about what a branch points
+/// at when the job runs, so the callee is pinned to a commit as well.
+#[test]
+fn secret_bearing_reusable_workflows_are_pinned_to_a_commit() {
+    let workflow = fs::read_to_string(".github/workflows/grimoire.yml")
+        .expect("grimoire workflow is readable");
+    assert!(
+        workflow.contains("secrets:"),
+        "this test exists because the workflow passes secrets"
+    );
+
+    for line in workflow.lines() {
+        let trimmed = line.trim();
+        let Some(reference) = trimmed.strip_prefix("uses:") else {
+            continue;
+        };
+        let Some((_, revision)) = reference.trim().rsplit_once('@') else {
+            panic!("every `uses:` must name a revision: {trimmed}");
+        };
+        assert!(
+            revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit()),
+            "`uses:` must name a full commit SHA, found {revision:?}"
+        );
+    }
 }
 
 #[test]

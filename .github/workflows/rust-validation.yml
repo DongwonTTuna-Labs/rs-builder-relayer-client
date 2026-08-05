@@ -15,16 +15,33 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # Before any toolchain or Cargo command, because what this repository
+      # controls decides whether those commands audit the committed tree at
+      # all. A pull request supplies the code that runs after this step.
+      - name: Build integrity preflight
+        run: >
+          test ! -L scripts &&
+          test ! -L scripts/preflight_build_integrity.py &&
+          python3 -I scripts/preflight_build_integrity.py
 
       - name: Show Rust toolchain
         run: rustup show
 
+      # rustfmt.toml sets disable_all_formatting, so this exits zero without
+      # checking anything. It runs for parity with the documented command list
+      # and is not formatting evidence.
       - name: Check formatting
         run: cargo fmt --all --check
 
+      # Needs the two endpoints: on a fresh checkout a bare `git diff --check`
+      # compares the working tree with itself and passes regardless.
       - name: Check whitespace
-        run: git diff --check
+        run: git diff --check ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}
 
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings

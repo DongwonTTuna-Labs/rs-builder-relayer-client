@@ -4,7 +4,9 @@
 
 - [ ] PR is not merged by the agent.
 - [ ] No private keys, API keys, auth headers, passphrases, or production signatures are committed.
-- [ ] `cargo fmt --all --check` passes.
+- [ ] `cargo fmt --all --check` exits zero. It checks nothing: `rustfmt.toml`
+      sets `disable_all_formatting`, so this is not evidence that the change is
+      formatted. Read the diff for formatting yourself.
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes.
 - [ ] `cargo test --workspace --all-features` passes.
 - [ ] `git diff --check` passes.
