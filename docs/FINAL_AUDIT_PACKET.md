@@ -93,7 +93,7 @@ by the last commit on this branch, and the results under it were produced at
 that commit; until it names a forty-character SHA, this packet is a draft and
 not audit evidence.
 
-    audited-commit: b561aad870870f9f45b565d59ca656ba018e3794
+    audited-commit: 3a13b190120a5162186c36f414e66e608ef3a683
 
 ### Crate
 
