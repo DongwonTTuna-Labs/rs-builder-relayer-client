@@ -220,6 +220,7 @@ paragraph.
 | A live permit carries no digest of the payload it approves, so an unreviewed call in the batch is not mechanically refused | DON-81 (PBRSDK-31) |
 | The owner-intent store is in-memory, and the primitive submit methods bypass the registry that uses it | DON-82 (PBRSDK-32) |
 | `disable_mutation` latches one client and its clones; a new enabled client is live again, and in-flight requests are not recalled | DON-83 (PBRSDK-33) |
+| The reusable workflow that receives four secrets is pinned by commit, but at that commit it checks out its own repository at `ref: main` and runs actions from there, so the code holding those secrets is still whatever the branch points at | DON-84 (PBRSDK-34) |
 
 Until all three are closed, the mutation gate should stay shut in every
 deployment, which is where this repository already leaves it.

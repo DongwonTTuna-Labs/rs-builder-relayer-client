@@ -17,8 +17,18 @@ jobs:
     permissions:
       contents: read
     # Pinned to a commit, not to a moving branch: this job hands four secrets
-    # to the callee, and pinning this file's own digest says nothing about
-    # what a branch points at when the job runs.
+    # to the callee, and pinning this file's own digest says nothing about what
+    # a branch points at when the job runs.
+    #
+    # This fixes the callee's own steps and not everything they run. At this
+    # commit the callee checks out `home-server-infra` at `ref: main` and
+    # executes actions from that checkout, so the code holding these secrets is
+    # still whatever `main` points at. Closing that is DON-84, in the callee's
+    # repository. What was audited here: top-level `permissions: {}`, job-level
+    # `contents: read`, `persist-credentials: false` on both checkouts, the
+    # consumer repository checked out as data at `head_sha`, and
+    # `create-github-app-token` pinned to a full SHA. `actions/checkout@v6` in
+    # the callee is a movable tag.
     uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@dad7767101e12cb4d987a467145c4c00642a4132
     with:
       consumer_repository: ${{ github.repository }}
