@@ -100,7 +100,7 @@ not audit evidence.
 | Command | Result |
 | --- | --- |
 | `python3 -I scripts/preflight_build_integrity.py` | exit 0 |
-| `cargo test --workspace --all-features` | 508 passed, 0 test binaries failed |
+| `cargo test --workspace --all-features` | 509 passed, 0 test binaries failed |
 | `cargo audit --deny warnings` | exit 0 |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 warnings |
 | `cargo fmt --all --check` | exit 0, and no evidence: `rustfmt.toml` sets `disable_all_formatting` |
@@ -127,14 +127,23 @@ decides to merge.
 
 ## Secret scan
 
-No value is reproduced here.
+This is a pattern scan, not a proof that no secret exists. It reports what a
+handful of shapes match, and a shape that nobody thought to write down is a
+shape it does not look for. No value is reproduced here.
 
 | Pattern | Result |
 | --- | --- |
-| 65-byte signature shape (`0x` + 130 hex) | 32 occurrences: 31 across 15 fixture files, every one declared synthetic in `tests/fixtures/deposit_wallet/PROVENANCE.md`, and one repeating `0x1111...` placeholder in `src/deposit_wallet/requests.rs` |
-| 32-byte key shape (`0x` + 64 hex) | Fixtures, plus the two CREATE2 init-code hashes in `src/contracts.rs` and repeating test patterns in `src/deposit_wallet/calldata/ctf.rs` |
+| 65-byte signature shape (`0x` + exactly 130 hex) | 12 occurrences, all in fixtures, every one declared synthetic in `tests/fixtures/deposit_wallet/PROVENANCE.md` |
+| 32-byte shape (`0x` + exactly 64 hex) | Fixtures, the two CREATE2 init-code hashes in `src/contracts.rs`, and repeating test patterns in `src/deposit_wallet/calldata/ctf.rs` |
+| Unprefixed 64-hex | 21 occurrences across `src/deposit_wallet/address.rs` (ERC-1967 constants), `src/deposit_wallet/identity.rs`, `src/deposit_wallet/http/tests.rs`, `tests/client_test.rs`, and `tests/public_api_boundary_test.rs`: protocol constants and synthetic test keys |
 | Bearer token, API key, or secret literal | none |
 | `env::var` in `src/` | none |
+
+An earlier version of this table reported 32 signature-shape matches. That count
+came from a regex with no length boundary, which also matched the first 130 hex
+characters of longer calldata. The bounded count is 12, and the same review
+found that the earlier table did not classify unprefixed 64-hex values at all.
+Both are corrected above.
 
 Every host that appears in the repository is a public Polymarket endpoint, a
 public documentation site, a public RPC provider, a loopback address, or an
@@ -198,6 +207,23 @@ production credential, and that the reviewed deposit-wallet surface redacts what
 it emits. A deployment that enables `debug` logging on the legacy path should
 treat that path's output as sensitive.
 
+## What blocks enabling live mutation
+
+An external review of the whole tree named three structural gaps. None of them
+is a defect in what is built; each is a property production needs that this
+repository does not yet establish. They are tracked rather than described, so
+that enabling live mutation has to close a ticket rather than reinterpret a
+paragraph.
+
+| Gap | Ticket |
+| --- | --- |
+| A live permit carries no digest of the payload it approves, so an unreviewed call in the batch is not mechanically refused | DON-81 (PBRSDK-31) |
+| The owner-intent store is in-memory, and the primitive submit methods bypass the registry that uses it | DON-82 (PBRSDK-32) |
+| `disable_mutation` latches one client and its clones; a new enabled client is live again, and in-flight requests are not recalled | DON-83 (PBRSDK-33) |
+
+Until all three are closed, the mutation gate should stay shut in every
+deployment, which is where this repository already leaves it.
+
 ## What this packet does not prove
 
 - It does not prove the relayer accepts any request this fork builds. Every
@@ -209,6 +235,22 @@ treat that path's output as sensitive.
 - It does not prove the resolved TLS backend count, feature unification under a
   different consumer feature set, or HTTPS connectivity. No test opens an
   outbound socket.
+- The no-CLOB audit proves the absence of named markers and function names, not
+  the absence of CLOB behaviour under other names, and nothing about what a
+  dependency does. The same holds for the legacy separation: the type system
+  does not stop a consumer from putting a legacy helper's output into a raw
+  `DepositWalletCall`.
+- The source matrix and fixture provenance were checked against the official
+  SDKs on 2026-07-04. Addresses, selectors, the nonce endpoint, and the
+  transaction response shape have to be compared against those pinned sources
+  again immediately before any live gate; this record is not that check.
+- Five of the eight accepted advisories are in the shipped graph, mostly the
+  legacy `ethers` 2.0.14 stack. Each has a rationale, and none has a
+  reachability proof. A human should re-review them against the consumer's own
+  lock, which is the authoritative one.
+- Bounded polling treats an API error, including an authentication failure, as
+  retryable until the policy is exhausted. That is fail-closed, and it can also
+  delay a diagnosis.
 - It does not prove the absence of vulnerabilities. It proves that
   `cargo audit --deny warnings` passes against the advisory database on the
   scan date, with eight accepted advisories each carrying a re-review condition.

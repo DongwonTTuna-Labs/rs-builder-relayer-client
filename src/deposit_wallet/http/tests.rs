@@ -4117,6 +4117,33 @@ async fn execute_wallet_batch_rejects_wrong_wallet_before_nonce_read() {
 }
 
 #[tokio::test]
+async fn execute_wallet_batch_rejects_an_empty_batch_before_nonce_read() {
+    // An empty batch signs and submits like any other, and consumes the
+    // owner's nonce to do nothing.
+    let signer = execute_signer();
+    let owner = signer.address();
+    let (url, handle) = spawn_optional_request_server().await;
+    let client = mutation_test_client(url, FIXED_NOW_UNIX, true);
+    let permit = execute_permit(RelayerMutationMode::Live, owner);
+
+    let error = client
+        .execute_wallet_batch(
+            execute_context(owner),
+            Vec::new(),
+            U256::from(EXECUTE_DEADLINE_UNIX),
+            &signer,
+            &read_permit(owner),
+            &permit,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, RelayerError::Signing(_)));
+    assert!(error.to_string().contains("at least one call"));
+    assert!(handle.await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn execute_wallet_batch_rejects_oversized_batch_before_nonce_read() {
     let signer = execute_signer();
     let owner = signer.address();
