@@ -3,5 +3,12 @@ max_width = 100
 newline_style = "Unix"
 use_field_init_shorthand = true
 use_try_shorthand = true
-# Preserve upstream Safe/Proxy source formatting in this fork setup PR.
+# Formatting is off for the whole crate, so `cargo fmt --all --check` reports
+# nothing and is not evidence that anything is formatted. It stays off because
+# this fork preserves upstream Safe/Proxy source as written, and rustfmt's
+# `ignore` list, which would exempt only those paths, is nightly-only while
+# `rust-toolchain.toml` pins stable. Turning formatting on therefore means
+# either reformatting upstream code this fork did not write, or moving to
+# nightly. Neither belongs in a release audit, so the setting is recorded here
+# rather than worked around, and no document claims formatting was verified.
 disable_all_formatting = true

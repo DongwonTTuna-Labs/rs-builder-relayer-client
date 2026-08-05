@@ -2,6 +2,10 @@
 
 ## Minimum Commands
 
+`cargo fmt --all --check` is in the list below for parity with CI, but
+`rustfmt.toml` sets `disable_all_formatting`, so it exits zero without checking
+anything. It is not formatting evidence.
+
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings

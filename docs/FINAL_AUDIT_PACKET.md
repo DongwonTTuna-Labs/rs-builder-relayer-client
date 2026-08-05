@@ -13,7 +13,8 @@ deliberately leaves open.
 | What | Value |
 | --- | --- |
 | Repository | `DongwonTTuna-Labs/rs-builder-relayer-client` |
-| Audited commit | `1ae5e4d653ac` on `don-73-pbrsdk-29-docs-final-state` |
+| Audited commit | recorded below, after this file stops changing |
+| Branch | `don-75-pbrsdk-30-final-audit` |
 | Upstream | `OrderBookTrade/rs-builder-relayer-client` at `a2306c8`, merge-base `521ab0b` |
 | Delivery | 24 open pull requests, #138 through #161. #138 and #140 through #161 form one stack, each based on the previous; #139 is a second PBRSDK-2 pull request against `main` |
 | Consumer | `DongwonTTuna-Labs/polymarket-liquidity-farming-rs`, draft pull requests #18, #19, #20 |
@@ -50,7 +51,7 @@ campaign. They are outside this audit.
 | PBRSDK-27 | Operator-approved tiny-value live validation | #159 | In review |
 | PBRSDK-28 | Release provenance, dependency pin, supply-chain review | #160 | In review |
 | PBRSDK-29 | Documentation at final feature state | #161 | In review |
-| PBRSDK-30 | This packet | this commit | In review |
+| PBRSDK-30 | This packet | #162 | In review |
 
 One defect found mid-campaign was fixed on its own branch rather than folded
 into an unrelated ticket: #157 removed a dry-run evidence field that exposed the
@@ -72,9 +73,9 @@ blocked evidence rather than reporting a completion that did not happen:
 | Requirement | Evidence |
 | --- | --- |
 | No agent merges a pull request | All 27 pull requests are open and unmerged; 26 are drafts, and `gh pr list --state all` reports 0 merged in the campaign range |
-| No secret in code, logs, responses, or commits | Secret scan below; `src/` makes no `env::var` call; `Debug` redaction is asserted by `public_observability_debug_and_artifact_json_omit_all_secret_sentinels`, `mutation_intent_serialization_and_debug_are_secret_free_and_redacted`, and `dry_run_and_permit_debug_redact_replayable_and_authorization_material` in `src/deposit_wallet/http/tests.rs`, plus `test_builder_config_debug_redacts_all_secret_fields` in `src/auth/mod.rs`. The identity types additionally carry no `Display`, `Serialize`, `Deserialize`, or `Deref`, asserted at compile time in `tests/public_api_boundary_test.rs` |
+| No production credential in the committed tree | Secret scan below; `src/` makes no `env::var` call; `Debug` redaction is asserted by `public_observability_debug_and_artifact_json_omit_all_secret_sentinels`, `mutation_intent_serialization_and_debug_are_secret_free_and_redacted`, and `dry_run_and_permit_debug_redact_replayable_and_authorization_material` in `src/deposit_wallet/http/tests.rs`, plus `test_builder_config_debug_redacts_all_secret_fields` in `tests/auth_test.rs`. The identity types additionally carry no `Display`, `Serialize`, `Deserialize`, or `Deref`, asserted at compile time in `tests/public_api_boundary_test.rs` |
 | Production dependency pinned by commit SHA, never by branch | `docs/CONSUMER_INTEGRATION.md` and `docs/PUBLISHING_DISABLED.md` require it; the consumer pins `rev = "c72dd58..."`; `scripts/preflight_build_integrity.py` rejects `git`, `path`, and registry-index dependency keys in this manifest |
-| Signer, relayer auth, and deposit-wallet identity separated at the type level | Six PBRSDK-22a identity newtypes, re-exported and compile-time negative-asserted (`tests/public_api_boundary_test.rs`) |
+| Signer, relayer auth, and deposit-wallet identity carry distinct types | Three newtypes -- `RelayerAuthIdentity`, `DepositWalletOwner`, `DepositWalletAddress` -- with private fields and compile-time assertions that they gain no `Display`, `Serialize`, `Deserialize`, or `Deref` (`tests/public_api_boundary_test.rs`). `DepositWalletIdentityConfig`, `IdentityOverlap`, and `IdentityConfigSummary` complete the surface but are not newtypes. This is role typing, not value separation: see the limits below |
 | No live claim before the gate | `docs/LIVE_VALIDATION_DECISION.md` marker is `blocked`, audited by `tests/live_validation_decision_test.rs`; README feature-status table states live validation was not performed |
 | Wire format compared against docs or an official SDK | `docs/DEPOSIT_WALLET_SOURCE_MATRIX.md` and `tests/fixtures/deposit_wallet/PROVENANCE.md` pin the source for every fixture |
 | Unknown, ambiguous, or partial responses are not treated as success | Ambiguity produces an `AmbiguousCandidateReport`, never a success outcome; the type and its getters are pinned in `tests/public_api_boundary_test.rs` and exercised in `src/deposit_wallet/http/tests.rs` |
@@ -87,15 +88,22 @@ blocked evidence rather than reporting a completion that did not happen:
 
 ## Validation at the audited commit
 
+A packet cannot name the commit that contains it. The line below is filled in
+by the last commit on this branch, and the results under it were produced at
+that commit; until it names a forty-character SHA, this packet is a draft and
+not audit evidence.
+
+    audited-commit: PENDING
+
 ### Crate
 
 | Command | Result |
 | --- | --- |
 | `python3 -I scripts/preflight_build_integrity.py` | exit 0 |
-| `cargo test --workspace --all-features` | 507 passed, 0 test binaries failed |
+| `cargo test --workspace --all-features` | 508 passed, 0 test binaries failed |
 | `cargo audit --deny warnings` | exit 0 |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 warnings |
-| `cargo fmt --all --check` | clean |
+| `cargo fmt --all --check` | exit 0, and no evidence: `rustfmt.toml` sets `disable_all_formatting` |
 | `cargo doc --workspace --all-features --no-deps` | 0 warnings |
 | `git diff --check` | clean |
 
@@ -106,7 +114,7 @@ touched.
 
 | Command | Result |
 | --- | --- |
-| `cargo fmt --all --check` | clean |
+| `cargo fmt --all --check` | exit 0, and no evidence: `rustfmt.toml` sets `disable_all_formatting` |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 warnings |
 | `cargo test --workspace --all-features` | 37 passed, 0 failed |
 
@@ -165,6 +173,30 @@ decision, funded credentials, and an accepted rollback plan, and none of those
 is an agent's to supply. `docs/MANUAL_LIVE_GATE_RUNBOOK.md` is the procedure an
 operator would follow, and `tests/live_gate_runbook_test.rs` holds it to its
 own stop conditions.
+
+## Limits on the identity and secret claims
+
+Role typing is not value separation. `DepositWalletIdentityConfig::try_new`
+rejects a zero address and an owner whose derived wallet does not match, and it
+reports `AuthEqualsOwner`, `AuthEqualsDepositWallet`, and
+`OwnerEqualsDepositWallet` as observations; it does not reject them. Policy is
+the caller's. `request_context()` converts back to two raw `Address` values, and
+the older public surface still accepts raw addresses without going through the
+typed config: `RelayerKeyAuth::new`, `RelayerReadPermit::for_owner`, and
+`RelayerMutationPermit::try_new` take an `Address` and do not reject the zero
+address. So the roles carry distinct types, and a caller who avoids the typed
+config can still give two roles the same value.
+
+The secret claim is likewise narrower than "nothing anywhere". The
+deposit-wallet client allowlists its host, refuses redirects, bounds bodies, and
+redacts its `Debug` and error output. The preserved legacy `RelayClient` does
+not: `set_url` accepts any URL and the client then sends an auth header to
+`/submit` on it, and nonce, transaction, and submit responses are logged whole
+through `debug!(raw_response = %text, ...)`, with HTTP error bodies carried into
+`RelayerError::Api`. What is established is that the committed tree holds no
+production credential, and that the reviewed deposit-wallet surface redacts what
+it emits. A deployment that enables `debug` logging on the legacy path should
+treat that path's output as sensitive.
 
 ## What this packet does not prove
 

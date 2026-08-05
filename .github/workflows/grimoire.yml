@@ -16,7 +16,10 @@ jobs:
       }}
     permissions:
       contents: read
-    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@main
+    # Pinned to a commit, not to a moving branch: this job hands four secrets
+    # to the callee, and pinning this file's own digest says nothing about
+    # what a branch points at when the job runs.
+    uses: DongwonTTuna-Labs/home-server-infra/.github/workflows/grimoire-control-plane.yml@dad7767101e12cb4d987a467145c4c00642a4132
     with:
       consumer_repository: ${{ github.repository }}
       consumer_ref: ${{ github.event.pull_request.head.ref }}

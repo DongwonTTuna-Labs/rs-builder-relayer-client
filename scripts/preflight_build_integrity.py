@@ -131,8 +131,8 @@ SECURITY_AUDIT_WORKFLOW = Path(".github/workflows/security-audit.yml")
 # leave that door open, so the directory is closed to its reviewed set and every
 # entry is pinned. Editing any of them requires updating a constant here.
 REVIEWED_WORKFLOW_SHA256 = {
-    "grimoire.yml": "5374f226020540d95a77a902d684b5b81d91f36c696f9cae9b4bfc9aa86cfcf8",
-    "rust-validation.yml": "2580eb2122e481a8804c488925e85de1ba0b7d846bf221a4dc45fcae37397f73",
+    "grimoire.yml": "a6625c8a892810598ed60e4bcd9ccef7c024f0f7480ba46e0f58d3c6c39ae8b3",
+    "rust-validation.yml": "15f9ba97ebf96bff7a8cb4cbc02ecd45a473105792e592ed216608e42a8a508b",
     "security-audit.yml": "6afa47f1354fa0d5fab4873a31299df6a12f098e27ff536f4ed9d3cdf8410552",
 }
 PREFLIGHT_COMMAND = (

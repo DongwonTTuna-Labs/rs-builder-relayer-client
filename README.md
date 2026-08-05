@@ -402,16 +402,24 @@ Depending on whether you use `RelayerTxType::Safe` or `RelayerTxType::Proxy`, th
 
 ## Examples
 
-```bash
-cp .env.example .env   # fill in your keys
+Every example in this repository is offline. Each one prints a plan built from
+fixtures and submits nothing; `tests/ci_contract_test.rs` holds them to that by
+rejecting any example that reads the environment, builds a wallet or provider,
+constructs a relayer client, or calls deploy, execute, or wait. None of them
+takes an `--execute` flag, and no flag in this repository turns one live.
 
-cargo run --example redeem_all                  # dry-run: scan positions
-cargo run --example redeem_all -- --execute     # actually redeem
-cargo run --example setup_wallet                # deploy Safe + approvals
-cargo run --example redeem_single               # redeem one position
-cargo run --example split_merge                 # split/merge demo
-cargo run --example redeem_magic                # magic.link proxy wallet redeem
+```bash
+cargo run --example redeem_all                  # prints an offline redeem plan
+cargo run --example setup_wallet                # prints an offline approval plan
+cargo run --example redeem_single               # prints one offline redemption
+cargo run --example split_merge                 # prints an offline split/merge plan
+cargo run --example redeem_magic                # prints an offline proxy-wallet plan
 ```
+
+Sending a relayer mutation is an operator procedure, not an example. It runs
+through [`docs/MANUAL_LIVE_GATE_RUNBOOK.md`](docs/MANUAL_LIVE_GATE_RUNBOOK.md),
+and [`docs/LIVE_VALIDATION_DECISION.md`](docs/LIVE_VALIDATION_DECISION.md)
+records that it has not been performed.
 
 ## References
 
